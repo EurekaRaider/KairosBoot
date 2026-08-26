@@ -13,7 +13,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DECLARATION = re.compile(r"KB_API\s+[^;]*?\bKB_CALL\s+(kb_[a-z0-9_]+)\s*\(", re.DOTALL)
-SYMBOL = re.compile(r"_?(kb_[a-z0-9_]+)$")
+WINDOWS_EXPORT_HEADER = re.compile(r"^\s*ordinal\s+hint\s+RVA\s+name\s*$", re.IGNORECASE)
+WINDOWS_EXPORT = re.compile(
+    r"^\s*\d+\s+[0-9a-f]+\s+[0-9a-f]+\s+(\S+)(?:\s+.*)?$", re.IGNORECASE
+)
+
+# The selected tools report only externally visible, defined symbols: ELF
+# dynamic definitions, Mach-O external definitions, and PE named exports.
+# KairosBoot's hidden visibility and Windows .def file mean no linker-generated
+# export is unavoidable today. Keep these allowlists exact; adding a platform
+# symbol requires captured tool output demonstrating why it cannot be hidden.
+PLATFORM_EXPORT_ALLOWLISTS: dict[str, frozenset[str]] = {
+    "darwin": frozenset(),
+    "linux": frozenset(),
+    "windows": frozenset(),
+}
 
 
 def fail(message: str) -> None:
@@ -39,29 +53,73 @@ def windows_definition_symbols() -> set[str]:
     return {line.strip() for line in lines if line.strip() and line.strip() != "EXPORTS"}
 
 
-def run_symbols(library: Path) -> str:
-    if sys.platform == "darwin":
-        command = ["nm", "-gU", str(library)]
-    elif sys.platform.startswith("win"):
+def platform_name(platform: str = sys.platform) -> str:
+    if platform == "darwin":
+        return "darwin"
+    if platform.startswith("win"):
+        return "windows"
+    return "linux"
+
+
+def run_symbols(library: Path, platform: str) -> str:
+    if platform == "darwin":
+        command = ["nm", "-gUj", str(library)]
+    elif platform == "windows":
         dumpbin = shutil.which("dumpbin")
         if dumpbin is None:
             fail("dumpbin is required to inspect Windows exports")
         command = [dumpbin, "/nologo", "/exports", str(library)]
     else:
-        command = ["nm", "-D", "--defined-only", str(library)]
+        command = ["nm", "-D", "--defined-only", "-j", str(library)]
     completed = subprocess.run(command, check=False, text=True, capture_output=True)
     if completed.returncode != 0:
         fail(f"symbol tool failed: {completed.stderr.strip()}")
     return completed.stdout
 
 
-def library_symbols(library: Path) -> set[str]:
+def parse_nm_symbols(output: str, *, strip_macho_prefix: bool) -> set[str]:
+    exported = {line.strip() for line in output.splitlines() if line.strip()}
+    if strip_macho_prefix:
+        return {symbol[1:] if symbol.startswith("_") else symbol for symbol in exported}
+    return exported
+
+
+def parse_dumpbin_symbols(output: str) -> set[str]:
     exported: set[str] = set()
-    for line in run_symbols(library).splitlines():
-        match = SYMBOL.search(line.strip())
+    in_export_table = False
+    for line in output.splitlines():
+        if WINDOWS_EXPORT_HEADER.fullmatch(line) is not None:
+            in_export_table = True
+            continue
+        if not in_export_table:
+            continue
+        if line.strip().lower() == "summary":
+            break
+        match = WINDOWS_EXPORT.fullmatch(line)
         if match is not None:
             exported.add(match.group(1))
+    if not in_export_table:
+        fail("dumpbin output did not contain an export table")
     return exported
+
+
+def library_symbols(library: Path, platform: str) -> set[str]:
+    output = run_symbols(library, platform)
+    if platform == "windows":
+        return parse_dumpbin_symbols(output)
+    return parse_nm_symbols(output, strip_macho_prefix=platform == "darwin")
+
+
+def check_library_exports(
+    library: Path, manifest: set[str], platform: str
+) -> None:
+    exported = library_symbols(library, platform)
+    expected = manifest | set(PLATFORM_EXPORT_ALLOWLISTS[platform])
+    if exported != expected:
+        fail(
+            "shared-library exports and ABI manifest differ; "
+            f"missing={sorted(expected - exported)}, extra={sorted(exported - expected)}"
+        )
 
 
 def main() -> None:
@@ -84,12 +142,7 @@ def main() -> None:
         )
 
     if args.library is not None:
-        exported = library_symbols(args.library)
-        if exported != manifest:
-            fail(
-                "shared-library exports and ABI manifest differ; "
-                f"missing={sorted(manifest - exported)}, extra={sorted(exported - manifest)}"
-            )
+        check_library_exports(args.library, manifest, platform_name())
     print(f"ABI check passed ({len(manifest)} kb_* symbols)")
 
 
