@@ -25,6 +25,8 @@ using kairosboot::fastboot::PrimitiveErrorCode;
 using kairosboot::image::FileSourceError;
 using kairosboot::image::FileSourceErrorKind;
 using kairosboot::image::ImageSourceError;
+using kairosboot::image::SparseError;
+using kairosboot::image::SparseErrorKind;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::transport::LibusbRuntimeError;
 using kairosboot::transport::LibusbRuntimeErrorKind;
@@ -97,6 +99,32 @@ void file_source_kinds_map_before_transfer_and_retain_native_code() {
             KB_TRANSFER_NOT_SENT,
             "SERIAL-F");
         CHECK(result.message == "unable to open image");
+    }
+}
+
+void sparse_kinds_map_before_transfer_and_retain_offset() {
+    struct Case final {
+        SparseErrorKind kind;
+        kb_status_t status;
+    };
+    constexpr std::array cases{
+        Case{SparseErrorKind::Malformed, KB_E_IO},
+        Case{SparseErrorKind::Truncated, KB_E_IO},
+        Case{SparseErrorKind::Unsupported, KB_E_NOT_SUPPORTED},
+        Case{SparseErrorKind::Source, KB_E_IO},
+        Case{SparseErrorKind::InvalidArgument, KB_E_INVALID_ARGUMENT},
+    };
+
+    for (const auto& test : cases) {
+        const auto result = normalize_public_error(
+            SparseError{test.kind, 37, "invalid sparse image"}, "SERIAL-S");
+        check_common(
+            result,
+            test.status,
+            0,
+            KB_TRANSFER_NOT_SENT,
+            "SERIAL-S");
+        CHECK(result.message == "invalid sparse image (input offset 37)");
     }
 }
 
@@ -234,6 +262,8 @@ int main() {
         {"image source normalization", image_source_is_io_before_any_transfer},
         {"file source normalization",
          file_source_kinds_map_before_transfer_and_retain_native_code},
+        {"sparse source normalization",
+         sparse_kinds_map_before_transfer_and_retain_offset},
         {"libusb status normalization",
          libusb_kinds_have_stable_status_and_retain_native_code},
         {"libusb message normalization",

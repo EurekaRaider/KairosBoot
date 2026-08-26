@@ -185,6 +185,32 @@ OperationErrorPayload normalize_public_error(
 }
 
 OperationErrorPayload normalize_public_error(
+    const image::SparseError& error,
+    const std::string_view device_identifier) {
+    kb_status_t status = KB_E_IO;
+    switch (error.kind) {
+        case image::SparseErrorKind::InvalidArgument:
+            status = KB_E_INVALID_ARGUMENT;
+            break;
+        case image::SparseErrorKind::Unsupported:
+            status = KB_E_NOT_SUPPORTED;
+            break;
+        case image::SparseErrorKind::Malformed:
+        case image::SparseErrorKind::Truncated:
+        case image::SparseErrorKind::Source:
+            status = KB_E_IO;
+            break;
+    }
+    return make_error(
+        status,
+        error.message + " (input offset " +
+            std::to_string(error.input_offset) + ")",
+        0,
+        KB_TRANSFER_NOT_SENT,
+        device_identifier);
+}
+
+OperationErrorPayload normalize_public_error(
     const transport::LibusbRuntimeError& error,
     const std::string_view device_identifier) {
     return make_error(

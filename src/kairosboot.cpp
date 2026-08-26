@@ -5,6 +5,7 @@
 #include "src/api/operation_state.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/image/file_source.hpp"
+#include "src/image/flash_artifact.hpp"
 #include "src/protocol/fastboot_protocol.hpp"
 #include "src/transport/image_transfer_source.hpp"
 #include "src/transport/libusb_runtime.hpp"
@@ -654,15 +655,22 @@ kb_status_t KB_CALL kb_flash_file_async(
                              file_source.error(), requested_identifier));
     }
 
-    if (auto valid_size =
-            kairosboot::fastboot::validate_download_size((*file_source)->size());
+    auto artifact = kairosboot::image::FlashArtifact::inspect(*file_source);
+    if (!artifact) {
+      return fail(error, kairosboot::api::normalize_public_error(
+                             artifact.error(), requested_identifier));
+    }
+
+    if (auto valid_size = kairosboot::fastboot::validate_download_size(
+            artifact->metadata().transfer_size);
         !valid_size) {
       return fail(error, kairosboot::api::normalize_public_error(
                              valid_size.error(), requested_identifier));
     }
 
     auto transfer_source =
-        kairosboot::transport::ImageTransferSource::create(*file_source);
+        kairosboot::transport::ImageTransferSource::create(
+            artifact->transfer_source());
     if (!transfer_source) {
       return fail(error, kairosboot::api::normalize_public_error(
                              transfer_source.error(), requested_identifier));
