@@ -10,21 +10,21 @@ namespace {
 
 [[nodiscard]] OperationErrorPayload cancelled_error() {
     return {
-        KB_E_CANCELLED,
-        "operation cancelled",
-        0,
-        KB_TRANSFER_NOT_SENT,
-        {},
+        .status = KB_E_CANCELLED,
+        .message = "operation cancelled",
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
+        .device_identifier = {},
     };
 }
 
 [[nodiscard]] OperationErrorPayload internal_error(const char* message) {
     return {
-        KB_E_INTERNAL,
-        message,
-        0,
-        KB_TRANSFER_NOT_SENT,
-        {},
+        .status = KB_E_INTERNAL,
+        .message = message,
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
+        .device_identifier = {},
     };
 }
 
@@ -307,11 +307,11 @@ void OperationState::publish_terminal(OperationOutcome outcome) noexcept {
         }
         if (cancel_requested_ && outcome.phase == OperationPhase::Succeeded) {
             outcome = OperationOutcome::cancelled({
-                KB_E_CANCELLED,
-                "operation cancelled after completing its work",
-                0,
-                KB_TRANSFER_FULLY_TRANSFERRED,
-                {},
+                .status = KB_E_CANCELLED,
+                .message = "operation cancelled after completing its work",
+                .native_code = 0,
+                .transfer_state = KB_TRANSFER_FULLY_TRANSFERRED,
+                .device_identifier = {},
             });
         }
         if (outcome.phase == OperationPhase::Succeeded) {
@@ -358,19 +358,19 @@ void OperationState::run() noexcept {
             outcome = task(context);
         } catch (const std::bad_alloc&) {
             outcome = OperationOutcome::failed({
-                KB_E_OUT_OF_MEMORY,
-                "operation task exhausted memory",
-                0,
-                KB_TRANSFER_NOT_SENT,
-                {},
+                .status = KB_E_OUT_OF_MEMORY,
+                .message = "operation task exhausted memory",
+                .native_code = 0,
+                .transfer_state = KB_TRANSFER_NOT_SENT,
+                .device_identifier = {},
             });
         } catch (const std::exception& error) {
             outcome = OperationOutcome::failed({
-                KB_E_INTERNAL,
-                error.what(),
-                0,
-                KB_TRANSFER_NOT_SENT,
-                {},
+                .status = KB_E_INTERNAL,
+                .message = error.what(),
+                .native_code = 0,
+                .transfer_state = KB_TRANSFER_NOT_SENT,
+                .device_identifier = {},
             });
         } catch (...) {
             outcome = OperationOutcome::failed(

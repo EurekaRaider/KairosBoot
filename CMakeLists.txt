@@ -176,6 +176,7 @@ endfunction()
 add_library(
   kairosboot_internal STATIC
   src/api/device_selection.cpp
+  src/api/device_selector.cpp
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
   src/fastboot/primitive_service.cpp
@@ -190,6 +191,7 @@ add_library(
   src/transport/buffer_budget.cpp
   src/transport/image_transfer_source.cpp
   src/transport/libusb_runtime.cpp
+  src/transport/sequential_streaming_transport.cpp
   src/transport/tcp_fastboot.cpp
   src/transport/transfer_ring.cpp
   src/transport/udp_fastboot.cpp
@@ -417,6 +419,17 @@ if(BUILD_TESTING)
   add_test(NAME device_selection COMMAND kairosboot_device_selection_tests)
   set_tests_properties(device_selection PROPERTIES TIMEOUT 10)
 
+  add_executable(kairosboot_device_selector_tests
+                 tests/api/device_selector_tests.cpp)
+  target_compile_features(kairosboot_device_selector_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_device_selector_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_device_selector_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_device_selector_tests)
+  add_test(NAME device_selector COMMAND kairosboot_device_selector_tests)
+  set_tests_properties(device_selector PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_operation_state_tests
                  tests/api/operation_state_tests.cpp)
   target_compile_features(kairosboot_operation_state_tests PRIVATE cxx_std_23)
@@ -428,6 +441,33 @@ if(BUILD_TESTING)
   add_test(NAME operation_state COMMAND kairosboot_operation_state_tests)
   set_tests_properties(operation_state PROPERTIES TIMEOUT 15)
 
+  add_executable(kairosboot_command_result_handle_tests
+                 tests/api/command_result_handle_tests.cpp)
+  target_compile_features(kairosboot_command_result_handle_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_command_result_handle_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_command_result_handle_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_command_result_handle_tests)
+  add_test(NAME command_result_handle
+           COMMAND kairosboot_command_result_handle_tests)
+  set_tests_properties(command_result_handle PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_sequential_streaming_transport_tests
+                 tests/api/sequential_streaming_transport_tests.cpp)
+  target_compile_features(kairosboot_sequential_streaming_transport_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_sequential_streaming_transport_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_sequential_streaming_transport_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(
+    kairosboot_sequential_streaming_transport_tests)
+  add_test(NAME sequential_streaming_transport
+           COMMAND kairosboot_sequential_streaming_transport_tests)
+  set_tests_properties(sequential_streaming_transport PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_c_api_test tests/c_api_test.c)
   set_target_properties(
     kairosboot_c_api_test
@@ -437,6 +477,18 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_c_api_test PRIVATE KairosBoot::C)
   kairosboot_enable_strict_warnings(kairosboot_c_api_test)
   add_test(NAME c_api COMMAND kairosboot_c_api_test)
+
+  add_executable(kairosboot_c_primitive_tcp_tests
+                 tests/api/c_primitive_tcp_tests.cpp)
+  target_compile_features(kairosboot_c_primitive_tcp_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_c_primitive_tcp_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_c_primitive_tcp_tests
+                        PRIVATE KairosBoot::C kairosboot_internal
+                                Boost::asio_core Threads::Threads)
+  kairosboot_enable_strict_warnings(kairosboot_c_primitive_tcp_tests)
+  add_test(NAME c_primitive_tcp COMMAND kairosboot_c_primitive_tcp_tests)
+  set_tests_properties(c_primitive_tcp PROPERTIES TIMEOUT 15)
 
   add_executable(kairosboot_cxx_api_test tests/cxx_api_test.cpp)
   target_compile_features(kairosboot_cxx_api_test PRIVATE cxx_std_23)

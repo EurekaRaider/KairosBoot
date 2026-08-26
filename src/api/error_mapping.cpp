@@ -20,13 +20,13 @@ namespace {
     const std::int32_t native_code,
     const kb_transfer_state_t transfer_state,
     const std::string_view device_identifier) {
-    return {
-        status,
-        std::move(message),
-        native_code,
-        transfer_state,
-        std::string(device_identifier),
-    };
+    OperationErrorPayload result;
+    result.status = status;
+    result.message = std::move(message);
+    result.native_code = native_code;
+    result.transfer_state = transfer_state;
+    result.device_identifier = device_identifier;
+    return result;
 }
 
 [[nodiscard]] kb_status_t runtime_status(
@@ -114,9 +114,11 @@ namespace {
         case PrimitiveErrorCode::Closed:
         case PrimitiveErrorCode::Poisoned:
         case PrimitiveErrorCode::TransportIo:
-        case PrimitiveErrorCode::ProtocolViolation:
-        case PrimitiveErrorCode::DeviceFail:
             return KB_E_IO;
+        case PrimitiveErrorCode::ProtocolViolation:
+            return KB_E_PROTOCOL;
+        case PrimitiveErrorCode::DeviceFail:
+            return KB_E_DEVICE_FAIL;
     }
     return KB_E_INTERNAL;
 }
@@ -135,16 +137,23 @@ namespace {
     return KB_TRANSFER_PARTIAL_OR_UNKNOWN;
 }
 
-[[nodiscard]] std::string primitive_message(
-    const fastboot::PrimitiveError& error) {
-    if (error.code != fastboot::PrimitiveErrorCode::DeviceFail ||
-        error.device_message.empty()) {
-        return error.message;
+[[nodiscard]] std::vector<CommandMessagePayload> command_messages(
+    const std::vector<protocol::Response>& responses) {
+    std::vector<CommandMessagePayload> result;
+    result.reserve(responses.size());
+    for (const auto& response : responses) {
+        if (response.kind != protocol::ResponseKind::Info &&
+            response.kind != protocol::ResponseKind::Text) {
+            continue;
+        }
+        result.push_back({
+            response.kind == protocol::ResponseKind::Text
+                ? CommandMessageKind::Text
+                : CommandMessageKind::Info,
+            response.payload,
+        });
     }
-    if (error.message.empty()) {
-        return error.device_message;
-    }
-    return error.message + ": " + error.device_message;
+    return result;
 }
 
 }  // namespace
@@ -256,12 +265,19 @@ OperationErrorPayload normalize_public_error(
 OperationErrorPayload normalize_public_error(
     const fastboot::PrimitiveError& error,
     const std::string_view device_identifier) {
-    return make_error(
+    auto result = make_error(
         primitive_status(error.code),
-        primitive_message(error),
+        error.message,
         static_cast<std::int32_t>(error.native_code),
         transfer_state(error.outbound_certainty),
         device_identifier);
+    result.device_message = error.device_message;
+    result.command_messages = command_messages(error.informational);
+    result.inbound_expected = error.inbound_expected;
+    result.inbound_transferred = error.inbound_transferred;
+    result.inbound_transfer_state = transfer_state(error.inbound_certainty);
+    result.session_poisoned = error.session_poisoned;
+    return result;
 }
 
 void accumulate_flash_transfer_state(
