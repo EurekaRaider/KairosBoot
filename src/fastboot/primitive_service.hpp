@@ -97,8 +97,8 @@ struct DownloadAndBootResult final {
 };
 
 struct FetchRange final {
-    std::optional<std::uint64_t> offset;
-    std::optional<std::uint64_t> size;
+    std::optional<std::uint64_t> offset{};
+    std::optional<std::uint64_t> size{};
 };
 
 [[nodiscard]] std::expected<void, PrimitiveError> validate_download_size(
