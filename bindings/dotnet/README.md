@@ -21,11 +21,12 @@ dotnet build bindings/dotnet/KairosBoot/KairosBoot.csproj -c Release
 dotnet pack bindings/dotnet/KairosBoot/KairosBoot.csproj -c Release
 ```
 
-`PackageVersion` can be supplied by the release workflow without editing the
-project:
+`Version` and `PackageVersion` must be supplied together by release automation
+so the managed assembly and NuGet metadata cannot diverge:
 
 ```sh
 dotnet pack bindings/dotnet/KairosBoot/KairosBoot.csproj -c Release \
+  /p:Version=1.2.3 \
   /p:PackageVersion=1.2.3
 ```
 
@@ -70,6 +71,7 @@ into a consuming application's output directory.
 
 ```sh
 dotnet pack bindings/dotnet/KairosBoot/KairosBoot.csproj -c Release \
+  /p:Version=1.2.3 \
   /p:PackageVersion=1.2.3 \
   /p:IncludeNativeRuntimes=true \
   /p:NativeRuntimeRoot=/absolute/path/to/staged/runtimes

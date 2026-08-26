@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using KairosBoot;
 
 internal static class Program
@@ -7,8 +8,20 @@ internal static class Program
     {
         if (args.Length != 1)
         {
-            Console.Error.WriteLine("expected the native KairosBoot version as one argument");
+            Console.Error.WriteLine("expected the KairosBoot release version as one argument");
             return 2;
+        }
+
+        var managed = typeof(Context).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        if (managed == null ||
+            !(string.Equals(managed, args[0], StringComparison.Ordinal) ||
+              managed.StartsWith(args[0] + "+", StringComparison.Ordinal)))
+        {
+            Console.Error.WriteLine(
+                $"managed version mismatch: expected {args[0]}, got {managed ?? "<missing>"}");
+            return 1;
         }
 
         var actual = Context.Version.Value;
@@ -18,7 +31,7 @@ internal static class Program
             return 1;
         }
 
-        Console.WriteLine($"KairosBoot package smoke passed: {actual}");
+        Console.WriteLine($"KairosBoot package smoke passed: managed={managed}, native={actual}");
         return 0;
     }
 }

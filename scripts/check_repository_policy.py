@@ -65,6 +65,7 @@ def check_workflows() -> None:
             "multi-config Release install": "cmake --install build --config Release",
             "external Release symbols": "-DKAIROSBOOT_RELEASE_SYMBOLS=ON",
             "managed Release package": "/p:Configuration=Release",
+            "managed assembly Release version": '/p:Version="$VERSION"',
             "Linux split debug symbols": "objcopy --only-keep-debug",
             "libusb split debug symbols": "libusb-1.0.debug",
             "macOS split debug symbols": "dsymutil",
@@ -87,6 +88,14 @@ def check_workflows() -> None:
         xcode = "/Applications/Xcode_26.3.app/Contents/Developer"
         if xcode not in ci:
             fail(f"CI workflow must pin the validated macOS Xcode: {xcode}")
+        for stale_path in (
+            "libkairosboot.so.0.1.0",
+            "libkairosboot.0.1.0.dylib",
+        ):
+            if stale_path in ci:
+                fail(f"CI workflow must not hard-code a development library path: {stale_path}")
+        if '"/p:Version=${package_version}"' not in ci:
+            fail("CI package build must align the managed assembly and package version")
 
 
 def check_required_files() -> None:

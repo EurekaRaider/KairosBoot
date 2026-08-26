@@ -73,8 +73,10 @@ jobs:
           ./consumer-build/c_consumer
           ./consumer-build/cxx_consumer
           "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
-          readelf -d "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.0.1.0" | grep -F 'libusb-1.0.so.0'
-          readelf -d "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.0.1.0" | grep -F "\$ORIGIN"
+          project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
+          library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.${project_version}"
+          readelf -d "$library" | grep -F 'libusb-1.0.so.0'
+          readelf -d "$library" | grep -F "\$ORIGIN"
 
       - name: Upload install tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -209,8 +211,10 @@ jobs:
           ./consumer-build/c_consumer
           ./consumer-build/cxx_consumer
           "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
-          otool -L "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.0.1.0.dylib" | grep -F '@rpath/libusb-1.0.0.dylib'
-          otool -l "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.0.1.0.dylib" | grep -A2 LC_RPATH | grep -F '@loader_path'
+          project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
+          library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.${project_version}.dylib"
+          otool -L "$library" | grep -F '@rpath/libusb-1.0.0.dylib'
+          otool -l "$library" | grep -A2 LC_RPATH | grep -F '@loader_path'
           otool -l "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib'
 
       - name: Upload install tree
@@ -333,6 +337,7 @@ jobs:
             /t:Pack \
             /p:Configuration=Release \
             "/p:PackageOutputPath=${RUNNER_TEMP}/nuget" \
+            "/p:Version=${package_version}" \
             "/p:PackageVersion=${package_version}" \
             /p:IncludeNativeRuntimes=true \
             "/p:NativeRuntimeRoot=$PWD/bindings/dotnet/KairosBoot/runtimes" \

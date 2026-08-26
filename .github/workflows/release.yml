@@ -408,6 +408,7 @@ jobs:
             /t:Pack \
             /p:Configuration=Release \
             /p:PackageOutputPath="$PWD/nuget" \
+            /p:Version="$VERSION" \
             /p:PackageVersion="$VERSION" \
             /p:IncludeNativeRuntimes=true \
             /p:NativeRuntimeRoot="$PWD/bindings/dotnet/KairosBoot/runtimes" \
