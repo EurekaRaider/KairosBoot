@@ -108,12 +108,17 @@ def main() -> None:
     )
     parser.add_argument("--generator", required=True)
     parser.add_argument("--architecture")
+    parser.add_argument("--dumpbin", type=Path)
     args = parser.parse_args()
 
     dist = args.dist.resolve()
     if not dist.is_dir():
         raise SystemExit(f"Release archive directory does not exist: {dist}")
     is_windows = args.platform.startswith("windows-")
+    if is_windows and args.dumpbin is None:
+        raise SystemExit("--dumpbin is required for Windows Release archive smoke")
+    if args.dumpbin is not None and not args.dumpbin.is_file():
+        raise SystemExit(f"dumpbin executable does not exist: {args.dumpbin}")
     suffix = ".zip" if is_windows else ".tar.gz"
     base = f"KairosBoot-v{args.version}-{args.platform}"
     archives = {
@@ -197,11 +202,15 @@ def main() -> None:
             library = sdk_root / "lib" / f"libkairosboot.so.{args.version}"
         if not library.is_file():
             raise SystemExit(f"SDK library is missing: {library}")
-        run(
-            [sys.executable, str(ROOT / "scripts" / "check_abi.py"), "--library", str(library)],
-            cwd=ROOT,
-            environment=environment,
-        )
+        abi_command = [
+            sys.executable,
+            str(ROOT / "scripts" / "check_abi.py"),
+            "--library",
+            str(library),
+        ]
+        if args.dumpbin is not None:
+            abi_command.extend(("--dumpbin", str(args.dumpbin.resolve())))
+        run(abi_command, cwd=ROOT, environment=environment)
 
     print(f"Native Release archive smoke passed: {args.platform}")
 

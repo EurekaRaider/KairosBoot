@@ -347,13 +347,20 @@ jobs:
         env:
           VERSION: ${{ needs.verify.outputs.version }}
           PLATFORM: ${{ matrix.id }}
-        run: >-
-          python scripts/smoke_native_archive.py
-          --dist dist
-          --version "$env:VERSION"
-          --platform "$env:PLATFORM"
-          --generator "Visual Studio 17 2022"
-          --architecture "${{ matrix.architecture }}"
+        run: |
+          $cache = Get-Content build/CMakeCache.txt -Raw
+          $match = [regex]::Match($cache, '(?m)^CMAKE_DUMPBIN:FILEPATH=(.+)$')
+          if (-not $match.Success) {
+            throw 'CMAKE_DUMPBIN is missing from build/CMakeCache.txt'
+          }
+          $dumpbin = $match.Groups[1].Value.Trim()
+          python scripts/smoke_native_archive.py `
+            --dist dist `
+            --version "$env:VERSION" `
+            --platform "$env:PLATFORM" `
+            --generator "Visual Studio 17 2022" `
+            --architecture "${{ matrix.architecture }}" `
+            --dumpbin "$dumpbin"
 
       - name: Smoke exact macOS Release archives
         if: runner.os == 'macOS'
