@@ -1,6 +1,7 @@
 #include <kairosboot/kairosboot.hpp>
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -8,7 +9,10 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <span>
+#include <stop_token>
 #include <type_traits>
+#include <vector>
 
 #define CHECK(condition)                                                       \
   do {                                                                         \
@@ -31,11 +35,57 @@ static_assert(std::is_nothrow_move_constructible_v<
               kairosboot::detail::OperationResources>);
 static_assert(std::is_nothrow_move_assignable_v<
               kairosboot::detail::OperationResources>);
+static_assert(!std::is_copy_constructible_v<kairosboot::CommandResult>);
+static_assert(std::is_nothrow_move_constructible_v<kairosboot::CommandResult>);
+static_assert(std::is_nothrow_move_assignable_v<kairosboot::CommandResult>);
+static_assert(std::is_copy_constructible_v<kairosboot::Error>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
+                             std::chrono::milliseconds>);
+static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
 static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
                                                                nullptr)));
+
+static_assert(requires(kairosboot::Context &context,
+                       kairosboot::DeviceSelector selector,
+                       kairosboot::CommandOptions options,
+                       std::span<const std::byte> bytes,
+                       kairosboot::FetchRange range) {
+  { context.getvar_async(selector, "product", options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.getvar(selector, "product", options) } ->
+      std::same_as<std::expected<kairosboot::CommandResult, kairosboot::Error>>;
+  context.erase_async(selector, "userdata", options);
+  context.erase(selector, "userdata", options);
+  context.set_active_async(selector, "a", options);
+  context.set_active(selector, "a", options);
+  context.reboot_async(selector, kairosboot::RebootTarget::Fastboot, options);
+  context.reboot(selector, kairosboot::RebootTarget::Recovery, options);
+  context.continue_boot_async(selector, options);
+  context.continue_boot(selector, options);
+  context.oem_async(selector, "device-info", options);
+  context.oem(selector, "device-info", options);
+  context.raw_command_async(selector, "getvar:all", options);
+  context.raw_command(selector, "getvar:all", options);
+  context.boot_async(selector, options);
+  context.boot(selector, options);
+  context.stage_async(selector, bytes, options);
+  context.stage(selector, bytes, options);
+  context.upload_async(selector, options);
+  context.upload(selector, options);
+  context.fetch_async(selector, "vendor", range, options);
+  context.fetch(selector, "vendor", range, options);
+});
+static_assert(requires(kairosboot::Operation &operation,
+                       std::stop_token stop_token) {
+  { operation.command_result() } ->
+      std::same_as<
+          std::expected<kairosboot::CommandResult, kairosboot::Error>>;
+  { operation.wait_result(stop_token) } ->
+      std::same_as<
+          std::expected<kairosboot::CommandResult, kairosboot::Error>>;
+});
 
 namespace {
 
@@ -93,6 +143,29 @@ int main() {
     const auto sentinel = kairosboot::detail::prepare_flash_options(finite);
     CHECK(!sentinel.has_value());
     CHECK(sentinel.error().status() == KB_E_INVALID_ARGUMENT);
+  }
+
+  {
+    const auto defaults = kairosboot::detail::prepare_command_options(
+        kairosboot::CommandOptions{});
+    CHECK(defaults.has_value());
+    CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
+    CHECK(defaults->native.maximum_receive_bytes == 64U * 1024U * 1024U);
+    CHECK(defaults->native.progress_callback == nullptr);
+
+    kairosboot::CommandOptions finite;
+    finite.timeout = 375ms;
+    finite.maximum_receive_bytes = 4096;
+    const auto prepared = kairosboot::detail::prepare_command_options(finite);
+    CHECK(prepared.has_value());
+    CHECK(prepared->native.timeout_ms == 375U);
+    CHECK(prepared->native.maximum_receive_bytes == 4096U);
+
+    finite.maximum_receive_bytes = 0;
+    const auto zero_bound =
+        kairosboot::detail::prepare_command_options(finite);
+    CHECK(!zero_bound.has_value());
+    CHECK(zero_bound.error().status() == KB_E_INVALID_ARGUMENT);
   }
 
   {
@@ -165,6 +238,12 @@ int main() {
 
   auto context = kairosboot::Context::create();
   CHECK(context.has_value());
+
+  const auto invalid_selector = context->getvar_async(
+      kairosboot::DeviceSelector{"unknown:device"}, "product");
+  CHECK(!invalid_selector.has_value());
+  CHECK(invalid_selector.error().status() == KB_E_INVALID_ARGUMENT);
+  CHECK(invalid_selector.error().device_identifier() == "unknown:device");
 
   auto devices = context->devices();
   CHECK(devices.has_value());

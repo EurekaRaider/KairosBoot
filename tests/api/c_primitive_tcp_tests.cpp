@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: MIT
-#include <kairosboot/kairosboot.h>
+#include <kairosboot/kairosboot.hpp>
 
 #include "src/transport/tcp_fastboot.hpp"
 
 #include <boost/asio.hpp>
 
 #include <array>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <initializer_list>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <span>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -185,6 +190,175 @@ private:
   tcp::acceptor acceptor_;
   std::uint16_t port_;
   std::thread worker_;
+  std::exception_ptr failure_;
+};
+
+class CxxScriptedServer final {
+public:
+  CxxScriptedServer()
+      : acceptor_(context_, tcp::endpoint(tcp::v4(), 0)),
+        port_(acceptor_.local_endpoint().port()),
+        worker_([this] { run(); }) {}
+
+  ~CxxScriptedServer() {
+    if (worker_.joinable()) {
+      {
+        std::scoped_lock lock(mutex_);
+        release_delayed_ = true;
+      }
+      condition_.notify_all();
+      boost::system::error_code ignored;
+      acceptor_.close(ignored);
+      worker_.join();
+    }
+  }
+
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+  void wait_for_delayed_command() {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] { return delayed_ready_ || failure_; });
+    rethrow_failure();
+  }
+
+  void release_delayed_command() {
+    {
+      std::scoped_lock lock(mutex_);
+      release_delayed_ = true;
+    }
+    condition_.notify_all();
+  }
+
+  void wait_for_cancel_command() {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] { return cancel_ready_ || failure_; });
+    rethrow_failure();
+  }
+
+  void finish() {
+    worker_.join();
+    rethrow_failure();
+  }
+
+private:
+  void rethrow_failure() const {
+    if (failure_ != nullptr) {
+      std::rethrow_exception(failure_);
+    }
+  }
+
+  void handshake(tcp::socket& socket) {
+    std::array<char, 4> handshake{};
+    boost::asio::read(socket, boost::asio::buffer(handshake));
+    CHECK((handshake == std::array<char, 4>{'F', 'B', '0', '1'}));
+    boost::asio::write(socket, boost::asio::buffer(handshake));
+  }
+
+  tcp::socket accept() {
+    tcp::socket socket(context_);
+    acceptor_.accept(socket);
+    handshake(socket);
+    return socket;
+  }
+
+  static std::string binary_frame(
+      const std::string_view prefix,
+      const std::initializer_list<unsigned char> bytes) {
+    std::string result{prefix};
+    for (const auto byte : bytes) {
+      result.push_back(static_cast<char>(byte));
+    }
+    return result;
+  }
+
+  void run() noexcept {
+    try {
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:binary");
+        write_frame(socket, binary_frame("INFO", {'i', 0, 0xff}));
+        write_frame(socket, binary_frame("TEXT", {'t', 0, 0xff}));
+        write_frame(socket, binary_frame("OKAY", {'v', 0, 0xff}));
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "erase:userdata");
+        write_frame(socket, binary_frame("INFO", {'w', 0, 0xff}));
+        write_frame(socket, binary_frame("FAIL", {'e', 0, 0xff}));
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:delayed");
+        {
+          std::unique_lock lock(mutex_);
+          delayed_ready_ = true;
+          condition_.notify_all();
+          condition_.wait(lock, [this] { return release_delayed_; });
+        }
+        write_frame(socket, "OKAYready");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "download:00000010");
+        write_frame(socket, "DATA00000010");
+        const auto payload = read_frame(socket);
+        CHECK(payload.size() == 16U);
+        for (std::size_t index = 0; index < payload.size(); ++index) {
+          CHECK(payload[index] == std::byte{static_cast<unsigned char>(index)});
+        }
+        write_frame(socket, "OKAYstaged");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "upload");
+        write_frame(socket, "DATA00000003");
+        write_frame(socket, binary_frame("", {'d', 0, 0xff}));
+        write_frame(socket, "OKAYuploaded");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) ==
+              "fetch:vendor:0x00000002:0x00000003");
+        write_frame(socket, "DATA00000003");
+        write_frame(socket, binary_frame("", {'f', 0, 0xff}));
+        write_frame(socket, "OKAYfetched");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "upload");
+        write_frame(socket, "DATA00000020");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:cancel");
+        {
+          std::scoped_lock lock(mutex_);
+          cancel_ready_ = true;
+        }
+        condition_.notify_all();
+        std::array<std::byte, 1> byte{};
+        boost::system::error_code closed;
+        static_cast<void>(socket.read_some(boost::asio::buffer(byte), closed));
+        CHECK(closed);
+      }
+    } catch (...) {
+      {
+        std::scoped_lock lock(mutex_);
+        failure_ = std::current_exception();
+      }
+      condition_.notify_all();
+    }
+  }
+
+  boost::asio::io_context context_;
+  tcp::acceptor acceptor_;
+  std::uint16_t port_;
+  std::thread worker_;
+  mutable std::mutex mutex_;
+  std::condition_variable condition_;
+  bool delayed_ready_{false};
+  bool release_delayed_{false};
+  bool cancel_ready_{false};
   std::exception_ptr failure_;
 };
 
@@ -381,12 +555,132 @@ void run_contract() {
   server.finish();
 }
 
+void run_cxx_contract() {
+  CxxScriptedServer server;
+  const auto selector_text =
+      "tcp:127.0.0.1:" + std::to_string(server.port());
+  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
+  auto context = kairosboot::Context::create();
+  CHECK(context.has_value());
+
+  auto binary = context->getvar(selector, "binary");
+  CHECK(binary.has_value());
+  CHECK(binary->device_identifier() == selector_text);
+  CHECK(binary->terminal_payload().size() == 3U);
+  CHECK(binary->terminal_payload()[0] == std::byte{'v'});
+  CHECK(binary->terminal_payload()[1] == std::byte{0});
+  CHECK(binary->terminal_payload()[2] == std::byte{0xff});
+  CHECK(binary->message_count() == 2U);
+  const auto info = binary->message(0);
+  CHECK(info.has_value());
+  CHECK(info->kind == kairosboot::CommandMessageKind::Info);
+  CHECK(info->payload.size() == 3U);
+  CHECK(info->payload[1] == std::byte{0});
+  CHECK(info->payload[2] == std::byte{0xff});
+  const auto text = binary->message(1);
+  CHECK(text.has_value());
+  CHECK(text->kind == kairosboot::CommandMessageKind::Text);
+  CHECK(!binary->message(2).has_value());
+
+  auto failed = context->erase(selector, "userdata");
+  CHECK(!failed.has_value());
+  CHECK(failed.error().status() == KB_E_DEVICE_FAIL);
+  CHECK(failed.error().device_message().size() == 3U);
+  CHECK(failed.error().device_message()[0] == std::byte{'e'});
+  CHECK(failed.error().device_message()[1] == std::byte{0});
+  CHECK(failed.error().device_message()[2] == std::byte{0xff});
+  CHECK(failed.error().command_messages().size() == 1U);
+  CHECK(failed.error().command_messages()[0].payload.size() == 3U);
+  CHECK(failed.error().command_messages()[0].payload[2] == std::byte{0xff});
+
+  std::optional<kairosboot::CommandResult> retained;
+  {
+    auto operation = context->getvar_async(selector, "delayed");
+    CHECK(operation.has_value());
+    server.wait_for_delayed_command();
+    auto premature = operation->command_result();
+    CHECK(!premature.has_value());
+    CHECK(premature.error().status() == KB_E_BUSY);
+    server.release_delayed_command();
+    auto completed = operation->wait_result();
+    CHECK(completed.has_value());
+    retained.emplace(std::move(*completed));
+  }
+  CHECK(retained.has_value());
+  CHECK(as_string(retained->terminal_payload()) == "ready");
+  CHECK(retained->device_identifier() == selector_text);
+
+  std::vector<std::uint64_t> stage_watermarks;
+  kairosboot::CommandOptions stage_options;
+  stage_options.progress = [&](const kairosboot::Progress& progress) {
+    CHECK(progress.device_identifier == selector_text);
+    CHECK(progress.stage == "stage");
+    stage_watermarks.push_back(progress.bytes_completed);
+    return kairosboot::ProgressAction::Continue;
+  };
+  std::vector<std::byte> stage_data(16U);
+  for (std::size_t index = 0; index < stage_data.size(); ++index) {
+    stage_data[index] = std::byte{static_cast<unsigned char>(index)};
+  }
+  auto stage_operation = context->stage_async(selector, stage_data,
+                                               stage_options);
+  CHECK(stage_operation.has_value());
+  stage_data.clear();
+  stage_data.shrink_to_fit();
+  auto staged = stage_operation->wait_result();
+  CHECK(staged.has_value());
+  CHECK(as_string(staged->terminal_payload()) == "staged");
+  CHECK(stage_watermarks == std::vector<std::uint64_t>({0, 16}));
+
+  kairosboot::CommandOptions receive_options;
+  receive_options.maximum_receive_bytes = 3;
+  auto uploaded = context->upload(selector, receive_options);
+  CHECK(uploaded.has_value());
+  CHECK(uploaded->data().size() == 3U);
+  CHECK(uploaded->data()[0] == std::byte{'d'});
+  CHECK(uploaded->data()[1] == std::byte{0});
+  CHECK(uploaded->data()[2] == std::byte{0xff});
+
+  auto fetched = context->fetch(
+      selector, "vendor", kairosboot::FetchRange{.offset = 2, .size = 3},
+      receive_options);
+  CHECK(fetched.has_value());
+  CHECK(fetched->data().size() == 3U);
+  CHECK(fetched->data()[0] == std::byte{'f'});
+  CHECK(fetched->data()[1] == std::byte{0});
+  CHECK(fetched->data()[2] == std::byte{0xff});
+
+  receive_options.maximum_receive_bytes = 16;
+  auto oversized = context->upload(selector, receive_options);
+  CHECK(!oversized.has_value());
+  CHECK(oversized.error().status() == KB_E_PROTOCOL);
+  CHECK(oversized.error().inbound_expected_bytes() == 32U);
+  CHECK(oversized.error().inbound_transferred_bytes() == 0U);
+  CHECK(oversized.error().inbound_transfer_state() ==
+        KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+  CHECK(oversized.error().session_poisoned());
+
+  auto cancelled_operation = context->getvar_async(selector, "cancel");
+  CHECK(cancelled_operation.has_value());
+  server.wait_for_cancel_command();
+  std::stop_source cancellation;
+  CHECK(cancellation.request_stop());
+  auto cancelled =
+      cancelled_operation->wait_result(cancellation.get_token());
+  CHECK(!cancelled.has_value());
+  CHECK(cancelled.error().status() == KB_E_CANCELLED);
+  CHECK(cancelled_operation->state() == KB_OPERATION_CANCELLED);
+
+  server.finish();
+}
+
 }  // namespace
 
 int main() {
   try {
     run_contract();
-    std::cout << "PASS: typed C primitives over Fastboot TCP\n";
+    run_cxx_contract();
+    std::cout << "PASS: typed C and C++ primitives over Fastboot TCP\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

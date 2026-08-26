@@ -4,15 +4,20 @@
 #include <kairosboot/kairosboot.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace kairosboot {
 
@@ -21,7 +26,7 @@ enum class ProgressAction : std::uint8_t {
   Cancel,
 };
 
-struct FlashProgress {
+struct Progress {
   std::uint64_t bytes_completed{};
   std::uint64_t bytes_total{};
   // These views are valid only for the duration of the progress callback.
@@ -29,10 +34,48 @@ struct FlashProgress {
   std::string_view device_identifier;
 };
 
+using FlashProgress = Progress;
+
+enum class CommandMessageKind : std::uint8_t {
+  Info,
+  Text,
+};
+
+struct CommandMessage {
+  CommandMessageKind kind{CommandMessageKind::Info};
+  std::vector<std::byte> payload;
+};
+
+struct CommandMessageView {
+  CommandMessageKind kind{CommandMessageKind::Info};
+  std::span<const std::byte> payload;
+};
+
+enum class RebootTarget : kb_reboot_target_t {
+  System = KB_REBOOT_SYSTEM,
+  Bootloader = KB_REBOOT_BOOTLOADER,
+  Recovery = KB_REBOOT_RECOVERY,
+  Fastboot = KB_REBOOT_FASTBOOT,
+};
+
+struct FetchRange {
+  std::optional<std::uint64_t> offset;
+  std::optional<std::uint64_t> size;
+};
+
+using DeviceSelector = std::optional<std::string_view>;
+
 struct FlashOptions {
   // Per-I/O timeout. milliseconds::max() selects the native infinite default.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
   std::function<ProgressAction(const FlashProgress &)> progress;
+};
+
+struct CommandOptions {
+  // Per-I/O timeout. milliseconds::max() selects the native infinite default.
+  std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
+  std::function<ProgressAction(const Progress &)> progress;
+  std::uint64_t maximum_receive_bytes{64ULL * 1024ULL * 1024ULL};
 };
 
 class Error {
@@ -48,6 +91,26 @@ public:
   [[nodiscard]] kb_transfer_state_t transfer_state() const noexcept {
     return transfer_state_;
   }
+  [[nodiscard]] std::span<const std::byte> device_message() const noexcept {
+    return device_message_;
+  }
+  [[nodiscard]] const std::vector<CommandMessage> &command_messages()
+      const noexcept {
+    return command_messages_;
+  }
+  [[nodiscard]] std::optional<std::uint64_t> inbound_expected_bytes()
+      const noexcept {
+    return inbound_expected_bytes_;
+  }
+  [[nodiscard]] std::uint64_t inbound_transferred_bytes() const noexcept {
+    return inbound_transferred_bytes_;
+  }
+  [[nodiscard]] kb_transfer_state_t inbound_transfer_state() const noexcept {
+    return inbound_transfer_state_;
+  }
+  [[nodiscard]] bool session_poisoned() const noexcept {
+    return session_poisoned_;
+  }
 
 private:
   friend Error detail_take_error(kb_status_t, kb_error_t *);
@@ -59,7 +122,27 @@ private:
   std::string device_identifier_;
   std::int32_t native_code_{0};
   kb_transfer_state_t transfer_state_{KB_TRANSFER_NOT_SENT};
+  std::vector<std::byte> device_message_;
+  std::vector<CommandMessage> command_messages_;
+  std::optional<std::uint64_t> inbound_expected_bytes_;
+  std::uint64_t inbound_transferred_bytes_{0};
+  kb_transfer_state_t inbound_transfer_state_{KB_TRANSFER_NOT_SENT};
+  bool session_poisoned_{false};
 };
+
+inline std::span<const std::byte> detail_byte_view(const std::uint8_t *data,
+                                                  std::size_t size) noexcept {
+  return {reinterpret_cast<const std::byte *>(data), size};
+}
+
+inline std::vector<std::byte> detail_copy_bytes(const std::uint8_t *data,
+                                                const std::size_t size) {
+  if (data == nullptr || size == 0) {
+    return {};
+  }
+  const auto *first = reinterpret_cast<const std::byte *>(data);
+  return {first, first + size};
+}
 
 inline Error detail_copy_error(kb_status_t fallback,
                                const kb_error_t *handle) {
@@ -71,14 +154,40 @@ inline Error detail_copy_error(kb_status_t fallback,
     result.device_identifier_ = kb_error_device_identifier(handle);
     result.native_code_ = kb_error_native_code(handle);
     result.transfer_state_ = kb_error_transfer_state(handle);
+    std::size_t size = 0;
+    const auto *device_message = kb_error_device_message(handle, &size);
+    result.device_message_ = detail_copy_bytes(device_message, size);
+    const std::size_t message_count = kb_error_command_message_count(handle);
+    result.command_messages_.reserve(message_count);
+    for (std::size_t index = 0; index < message_count; ++index) {
+      size = 0;
+      const auto *payload =
+          kb_error_command_message_payload(handle, index, &size);
+      result.command_messages_.push_back(CommandMessage{
+          kb_error_command_message_kind(handle, index) ==
+                  KB_COMMAND_MESSAGE_TEXT
+              ? CommandMessageKind::Text
+              : CommandMessageKind::Info,
+          detail_copy_bytes(payload, size),
+      });
+    }
+    const auto inbound_expected = kb_error_inbound_expected_bytes(handle);
+    if (inbound_expected != KB_FETCH_UNSPECIFIED) {
+      result.inbound_expected_bytes_ = inbound_expected;
+    }
+    result.inbound_transferred_bytes_ =
+        kb_error_inbound_transferred_bytes(handle);
+    result.inbound_transfer_state_ =
+        kb_error_inbound_transfer_state(handle);
+    result.session_poisoned_ = kb_error_session_poisoned(handle) != 0;
   }
   return result;
 }
 
 inline Error detail_take_error(kb_status_t fallback, kb_error_t *handle) {
-  Error result = detail_copy_error(fallback, handle);
-  kb_error_release(handle);
-  return result;
+  const std::unique_ptr<kb_error_t, void (*)(kb_error_t *)> owner{
+      handle, &kb_error_release};
+  return detail_copy_error(fallback, owner.get());
 }
 
 inline Error detail_make_error(kb_status_t status, std::string message) {
@@ -130,25 +239,35 @@ struct PreparedFlashOptions final {
   std::shared_ptr<ProgressCallbackState> callback_state;
 };
 
+[[nodiscard]] inline std::expected<std::uint32_t, Error>
+prepare_timeout(const std::chrono::milliseconds timeout,
+                const std::string_view option_name) {
+  if (timeout == std::chrono::milliseconds::max()) {
+    return KB_WAIT_INFINITE;
+  }
+  const auto count = timeout.count();
+  if (count < 0 ||
+      static_cast<std::uint64_t>(count) >=
+          static_cast<std::uint64_t>(KB_WAIT_INFINITE)) {
+    return std::unexpected(detail_make_error(
+        KB_E_INVALID_ARGUMENT,
+        std::string{option_name} +
+            " must be non-negative and less than UINT32_MAX milliseconds, "
+            "or std::chrono::milliseconds::max()"));
+  }
+  return static_cast<std::uint32_t>(count);
+}
+
 [[nodiscard]] inline std::expected<PreparedFlashOptions, Error>
 prepare_flash_options(const FlashOptions &options) {
-  std::uint32_t timeout_ms = KB_WAIT_INFINITE;
-  if (options.timeout != std::chrono::milliseconds::max()) {
-    const auto count = options.timeout.count();
-    if (count < 0 ||
-        static_cast<std::uint64_t>(count) >=
-            static_cast<std::uint64_t>(KB_WAIT_INFINITE)) {
-      return std::unexpected(detail_make_error(
-          KB_E_INVALID_ARGUMENT,
-          "flash timeout must be non-negative and less than UINT32_MAX "
-          "milliseconds, or std::chrono::milliseconds::max()"));
-    }
-    timeout_ms = static_cast<std::uint32_t>(count);
+  auto timeout = prepare_timeout(options.timeout, "flash timeout");
+  if (!timeout) {
+    return std::unexpected(std::move(timeout.error()));
   }
 
   PreparedFlashOptions result;
   kb_flash_options_init(&result.native);
-  result.native.timeout_ms = timeout_ms;
+  result.native.timeout_ms = *timeout;
   if (options.progress) {
     // This ordinary C++ allocation/copy happens before calling the C ABI and
     // may propagate std::bad_alloc or a callable-defined copy exception.
@@ -160,6 +279,48 @@ prepare_flash_options(const FlashOptions &options) {
     result.native.progress_user_data = result.callback_state.get();
   }
   return result;
+}
+
+struct PreparedCommandOptions final {
+  kb_command_options_t native{};
+  std::shared_ptr<ProgressCallbackState> callback_state;
+};
+
+[[nodiscard]] inline std::expected<PreparedCommandOptions, Error>
+prepare_command_options(const CommandOptions &options) {
+  auto timeout = prepare_timeout(options.timeout, "command timeout");
+  if (!timeout) {
+    return std::unexpected(std::move(timeout.error()));
+  }
+  if (options.maximum_receive_bytes == 0) {
+    return std::unexpected(detail_make_error(
+        KB_E_INVALID_ARGUMENT,
+        "command maximum_receive_bytes must be greater than zero"));
+  }
+
+  PreparedCommandOptions result;
+  kb_command_options_init(&result.native);
+  result.native.timeout_ms = *timeout;
+  result.native.maximum_receive_bytes = options.maximum_receive_bytes;
+  if (options.progress) {
+    result.callback_state =
+        std::make_shared<ProgressCallbackState>(ProgressCallbackState{
+            options.progress,
+        });
+    result.native.progress_callback = &progress_trampoline;
+    result.native.progress_user_data = result.callback_state.get();
+  }
+  return result;
+}
+
+[[nodiscard]] inline kb_reboot_target_t
+native_reboot_target(const RebootTarget target) noexcept {
+  return static_cast<kb_reboot_target_t>(target);
+}
+
+[[nodiscard]] inline std::uint64_t
+native_fetch_value(const std::optional<std::uint64_t> value) noexcept {
+  return value.value_or(KB_FETCH_UNSPECIFIED);
 }
 
 // Owns the callback state until native release has drained every callback.
@@ -258,6 +419,68 @@ private:
   kb_device_list_t *handle_{};
 };
 
+class CommandResult {
+public:
+  explicit CommandResult(kb_command_result_t *handle) noexcept
+      : handle_(handle) {}
+  ~CommandResult() { kb_command_result_release(handle_); }
+
+  CommandResult(const CommandResult &) = delete;
+  CommandResult &operator=(const CommandResult &) = delete;
+
+  CommandResult(CommandResult &&other) noexcept
+      : handle_(std::exchange(other.handle_, nullptr)) {}
+  CommandResult &operator=(CommandResult &&other) noexcept {
+    if (this != &other) {
+      kb_command_result_release(handle_);
+      handle_ = std::exchange(other.handle_, nullptr);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] std::span<const std::byte> terminal_payload() const noexcept {
+    std::size_t size = 0;
+    const auto *data = kb_command_result_terminal_payload(handle_, &size);
+    return detail_byte_view(data, size);
+  }
+
+  [[nodiscard]] std::size_t message_count() const noexcept {
+    return kb_command_result_message_count(handle_);
+  }
+
+  [[nodiscard]] std::optional<CommandMessageView>
+  message(const std::size_t index) const noexcept {
+    if (index >= message_count()) {
+      return std::nullopt;
+    }
+    std::size_t size = 0;
+    const auto *data =
+        kb_command_result_message_payload(handle_, index, &size);
+    return CommandMessageView{
+        kb_command_result_message_kind(handle_, index) ==
+                KB_COMMAND_MESSAGE_TEXT
+            ? CommandMessageKind::Text
+            : CommandMessageKind::Info,
+        detail_byte_view(data, size),
+    };
+  }
+
+  [[nodiscard]] std::span<const std::byte> data() const noexcept {
+    std::size_t size = 0;
+    const auto *data = kb_command_result_data(handle_, &size);
+    return detail_byte_view(data, size);
+  }
+
+  [[nodiscard]] std::string_view device_identifier() const noexcept {
+    const char *identifier = kb_command_result_device_identifier(handle_);
+    return identifier == nullptr ? std::string_view{}
+                                 : std::string_view{identifier};
+  }
+
+private:
+  kb_command_result_t *handle_{};
+};
+
 class Operation {
 public:
   explicit Operation(kb_operation_t *handle) noexcept : resources_(handle) {}
@@ -283,12 +506,66 @@ public:
     }
     return {};
   }
+  [[nodiscard]] std::expected<void, Error>
+  wait(const std::chrono::milliseconds timeout) {
+    auto native_timeout = detail::prepare_timeout(timeout, "operation timeout");
+    if (!native_timeout) {
+      return std::unexpected(std::move(native_timeout.error()));
+    }
+    return wait(*native_timeout);
+  }
   [[nodiscard]] std::expected<void, Error> cancel() {
     const kb_status_t status = kb_operation_cancel(resources_.handle());
     if (status != KB_OK) {
       return std::unexpected(detail_copy_error(status, nullptr));
     }
     return {};
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> command_result() const {
+    kb_command_result_t *result = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = kb_operation_command_result(
+        resources_.handle(), &result, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return CommandResult{result};
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  wait_result(std::uint32_t timeout_ms = KB_WAIT_INFINITE) {
+    auto waited = wait(timeout_ms);
+    if (!waited) {
+      return std::unexpected(std::move(waited.error()));
+    }
+    return command_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  wait_result(const std::chrono::milliseconds timeout) {
+    auto native_timeout = detail::prepare_timeout(timeout, "operation timeout");
+    if (!native_timeout) {
+      return std::unexpected(std::move(native_timeout.error()));
+    }
+    return wait_result(*native_timeout);
+  }
+
+  // A stop request calls the C cancellation API, then this method remains in
+  // kb_operation_wait until the native transport has reached a terminal state
+  // and drained its callbacks.
+  [[nodiscard]] std::expected<CommandResult, Error>
+  wait_result(const std::stop_token stop_token,
+              const std::chrono::milliseconds timeout =
+                  std::chrono::milliseconds::max()) {
+    auto native_timeout = detail::prepare_timeout(timeout, "operation timeout");
+    if (!native_timeout) {
+      return std::unexpected(std::move(native_timeout.error()));
+    }
+    std::stop_callback cancel_on_stop{
+        stop_token,
+        [handle = resources_.handle()] { (void)kb_operation_cancel(handle); }};
+    return wait_result(*native_timeout);
   }
 
 private:
@@ -336,6 +613,401 @@ public:
       return std::unexpected(detail_take_error(status, error));
     }
     return DeviceList{devices};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> getvar_async(
+      const DeviceSelector selector, const std::string_view variable,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string variable_storage{variable};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_getvar_async(handle_, selector_value,
+                                   variable_storage.c_str(), native, operation,
+                                   error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  getvar_async(const std::string_view variable,
+               const CommandOptions &options = {}) const {
+    return getvar_async(std::nullopt, variable, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> getvar(
+      const DeviceSelector selector, const std::string_view variable,
+      const CommandOptions &options = {}) const {
+    auto operation = getvar_async(selector, variable, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  getvar(const std::string_view variable,
+         const CommandOptions &options = {}) const {
+    return getvar(std::nullopt, variable, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> erase_async(
+      const DeviceSelector selector, const std::string_view partition,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_erase_async(handle_, selector_value,
+                                  partition_storage.c_str(), native, operation,
+                                  error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  erase_async(const std::string_view partition,
+              const CommandOptions &options = {}) const {
+    return erase_async(std::nullopt, partition, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> erase(
+      const DeviceSelector selector, const std::string_view partition,
+      const CommandOptions &options = {}) const {
+    auto operation = erase_async(selector, partition, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  erase(const std::string_view partition,
+        const CommandOptions &options = {}) const {
+    return erase(std::nullopt, partition, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> set_active_async(
+      const DeviceSelector selector, const std::string_view slot,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string slot_storage{slot};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_set_active_async(handle_, selector_value,
+                                       slot_storage.c_str(), native, operation,
+                                       error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  set_active_async(const std::string_view slot,
+                   const CommandOptions &options = {}) const {
+    return set_active_async(std::nullopt, slot, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> set_active(
+      const DeviceSelector selector, const std::string_view slot,
+      const CommandOptions &options = {}) const {
+    auto operation = set_active_async(selector, slot, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  set_active(const std::string_view slot,
+             const CommandOptions &options = {}) const {
+    return set_active(std::nullopt, slot, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> reboot_async(
+      const DeviceSelector selector, const RebootTarget target,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_reboot_async(handle_, selector_value,
+                                   detail::native_reboot_target(target), native,
+                                   operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> reboot_async(
+      const RebootTarget target = RebootTarget::System,
+      const CommandOptions &options = {}) const {
+    return reboot_async(std::nullopt, target, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> reboot(
+      const DeviceSelector selector, const RebootTarget target,
+      const CommandOptions &options = {}) const {
+    auto operation = reboot_async(selector, target, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> reboot(
+      const RebootTarget target = RebootTarget::System,
+      const CommandOptions &options = {}) const {
+    return reboot(std::nullopt, target, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> continue_boot_async(
+      const DeviceSelector selector,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_continue_boot_async(handle_, selector_value, native,
+                                           operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  continue_boot_async(const CommandOptions &options = {}) const {
+    return continue_boot_async(std::nullopt, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> continue_boot(
+      const DeviceSelector selector,
+      const CommandOptions &options = {}) const {
+    auto operation = continue_boot_async(selector, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  continue_boot(const CommandOptions &options = {}) const {
+    return continue_boot(std::nullopt, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> oem_async(
+      const DeviceSelector selector, const std::string_view command_suffix,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string suffix_storage{command_suffix};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_oem_async(handle_, selector_value, suffix_storage.c_str(),
+                                native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  oem_async(const std::string_view command_suffix,
+            const CommandOptions &options = {}) const {
+    return oem_async(std::nullopt, command_suffix, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> oem(
+      const DeviceSelector selector, const std::string_view command_suffix,
+      const CommandOptions &options = {}) const {
+    auto operation = oem_async(selector, command_suffix, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  oem(const std::string_view command_suffix,
+      const CommandOptions &options = {}) const {
+    return oem(std::nullopt, command_suffix, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> raw_command_async(
+      const DeviceSelector selector, const std::string_view command,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string command_storage{command};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_raw_command_async(handle_, selector_value,
+                                        command_storage.c_str(), native,
+                                        operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  raw_command_async(const std::string_view command,
+                    const CommandOptions &options = {}) const {
+    return raw_command_async(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> raw_command(
+      const DeviceSelector selector, const std::string_view command,
+      const CommandOptions &options = {}) const {
+    auto operation = raw_command_async(selector, command, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  raw_command(const std::string_view command,
+              const CommandOptions &options = {}) const {
+    return raw_command(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_async(
+      const DeviceSelector selector,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_boot_async(handle_, selector_value, native, operation,
+                                 error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  boot_async(const CommandOptions &options = {}) const {
+    return boot_async(std::nullopt, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> boot(
+      const DeviceSelector selector,
+      const CommandOptions &options = {}) const {
+    auto operation = boot_async(selector, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  boot(const CommandOptions &options = {}) const {
+    return boot(std::nullopt, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> stage_async(
+      const DeviceSelector selector, const std::span<const std::byte> data,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_stage_async(handle_, selector_value, data.data(),
+                                  data.size(), native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> stage_async(
+      const std::span<const std::byte> data,
+      const CommandOptions &options = {}) const {
+    return stage_async(std::nullopt, data, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> stage(
+      const DeviceSelector selector, const std::span<const std::byte> data,
+      const CommandOptions &options = {}) const {
+    auto operation = stage_async(selector, data, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  stage(const std::span<const std::byte> data,
+        const CommandOptions &options = {}) const {
+    return stage(std::nullopt, data, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> upload_async(
+      const DeviceSelector selector,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_upload_async(handle_, selector_value, native, operation,
+                                   error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  upload_async(const CommandOptions &options = {}) const {
+    return upload_async(std::nullopt, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> upload(
+      const DeviceSelector selector,
+      const CommandOptions &options = {}) const {
+    auto operation = upload_async(selector, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  upload(const CommandOptions &options = {}) const {
+    return upload(std::nullopt, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> fetch_async(
+      const DeviceSelector selector, const std::string_view partition,
+      const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_fetch_async(
+              handle_, selector_value, partition_storage.c_str(),
+              detail::native_fetch_value(range.offset),
+              detail::native_fetch_value(range.size), native, operation,
+              error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> fetch_async(
+      const std::string_view partition, const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    return fetch_async(std::nullopt, partition, range, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> fetch(
+      const DeviceSelector selector, const std::string_view partition,
+      const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    auto operation = fetch_async(selector, partition, range, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> fetch(
+      const std::string_view partition, const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    return fetch(std::nullopt, partition, range, options);
   }
 
   [[nodiscard]] std::expected<Operation, Error> flash_file_async(
@@ -443,6 +1115,32 @@ public:
   }
 
 private:
+  template <typename Start>
+  [[nodiscard]] std::expected<Operation, Error>
+  start_typed_operation(const CommandOptions &options, Start &&start) const {
+    auto prepared = detail::prepare_command_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = std::invoke(
+        std::forward<Start>(start), &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] static const char *
+  selector_pointer(const DeviceSelector selector, std::string &storage) {
+    if (!selector.has_value()) {
+      return nullptr;
+    }
+    storage.assign(selector->data(), selector->size());
+    return storage.c_str();
+  }
+
   explicit Context(kb_context_t *handle) noexcept : handle_(handle) {}
   kb_context_t *handle_{};
 };
