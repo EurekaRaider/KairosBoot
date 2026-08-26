@@ -100,6 +100,8 @@ public:
     // Accepted submissions must complete asynchronously through handle_completion().
     // Implementations must not invoke completion inline from submit().
     [[nodiscard]] virtual SubmitResult submit(const TransferSubmission& submission) = 0;
+    // Cancellation only requests an asynchronous completion; it must not call
+    // handle_completion() inline or otherwise mutate the owning ring.
     virtual void cancel(TransferId id) noexcept = 0;
 };
 

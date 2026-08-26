@@ -8,12 +8,14 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,6 +25,48 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+namespace allocation_fault {
+
+thread_local bool enabled = false;
+thread_local std::size_t attempts = 0;
+
+[[nodiscard]] void* allocate(const std::size_t size) {
+    if (enabled) {
+        ++attempts;
+        throw std::bad_alloc{};
+    }
+    if (void* allocation = std::malloc(size == 0 ? 1 : size); allocation != nullptr) {
+        return allocation;
+    }
+    throw std::bad_alloc{};
+}
+
+}  // namespace allocation_fault
+
+void* operator new(const std::size_t size) {
+    return allocation_fault::allocate(size);
+}
+
+void* operator new[](const std::size_t size) {
+    return allocation_fault::allocate(size);
+}
+
+void operator delete(void* const allocation) noexcept {
+    std::free(allocation);
+}
+
+void operator delete[](void* const allocation) noexcept {
+    std::free(allocation);
+}
+
+void operator delete(void* const allocation, std::size_t) noexcept {
+    std::free(allocation);
+}
+
+void operator delete[](void* const allocation, std::size_t) noexcept {
+    std::free(allocation);
+}
 
 namespace {
 
@@ -82,6 +126,8 @@ public:
         std::size_t size{};
     };
 
+    FakeBackend() { cancelled_.reserve(32); }
+
     [[nodiscard]] SubmitResult submit(const TransferSubmission& submission) override {
         auto result = SubmitResult::accepted;
         if (!submit_results_.empty()) {
@@ -115,6 +161,19 @@ private:
     std::unordered_map<TransferId, Pending> pending_;
     std::vector<TransferId> order_;
     std::vector<TransferId> cancelled_;
+};
+
+class AllocationFailureScope final {
+public:
+    AllocationFailureScope() noexcept {
+        allocation_fault::attempts = 0;
+        allocation_fault::enabled = true;
+    }
+
+    ~AllocationFailureScope() { allocation_fault::enabled = false; }
+
+    AllocationFailureScope(const AllocationFailureScope&) = delete;
+    AllocationFailureScope& operator=(const AllocationFailureScope&) = delete;
 };
 
 [[nodiscard]] std::shared_ptr<MemoryTransferSource> make_source(const std::size_t size) {
@@ -268,8 +327,12 @@ void test_transfer_ring_cancel_waits_for_drain() {
     TransferRing ring(backend, budget, TransferRingConfig{4, 2});
 
     KB_CHECK(ring.start(make_source(12)));
+    KB_CHECK(ring.completion_watermark() == 0);
+    KB_CHECK(ring.submitted_bytes() == 8);
+    KB_CHECK(ring.in_flight() == 2);
     ring.cancel();
     KB_CHECK(ring.state() == TransferRingState::cancelling);
+    KB_CHECK(ring.error()->certainty == DeliveryCertainty::partial_or_unknown);
     KB_CHECK(backend.was_cancelled(1));
     KB_CHECK(backend.was_cancelled(2));
     KB_CHECK(ring.handle_completion({2, CompletionCode::success, 4}));
@@ -280,6 +343,45 @@ void test_transfer_ring_cancel_waits_for_drain() {
     KB_CHECK(ring.error()->certainty == DeliveryCertainty::partial_or_unknown);
     KB_CHECK(ring.submitted_bytes() == 8);
     KB_CHECK(budget->used() == 0);
+}
+
+void test_transfer_ring_cancel_and_failure_drain_do_not_allocate() {
+    {
+        FakeBackend backend;
+        const auto budget = std::make_shared<BufferBudget>(8);
+        TransferRing ring(backend, budget, TransferRingConfig{4, 2});
+
+        KB_CHECK(ring.start(make_source(8)));
+        {
+            AllocationFailureScope fault;
+            ring.cancel();
+            KB_CHECK(ring.handle_completion({2, CompletionCode::cancelled, 0}));
+            KB_CHECK(ring.handle_completion({1, CompletionCode::cancelled, 0}));
+        }
+        KB_CHECK(allocation_fault::attempts == 0);
+        KB_CHECK(ring.state() == TransferRingState::cancelled);
+        KB_CHECK(ring.error()->certainty == DeliveryCertainty::partial_or_unknown);
+        KB_CHECK(budget->used() == 0);
+    }
+
+    {
+        FakeBackend backend;
+        const auto budget = std::make_shared<BufferBudget>(12);
+        TransferRing ring(backend, budget, TransferRingConfig{4, 3});
+
+        KB_CHECK(ring.start(make_source(12)));
+        {
+            AllocationFailureScope fault;
+            KB_CHECK(ring.handle_completion({1, CompletionCode::success, 2}));
+            KB_CHECK(ring.handle_completion({2, CompletionCode::cancelled, 0}));
+            KB_CHECK(ring.handle_completion({3, CompletionCode::cancelled, 0}));
+        }
+        KB_CHECK(allocation_fault::attempts == 0);
+        KB_CHECK(ring.state() == TransferRingState::failed);
+        KB_CHECK(ring.error()->kind == TransferErrorKind::partial_transfer);
+        KB_CHECK(ring.error()->certainty == DeliveryCertainty::partial_or_unknown);
+        KB_CHECK(budget->used() == 0);
+    }
 }
 
 void test_tuner_defaults_bounds_and_deterministic_feedback() {
@@ -647,6 +749,8 @@ int main() {
         {"partial transfer cancel and drain", test_transfer_ring_partial_failure_cancels_and_drains},
         {"no-device error classification", test_transfer_ring_no_device_classification},
         {"explicit cancellation drain", test_transfer_ring_cancel_waits_for_drain},
+        {"cancel and failure drain do not allocate",
+         test_transfer_ring_cancel_and_failure_drain_do_not_allocate},
         {"adaptive tuner deterministic feedback", test_tuner_defaults_bounds_and_deterministic_feedback},
         {"global memory budget formula", test_global_memory_budget_formula},
         {"process USB budget formula and cap", test_process_usb_budget_formula_and_cap},

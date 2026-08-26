@@ -1115,6 +1115,43 @@ void test_transfer_ring_adapter_lifetime_and_completion_flow() {
     runtime->stop();
 }
 
+void test_observer_cancel_certainty_includes_submitted_and_out_of_order_data() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    auto backend_result = runtime->open_bulk_out(matching_device(runtime));
+    KB_CHECK(backend_result.has_value());
+    auto backend = std::move(*backend_result);
+    const auto budget = std::make_shared<BufferBudget>(8);
+    TransferRing ring(*backend, budget, TransferRingConfig{4, 2});
+    std::vector<std::byte> source_bytes(8, std::byte{0x5A});
+
+    KB_CHECK(ring.start(
+        std::make_shared<MemoryTransferSource>(std::move(source_bytes))));
+    KB_CHECK(ring.completion_watermark() == 0);
+    KB_CHECK(ring.submitted_bytes() == 8);
+    KB_CHECK(ring.in_flight() == 2);
+    KB_CHECK(kairosboot::transport::detail::observer_cancel_certainty(ring) ==
+             TransferCertainty::PartialOrUnknown);
+
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto out_of_order = wait_for_completion(*backend);
+    KB_CHECK(out_of_order.id == 2);
+    KB_CHECK(ring.handle_completion(out_of_order));
+    KB_CHECK(ring.completion_watermark() == 0);
+    KB_CHECK(ring.completed_bytes() == 4);
+    KB_CHECK(ring.in_flight() == 1);
+    KB_CHECK(kairosboot::transport::detail::observer_cancel_certainty(ring) ==
+             TransferCertainty::PartialOrUnknown);
+
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    KB_CHECK(ring.handle_completion(wait_for_completion(*backend)));
+    KB_CHECK(kairosboot::transport::detail::observer_cancel_certainty(ring) ==
+             TransferCertainty::FullyTransferred);
+
+    backend->stop();
+    runtime->stop();
+}
+
 void test_runtime_stop_cancels_and_drains_idempotently() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -1998,6 +2035,8 @@ int main() {
         {"submit and completion error classification", test_submit_and_completion_error_classification},
         {"submit allocation failures", test_submit_allocation_failures_do_not_throw_or_leak},
         {"transfer ring adapter flow", test_transfer_ring_adapter_lifetime_and_completion_flow},
+        {"observer cancel certainty for submitted and out-of-order data",
+         test_observer_cancel_certainty_includes_submitted_and_out_of_order_data},
         {"runtime stop cancel and drain", test_runtime_stop_cancels_and_drains_idempotently},
         {"terminal event error poisons accepting", test_terminal_event_error_poisons_accepting},
         {"explicit zero packet contract", test_explicit_zero_packet_contract},

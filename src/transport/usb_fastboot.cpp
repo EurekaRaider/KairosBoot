@@ -200,17 +200,6 @@ private:
         bytes, std::numeric_limits<std::size_t>::max()));
 }
 
-[[nodiscard]] protocol::TransferCertainty observer_cancel_certainty(
-    const TransferRing& ring) noexcept {
-    if (ring.total_bytes() != 0 &&
-        ring.completion_watermark() == ring.total_bytes()) {
-        return protocol::TransferCertainty::FullyTransferred;
-    }
-    return ring.completion_watermark() == 0
-        ? protocol::TransferCertainty::NotTransferred
-        : protocol::TransferCertainty::PartialOrUnknown;
-}
-
 [[nodiscard]] protocol::TransferResult classify_requested_cancellation(
     protocol::TransferResult failure,
     const bool cancellation_requested) {
@@ -481,7 +470,7 @@ protocol::TransferResult UsbFastbootTransport::write_source(
                     auto failure = protocol::TransferResult{
                         .status = protocol::TransportStatus::Cancelled,
                         .transferred = transferred_size(completion_watermark),
-                        .certainty = observer_cancel_certainty(ring),
+                        .certainty = detail::observer_cancel_certainty(ring),
                         .truncated = false,
                         .detail = "USB bulk OUT was cancelled by progress observer",
                         .native_code = 0,
