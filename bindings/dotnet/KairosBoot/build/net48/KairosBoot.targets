@@ -1,0 +1,4 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildThisFileDirectory)..\..\buildTransitive\net48\KairosBoot.targets"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\buildTransitive\net48\KairosBoot.targets')" />
+</Project>

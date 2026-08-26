@@ -5,7 +5,9 @@ namespace KairosBoot.Interop;
 
 internal static partial class NativeMethods
 {
-    internal const string LibraryName = "kairosboot";
+    // Keep the managed KairosBoot.dll and the native library distinct on
+    // case-insensitive filesystems.
+    internal const string LibraryName = "kairosboot_native";
     internal const uint ApiVersion = 1;
     internal const uint DefaultTimeoutMilliseconds = 30_000;
     internal const uint WaitSliceMilliseconds = 50;

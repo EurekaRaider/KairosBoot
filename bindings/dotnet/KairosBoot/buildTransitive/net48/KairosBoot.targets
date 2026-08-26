@@ -1,0 +1,56 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <_KairosBootNet48PackageRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</_KairosBootNet48PackageRoot>
+    <_KairosBootNet48NativeDir>$(_KairosBootNet48PackageRoot)\runtimes\win-x64\native</_KairosBootNet48NativeDir>
+    <_KairosBootNet48EffectivePlatform Condition="'$(PlatformTarget)' != ''">$(PlatformTarget)</_KairosBootNet48EffectivePlatform>
+    <_KairosBootNet48EffectivePlatform Condition="'$(_KairosBootNet48EffectivePlatform)' == ''">$(Platform)</_KairosBootNet48EffectivePlatform>
+  </PropertyGroup>
+
+  <Target Name="KairosBootValidateNet48Platform"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(_KairosBootNet48EffectivePlatform)' != 'x64'"
+           Text="KB.NET48.X64: KairosBoot supports .NET Framework 4.8 only with PlatformTarget=x64 (current: '$(_KairosBootNet48EffectivePlatform)')." />
+  </Target>
+
+  <Target Name="KairosBootCollectNet48NativeRuntime"
+          DependsOnTargets="KairosBootValidateNet48Platform"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\kairosboot_native.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\libusb-1.0.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\msvcp140.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\msvcp140_1.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\msvcp140_2.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\msvcp140_atomic_wait.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\vcruntime140.dll" />
+      <_KairosBootNet48RequiredRuntime Include="$(_KairosBootNet48NativeDir)\vcruntime140_1.dll" />
+      <_KairosBootNet48MissingRuntime Include="@(_KairosBootNet48RequiredRuntime)"
+                                      Condition="!Exists('%(Identity)')" />
+      <_KairosBootNet48NativeRuntime Include="$(_KairosBootNet48NativeDir)\*.dll" />
+    </ItemGroup>
+
+    <Error Condition="'@(_KairosBootNet48MissingRuntime)' != ''"
+           Text="KairosBoot's net48 package is incomplete. Missing app-local runtime file(s): @(_KairosBootNet48MissingRuntime, ', ')" />
+  </Target>
+
+  <Target Name="KairosBootCopyNet48NativeRuntime"
+          AfterTargets="CopyFilesToOutputDirectory"
+          DependsOnTargets="KairosBootCollectNet48NativeRuntime"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(OutDir)' == ''"
+           Text="KairosBoot cannot deploy its net48 native runtime because OutDir is empty." />
+    <Copy SourceFiles="@(_KairosBootNet48NativeRuntime)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="KairosBootCopyNet48NativeRuntimeToPublish"
+          AfterTargets="CopyFilesToPublishDirectory"
+          DependsOnTargets="KairosBootCollectNet48NativeRuntime"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(PublishDir)' != ''">
+    <Copy SourceFiles="@(_KairosBootNet48NativeRuntime)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

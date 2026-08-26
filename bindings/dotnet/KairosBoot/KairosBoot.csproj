@@ -48,40 +48,108 @@
   <ItemGroup Condition="'$(IncludeNativeRuntimes)' == 'true'">
     <None Remove="$(NativeRuntimeRoot)/**/*" />
     <None Include="$(NativeRuntimeRoot)/win-x64/native/**/*"
+          Exclude="$(NativeRuntimeRoot)/win-x64/native/licenses/**/*"
           Pack="true"
           PackagePath="runtimes/win-x64/native/" />
     <None Include="$(NativeRuntimeRoot)/win-arm64/native/**/*"
+          Exclude="$(NativeRuntimeRoot)/win-arm64/native/licenses/**/*"
           Pack="true"
           PackagePath="runtimes/win-arm64/native/" />
     <None Include="$(NativeRuntimeRoot)/linux-x64/native/**/*"
+          Exclude="$(NativeRuntimeRoot)/linux-x64/native/licenses/**/*"
           Pack="true"
           PackagePath="runtimes/linux-x64/native/" />
     <None Include="$(NativeRuntimeRoot)/linux-arm64/native/**/*"
+          Exclude="$(NativeRuntimeRoot)/linux-arm64/native/licenses/**/*"
           Pack="true"
           PackagePath="runtimes/linux-arm64/native/" />
     <None Include="$(NativeRuntimeRoot)/osx-x64/native/**/*"
+          Exclude="$(NativeRuntimeRoot)/osx-x64/native/licenses/**/*"
           Pack="true"
           PackagePath="runtimes/osx-x64/native/" />
     <None Include="$(NativeRuntimeRoot)/osx-arm64/native/**/*"
+          Exclude="$(NativeRuntimeRoot)/osx-arm64/native/licenses/**/*"
           Pack="true"
           PackagePath="runtimes/osx-arm64/native/" />
+
+    <None Include="$(NativeRuntimeRoot)/win-x64/native/licenses/libusb/COPYING"
+          Pack="true"
+          PackagePath="licenses/libusb/" />
+    <None Include="$(NativeRuntimeRoot)/win-x64/native/licenses/libusb/kairosboot-libusb.json"
+          Pack="true"
+          PackagePath="licenses/libusb/manifests/win-x64.json" />
+    <None Include="$(NativeRuntimeRoot)/win-arm64/native/licenses/libusb/kairosboot-libusb.json"
+          Pack="true"
+          PackagePath="licenses/libusb/manifests/win-arm64.json" />
+    <None Include="$(NativeRuntimeRoot)/linux-x64/native/licenses/libusb/kairosboot-libusb.json"
+          Pack="true"
+          PackagePath="licenses/libusb/manifests/linux-x64.json" />
+    <None Include="$(NativeRuntimeRoot)/linux-arm64/native/licenses/libusb/kairosboot-libusb.json"
+          Pack="true"
+          PackagePath="licenses/libusb/manifests/linux-arm64.json" />
+    <None Include="$(NativeRuntimeRoot)/osx-x64/native/licenses/libusb/kairosboot-libusb.json"
+          Pack="true"
+          PackagePath="licenses/libusb/manifests/osx-x64.json" />
+    <None Include="$(NativeRuntimeRoot)/osx-arm64/native/licenses/libusb/kairosboot-libusb.json"
+          Pack="true"
+          PackagePath="licenses/libusb/manifests/osx-arm64.json" />
+
+    <None Include="build/net48/KairosBoot.targets"
+          Pack="true"
+          PackagePath="build/net48/" />
+    <None Include="buildTransitive/net48/KairosBoot.targets"
+          Pack="true"
+          PackagePath="buildTransitive/net48/" />
+    <None Include="licenses/microsoft-vc-runtime/NOTICE.txt"
+          Pack="true"
+          PackagePath="licenses/microsoft-vc-runtime/NOTICE.txt" />
   </ItemGroup>
 
   <Target Name="ValidateNativeRuntimeAssets"
           BeforeTargets="_IntermediatePack"
           Condition="'$(IncludeNativeRuntimes)' == 'true'">
     <ItemGroup>
-      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/kairosboot.dll" />
-      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/kairosboot.dll" />
-      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/libkairosboot.so" />
-      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/libkairosboot.so" />
-      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/libkairosboot.dylib" />
-      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/libkairosboot.dylib" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/kairosboot_native.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/libusb-1.0.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/msvcp140.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/msvcp140_1.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/msvcp140_2.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/msvcp140_atomic_wait.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/vcruntime140.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/vcruntime140_1.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/kairosboot_native.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/libusb-1.0.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/msvcp140.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/msvcp140_1.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/msvcp140_2.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/msvcp140_atomic_wait.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/vcruntime140.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/vcruntime140_1.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/libkairosboot_native.so" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/libusb-1.0.so.0" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/libkairosboot_native.so" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/libusb-1.0.so.0" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/libkairosboot_native.dylib" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/libusb-1.0.0.dylib" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/libkairosboot_native.dylib" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/libusb-1.0.0.dylib" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/licenses/libusb/COPYING" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/licenses/libusb/COPYING" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/licenses/libusb/COPYING" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/licenses/libusb/COPYING" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/licenses/libusb/COPYING" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/licenses/libusb/COPYING" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/licenses/libusb/kairosboot-libusb.json" />
       <_MissingNativeAsset Include="@(_ExpectedNativeAsset)"
                            Condition="!Exists('%(Identity)')" />
     </ItemGroup>
 
     <Error Condition="'@(_MissingNativeAsset)' != ''"
-           Text="IncludeNativeRuntimes=true requires all six native assets. Missing: @(_MissingNativeAsset, ', ')" />
+           Text="IncludeNativeRuntimes=true requires complete six-RID native, libusb, app-local VC runtime, and redistribution assets. Missing: @(_MissingNativeAsset, ', ')" />
   </Target>
 </Project>

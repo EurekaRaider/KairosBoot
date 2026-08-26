@@ -1,0 +1,8 @@
+KairosBoot Windows packages redistribute Microsoft Visual C++ Runtime files
+from the licensed Visual Studio app-local redistribution directory. Those
+files remain subject to the Microsoft Visual Studio license and are not
+covered by KairosBoot's MIT license.
+
+Release builds must stage files from the same or a newer supported v14 runtime
+than the MSVC toolset used to build KairosBoot. Do not source these DLLs from
+an arbitrary machine or third-party download.

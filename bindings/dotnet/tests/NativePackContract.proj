@@ -24,13 +24,42 @@
     <MakeDir Directories="$(ManagedOutput);$(MissingOutput);$(CompleteOutput)" />
 
     <ItemGroup>
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/kairosboot.dll" />
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/kairosboot.dll" />
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/libkairosboot.so" />
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/libkairosboot.so" />
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/libkairosboot.dylib" />
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/libkairosboot.dylib" />
-      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/licenses/NOTICE.txt" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/kairosboot_native.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/libusb-1.0.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/msvcp140.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/msvcp140_1.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/msvcp140_2.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/msvcp140_atomic_wait.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/vcruntime140.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/vcruntime140_1.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/kairosboot_native.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/libusb-1.0.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/msvcp140.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/msvcp140_1.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/msvcp140_2.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/msvcp140_atomic_wait.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/vcruntime140.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/vcruntime140_1.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/libkairosboot_native.so" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/libusb-1.0.so.0" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/libkairosboot_native.so" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/libusb-1.0.so.0" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/libkairosboot_native.dylib" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/libusb-1.0.0.dylib" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/libkairosboot_native.dylib" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/libusb-1.0.0.dylib" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/licenses/libusb/COPYING" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/licenses/libusb/COPYING" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/licenses/libusb/COPYING" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/licenses/libusb/COPYING" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/licenses/libusb/COPYING" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/licenses/libusb/COPYING" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/licenses/libusb/kairosboot-libusb.json" />
     </ItemGroup>
 
     <MakeDir Directories="@(_PlaceholderAsset->'%(RootDir)%(Directory)')" />
@@ -59,6 +88,8 @@
            OverwriteReadOnlyFiles="true" />
     <Error Condition="Exists('$(ManagedExtract)/runtimes')"
            Text="Managed-only package unexpectedly contains native runtime assets." />
+    <Error Condition="Exists('$(ManagedExtract)/build/net48/KairosBoot.targets') or Exists('$(ManagedExtract)/buildTransitive/net48/KairosBoot.targets')"
+           Text="Managed-only package unexpectedly contains native deployment targets." />
   </Target>
 
   <Target Name="VerifyMissingRuntimeFailure" DependsOnTargets="VerifyManagedOnly">
@@ -94,17 +125,47 @@
            OverwriteReadOnlyFiles="true" />
 
     <ItemGroup>
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/kairosboot.dll" />
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/kairosboot.dll" />
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-x64/native/libkairosboot.so" />
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-arm64/native/libkairosboot.so" />
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-x64/native/libkairosboot.dylib" />
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-arm64/native/libkairosboot.dylib" />
-      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/licenses/NOTICE.txt" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/kairosboot_native.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/libusb-1.0.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/msvcp140.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/msvcp140_1.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/msvcp140_2.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/msvcp140_atomic_wait.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/vcruntime140.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/vcruntime140_1.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/kairosboot_native.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/libusb-1.0.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/msvcp140.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/msvcp140_1.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/msvcp140_2.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/msvcp140_atomic_wait.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/vcruntime140.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/vcruntime140_1.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-x64/native/libkairosboot_native.so" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-x64/native/libusb-1.0.so.0" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-arm64/native/libkairosboot_native.so" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-arm64/native/libusb-1.0.so.0" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-x64/native/libkairosboot_native.dylib" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-x64/native/libusb-1.0.0.dylib" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-arm64/native/libkairosboot_native.dylib" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-arm64/native/libusb-1.0.0.dylib" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/COPYING" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/win-x64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/win-arm64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/linux-x64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/linux-arm64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/osx-x64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/osx-arm64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/microsoft-vc-runtime/NOTICE.txt" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/build/net48/KairosBoot.targets" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/buildTransitive/net48/KairosBoot.targets" />
+      <_UnexpectedNativeLicense Include="$(CompleteExtract)/runtimes/*/native/licenses/**/*" />
     </ItemGroup>
 
-    <Error Condition="!Exists('%(_ExpectedPackageAsset.Identity)')"
+    <Error Condition="!$([System.IO.File]::Exists('%(_ExpectedPackageAsset.Identity)'))"
            Text="Native package is missing: %(_ExpectedPackageAsset.Identity)" />
+    <Error Condition="'@(_UnexpectedNativeLicense)' != ''"
+           Text="Native license metadata must not be packaged as runtime assets: @(_UnexpectedNativeLicense, ', ')" />
   </Target>
 
   <Target Name="Verify"

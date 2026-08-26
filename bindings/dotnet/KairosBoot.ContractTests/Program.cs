@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using KairosBoot;
@@ -30,7 +31,19 @@ internal static class Program
     {
         var version = Context.Version;
         Check(version.ApiVersion == 1, "API version");
-        Check(version.Value == "0.1.0-dev", "runtime version");
+        var expected = Environment.GetEnvironmentVariable("KAIROSBOOT_EXPECTED_VERSION");
+        if (string.IsNullOrEmpty(expected))
+        {
+            Check(
+                Regex.IsMatch(
+                    version.Value,
+                    @"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"),
+                "runtime semantic version");
+        }
+        else
+        {
+            Check(version.Value == expected, "runtime version");
+        }
     }
 
     private static void CheckDevicesFailAccurately()
