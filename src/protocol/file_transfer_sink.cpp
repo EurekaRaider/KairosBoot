@@ -18,7 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <cstdlib>
+#include <bcrypt.h>
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -342,18 +342,16 @@ FileTransferSink::create(const std::filesystem::path& requested_destination) {
         }
 
         for (std::uint32_t attempt = 0; attempt < 32U; ++attempt) {
-            std::array<unsigned int, 4> words{};
-            for (auto& word : words) {
-                const int random_error = ::rand_s(&word);
-                if (random_error != 0) {
-                    return std::unexpected(sink_error(
-                        FileTransferSinkErrorKind::CreateFailed,
-                        random_error,
-                        "unable to generate a private receive file name"));
-                }
-            }
             std::array<unsigned char, 16> random{};
-            std::memcpy(random.data(), words.data(), random.size());
+            const auto random_status = ::BCryptGenRandom(
+                nullptr, random.data(), static_cast<ULONG>(random.size()),
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+            if (!BCRYPT_SUCCESS(random_status)) {
+                return std::unexpected(sink_error(
+                    FileTransferSinkErrorKind::CreateFailed,
+                    static_cast<int>(random_status),
+                    "unable to generate a private receive file name"));
+            }
             const auto temporary_leaf =
                 std::filesystem::path(encode_random_name(random));
             const auto temporary_path = *final_parent / temporary_leaf;
