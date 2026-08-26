@@ -1,0 +1,129 @@
+{
+  "documentType": "kairosboot.aosp-update-plan-golden",
+  "schemaVersion": 1,
+  "oracle": {
+    "platformToolsVersion": "37.0.1",
+    "aospSourceCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "kind": "source-derived with a locked-binary lexical cross-check",
+    "binaryCrossCheck": {
+      "darwinFastbootSha256": "c97aa28970ba9a46023a8ca52a78dd6547c2c1c4133f9715d4fe551e1dfae152",
+      "case": "version 0x1 in an otherwise empty update package",
+      "exitCode": 0,
+      "downloadOrFlashCommands": 0
+    },
+    "sourceEvidence": [
+      "fastboot.cpp:870-905",
+      "fastboot.cpp:931-964",
+      "fastboot.cpp:1620-1693",
+      "fastboot.cpp:1730-1800",
+      "fastboot.cpp:1807-1827",
+      "fastboot.cpp:1928-1937",
+      "task.cpp:81-105"
+    ]
+  },
+  "scope": {
+    "included": [
+      "android-info.txt requirement parsing",
+      "fastboot-info.txt version and task parsing",
+      "if-wipe deterministic expansion",
+      "source-order preservation",
+      "bounded offline validation"
+    ],
+    "excluded": [
+      "ZIP extraction",
+      "hardcoded image-list fallback",
+      "device requirement evaluation",
+      "slot discovery",
+      "dynamic partition classification",
+      "resize task insertion",
+      "optimized super rewriting",
+      "task execution"
+    ]
+  },
+  "intentionalDeviations": [
+    "malformed android-info lines are fatal instead of warnings",
+    "inactive if-wipe bodies are validated before condition expansion",
+    "embedded NUL bytes are rejected",
+    "artifact absolute paths, backslashes, empty components, dot components, and parent traversal are rejected",
+    "duplicate version declarations, duplicate flash flags, and duplicate symbolic flash targets are rejected",
+    "unknown reboot targets are rejected during planning instead of during execution",
+    "all input, line, field, token, option, requirement, and task counts are bounded"
+  ],
+  "goldens": [
+    {
+      "id": "requirements",
+      "androidInfoLines": [
+        "product=atlas|boreal",
+        "reject version-bootloader=bad*",
+        "require-for-product:atlas version-baseband=1|2",
+        "require board=atlas",
+        "require partition-exists=vendor"
+      ],
+      "expected": [
+        {"action": "require", "variable": "product", "options": ["atlas", "boreal"]},
+        {"action": "reject", "variable": "version-bootloader", "options": ["bad*"]},
+        {"action": "require", "product": "atlas", "variable": "version-baseband", "options": ["1", "2"]},
+        {"action": "require", "variable": "product", "options": ["atlas"]},
+        {"action": "require", "variable": "partition-exists", "options": ["vendor"]}
+      ]
+    },
+    {
+      "id": "tasks-and-wipe-condition",
+      "fastbootInfoLines": [
+        "   # generated package plan",
+        "flash --apply-vbmeta boot",
+        "version 1",
+        "flash system images/system.img --slot-other",
+        "if-wipe erase userdata",
+        "reboot fastboot",
+        "update-super",
+        "reboot",
+        "erase cache"
+      ],
+      "expectedVersion": 1,
+      "expectedWithoutWipe": [
+        "flash --apply-vbmeta boot boot.img",
+        "flash --slot-other system images/system.img",
+        "reboot fastboot",
+        "update-super",
+        "reboot",
+        "erase cache"
+      ],
+      "expectedWithWipe": [
+        "flash --apply-vbmeta boot boot.img",
+        "flash --slot-other system images/system.img",
+        "erase userdata",
+        "reboot fastboot",
+        "update-super",
+        "reboot",
+        "erase cache"
+      ]
+    },
+    {
+      "id": "literal-space-tokenization",
+      "accepted": [
+        "   #comment words",
+        "flash boot #image",
+        "version 0x1"
+      ],
+      "rejected": [
+        "flash\\tboot",
+        "version 1\\r",
+        "\\ufeffversion 1"
+      ]
+    },
+    {
+      "id": "security-rejections",
+      "rejected": [
+        "flash boot ../boot.img",
+        "flash boot /absolute.img",
+        "flash boot images\\\\boot.img",
+        "flash boot images//boot.img",
+        "flash boot images/./boot.img",
+        "version 1 followed by a second version declaration",
+        "the same symbolic flash target declared twice",
+        "an embedded NUL byte in either manifest"
+      ]
+    }
+  ]
+}
