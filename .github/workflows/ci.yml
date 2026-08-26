@@ -83,7 +83,7 @@ jobs:
           fi
 
       - name: Upload install tree
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kairosboot-${{ matrix.id }}
           path: ${{ runner.temp }}/kairosboot-install
@@ -242,7 +242,7 @@ jobs:
           otool -l "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib'
 
       - name: Upload install tree
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kairosboot-${{ matrix.id }}
           path: ${{ runner.temp }}/kairosboot-install
@@ -386,7 +386,7 @@ jobs:
           --rid linux-x64
 
       - name: Upload actual NuGet package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kairosboot-managed-package
           path: ${{ runner.temp }}/nuget/*.nupkg
