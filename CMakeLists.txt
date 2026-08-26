@@ -150,6 +150,8 @@ target_link_libraries(kairosboot_internal
 if(WIN32)
   # Boost.Asio still uses the operating system's Winsock implementation. Keep
   # the platform link dependency explicit for every supported Windows toolchain.
+  target_compile_definitions(kairosboot_internal
+                             PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
   target_link_libraries(kairosboot_internal PRIVATE ws2_32)
 endif()
 kairosboot_enable_strict_warnings(kairosboot_internal)

@@ -167,6 +167,7 @@ def check_compatibility_baseline() -> None:
         "Boost population": "FetchContent_MakeAvailable(Boost)",
         "Boost digest verification": 'URL_HASH "SHA256=${KAIROSBOOT_BOOST_SHA256}"',
         "Boost.Asio target": "Boost::asio_core",
+        "Boost.Asio Windows 10 API baseline": "_WIN32_WINNT=0x0A00 WINVER=0x0A00",
     }
     for contract, marker in boost_contract.items():
         if marker not in cmake:
