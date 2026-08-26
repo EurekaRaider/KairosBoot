@@ -93,8 +93,8 @@ struct PlannedUpdateTask final {
     UpdateSourceLocation location;
 
     // Flash fields.
-    std::string partition;
-    std::string artifact;
+    std::string partition{};
+    std::string artifact{};
     PlannedSlot slot{PlannedSlot::Default};
     bool apply_vbmeta{false};
 
@@ -109,9 +109,9 @@ struct ParsedUpdateManifest final {
 };
 
 struct DeterministicUpdatePlan final {
-    std::vector<PlannedRequirement> requirements;
-    std::vector<PlannedUpdateTask> tasks;
-    std::optional<std::uint32_t> fastboot_info_version;
+    std::vector<PlannedRequirement> requirements{};
+    std::vector<PlannedUpdateTask> tasks{};
+    std::optional<std::uint32_t> fastboot_info_version{};
 };
 
 // Parses the grammar used by frozen AOSP Platform-Tools 37.0.1. Security

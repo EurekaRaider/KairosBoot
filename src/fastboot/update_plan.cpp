@@ -34,8 +34,8 @@ struct Assignment final {
 
 struct RequirementSyntax final {
     RequirementAction action{RequirementAction::Require};
-    Assignment assignment;
-    std::optional<std::string_view> product;
+    Assignment assignment{};
+    std::optional<std::string_view> product{};
     std::size_t product_offset{0};
 };
 
