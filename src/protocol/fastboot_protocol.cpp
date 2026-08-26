@@ -182,17 +182,65 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download(
         });
     }
 
+    return download_locked(
+        static_cast<std::uint32_t>(bytes.size()), bytes, nullptr, {});
+}
+
+std::expected<CommandResult, ProtocolError> FastbootSession::download_source(
+    std::shared_ptr<ITransferSource> source,
+    const TransferProgressObserver& observer) {
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::Busy,
+            .message = "another Fastboot operation is already using this session",
+        });
+    }
+    if (source == nullptr) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::InvalidArgument,
+            .message = "Fastboot download source is null",
+        });
+    }
+
+    const auto size = source->size();
+    if (size > std::numeric_limits<std::uint32_t>::max()) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::InvalidArgument,
+            .message = "Fastboot download size exceeds the protocol's 32-bit limit",
+        });
+    }
+
+    return download_locked(
+        static_cast<std::uint32_t>(size), {}, std::move(source), observer);
+}
+
+std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
+    const std::uint32_t size,
+    const std::span<const std::byte> bytes,
+    std::shared_ptr<ITransferSource> source,
+    const TransferProgressObserver& observer) {
     std::array<char, 18> command_buffer{};
     const auto command_length = std::snprintf(
         command_buffer.data(),
         command_buffer.size(),
         "download:%08x",
-        static_cast<unsigned int>(bytes.size()));
+        static_cast<unsigned int>(size));
     const std::string_view command_text(
         command_buffer.data(), static_cast<std::size_t>(command_length));
 
     if (const auto begin = begin_locked(command_text); !begin) {
         return std::unexpected(begin.error());
+    }
+
+    auto* streaming = source == nullptr
+        ? nullptr
+        : dynamic_cast<IStreamingTransportSession*>(transport_.get());
+    if (source != nullptr && streaming == nullptr) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::StreamingUnsupported,
+            .message = "Fastboot transport does not support source streaming",
+        });
     }
 
     state_ = SessionState::WritingCommand;
@@ -244,7 +292,7 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download(
             });
         }
 
-        if (!response->data_size || *response->data_size != bytes.size()) {
+        if (!response->data_size || *response->data_size != size) {
             return poison_locked(ProtocolError{
                 .code = ProtocolErrorCode::DataLengthMismatch,
                 .message = "Fastboot device accepted a different download length",
@@ -256,8 +304,17 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download(
     }
 
     state_ = SessionState::Downloading;
-    if (const auto write = write_exact_locked(bytes, ProtocolPhase::DataWrite); !write) {
-        return std::unexpected(write.error());
+    if (source != nullptr) {
+        if (const auto write = write_source_locked(
+                *streaming, std::move(source), size, observer);
+            !write) {
+            return std::unexpected(write.error());
+        }
+    } else {
+        if (const auto write = write_exact_locked(bytes, ProtocolPhase::DataWrite);
+            !write) {
+            return std::unexpected(write.error());
+        }
     }
 
     state_ = SessionState::AwaitingResponse;
@@ -398,6 +455,73 @@ std::expected<void, ProtocolError> FastbootSession::write_exact_locked(
             });
         }
         offset += result.transferred;
+    }
+    return {};
+}
+
+std::expected<void, ProtocolError> FastbootSession::write_source_locked(
+    IStreamingTransportSession& streaming,
+    std::shared_ptr<ITransferSource> source,
+    const std::uint32_t size,
+    const TransferProgressObserver& observer) {
+    const auto result = streaming.write_source(
+        std::move(source), options_.io_timeout, observer);
+    const auto expected = static_cast<std::size_t>(size);
+    const auto outbound_certainty = aggregate_write_certainty(
+        0, expected, result);
+
+    if (result.transferred > expected) {
+        return poison_locked(ProtocolError{
+            .code = ProtocolErrorCode::TransportContractViolation,
+            .message = "streaming transport reported writing more bytes than requested",
+            .transport_status = result.status,
+            .transfer_certainty = result.certainty,
+            .phase = ProtocolPhase::DataWrite,
+            .outbound_certainty = outbound_certainty,
+            .native_code = result.native_code,
+        });
+    }
+    if (result.status != TransportStatus::Ok) {
+        return poison_locked(transport_error_locked(
+            result,
+            "source write",
+            ProtocolPhase::DataWrite,
+            outbound_certainty));
+    }
+    if (result.certainty != TransferCertainty::FullyTransferred) {
+        return poison_locked(ProtocolError{
+            .code = ProtocolErrorCode::TransportContractViolation,
+            .message = "successful source write has an uncertain transfer outcome",
+            .transport_status = result.status,
+            .transfer_certainty = result.certainty,
+            .phase = ProtocolPhase::DataWrite,
+            .outbound_certainty = outbound_certainty,
+            .native_code = result.native_code,
+        });
+    }
+    if (result.truncated) {
+        return poison_locked(ProtocolError{
+            .code = ProtocolErrorCode::TransportContractViolation,
+            .message = "streaming transport marked a source write as truncated",
+            .transport_status = result.status,
+            .transfer_certainty = result.certainty,
+            .phase = ProtocolPhase::DataWrite,
+            .outbound_certainty = outbound_certainty,
+            .native_code = result.native_code,
+        });
+    }
+    if (result.transferred != expected) {
+        return poison_locked(ProtocolError{
+            .code = result.transferred == 0
+                ? ProtocolErrorCode::ZeroProgress
+                : ProtocolErrorCode::TransportContractViolation,
+            .message = "streaming transport did not write the complete source",
+            .transport_status = result.status,
+            .transfer_certainty = result.certainty,
+            .phase = ProtocolPhase::DataWrite,
+            .outbound_certainty = outbound_certainty,
+            .native_code = result.native_code,
+        });
     }
     return {};
 }

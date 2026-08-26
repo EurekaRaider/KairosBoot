@@ -65,6 +65,7 @@ enum class SessionState : std::uint8_t {
 
 enum class ProtocolErrorCode : std::uint8_t {
     InvalidArgument,
+    StreamingUnsupported,
     Busy,
     Closed,
     Poisoned,
@@ -141,6 +142,10 @@ public:
     [[nodiscard]] std::expected<CommandResult, ProtocolError> download(
         std::span<const std::byte> bytes);
 
+    [[nodiscard]] std::expected<CommandResult, ProtocolError> download_source(
+        std::shared_ptr<ITransferSource> source,
+        const TransferProgressObserver& observer = {});
+
     [[nodiscard]] SessionState state() const noexcept;
     [[nodiscard]] std::optional<ProtocolError> poison_error() const;
     void request_cancel() noexcept;
@@ -152,6 +157,16 @@ private:
     [[nodiscard]] std::expected<void, ProtocolError> write_exact_locked(
         std::span<const std::byte> bytes,
         ProtocolPhase phase);
+    [[nodiscard]] std::expected<void, ProtocolError> write_source_locked(
+        IStreamingTransportSession& streaming,
+        std::shared_ptr<ITransferSource> source,
+        std::uint32_t size,
+        const TransferProgressObserver& observer);
+    [[nodiscard]] std::expected<CommandResult, ProtocolError> download_locked(
+        std::uint32_t size,
+        std::span<const std::byte> bytes,
+        std::shared_ptr<ITransferSource> source,
+        const TransferProgressObserver& observer);
     [[nodiscard]] std::expected<Response, ProtocolError> read_response_locked(
         ProtocolPhase phase,
         TransferCertainty outbound_certainty);

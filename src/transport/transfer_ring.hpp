@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/protocol/transport_session.hpp"
 #include "src/transport/buffer_budget.hpp"
 
 #include <cstddef>
@@ -102,13 +103,7 @@ public:
     virtual void cancel(TransferId id) noexcept = 0;
 };
 
-class TransferSource {
-public:
-    virtual ~TransferSource() = default;
-    [[nodiscard]] virtual std::uint64_t size() const noexcept = 0;
-    [[nodiscard]] virtual bool read_exact(std::uint64_t offset,
-                                          std::span<std::byte> destination) noexcept = 0;
-};
+using TransferSource = protocol::ITransferSource;
 
 class MemoryTransferSource final : public TransferSource {
 public:

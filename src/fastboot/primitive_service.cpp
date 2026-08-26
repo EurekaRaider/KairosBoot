@@ -29,6 +29,16 @@ namespace {
     return true;
 }
 
+[[nodiscard]] std::expected<void, PrimitiveError> validate_download_source(
+    const std::shared_ptr<protocol::ITransferSource>& source) {
+    if (source == nullptr) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Download,
+            "Fastboot download source must not be null"));
+    }
+    return validate_download_size(source->size());
+}
+
 [[nodiscard]] protocol::TransferCertainty download_certainty(
     const protocol::ProtocolPhase phase,
     const protocol::TransferCertainty phase_certainty) noexcept {
@@ -51,6 +61,8 @@ namespace {
     switch (code) {
         case ProtocolErrorCode::InvalidArgument:
             return PrimitiveErrorCode::InvalidArgument;
+        case ProtocolErrorCode::StreamingUnsupported:
+            return PrimitiveErrorCode::Unsupported;
         case ProtocolErrorCode::Busy:
             return PrimitiveErrorCode::Busy;
         case ProtocolErrorCode::Closed:
@@ -111,21 +123,17 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::download(
         return std::unexpected(std::move(size.error()));
     }
 
-    auto result = session_.download(bytes);
-    if (!result) {
-        return std::unexpected(protocol_error(
-            PrimitiveOperation::Download, result.error(), true));
+    return finish_download(session_.download(bytes));
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::download_source(
+    std::shared_ptr<protocol::ITransferSource> source,
+    const protocol::TransferProgressObserver& observer) {
+    if (auto valid = validate_download_source(source); !valid) {
+        return std::unexpected(std::move(valid.error()));
     }
-    if (!result->succeeded()) {
-        return std::unexpected(device_fail(
-            PrimitiveOperation::Download, *result, true));
-    }
-    return PrimitiveReply{
-        .terminal = std::move(result->terminal),
-        .informational = std::move(result->informational),
-        .phase = result->phase,
-        .outbound_certainty = protocol::TransferCertainty::FullyTransferred,
-    };
+    return finish_download(
+        session_.download_source(std::move(source), observer));
 }
 
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::flash_downloaded(
@@ -153,6 +161,35 @@ PrimitiveService::download_and_flash(
     }
 
     auto downloaded = download(bytes);
+    if (!downloaded) {
+        return std::unexpected(std::move(downloaded.error()));
+    }
+    auto flashed = command(PrimitiveOperation::Flash, *flash_command);
+    if (!flashed) {
+        return std::unexpected(std::move(flashed.error()));
+    }
+    return DownloadAndFlashResult{
+        .download = std::move(*downloaded),
+        .flash = std::move(*flashed),
+    };
+}
+
+std::expected<DownloadAndFlashResult, PrimitiveError>
+PrimitiveService::download_and_flash_source(
+    const std::string_view partition,
+    std::shared_ptr<protocol::ITransferSource> source,
+    const protocol::TransferProgressObserver& observer) {
+    // Validate every local input before the device accepts a download.
+    auto flash_command = parameter_command(
+        PrimitiveOperation::Flash, "flash:", partition);
+    if (!flash_command) {
+        return std::unexpected(std::move(flash_command.error()));
+    }
+    if (auto valid = validate_download_source(source); !valid) {
+        return std::unexpected(std::move(valid.error()));
+    }
+
+    auto downloaded = download_source(std::move(source), observer);
     if (!downloaded) {
         return std::unexpected(std::move(downloaded.error()));
     }
@@ -259,6 +296,24 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::command(
         session_.close();
     }
     return reply;
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::finish_download(
+    std::expected<protocol::CommandResult, protocol::ProtocolError> result) {
+    if (!result) {
+        return std::unexpected(protocol_error(
+            PrimitiveOperation::Download, result.error(), true));
+    }
+    if (!result->succeeded()) {
+        return std::unexpected(device_fail(
+            PrimitiveOperation::Download, *result, true));
+    }
+    return PrimitiveReply{
+        .terminal = std::move(result->terminal),
+        .informational = std::move(result->informational),
+        .phase = result->phase,
+        .outbound_certainty = protocol::TransferCertainty::FullyTransferred,
+    };
 }
 
 PrimitiveError PrimitiveService::protocol_error(

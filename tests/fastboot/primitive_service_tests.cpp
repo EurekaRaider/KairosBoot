@@ -2,7 +2,9 @@
 #include "src/fastboot/primitive_service.hpp"
 #include "tests/protocol/scripted_transport.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -10,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -25,9 +28,13 @@ using kairosboot::fastboot::PrimitiveService;
 using kairosboot::fastboot::RebootTarget;
 using kairosboot::fastboot::validate_download_size;
 using kairosboot::protocol::FastbootSession;
+using kairosboot::protocol::ITransferSource;
+using kairosboot::protocol::ITransportSession;
 using kairosboot::protocol::ProtocolPhase;
 using kairosboot::protocol::SessionState;
 using kairosboot::protocol::TransferCertainty;
+using kairosboot::protocol::TransferProgressAction;
+using kairosboot::protocol::TransferResult;
 using kairosboot::protocol::TransportStatus;
 using kairosboot::protocol::test::ScriptedTransport;
 using kairosboot::protocol::test::to_bytes;
@@ -44,6 +51,109 @@ public:
                                std::to_string(__LINE__));                                 \
         }                                                                                 \
     } while (false)
+
+class RecordingSource final : public ITransferSource {
+public:
+    struct Read final {
+        std::uint64_t offset{0};
+        std::size_t size{0};
+
+        friend bool operator==(const Read&, const Read&) = default;
+    };
+
+    RecordingSource(
+        std::vector<std::byte> bytes,
+        const std::size_t maximum_read,
+        const std::optional<std::size_t> failing_call = std::nullopt)
+        : bytes_(std::move(bytes)),
+          maximum_read_(maximum_read),
+          failing_call_(failing_call) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return bytes_.size();
+    }
+
+    [[nodiscard]] bool read_exact(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) noexcept override {
+        if (read_count_ >= reads_.size()) {
+            return false;
+        }
+        reads_[read_count_] = Read{offset, destination.size()};
+        const auto call = read_count_++;
+        if (failing_call_ == call || destination.size() > maximum_read_ ||
+            offset > bytes_.size()) {
+            return false;
+        }
+        const auto start = static_cast<std::size_t>(offset);
+        if (destination.size() > bytes_.size() - start) {
+            return false;
+        }
+        std::ranges::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(start),
+            destination.size(),
+            destination.begin());
+        return true;
+    }
+
+    [[nodiscard]] std::span<const Read> reads() const noexcept {
+        return std::span(reads_).first(read_count_);
+    }
+
+private:
+    std::vector<std::byte> bytes_;
+    std::size_t maximum_read_{0};
+    std::optional<std::size_t> failing_call_;
+    std::array<Read, 16> reads_{};
+    std::size_t read_count_{0};
+};
+
+class SizedSource final : public ITransferSource {
+public:
+    explicit SizedSource(const std::uint64_t size) : size_(size) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
+
+    [[nodiscard]] bool read_exact(
+        std::uint64_t /*offset*/,
+        std::span<std::byte> /*destination*/) noexcept override {
+        return false;
+    }
+
+private:
+    std::uint64_t size_{0};
+};
+
+class NonStreamingTransport final : public ITransportSession {
+public:
+    [[nodiscard]] TransferResult write(
+        std::span<const std::byte> /*bytes*/,
+        std::chrono::milliseconds /*timeout*/) override {
+        ++wire_calls;
+        return {
+            .status = TransportStatus::IoError,
+            .certainty = TransferCertainty::NotTransferred,
+            .detail = "unexpected non-streaming write",
+        };
+    }
+
+    [[nodiscard]] TransferResult read(
+        std::span<std::byte> /*destination*/,
+        std::chrono::milliseconds /*timeout*/) override {
+        ++wire_calls;
+        return {
+            .status = TransportStatus::IoError,
+            .certainty = TransferCertainty::NotTransferred,
+            .detail = "unexpected non-streaming read",
+        };
+    }
+
+    void request_cancel() noexcept override {}
+    void close() noexcept override { closed = true; }
+
+    std::size_t wire_calls{0};
+    bool closed{false};
+};
 
 [[nodiscard]] std::string accepted_text(const ScriptedTransport& script) {
     std::string result;
@@ -444,6 +554,268 @@ void terminal_device_fail_does_not_retire_session() {
     CHECK(script->complete());
 }
 
+void source_download_uses_bounded_random_reads() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto payload = to_bytes("abcdefghij");
+    script->expect_write("download:0000000a");
+    script->respond("DATA0000000a");
+    script->expect_source_write(
+        payload,
+        {
+            {.offset = 6, .size = 4, .progress_watermark = 0},
+            {.offset = 0, .size = 3, .progress_watermark = 3},
+            {.offset = 3, .size = 3, .progress_watermark = 10},
+        });
+    script->respond("OKAYstaged");
+    script->expect_write("flash:boot");
+    script->respond("OKAYflashed");
+
+    auto source = std::make_shared<RecordingSource>(payload, 4);
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> progress;
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.download_and_flash_source(
+        "boot",
+        source,
+        [&progress](const std::uint64_t watermark, const std::uint64_t total) {
+            progress.emplace_back(watermark, total);
+            return TransferProgressAction::continue_transfer;
+        });
+
+    CHECK(result.has_value());
+    CHECK(result->download.terminal.payload == "staged");
+    CHECK(result->flash.terminal.payload == "flashed");
+    constexpr std::array expected_reads{
+        RecordingSource::Read{6, 4},
+        RecordingSource::Read{0, 3},
+        RecordingSource::Read{3, 3},
+    };
+    CHECK(std::ranges::equal(source->reads(), expected_reads));
+    const std::vector expected_progress{
+        std::pair<std::uint64_t, std::uint64_t>{3, 10},
+        std::pair<std::uint64_t, std::uint64_t>{10, 10},
+    };
+    CHECK(progress == expected_progress);
+    CHECK(accepted_text(*script) ==
+          "download:0000000aabcdefghijflash:boot");
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void source_device_fail_phases_are_reusable() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        const auto payload = to_bytes("abcdef");
+        script->expect_write("download:00000006");
+        script->respond("INFOchecking");
+        script->respond("FAILtoo large");
+        script->expect_write("getvar:product");
+        script->respond("OKAYkairos");
+
+        auto source = std::make_shared<RecordingSource>(payload, payload.size());
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_source(source);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::DeviceFail);
+        CHECK(result.error().phase == ProtocolPhase::InitialResponse);
+        CHECK(result.error().device_message == "too large");
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(!result.error().session_poisoned);
+        CHECK(source->reads().empty());
+        CHECK(session.state() == SessionState::Ready);
+        CHECK(service.getvar("product").has_value());
+        CHECK(script->complete());
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        const auto payload = to_bytes("abcdef");
+        script->expect_write("download:00000006");
+        script->respond("DATA00000006");
+        script->expect_source_write(
+            payload,
+            {{.offset = 0, .size = 6, .progress_watermark = 6}});
+        script->respond("INFOverifying");
+        script->respond("FAILbad payload");
+        script->expect_write("getvar:product");
+        script->respond("OKAYkairos");
+
+        auto source = std::make_shared<RecordingSource>(payload, payload.size());
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_source(source);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::DeviceFail);
+        CHECK(result.error().phase == ProtocolPhase::FinalResponse);
+        CHECK(result.error().device_message == "bad payload");
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::FullyTransferred);
+        CHECK(!result.error().session_poisoned);
+        CHECK(source->reads().size() == 1);
+        CHECK(session.state() == SessionState::Ready);
+        CHECK(service.getvar("product").has_value());
+        CHECK(script->complete());
+    }
+}
+
+void source_data_mismatch_never_reads_payload() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto payload = to_bytes("abcdef");
+    script->expect_write("download:00000006");
+    script->respond("DATA00000005");
+
+    auto source = std::make_shared<RecordingSource>(payload, payload.size());
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.download_source(source);
+    CHECK(!result);
+    CHECK(result.error().code == PrimitiveErrorCode::ProtocolViolation);
+    CHECK(result.error().phase == ProtocolPhase::InitialResponse);
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::NotTransferred);
+    CHECK(result.error().session_poisoned);
+    CHECK(source->reads().empty());
+    CHECK(accepted_text(*script) == "download:00000006");
+    CHECK(session.state() == SessionState::Poisoned);
+    CHECK(script->complete());
+}
+
+void source_cancel_and_failure_poison_with_native_codes() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        const auto payload = to_bytes("abcdef");
+        script->expect_write("download:00000006");
+        script->respond("DATA00000006");
+        script->expect_source_write(
+            payload,
+            {
+                {.offset = 0, .size = 3, .progress_watermark = 3},
+                {.offset = 3, .size = 3, .progress_watermark = 6},
+            },
+            std::nullopt,
+            TransportStatus::Ok,
+            TransferCertainty::FullyTransferred,
+            125);
+
+        auto source = std::make_shared<RecordingSource>(payload, 3);
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_source(
+            source,
+            [](std::uint64_t, std::uint64_t) {
+                return TransferProgressAction::cancel;
+            });
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::Cancelled);
+        CHECK(result.error().phase == ProtocolPhase::DataWrite);
+        CHECK(result.error().transport_status == TransportStatus::Cancelled);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().native_code == 125);
+        CHECK(result.error().session_poisoned);
+        CHECK(source->reads().size() == 1);
+        CHECK(accepted_text(*script) == "download:00000006abc");
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        const auto payload = to_bytes("abcdef");
+        script->expect_write("download:00000006");
+        script->respond("DATA00000006");
+        script->expect_source_write(
+            payload,
+            {{.offset = 0, .size = 3, .progress_watermark = 3}},
+            0,
+            TransportStatus::IoError,
+            TransferCertainty::NotTransferred,
+            5,
+            "source read failed");
+
+        auto source = std::make_shared<RecordingSource>(payload, 3, 0);
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_source(source);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::TransportIo);
+        CHECK(result.error().phase == ProtocolPhase::DataWrite);
+        CHECK(result.error().transport_status == TransportStatus::IoError);
+        CHECK(result.error().transport_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(result.error().native_code == 5);
+        CHECK(result.error().session_poisoned);
+        CHECK(source->reads().size() == 1);
+        CHECK(accepted_text(*script) == "download:00000006");
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+}
+
+void source_preflight_and_capability_fail_without_wire_io() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+
+        const auto null_source = service.download_source(nullptr);
+        CHECK(!null_source);
+        CHECK(null_source.error().code == PrimitiveErrorCode::InvalidArgument);
+        CHECK(null_source.error().phase == ProtocolPhase::Validation);
+
+        const auto zero = service.download_source(
+            std::make_shared<SizedSource>(0));
+        CHECK(!zero);
+        CHECK(zero.error().code == PrimitiveErrorCode::InvalidArgument);
+
+        const auto too_large = service.download_source(
+            std::make_shared<SizedSource>(
+                static_cast<std::uint64_t>(
+                    std::numeric_limits<std::uint32_t>::max()) + 1U));
+        CHECK(!too_large);
+        CHECK(too_large.error().code == PrimitiveErrorCode::InvalidArgument);
+
+        const auto invalid_partition = service.download_and_flash_source(
+            "bad\npartition",
+            std::make_shared<SizedSource>(1));
+        CHECK(!invalid_partition);
+        CHECK(invalid_partition.error().code ==
+              PrimitiveErrorCode::InvalidArgument);
+
+        CHECK(accepted_text(*script).empty());
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+
+    {
+        auto transport = std::make_unique<NonStreamingTransport>();
+        auto* raw_transport = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_source(
+            std::make_shared<RecordingSource>(to_bytes("x"), 1));
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::Unsupported);
+        CHECK(result.error().phase == ProtocolPhase::Validation);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(!result.error().session_poisoned);
+        CHECK(raw_transport->wire_calls == 0);
+        CHECK(session.state() == SessionState::Ready);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -460,6 +832,11 @@ int main() {
         {"cancelled payload", cancelled_payload_is_partial_and_poisoned},
         {"malformed download handshake", malformed_download_handshake_poisons_without_payload},
         {"terminal FAIL remains reusable", terminal_device_fail_does_not_retire_session},
+        {"source bounded random reads", source_download_uses_bounded_random_reads},
+        {"source FAIL phases remain reusable", source_device_fail_phases_are_reusable},
+        {"source DATA mismatch", source_data_mismatch_never_reads_payload},
+        {"source cancellation and failure", source_cancel_and_failure_poison_with_native_codes},
+        {"source preflight and capability", source_preflight_and_capability_fail_without_wire_io},
     };
 
     std::size_t failures = 0;

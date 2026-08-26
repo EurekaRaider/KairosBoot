@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,6 +26,7 @@ enum class PrimitiveOperation : std::uint8_t {
 
 enum class PrimitiveErrorCode : std::uint8_t {
     InvalidArgument,
+    Unsupported,
     Busy,
     Closed,
     Poisoned,
@@ -88,12 +90,20 @@ public:
         std::string_view key);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> download(
         std::span<const std::byte> bytes);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> download_source(
+        std::shared_ptr<protocol::ITransferSource> source,
+        const protocol::TransferProgressObserver& observer = {});
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> flash_downloaded(
         std::string_view partition);
     [[nodiscard]] std::expected<DownloadAndFlashResult, PrimitiveError>
     download_and_flash(
         std::string_view partition,
         std::span<const std::byte> bytes);
+    [[nodiscard]] std::expected<DownloadAndFlashResult, PrimitiveError>
+    download_and_flash_source(
+        std::string_view partition,
+        std::shared_ptr<protocol::ITransferSource> source,
+        const protocol::TransferProgressObserver& observer = {});
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> erase(
         std::string_view partition);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> reboot(
@@ -113,6 +123,8 @@ private:
         PrimitiveOperation operation,
         std::string_view command_text,
         bool retire_on_success = false);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> finish_download(
+        std::expected<protocol::CommandResult, protocol::ProtocolError> result);
     [[nodiscard]] PrimitiveError protocol_error(
         PrimitiveOperation operation,
         const protocol::ProtocolError& error,

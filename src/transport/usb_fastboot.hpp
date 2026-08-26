@@ -7,7 +7,6 @@
 #include <atomic>
 #include <cstdint>
 #include <expected>
-#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -19,19 +18,14 @@ struct UsbFastbootTransportOptions final {
     std::shared_ptr<BufferBudget> buffer_budget;
 };
 
-enum class TransferProgressAction : std::uint8_t {
-    continue_transfer,
-    cancel,
-};
-
-using TransferProgressObserver = std::function<TransferProgressAction(
-    std::uint64_t completion_watermark,
-    std::uint64_t total_bytes)>;
+using TransferProgressAction = protocol::TransferProgressAction;
+using TransferProgressObserver = protocol::TransferProgressObserver;
 
 // Internal protocol adapter. One instance exclusively owns one claimed USB
 // interface. write()/read() are serialized; request_cancel()/close() may run
 // from a different thread and use the runtime's bounded drain/quarantine path.
-class UsbFastbootTransport final : public protocol::ITransportSession {
+class UsbFastbootTransport final : public protocol::ITransportSession,
+                                   public protocol::IStreamingTransportSession {
 public:
     [[nodiscard]] static std::expected<std::unique_ptr<UsbFastbootTransport>,
                                        LibusbRuntimeError>
@@ -56,7 +50,7 @@ public:
     [[nodiscard]] protocol::TransferResult write_source(
         std::shared_ptr<TransferSource> source,
         std::chrono::milliseconds timeout,
-        const TransferProgressObserver& observer = {});
+        const TransferProgressObserver& observer = {}) override;
 
     [[nodiscard]] protocol::TransferResult read(
         std::span<std::byte> destination,
