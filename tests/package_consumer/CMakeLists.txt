@@ -12,5 +12,9 @@ set_target_properties(
 target_link_libraries(c_consumer PRIVATE KairosBoot::C)
 
 add_executable(cxx_consumer cxx_consumer.cpp)
-target_compile_features(cxx_consumer PRIVATE cxx_std_23)
+set_target_properties(
+  cxx_consumer
+  PROPERTIES CXX_STANDARD 23
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
 target_link_libraries(cxx_consumer PRIVATE KairosBoot::Cxx)
