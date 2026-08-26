@@ -49,7 +49,7 @@ public:
     create(const FlashArtifact& artifact,
            std::uint64_t target_max_download_size,
            std::uint64_t host_resparse_limit = kDefaultResparseLimitBytes,
-           std::stop_token stop_token = {});
+           std::stop_token cancellation = {});
 
     [[nodiscard]] std::span<const SparseFlashPart> parts() const noexcept;
     [[nodiscard]] bool reparsed() const noexcept;
@@ -57,6 +57,12 @@ public:
     [[nodiscard]] std::uint64_t transfer_size() const noexcept;
 
 private:
+    [[nodiscard]] static std::expected<SparseFlashPlan, SparseFlashPlanError>
+    create_impl(const FlashArtifact& artifact,
+                std::uint64_t target_max_download_size,
+                std::uint64_t host_resparse_limit,
+                std::stop_token cancellation);
+
     SparseFlashPlan(std::vector<SparseFlashPart> parts,
                     bool reparsed,
                     std::uint64_t expanded_size,

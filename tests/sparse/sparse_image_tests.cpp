@@ -200,6 +200,30 @@ void append_u32(std::vector<std::byte>& bytes, const std::uint32_t value) {
     return bytes;
 }
 
+[[nodiscard]] std::vector<std::byte> oracle_pattern(
+    const std::size_t size,
+    const unsigned int seed = 0) {
+    std::vector<std::byte> bytes(size);
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+        bytes[index] = std::byte{static_cast<unsigned char>(
+            (index * 17 + 3 + seed) % 251)};
+    }
+    return bytes;
+}
+
+[[nodiscard]] std::vector<std::byte> repeated_u32_blocks(
+    const std::uint32_t value,
+    const std::uint32_t blocks) {
+    std::vector<std::byte> bytes(
+        static_cast<std::size_t>(blocks) * 4096);
+    const auto pattern = little_u32(value);
+    for (std::size_t offset = 0; offset < bytes.size(); offset += 4) {
+        std::ranges::copy(pattern, bytes.begin() +
+            static_cast<std::ptrdiff_t>(offset));
+    }
+    return bytes;
+}
+
 void append_header(
     std::vector<std::byte>& bytes,
     const std::uint32_t block_size,
@@ -423,10 +447,7 @@ void sparse_flash_plan_preserves_payloads_that_fit() {
 }
 
 void raw_images_are_split_without_materializing_their_expansion() {
-    std::vector<std::byte> raw(3 * 4096);
-    for (std::size_t index = 0; index < raw.size(); ++index) {
-        raw[index] = std::byte{static_cast<unsigned char>(index / 4096 + 1)};
-    }
+    auto raw = oracle_pattern(3 * 4096);
     auto source = std::make_shared<MemorySource>(raw, 73);
     auto artifact = FlashArtifact::inspect(source);
     CHECK(artifact.has_value());
@@ -444,6 +465,33 @@ void raw_images_are_split_without_materializing_their_expansion() {
         CHECK(part.data_end_offset == (index + 1) * 4096);
 
         auto encoded = read_all(part.source, 97);
+        std::vector<std::byte> expected;
+        const auto chunk_count = index == 1 ? 3U : 2U;
+        append_header(expected, 4096, 3, chunk_count);
+        if (index != 0) {
+            append_chunk(
+                expected,
+                kSparseChunkDontCare,
+                static_cast<std::uint32_t>(index),
+                {});
+        }
+        append_chunk(
+            expected,
+            kSparseChunkRaw,
+            1,
+            std::span(raw).subspan(index * 4096, 4096));
+        if (index != 2) {
+            append_chunk(
+                expected,
+                kSparseChunkDontCare,
+                static_cast<std::uint32_t>(2 - index),
+                {});
+        }
+        // Frozen Platform-Tools 37.0.1 Darwin binary SHA-256 values are
+        // 50cdb9c2e5f0104ae83181a1156728ccd7e5a1acc347353c393b09df29c9eee5,
+        // 8dbdff7c3e9d4aca632cc722b5cddc0a50a9a52de924f33407525878ea7a86cc,
+        // be02dc22cd33ceeb28ffdf60853f10eecf76d90e3c9eba54f4ac04adca3300e4.
+        CHECK(encoded == expected);
         auto parsed = open_bytes(std::move(encoded), 41);
         CHECK(parsed.has_value());
         CHECK(parsed->output_size() == raw.size());
@@ -451,14 +499,196 @@ void raw_images_are_split_without_materializing_their_expansion() {
         auto read = parsed->read_at(index * 4096, expanded_block);
         CHECK(read.has_value());
         CHECK(*read == expanded_block.size());
-        CHECK(std::ranges::all_of(expanded_block, [index](const std::byte byte) {
-            return byte == std::byte{static_cast<unsigned char>(index + 1)};
-        }));
+        CHECK(std::ranges::equal(
+            expanded_block,
+            std::span(raw).subspan(index * 4096, expanded_block.size())));
         const auto chunks = parsed->chunks();
         CHECK(std::ranges::count_if(chunks, [](const auto& chunk) {
                   return chunk.kind == SparseChunkKind::Raw;
               }) == 1);
     }
+}
+
+void raw_fill_detection_and_encoded_size_boundaries_match_aosp() {
+    auto repeated = repeated_u32_blocks(0x04030201U, 2);
+    auto repeated_source = std::make_shared<MemorySource>(repeated, 31);
+    auto repeated_artifact = FlashArtifact::inspect(repeated_source);
+    CHECK(repeated_artifact.has_value());
+
+    auto fitting = SparseFlashPlan::create(
+        *repeated_artifact,
+        repeated.size(),
+        1);
+    CHECK(fitting.has_value());
+    CHECK(!fitting->reparsed());
+    CHECK(fitting->parts().size() == 1);
+    CHECK(fitting->parts().front().source.get() == repeated_source.get());
+
+    auto one_byte_over =
+        SparseFlashPlan::create(*repeated_artifact, repeated.size() - 1);
+    CHECK(one_byte_over.has_value());
+    CHECK(one_byte_over->reparsed());
+    CHECK(one_byte_over->parts().size() == 1);
+
+    std::vector<std::byte> expected_merged_fill;
+    append_header(expected_merged_fill, 4096, 2, 1);
+    const auto merged_fill = little_u32(0x04030201U);
+    append_chunk(
+        expected_merged_fill, kSparseChunkFill, 2, merged_fill);
+    CHECK(read_all(one_byte_over->parts().front().source, 7) ==
+          expected_merged_fill);
+
+    std::vector<std::byte> different_fills(2 * 4096);
+    std::ranges::fill(
+        std::span(different_fills).first(4096), std::byte{0x01});
+    std::ranges::fill(
+        std::span(different_fills).last(4096), std::byte{0x02});
+    auto different_source =
+        std::make_shared<MemorySource>(different_fills, 43);
+    auto different_artifact = FlashArtifact::inspect(different_source);
+    CHECK(different_artifact.has_value());
+    auto different_plan = SparseFlashPlan::create(*different_artifact, 4200);
+    CHECK(different_plan.has_value());
+    CHECK(different_plan->parts().size() == 1);
+
+    std::vector<std::byte> expected_different_fills;
+    append_header(expected_different_fills, 4096, 2, 2);
+    const auto first_fill = little_u32(0x01010101U);
+    const auto second_fill = little_u32(0x02020202U);
+    append_chunk(
+        expected_different_fills, kSparseChunkFill, 1, first_fill);
+    append_chunk(
+        expected_different_fills, kSparseChunkFill, 1, second_fill);
+    const auto encoded = read_all(different_plan->parts().front().source, 5);
+    CHECK(encoded == expected_different_fills);
+    CHECK(encoded.size() == 60);
+    // Frozen Platform-Tools 37.0.1 Darwin binary SHA-256:
+    // 270cec22bcd7b6ce57d80502c9e3013e9f78765da11a925accc2a75478a74f64.
+}
+
+void aosp_56_byte_overhead_boundary_is_exact() {
+    auto raw = oracle_pattern(2 * 4096);
+    auto source = std::make_shared<MemorySource>(raw, 67);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+
+    // 56 bytes are reserved before block-aligned splitting. At 4164 bytes the
+    // two-pass libsparse algorithm also emits its observed empty tail part.
+    auto exact = SparseFlashPlan::create(*artifact, 4164);
+    if (!exact) {
+        throw CheckFailure("exact AOSP overhead boundary failed: " +
+                           exact.error().message);
+    }
+    CHECK(exact->parts().size() == 3);
+    CHECK(exact->parts()[0].source->size() == 4148);
+    CHECK(exact->parts()[1].source->size() == 4148);
+    CHECK(exact->parts()[2].source->size() == 40);
+
+    std::vector<std::byte> expected_first;
+    append_header(expected_first, 4096, 2, 2);
+    append_chunk(
+        expected_first,
+        kSparseChunkRaw,
+        1,
+        std::span(raw).first(4096));
+    append_chunk(expected_first, kSparseChunkDontCare, 1, {});
+    std::vector<std::byte> expected_second;
+    append_header(expected_second, 4096, 2, 2);
+    append_chunk(expected_second, kSparseChunkDontCare, 1, {});
+    append_chunk(
+        expected_second,
+        kSparseChunkRaw,
+        1,
+        std::span(raw).last(4096));
+    std::vector<std::byte> expected_empty;
+    append_header(expected_empty, 4096, 2, 1);
+    append_chunk(expected_empty, kSparseChunkDontCare, 2, {});
+    CHECK(read_all(exact->parts()[0].source) == expected_first);
+    CHECK(read_all(exact->parts()[1].source) == expected_second);
+    CHECK(read_all(exact->parts()[2].source) == expected_empty);
+
+    auto one_byte_short = SparseFlashPlan::create(*artifact, 4163);
+    CHECK(!one_byte_short);
+    CHECK(one_byte_short.error().kind ==
+          SparseFlashPlanErrorKind::Unsupported);
+}
+
+void sparse_backed_blocks_merge_like_aosp_libsparse() {
+    constexpr std::uint32_t blocks = 10;
+    constexpr std::uint32_t fill_value = 0x11223344U;
+    std::vector<std::byte> sparse;
+    append_header(sparse, 4096, blocks, blocks);
+    const auto fill = little_u32(fill_value);
+    for (std::uint32_t index = 0; index < blocks; ++index) {
+        append_chunk(sparse, kSparseChunkFill, 1, fill);
+    }
+
+    auto source = std::make_shared<MemorySource>(sparse, 11);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+    CHECK(artifact->metadata().transfer_size == 188);
+
+    auto fitting = SparseFlashPlan::create(*artifact, 188);
+    CHECK(fitting.has_value());
+    CHECK(!fitting->reparsed());
+    CHECK(fitting->parts().front().source.get() == source.get());
+
+    auto plan = SparseFlashPlan::create(*artifact, 100);
+    CHECK(plan.has_value());
+    CHECK(plan->reparsed());
+    CHECK(plan->parts().size() == 1);
+    std::vector<std::byte> expected;
+    append_header(expected, 4096, blocks, 1);
+    append_chunk(expected, kSparseChunkFill, blocks, fill);
+    CHECK(read_all(plan->parts().front().source, 3) == expected);
+}
+
+void sparse_raw_chunks_obey_the_aosp_seven_eighths_heuristic() {
+    constexpr std::uint32_t first_blocks = 11;
+    constexpr std::uint32_t second_blocks = 2;
+    auto first = oracle_pattern(first_blocks * 4096);
+    auto second = oracle_pattern(second_blocks * 4096, 29);
+
+    std::vector<std::byte> sparse;
+    append_header(
+        sparse, 4096, first_blocks + second_blocks, 2);
+    append_chunk(sparse, kSparseChunkRaw, first_blocks, first);
+    append_chunk(sparse, kSparseChunkRaw, second_blocks, second);
+
+    auto source = std::make_shared<MemorySource>(sparse, 101);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+    auto plan = SparseFlashPlan::create(*artifact, 50000);
+    CHECK(plan.has_value());
+    CHECK(plan->parts().size() == 2);
+
+    std::vector<std::byte> expected_first;
+    append_header(
+        expected_first, 4096, first_blocks + second_blocks, 2);
+    append_chunk(expected_first, kSparseChunkRaw, first_blocks, first);
+    append_chunk(
+        expected_first, kSparseChunkDontCare, second_blocks, {});
+    std::vector<std::byte> expected_second;
+    append_header(
+        expected_second, 4096, first_blocks + second_blocks, 2);
+    append_chunk(
+        expected_second, kSparseChunkDontCare, first_blocks, {});
+    append_chunk(expected_second, kSparseChunkRaw, second_blocks, second);
+
+    const auto encoded_first = read_all(plan->parts()[0].source, 113);
+    const auto encoded_second = read_all(plan->parts()[1].source, 127);
+    CHECK(encoded_first == expected_first);
+    CHECK(encoded_second == expected_second);
+    CHECK(encoded_first.size() == 45108);
+    CHECK(encoded_second.size() == 8244);
+    CHECK(plan->parts()[0].first_data_offset == 0);
+    CHECK(plan->parts()[0].data_end_offset == first_blocks * 4096ULL);
+    CHECK(plan->parts()[1].first_data_offset == first_blocks * 4096ULL);
+    CHECK(plan->parts()[1].data_end_offset ==
+          (first_blocks + second_blocks) * 4096ULL);
+    // Frozen Platform-Tools 37.0.1 Darwin binary SHA-256 values:
+    // 4a771e5374457c2d58c0976499b2c1b98253ccd328684acccf054c54344ed79e,
+    // a2c4874f86206520bbcbce21f33bad7df7cacdf0a62696c1936dd7a53df7c8f4.
 }
 
 void sparse_chunks_are_repacked_with_partition_offsets_preserved() {
@@ -468,7 +698,7 @@ void sparse_chunks_are_repacked_with_partition_offsets_preserved() {
     CHECK(artifact.has_value());
     CHECK(artifact->metadata().kind == FlashArtifactKind::AndroidSparse);
 
-    auto plan = SparseFlashPlan::create(*artifact, 68);
+    auto plan = SparseFlashPlan::create(*artifact, 88);
     CHECK(plan.has_value());
     CHECK(plan->reparsed());
     CHECK(plan->parts().size() >= 2);
@@ -476,7 +706,7 @@ void sparse_chunks_are_repacked_with_partition_offsets_preserved() {
     std::vector<std::byte> reconstructed(mixed.expanded.size());
     std::vector<std::uint8_t> written(mixed.expanded.size());
     for (const auto& part : plan->parts()) {
-        CHECK(part.source->size() <= 68);
+        CHECK(part.source->size() <= 88);
         auto parsed = SparseImage::open(part.source);
         CHECK(parsed.has_value());
         CHECK(parsed->output_size() == mixed.expanded.size());
@@ -512,9 +742,26 @@ void sparse_flash_plan_rejects_unsafe_split_inputs() {
             std::vector<std::byte>(4097, std::byte{0x2A}));
         auto artifact = FlashArtifact::inspect(source);
         CHECK(artifact.has_value());
+
+        auto fitting = SparseFlashPlan::create(*artifact, 4097);
+        CHECK(fitting.has_value());
+        CHECK(!fitting->reparsed());
+        CHECK(fitting->parts().front().source.get() == source.get());
+
         auto plan = SparseFlashPlan::create(*artifact, 4096);
         CHECK(!plan);
         CHECK(plan.error().kind == SparseFlashPlanErrorKind::Unsupported);
+    }
+    {
+        auto raw = oracle_pattern(2 * 4096 + 1);
+        auto source = std::make_shared<MemorySource>(std::move(raw));
+        auto artifact = FlashArtifact::inspect(source);
+        CHECK(artifact.has_value());
+        auto plan = SparseFlashPlan::create(*artifact, 4200);
+        CHECK(!plan);
+        CHECK(plan.error().kind == SparseFlashPlanErrorKind::Unsupported);
+        // The frozen Platform-Tools 37.0.1 binary likewise closes without a
+        // DATA command for this 8193-byte fixture.
     }
     {
         auto source = std::make_shared<MemorySource>(
@@ -527,20 +774,83 @@ void sparse_flash_plan_rejects_unsafe_split_inputs() {
     }
 }
 
-void sparse_flash_plan_honors_pre_requested_cancellation() {
-    auto source = std::make_shared<MemorySource>(
-        std::vector<std::byte>(4096, std::byte{0x2A}));
+void sparse_flash_planning_is_cancellable_during_raw_scans() {
+    auto raw = oracle_pattern(3 * 4096);
+    std::stop_source cancellation;
+    auto source = std::make_shared<CancellingSource>(
+        std::move(raw), cancellation, 4096);
     auto artifact = FlashArtifact::inspect(source);
     CHECK(artifact.has_value());
 
-    std::stop_source cancellation;
-    cancellation.request_stop();
     auto plan = SparseFlashPlan::create(
-        *artifact, 4096, kairosboot::image::kDefaultResparseLimitBytes,
+        *artifact, 4200, kairosboot::image::kDefaultResparseLimitBytes,
         cancellation.get_token());
     CHECK(!plan);
     CHECK(plan.error().kind == SparseFlashPlanErrorKind::Cancelled);
+
+    auto fitting_source = std::make_shared<MemorySource>(
+        std::vector<std::byte>(4096, std::byte{0x5A}));
+    auto fitting_artifact = FlashArtifact::inspect(fitting_source);
+    CHECK(fitting_artifact.has_value());
+    std::stop_source pre_cancelled;
+    pre_cancelled.request_stop();
+    auto cancelled_fitting = SparseFlashPlan::create(
+        *fitting_artifact,
+        4096,
+        kairosboot::image::kDefaultResparseLimitBytes,
+        pre_cancelled.get_token());
+    CHECK(!cancelled_fitting);
+    CHECK(cancelled_fitting.error().kind ==
+          SparseFlashPlanErrorKind::Cancelled);
+}
+
+void sparse_flash_planning_surfaces_raw_source_failures() {
+    auto raw = oracle_pattern(2 * 4096);
+    auto source = std::make_shared<ObservingSource>(
+        std::move(raw),
+        std::numeric_limits<std::size_t>::max(),
+        1);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+
+    auto plan = SparseFlashPlan::create(*artifact, 4200);
+    CHECK(!plan);
+    CHECK(plan.error().kind == SparseFlashPlanErrorKind::Source);
     CHECK(plan.error().output_offset == 0);
+}
+
+void one_hundred_thousand_fragments_remain_near_linear() {
+    constexpr std::uint32_t fragment_count = 100'000;
+    constexpr std::uint64_t target_size = 1'000'000;
+    std::vector<std::byte> sparse;
+    sparse.reserve(28 + static_cast<std::size_t>(fragment_count) * 16);
+    append_header(sparse, 4096, fragment_count, fragment_count);
+    for (std::uint32_t index = 0; index < fragment_count; ++index) {
+        const auto fill = little_u32(index & 1U ? 0x55555555U
+                                                : 0xAAAAAAAAU);
+        append_chunk(sparse, kSparseChunkFill, 1, fill);
+    }
+
+    auto source = std::make_shared<MemorySource>(std::move(sparse), 257);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+    const auto started = std::chrono::steady_clock::now();
+    auto plan = SparseFlashPlan::create(*artifact, target_size);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    if (!plan) {
+        throw CheckFailure("100k sparse plan failed: " +
+                           plan.error().message);
+    }
+    CHECK(plan->reparsed());
+    CHECK(plan->parts().size() >= 2);
+    CHECK(std::ranges::all_of(plan->parts(), [](const auto& part) {
+        return part.source->size() <= target_size;
+    }));
+    CHECK(elapsed < std::chrono::seconds(10));
+    std::cout << "METRIC: 100k sparse planner "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed)
+                     .count()
+              << " ms\n";
 }
 
 void flash_artifact_classifies_raw_without_materializing_it() {
@@ -954,10 +1264,22 @@ int main() {
         {"sparse flash plan preserves fitting payloads",
          sparse_flash_plan_preserves_payloads_that_fit},
         {"raw sparse split", raw_images_are_split_without_materializing_their_expansion},
+        {"raw FILL and encoded boundary",
+         raw_fill_detection_and_encoded_size_boundaries_match_aosp},
+        {"AOSP 56-byte overhead boundary",
+         aosp_56_byte_overhead_boundary_is_exact},
+        {"libsparse backed-block merging",
+         sparse_backed_blocks_merge_like_aosp_libsparse},
+        {"AOSP seven-eighths heuristic",
+         sparse_raw_chunks_obey_the_aosp_seven_eighths_heuristic},
         {"sparse repacking", sparse_chunks_are_repacked_with_partition_offsets_preserved},
         {"sparse split rejection", sparse_flash_plan_rejects_unsafe_split_inputs},
-        {"sparse split cancellation",
-         sparse_flash_plan_honors_pre_requested_cancellation},
+        {"sparse planner cancellation",
+         sparse_flash_planning_is_cancellable_during_raw_scans},
+        {"sparse planner source failures",
+         sparse_flash_planning_surfaces_raw_source_failures},
+        {"100k sparse planner scale",
+         one_hundred_thousand_fragments_remain_near_linear},
         {"flash artifact raw classification",
          flash_artifact_classifies_raw_without_materializing_it},
         {"flash artifact sparse classification",

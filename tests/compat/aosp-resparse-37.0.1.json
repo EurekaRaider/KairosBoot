@@ -1,0 +1,84 @@
+{
+  "documentType": "kairosboot.aosp-resparse-golden",
+  "schemaVersion": 1,
+  "oracle": {
+    "platformToolsVersion": "37.0.1",
+    "aospSourceCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "darwinFastbootSha256": "c97aa28970ba9a46023a8ca52a78dd6547c2c1c4133f9715d4fe551e1dfae152",
+    "transport": "Fastboot TCP v1 scripted device",
+    "generatedAt": "2026-08-26"
+  },
+  "cases": [
+    {
+      "id": "raw-different-fill-blocks",
+      "input": "4096 bytes 0x01 followed by 4096 bytes 0x02",
+      "maximumDownloadSize": 4200,
+      "parts": [
+        {
+          "size": 60,
+          "sha256": "270cec22bcd7b6ce57d80502c9e3013e9f78765da11a925accc2a75478a74f64"
+        }
+      ]
+    },
+    {
+      "id": "raw-three-nonfill-blocks",
+      "input": "12288 bytes where byte[i] = (i * 17 + 3) mod 251",
+      "maximumDownloadSize": 4200,
+      "parts": [
+        {
+          "size": 4148,
+          "sha256": "50cdb9c2e5f0104ae83181a1156728ccd7e5a1acc347353c393b09df29c9eee5"
+        },
+        {
+          "size": 4160,
+          "sha256": "8dbdff7c3e9d4aca632cc722b5cddc0a50a9a52de924f33407525878ea7a86cc"
+        },
+        {
+          "size": 4148,
+          "sha256": "be02dc22cd33ceeb28ffdf60853f10eecf76d90e3c9eba54f4ac04adca3300e4"
+        }
+      ]
+    },
+    {
+      "id": "raw-two-block-minimum-progress-boundary",
+      "input": "8192 bytes where byte[i] = (i * 17 + 3) mod 251",
+      "maximumDownloadSize": 4164,
+      "parts": [
+        {
+          "size": 4148,
+          "sha256": "8335c4661f2cfa437b96eafaa38936c64bffd2308b97233e6216083999ecaf25"
+        },
+        {
+          "size": 4148,
+          "sha256": "fd1bbde52b83a4c6c4e5f5a7d6bd8ad83a90c8c8e95a85bca358bfbdf5e71f1b"
+        },
+        {
+          "size": 40,
+          "sha256": "65873c26cd639249dfdfc928afa8e91edb3d4094df23cc96ad940ec2c6d08fe6"
+        }
+      ]
+    },
+    {
+      "id": "sparse-seven-eighths-no-split",
+      "input": "4096-byte sparse blocks: 11-block RAW pattern seed 0, then 2-block RAW pattern seed 29",
+      "maximumDownloadSize": 50000,
+      "parts": [
+        {
+          "size": 45108,
+          "sha256": "4a771e5374457c2d58c0976499b2c1b98253ccd328684acccf054c54344ed79e"
+        },
+        {
+          "size": 8244,
+          "sha256": "a2c4874f86206520bbcbce21f33bad7df7cacdf0a62696c1936dd7a53df7c8f4"
+        }
+      ]
+    },
+    {
+      "id": "unaligned-raw-rejected-before-data",
+      "input": "8193 bytes where byte[i] = (i * 17 + 3) mod 251",
+      "maximumDownloadSize": 4200,
+      "parts": [],
+      "terminal": "rejected-before-DATA"
+    }
+  ]
+}
