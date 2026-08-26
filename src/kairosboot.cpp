@@ -112,6 +112,12 @@ kb_status_t fail(kb_error_t **error, kb_status_t status, const char *message,
               device_identifier == nullptr ? "" : device_identifier,
           .native_code = native_code,
           .transfer_state = transfer_state,
+          .device_message = {},
+          .command_messages = {},
+          .inbound_expected = std::nullopt,
+          .inbound_transferred = 0,
+          .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+          .session_poisoned = false,
       };
     } catch (...) {
       *error = nullptr;
@@ -304,6 +310,12 @@ kairosboot::api::OperationOutcome cancelled_operation(
       .native_code = 0,
       .transfer_state = transfer_state,
       .device_identifier = std::move(device),
+      .device_message = {},
+      .command_messages = {},
+      .inbound_expected = std::nullopt,
+      .inbound_transferred = 0,
+      .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+      .session_poisoned = false,
   });
 }
 
@@ -621,7 +633,7 @@ primitive_execution(
   if (!reply) {
     return std::unexpected(std::move(reply.error()));
   }
-  return PrimitiveExecution{.reply = std::move(*reply)};
+  return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
 }
 
 using PrimitiveExecutor = std::function<std::expected<
@@ -666,11 +678,23 @@ prepare_target(kb_context_t &context, const char *selector_text) {
     return std::unexpected(kairosboot::api::OperationErrorPayload{
         .status = parsed.error().status,
         .message = parsed.error().message,
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
         .device_identifier = selector_text == nullptr ? "" : selector_text,
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     });
   }
 
-  PreparedTarget target{.selector = std::move(*parsed)};
+  PreparedTarget target{
+      .selector = std::move(*parsed),
+      .usb_runtime = {},
+      .usb_device = std::nullopt,
+  };
   if (target.selector.kind == kairosboot::api::DeviceSelectorKind::Tcp ||
       target.selector.kind == kairosboot::api::DeviceSelectorKind::Udp) {
     return target;
@@ -691,7 +715,15 @@ prepare_target(kb_context_t &context, const char *selector_text) {
     return std::unexpected(kairosboot::api::OperationErrorPayload{
         .status = selected.error().status,
         .message = selected.error().message,
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
         .device_identifier = target.selector.identifier,
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     });
   }
   target.usb_runtime = *runtime;
@@ -726,7 +758,14 @@ prepare_target(kb_context_t &context, const char *selector_text) {
       .status = status,
       .message = error.message,
       .native_code = error.native_error,
+      .transfer_state = KB_TRANSFER_NOT_SENT,
       .device_identifier = identifier,
+      .device_message = {},
+      .command_messages = {},
+      .inbound_expected = std::nullopt,
+      .inbound_transferred = 0,
+      .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+      .session_poisoned = false,
   };
 }
 
@@ -758,7 +797,14 @@ prepare_target(kb_context_t &context, const char *selector_text) {
       .status = status,
       .message = error.message,
       .native_code = error.native_error,
+      .transfer_state = KB_TRANSFER_NOT_SENT,
       .device_identifier = identifier,
+      .device_message = {},
+      .command_messages = {},
+      .inbound_expected = std::nullopt,
+      .inbound_transferred = 0,
+      .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+      .session_poisoned = false,
   };
 }
 
@@ -807,7 +853,15 @@ open_target(
     return std::unexpected(kairosboot::api::OperationErrorPayload{
         .status = KB_E_INTERNAL,
         .message = "prepared USB target is incomplete",
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
         .device_identifier = target.selector.identifier,
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     });
   }
   kairosboot::transport::UsbFastbootTransportOptions transport_options;
@@ -1504,7 +1558,7 @@ kb_status_t KB_CALL kb_getvar_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -1542,7 +1596,7 @@ kb_status_t KB_CALL kb_erase_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -1580,7 +1634,7 @@ kb_status_t KB_CALL kb_set_active_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -1908,7 +1962,7 @@ kb_status_t KB_CALL kb_reboot_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -1938,7 +1992,7 @@ kb_status_t KB_CALL kb_continue_boot_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -1977,7 +2031,7 @@ kb_status_t KB_CALL kb_oem_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -2015,7 +2069,7 @@ kb_status_t KB_CALL kb_raw_command_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -2044,7 +2098,7 @@ kb_status_t KB_CALL kb_boot_async(
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
-        return PrimitiveExecution{.reply = std::move(*reply)};
+        return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
       },
       operation, error);
 }
@@ -2098,7 +2152,7 @@ kb_status_t KB_CALL kb_stage_async(
           if (!reply) {
             return std::unexpected(std::move(reply.error()));
           }
-          return PrimitiveExecution{.reply = std::move(*reply)};
+          return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
         },
         operation, error);
   } catch (const std::bad_alloc &) {

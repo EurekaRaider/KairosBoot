@@ -15,6 +15,12 @@ namespace {
         .native_code = 0,
         .transfer_state = KB_TRANSFER_NOT_SENT,
         .device_identifier = {},
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     };
 }
 
@@ -25,6 +31,12 @@ namespace {
         .native_code = 0,
         .transfer_state = KB_TRANSFER_NOT_SENT,
         .device_identifier = {},
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     };
 }
 
@@ -312,6 +324,12 @@ void OperationState::publish_terminal(OperationOutcome outcome) noexcept {
                 .native_code = 0,
                 .transfer_state = KB_TRANSFER_FULLY_TRANSFERRED,
                 .device_identifier = {},
+                .device_message = {},
+                .command_messages = {},
+                .inbound_expected = std::nullopt,
+                .inbound_transferred = 0,
+                .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+                .session_poisoned = false,
             });
         }
         if (outcome.phase == OperationPhase::Succeeded) {
@@ -363,6 +381,12 @@ void OperationState::run() noexcept {
                 .native_code = 0,
                 .transfer_state = KB_TRANSFER_NOT_SENT,
                 .device_identifier = {},
+                .device_message = {},
+                .command_messages = {},
+                .inbound_expected = std::nullopt,
+                .inbound_transferred = 0,
+                .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+                .session_poisoned = false,
             });
         } catch (const std::exception& error) {
             outcome = OperationOutcome::failed({
@@ -371,6 +395,12 @@ void OperationState::run() noexcept {
                 .native_code = 0,
                 .transfer_state = KB_TRANSFER_NOT_SENT,
                 .device_identifier = {},
+                .device_message = {},
+                .command_messages = {},
+                .inbound_expected = std::nullopt,
+                .inbound_transferred = 0,
+                .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+                .session_poisoned = false,
             });
         } catch (...) {
             outcome = OperationOutcome::failed(

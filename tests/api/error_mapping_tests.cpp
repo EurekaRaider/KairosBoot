@@ -285,7 +285,14 @@ void multipart_flash_certainty_includes_downloaded_current_part() {
             .message = "failed",
             .native_code = 0,
             .transfer_state = initial,
-            .device_identifier = "SERIAL-M"};
+            .device_identifier = "SERIAL-M",
+            .device_message = {},
+            .command_messages = {},
+            .inbound_expected = std::nullopt,
+            .inbound_transferred = 0,
+            .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+            .session_poisoned = false,
+        };
         accumulate_flash_transfer_state(
             payload, failed_operation, completed, current, total);
         return payload.transfer_state;
