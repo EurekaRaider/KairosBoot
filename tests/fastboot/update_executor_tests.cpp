@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -16,12 +17,14 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
 
 using kairosboot::fastboot::execute_prepared_update;
+using kairosboot::fastboot::IPreparedDeviceTask;
 using kairosboot::fastboot::IUpdateDevice;
 using kairosboot::fastboot::PlannedRebootTarget;
 using kairosboot::fastboot::PlannedRequirement;
@@ -32,9 +35,12 @@ using kairosboot::fastboot::PreparedUpdatePackage;
 using kairosboot::fastboot::RequirementAction;
 using kairosboot::fastboot::UpdateDeviceError;
 using kairosboot::fastboot::UpdateDeviceErrorKind;
+using kairosboot::fastboot::UpdateDeviceTaskInput;
 using kairosboot::fastboot::UpdateExecutionErrorKind;
 using kairosboot::fastboot::UpdateExecutionEventKind;
 using kairosboot::fastboot::UpdateExecutorOptions;
+using kairosboot::fastboot::UpdateOperationContext;
+using kairosboot::fastboot::UpdateSuperArtifactInput;
 using kairosboot::fastboot::UpdateManifestKind;
 using kairosboot::fastboot::UpdateSourceLocation;
 using kairosboot::fastboot::UpdateTaskKind;
@@ -43,6 +49,11 @@ using kairosboot::image::FlashArtifact;
 using kairosboot::image::IImageSource;
 using kairosboot::image::ImageSourceError;
 using kairosboot::image::ResolvedArtifact;
+using kairosboot::protocol::ProtocolPhase;
+using kairosboot::protocol::Response;
+using kairosboot::protocol::ResponseKind;
+using kairosboot::protocol::TransferCertainty;
+using kairosboot::protocol::TransportStatus;
 
 class CheckFailure final : public std::runtime_error {
 public:
@@ -183,77 +194,126 @@ make_package(std::vector<PlannedRequirement> requirements,
 class ScriptedUpdateDevice final : public IUpdateDevice {
 public:
     [[nodiscard]] std::expected<std::string, UpdateDeviceError>
-    getvar(const std::string_view name, const std::stop_token) override {
+    getvar(const std::string_view name,
+           const UpdateOperationContext& context) override {
         getvar_calls.emplace_back(name);
+        observed_deadlines.push_back(context.deadline);
         if (throw_getvar == name) {
             throw std::runtime_error("scripted getvar exception");
         }
         if (fail_getvar == name) {
             return std::unexpected(UpdateDeviceError{
-                .native_code = 17,
                 .message = "scripted getvar failure",
+                .native_code = 17,
             });
         }
         const auto found = variables.find(name);
         if (found == variables.end()) {
             return std::unexpected(UpdateDeviceError{
-                .native_code = 2,
                 .message = "missing scripted variable",
+                .native_code = 2,
             });
         }
         return found->second;
     }
 
-    [[nodiscard]] std::expected<void, UpdateDeviceError>
-    flash(const PlannedUpdateTask& task, const PreparedUpdateArtifact& artifact,
-          const std::stop_token cancellation) override {
-        CHECK(task.kind == UpdateTaskKind::Flash);
-        CHECK(task.artifact == artifact.name);
-        last_flash_artifact = &artifact;
-        return destructive(
-            "flash:" + task.partition + ":" + task.artifact +
-                (task.slot == PlannedSlot::Other ? ":slot-other" : ":default") +
-                (task.apply_vbmeta ? ":apply-vbmeta" : ":no-vbmeta"),
-            cancellation);
-    }
-
-    [[nodiscard]] std::expected<void, UpdateDeviceError>
-    erase(const PlannedUpdateTask& task, const std::stop_token cancellation) override {
-        CHECK(task.kind == UpdateTaskKind::Erase);
-        return destructive("erase:" + task.partition, cancellation);
-    }
-
-    [[nodiscard]] std::expected<void, UpdateDeviceError>
-    reboot(const PlannedUpdateTask& task, const std::stop_token cancellation) override {
-        CHECK(task.kind == UpdateTaskKind::Reboot);
-        return destructive(
-            "reboot:" + std::to_string(static_cast<unsigned>(task.reboot_target)),
-            cancellation);
-    }
-
-    [[nodiscard]] std::expected<void, UpdateDeviceError>
-    update_super(const PlannedUpdateTask& task,
-                 const std::stop_token cancellation) override {
-        CHECK(task.kind == UpdateTaskKind::UpdateSuper);
-        return destructive("update-super", cancellation);
+    [[nodiscard]] std::expected<std::unique_ptr<IPreparedDeviceTask>,
+                                UpdateDeviceError>
+    prepare_task(UpdateDeviceTaskInput input,
+                 const UpdateOperationContext& context) override {
+        const auto index = prepare_calls.size();
+        observed_deadlines.push_back(context.deadline);
+        prepare_calls.push_back(call_name(input));
+        if (input.task.kind == UpdateTaskKind::Flash) {
+            CHECK(input.flash_artifact);
+            CHECK(input.flash_artifact->logical_name == input.task.artifact);
+            CHECK(input.flash_artifact->source);
+            last_flash_source = input.flash_artifact->source;
+        } else {
+            CHECK(!input.flash_artifact);
+        }
+        if (input.task.kind == UpdateTaskKind::UpdateSuper && input.super_artifact) {
+            last_super_source = input.super_artifact->source;
+        }
+        if (throw_prepare_index == index) {
+            throw std::runtime_error("scripted task preparation exception");
+        }
+        if (cancel_prepare_index == index) {
+            CHECK(cancellation_source != nullptr);
+            cancellation_source->request_stop();
+        }
+        if (fail_prepare_index == index) {
+            return std::unexpected(
+                prepare_error.value_or(UpdateDeviceError{
+                    .message = "scripted task preparation failure",
+                    .native_code = 23,
+                }));
+        }
+        return std::unique_ptr<IPreparedDeviceTask>(
+            std::make_unique<Token>(*this, std::move(input)));
     }
 
     std::map<std::string, std::string, std::less<>> variables;
     std::vector<std::string> getvar_calls;
+    std::vector<std::string> prepare_calls;
     std::vector<std::string> task_calls;
+    std::vector<std::optional<std::chrono::steady_clock::time_point>>
+        observed_deadlines;
     std::string fail_getvar;
     std::string throw_getvar;
+    std::optional<std::size_t> fail_prepare_index;
+    std::optional<std::size_t> cancel_prepare_index;
+    std::optional<std::size_t> throw_prepare_index;
     std::optional<std::size_t> fail_task_index;
     std::optional<std::size_t> cancel_task_index;
     std::optional<std::size_t> throw_task_index;
+    std::optional<UpdateDeviceError> prepare_error;
+    std::optional<UpdateDeviceError> task_error;
     std::stop_source* cancellation_source{};
-    const PreparedUpdateArtifact* last_flash_artifact{};
+    std::shared_ptr<const IImageSource> last_flash_source;
+    std::shared_ptr<const IImageSource> last_super_source;
 
 private:
+    class Token final : public IPreparedDeviceTask {
+    public:
+        Token(ScriptedUpdateDevice& owner, UpdateDeviceTaskInput input)
+            : owner_(owner), input_(std::move(input)) {}
+
+        [[nodiscard]] std::expected<void, UpdateDeviceError>
+        execute(const UpdateOperationContext& context) const override {
+            return owner_.destructive(input_, context);
+        }
+
+    private:
+        ScriptedUpdateDevice& owner_;
+        const UpdateDeviceTaskInput input_;
+    };
+
+    [[nodiscard]] static std::string call_name(const UpdateDeviceTaskInput& input) {
+        const auto& task = input.task;
+        switch (task.kind) {
+        case UpdateTaskKind::Flash:
+            return "flash:" + task.partition + ":" + task.artifact +
+                   (task.slot == PlannedSlot::Other ? ":slot-other" : ":default") +
+                   (task.apply_vbmeta ? ":apply-vbmeta" : ":no-vbmeta");
+        case UpdateTaskKind::Erase:
+            return "erase:" + task.partition;
+        case UpdateTaskKind::Reboot:
+            return "reboot:" +
+                   std::to_string(static_cast<unsigned>(task.reboot_target));
+        case UpdateTaskKind::UpdateSuper:
+            return "update-super";
+        default:
+            return "unknown";
+        }
+    }
+
     [[nodiscard]] std::expected<void, UpdateDeviceError>
-    destructive(std::string call, const std::stop_token cancellation) {
+    destructive(const UpdateDeviceTaskInput& input,
+                const UpdateOperationContext& context) {
         const auto index = task_calls.size();
-        task_calls.push_back(std::move(call));
+        observed_deadlines.push_back(context.deadline);
+        task_calls.push_back(call_name(input));
         if (throw_task_index == index) {
             throw std::runtime_error("scripted task exception");
         }
@@ -262,12 +322,17 @@ private:
             cancellation_source->request_stop();
         }
         if (fail_task_index == index) {
-            return std::unexpected(UpdateDeviceError{
-                .kind = cancellation.stop_requested() ? UpdateDeviceErrorKind::Cancelled
-                                                      : UpdateDeviceErrorKind::Failed,
-                .native_code = 31,
-                .message = "scripted task failure",
-            });
+            if (task_error) {
+                return std::unexpected(*task_error);
+            }
+            return std::unexpected(
+                UpdateDeviceError{
+                    .kind = context.cancellation.stop_requested()
+                                ? UpdateDeviceErrorKind::Cancelled
+                                : UpdateDeviceErrorKind::Failed,
+                    .message = "scripted task failure",
+                    .native_code = 31,
+                });
         }
         return {};
     }
@@ -323,7 +388,9 @@ void requirements_are_checked_once_before_ordered_tasks() {
                                    "reboot:3",
                                    "update-super",
                                }));
-    CHECK(device.last_flash_artifact == &prepared.artifacts[0]);
+    CHECK(device.prepare_calls == device.task_calls);
+    CHECK(device.last_flash_source ==
+          prepared.artifacts[0].artifact.transfer_source());
     CHECK(result->trace.front().kind == UpdateExecutionEventKind::ValidationStarted);
     CHECK(result->trace.back().kind == UpdateExecutionEventKind::ExecutionCompleted);
     CHECK(
@@ -487,9 +554,22 @@ void cancellation_before_and_during_tasks_is_truthful() {
         execute_prepared_update(prepared, device, {}, during.get_token());
     CHECK(!cancelled_during);
     CHECK(cancelled_during.error().kind == UpdateExecutionErrorKind::Cancelled);
-    CHECK(cancelled_during.error().task_index == 1U);
+    CHECK(cancelled_during.error().task_index == 0U);
     CHECK(cancelled_during.error().completed_tasks == 1U);
     CHECK(device.task_calls.size() == 1U);
+
+    std::stop_source during_preparation;
+    ScriptedUpdateDevice preparation_device;
+    preparation_device.cancel_prepare_index = 1U;
+    preparation_device.cancellation_source = &during_preparation;
+    auto cancelled_preparation = execute_prepared_update(
+        prepared, preparation_device, {}, during_preparation.get_token());
+    CHECK(!cancelled_preparation);
+    CHECK(cancelled_preparation.error().kind ==
+          UpdateExecutionErrorKind::Cancelled);
+    CHECK(cancelled_preparation.error().task_index == 1U);
+    CHECK(preparation_device.prepare_calls.size() == 2U);
+    CHECK(preparation_device.task_calls.empty());
 }
 
 void observer_exceptions_stop_before_the_next_destructive_call() {
@@ -524,6 +604,213 @@ void observer_exceptions_stop_before_the_next_destructive_call() {
     CHECK(task.error().task_index == 0U);
     CHECK(task.error().completed_tasks == 1U);
     CHECK(task_device.task_calls.size() == 1U);
+}
+
+void later_task_preparation_failure_keeps_every_task_non_destructive() {
+    std::vector<PlannedUpdateTask> tasks;
+    tasks.push_back(erase_task("cache", 85U));
+    tasks.push_back(reboot_task(PlannedRebootTarget::Fastboot, 86U));
+    tasks.push_back(update_super_task(87U));
+    auto prepared = make_package({}, std::move(tasks), {});
+
+    ScriptedUpdateDevice device;
+    device.fail_prepare_index = 1U;
+    device.prepare_error = UpdateDeviceError{
+        .phase = ProtocolPhase::Validation,
+        .message = "device does not support reboot-fastboot",
+        .device_message = "unsupported capability",
+        .native_code = 95,
+    };
+    auto result = execute_prepared_update(prepared, device);
+    CHECK(!result);
+    CHECK(result.error().kind == UpdateExecutionErrorKind::DeviceTaskFailed);
+    CHECK(result.error().task_index == 1U);
+    CHECK(result.error().completed_tasks == 0U);
+    CHECK(result.error().device_error);
+    CHECK(result.error().device_error->device_message == "unsupported capability");
+    CHECK(device.prepare_calls.size() == 2U);
+    CHECK(device.task_calls.empty());
+}
+
+void invalid_task_enums_fail_before_device_preparation() {
+    auto invalid_kind_task = erase_task("cache", 88U);
+    invalid_kind_task.kind = static_cast<UpdateTaskKind>(0xffU);
+    auto invalid_kind = make_package({}, {invalid_kind_task}, {});
+    ScriptedUpdateDevice kind_device;
+    auto kind_result = execute_prepared_update(invalid_kind, kind_device);
+    CHECK(!kind_result);
+    CHECK(kind_result.error().kind ==
+          UpdateExecutionErrorKind::InvalidPreparedPackage);
+    CHECK(kind_device.prepare_calls.empty());
+    CHECK(kind_device.task_calls.empty());
+
+    auto invalid_slot_task = flash_task("boot", "boot.img", 89U);
+    invalid_slot_task.slot = static_cast<PlannedSlot>(0xffU);
+    std::vector<PreparedUpdateArtifact> slot_artifacts;
+    slot_artifacts.push_back(make_artifact("boot.img"));
+    auto invalid_slot =
+        make_package({}, {invalid_slot_task}, std::move(slot_artifacts));
+    ScriptedUpdateDevice slot_device;
+    auto slot_result = execute_prepared_update(invalid_slot, slot_device);
+    CHECK(!slot_result);
+    CHECK(slot_result.error().kind ==
+          UpdateExecutionErrorKind::InvalidPreparedPackage);
+    CHECK(slot_device.prepare_calls.empty());
+    CHECK(slot_device.task_calls.empty());
+
+    auto invalid_reboot_task = reboot_task(PlannedRebootTarget::System, 90U);
+    invalid_reboot_task.reboot_target =
+        static_cast<PlannedRebootTarget>(0xffU);
+    auto invalid_reboot = make_package({}, {invalid_reboot_task}, {});
+    ScriptedUpdateDevice reboot_device;
+    auto reboot_result = execute_prepared_update(invalid_reboot, reboot_device);
+    CHECK(!reboot_result);
+    CHECK(reboot_result.error().kind ==
+          UpdateExecutionErrorKind::InvalidPreparedPackage);
+    CHECK(reboot_device.prepare_calls.empty());
+    CHECK(reboot_device.task_calls.empty());
+}
+
+void prepared_super_binding_reaches_only_the_update_super_token() {
+    auto prepared = make_package({}, {erase_task("cache", 91U),
+                                      update_super_task(92U)}, {});
+    auto source = std::make_shared<MemorySource>("dedicated-super");
+    UpdateExecutorOptions options;
+    options.super_artifact = UpdateSuperArtifactInput{
+        .logical_name = "super.img",
+        .source = source,
+    };
+    ScriptedUpdateDevice device;
+    auto result = execute_prepared_update(prepared, device, options);
+    CHECK(result);
+    CHECK(result->completed_tasks == 2U);
+    CHECK(device.last_super_source == source);
+    CHECK(device.prepare_calls == device.task_calls);
+}
+
+void one_absolute_deadline_covers_getvar_prepare_and_execute() {
+    auto prepared = make_package(
+        {requirement("product", {"atlas"}, 93U)},
+        {erase_task("cache", 94U)}, {});
+    ScriptedUpdateDevice device;
+    device.variables = {{"product", "atlas"}};
+    UpdateExecutorOptions options;
+    options.deadline = std::chrono::steady_clock::now() + std::chrono::hours(1);
+    auto result = execute_prepared_update(prepared, device, options);
+    CHECK(result);
+    CHECK(device.observed_deadlines.size() == 3U);
+    CHECK(std::all_of(device.observed_deadlines.begin(),
+                      device.observed_deadlines.end(), [&](const auto& observed) {
+                          return observed == options.deadline;
+                      }));
+
+    ScriptedUpdateDevice expired_device;
+    UpdateExecutorOptions expired_options;
+    expired_options.deadline = std::chrono::steady_clock::now();
+    auto expired = execute_prepared_update(prepared, expired_device,
+                                           expired_options);
+    CHECK(!expired);
+    CHECK(expired.error().kind == UpdateExecutionErrorKind::TimedOut);
+    CHECK(expired_device.getvar_calls.empty());
+    CHECK(expired_device.prepare_calls.empty());
+    CHECK(expired_device.task_calls.empty());
+}
+
+void task_started_observer_cancel_and_deadline_are_rechecked() {
+    auto prepared = make_package({}, {erase_task("cache", 95U)}, {});
+
+    std::stop_source cancellation;
+    ScriptedUpdateDevice cancelled_device;
+    UpdateExecutorOptions cancel_options;
+    cancel_options.observer = [&](const auto& item) {
+        if (item.kind == UpdateExecutionEventKind::TaskStarted) {
+            cancellation.request_stop();
+        }
+    };
+    auto cancelled = execute_prepared_update(
+        prepared, cancelled_device, cancel_options, cancellation.get_token());
+    CHECK(!cancelled);
+    CHECK(cancelled.error().kind == UpdateExecutionErrorKind::Cancelled);
+    CHECK(cancelled.error().task_index == 0U);
+    CHECK(cancelled_device.prepare_calls.size() == 1U);
+    CHECK(cancelled_device.task_calls.empty());
+
+    ScriptedUpdateDevice timed_device;
+    UpdateExecutorOptions timeout_options;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(25);
+    timeout_options.deadline = deadline;
+    timeout_options.observer = [deadline](const auto& item) {
+        if (item.kind == UpdateExecutionEventKind::TaskStarted) {
+            while (std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+        }
+    };
+    auto timed = execute_prepared_update(prepared, timed_device, timeout_options);
+    CHECK(!timed);
+    CHECK(timed.error().kind == UpdateExecutionErrorKind::TimedOut);
+    CHECK(timed.error().task_index == 0U);
+    CHECK(timed_device.prepare_calls.size() == 1U);
+    CHECK(timed_device.task_calls.empty());
+}
+
+void device_error_fidelity_survives_task_failed_observer_exception() {
+    auto prepared = make_package({}, {erase_task("cache", 96U)}, {});
+    ScriptedUpdateDevice device;
+    device.fail_task_index = 0U;
+    device.task_error = UpdateDeviceError{
+        .kind = UpdateDeviceErrorKind::TimedOut,
+        .phase = ProtocolPhase::DataWrite,
+        .message = "transport deadline expired",
+        .device_message = "remote terminal detail",
+        .informational = {
+            Response{.kind = ResponseKind::Info, .payload = "progress"},
+            Response{.kind = ResponseKind::Text, .payload = "diagnostic"},
+        },
+        .transport_status = TransportStatus::Timeout,
+        .transport_certainty = TransferCertainty::PartialOrUnknown,
+        .outbound_certainty = TransferCertainty::PartialOrUnknown,
+        .inbound_expected = 4096U,
+        .inbound_transferred = 17U,
+        .inbound_certainty = TransferCertainty::PartialOrUnknown,
+        .session_poisoned = true,
+        .session_closed = true,
+        .native_code = 110,
+    };
+    UpdateExecutorOptions options;
+    options.observer = [](const auto& item) {
+        if (item.kind == UpdateExecutionEventKind::TaskFailed) {
+            throw std::runtime_error("observer secondary failure");
+        }
+    };
+    auto result = execute_prepared_update(prepared, device, options);
+    CHECK(!result);
+    CHECK(result.error().kind == UpdateExecutionErrorKind::TimedOut);
+    CHECK(result.error().task_index == 0U);
+    CHECK(result.error().device_error);
+    const auto& error = *result.error().device_error;
+    CHECK(error.kind == UpdateDeviceErrorKind::TimedOut);
+    CHECK(error.phase == ProtocolPhase::DataWrite);
+    CHECK(error.message == "transport deadline expired");
+    CHECK(error.device_message == "remote terminal detail");
+    CHECK(error.informational.size() == 2U);
+    CHECK(error.informational[0].kind == ResponseKind::Info);
+    CHECK(error.informational[1].kind == ResponseKind::Text);
+    CHECK(error.transport_status == TransportStatus::Timeout);
+    CHECK(error.transport_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(error.outbound_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(error.inbound_expected == 4096U);
+    CHECK(error.inbound_transferred == 17U);
+    CHECK(error.inbound_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(error.session_poisoned);
+    CHECK(error.session_closed);
+    CHECK(error.native_code == 110);
+    CHECK(result.error().secondary_observer_error);
+    CHECK(result.error().secondary_observer_error->find("observer secondary failure") !=
+          std::string::npos);
+    CHECK(result.error().trace.back().kind ==
+          UpdateExecutionEventKind::TaskFailed);
 }
 
 void actor_exceptions_and_empty_plans_are_structured() {
@@ -578,6 +865,18 @@ int main() {
         Test{"task cancellation", cancellation_before_and_during_tasks_is_truthful},
         Test{"observer exceptions",
              observer_exceptions_stop_before_the_next_destructive_call},
+        Test{"prepare all before execute",
+             later_task_preparation_failure_keeps_every_task_non_destructive},
+        Test{"invalid task enums",
+             invalid_task_enums_fail_before_device_preparation},
+        Test{"dedicated super binding",
+             prepared_super_binding_reaches_only_the_update_super_token},
+        Test{"absolute deadline propagation",
+             one_absolute_deadline_covers_getvar_prepare_and_execute},
+        Test{"TaskStarted cancellation and deadline",
+             task_started_observer_cancel_and_deadline_are_rechecked},
+        Test{"device error fidelity and observer secondary",
+             device_error_fidelity_survives_task_failed_observer_exception},
         Test{"actor exceptions and empty plan",
              actor_exceptions_and_empty_plans_are_structured},
     };
