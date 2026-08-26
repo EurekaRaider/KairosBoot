@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,11 +62,17 @@ def platform_name(platform: str = sys.platform) -> str:
     return "linux"
 
 
-def run_symbols(library: Path, platform: str) -> str:
+def run_symbols(
+    library: Path, platform: str, dumpbin_path: Optional[Path] = None
+) -> str:
     if platform == "darwin":
         command = ["nm", "-gUj", str(library)]
     elif platform == "windows":
-        dumpbin = shutil.which("dumpbin")
+        dumpbin = (
+            str(dumpbin_path)
+            if dumpbin_path is not None
+            else shutil.which("dumpbin")
+        )
         if dumpbin is None:
             fail("dumpbin is required to inspect Windows exports")
         command = [dumpbin, "/nologo", "/exports", str(library)]
@@ -103,17 +110,22 @@ def parse_dumpbin_symbols(output: str) -> set[str]:
     return exported
 
 
-def library_symbols(library: Path, platform: str) -> set[str]:
-    output = run_symbols(library, platform)
+def library_symbols(
+    library: Path, platform: str, dumpbin_path: Optional[Path] = None
+) -> set[str]:
+    output = run_symbols(library, platform, dumpbin_path)
     if platform == "windows":
         return parse_dumpbin_symbols(output)
     return parse_nm_symbols(output, strip_macho_prefix=platform == "darwin")
 
 
 def check_library_exports(
-    library: Path, manifest: set[str], platform: str
+    library: Path,
+    manifest: set[str],
+    platform: str,
+    dumpbin_path: Optional[Path] = None,
 ) -> None:
-    exported = library_symbols(library, platform)
+    exported = library_symbols(library, platform, dumpbin_path)
     expected = manifest | set(PLATFORM_EXPORT_ALLOWLISTS[platform])
     if exported != expected:
         fail(
@@ -125,6 +137,7 @@ def check_library_exports(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--library", type=Path)
+    parser.add_argument("--dumpbin", type=Path)
     args = parser.parse_args()
 
     manifest = manifest_symbols()
@@ -141,8 +154,15 @@ def main() -> None:
             f"missing={sorted(manifest - definitions)}, extra={sorted(definitions - manifest)}"
         )
 
+    if args.dumpbin is not None and args.library is None:
+        fail("--dumpbin requires --library")
     if args.library is not None:
-        check_library_exports(args.library, manifest, platform_name())
+        platform = platform_name()
+        if args.dumpbin is not None and platform != "windows":
+            fail("--dumpbin is valid only on Windows")
+        if args.dumpbin is not None and not args.dumpbin.is_file():
+            fail(f"dumpbin does not exist: {args.dumpbin}")
+        check_library_exports(args.library, manifest, platform, args.dumpbin)
     print(f"ABI check passed ({len(manifest)} kb_* symbols)")
 
 
