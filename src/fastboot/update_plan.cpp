@@ -303,6 +303,8 @@ tokenize_fastboot_line(
             return RequirementSyntax{
                 .action = action,
                 .assignment = *assignment,
+                .product = std::nullopt,
+                .product_offset = 0,
             };
         }
         return std::nullopt;
@@ -318,6 +320,8 @@ tokenize_fastboot_line(
         return RequirementSyntax{
             .action = RequirementAction::Require,
             .assignment = *assignment,
+            .product = std::nullopt,
+            .product_offset = 0,
         };
     }
 
