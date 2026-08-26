@@ -20,6 +20,18 @@ implementedSlices:
   - id: protocol.download-exact-length
     status: implemented
     evidence: tests/protocol/protocol_tests.cpp
+  - id: transport.tcp-v1
+    status: implemented-core
+    evidence: tests/tcp/tcp_fastboot_tests.cpp
+  - id: transport.udp-v1
+    status: implemented-core
+    evidence: tests/udp/udp_fastboot_tests.cpp
+  - id: transport.usb-session
+    status: implemented-core
+    evidence: tests/libusb_runtime/test_main.cpp
+  - id: image.android-sparse
+    status: implemented-core
+    evidence: tests/sparse/sparse_image_tests.cpp
 
 pendingInventories:
   - image-types

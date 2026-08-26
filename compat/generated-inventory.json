@@ -14,9 +14,9 @@
     ]
   },
   "transports": [
-    { "id": "usb", "required": true, "status": "in-progress" },
-    { "id": "tcp", "required": true, "status": "planned" },
-    { "id": "udp", "required": true, "status": "planned" }
+    { "id": "usb", "required": true, "status": "implemented-core" },
+    { "id": "tcp", "required": true, "status": "implemented-core" },
+    { "id": "udp", "required": true, "status": "implemented-core" }
   ],
   "protocolCapabilities": [
     { "id": "command", "required": true, "status": "implemented-core" },

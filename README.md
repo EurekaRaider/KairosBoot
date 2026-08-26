@@ -22,10 +22,11 @@ wrapper, .NET bindings, and high-throughput multi-device flashing.
 - The `kairosboot` command-line tool
 
 The current implementation milestone includes the stable API foundation,
-Fastboot response state machine, TCP v1 framing, an asynchronous libusb bulk-OUT
-runtime, public USB Fastboot device enumeration, transfer-ring scheduling,
-sparse-image validation, and no-hardware test doubles. The transport cores are
-not yet wired to the public destructive device commands.
+Fastboot response state machine, TCP v1 and reliable UDP v1 transports, a
+bidirectional asynchronous libusb Fastboot session, public USB device
+enumeration, transfer-ring scheduling, sparse-image validation, and no-hardware
+test doubles. The transport cores are not yet wired to the public destructive
+device commands.
 
 ## Build the foundation milestone
 
@@ -45,6 +46,11 @@ cmake -S . -B build -G Ninja \
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Official release assets are always compiled with the CMake `Release`
+configuration. `KAIROSBOOT_RELEASE_SYMBOLS=ON` adds symbol information without
+removing Release optimization; CI then publishes separate PDB, dSYM, or GNU
+debug files and packages stripped SDK, CLI, and NuGet runtimes.
 
 The installed SDK/CLI contains the matching libusb runtime, LGPL license, and a
 dependency manifest. USB enumeration is active; flashing still returns
