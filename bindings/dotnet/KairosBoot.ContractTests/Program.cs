@@ -78,18 +78,30 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 65)
+        if (uniqueEntryPoints.Count != 77)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 65 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 77 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 65, "unique entry points");
+        Check(uniqueEntryPoints.Count == 77, "unique entry points");
         Check(entryPoints.Contains("kb_command_options_init"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
         Check(entryPoints.Contains("kb_error_session_poisoned"), "extended error import");
+        Check(entryPoints.Contains("kb_flashing_async"), "flashing import");
+        Check(entryPoints.Contains("kb_gsi_async"), "GSI import");
+        Check(entryPoints.Contains("kb_snapshot_update_async"), "snapshot-update import");
+        Check(
+            entryPoints.Contains("kb_create_logical_partition_async"),
+            "create logical partition import");
+        Check(
+            entryPoints.Contains("kb_delete_logical_partition_async"),
+            "delete logical partition import");
+        Check(
+            entryPoints.Contains("kb_resize_logical_partition_async"),
+            "resize logical partition import");
         CheckInteropCallingConventionAndStrings();
         Check(
             typeof(CommandResultSafeHandle).IsSubclassOf(typeof(SafeHandle)),
@@ -112,7 +124,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 65, "net48 DllImport count");
+        Check(methods.Count == 77, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -121,7 +133,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 40, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 58, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -139,7 +151,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 65, "net10 LibraryImport count");
+        Check(groups.Count == 77, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -150,7 +162,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 24, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 36, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -256,6 +268,12 @@ internal static class Program
             "GetVarAsync",
             "EraseAsync",
             "SetActiveAsync",
+            "FlashingAsync",
+            "GsiAsync",
+            "SnapshotUpdateAsync",
+            "CreateLogicalPartitionAsync",
+            "DeleteLogicalPartitionAsync",
+            "ResizeLogicalPartitionAsync",
             "RebootAsync",
             "ContinueBootAsync",
             "OemAsync",
@@ -277,6 +295,34 @@ internal static class Program
                 methods[0].ReturnType == typeof(Task<CommandResult>),
                 $"{name} returns Task<CommandResult>");
         }
+
+        Check(typeof(FlashingCommand).IsEnum, "strong flashing enum");
+        Check(typeof(GsiCommand).IsEnum, "strong GSI enum");
+        Check(typeof(SnapshotUpdateCommand).IsEnum, "strong snapshot enum");
+        Check((int)FlashingCommand.Lock == 0, "flashing lock enum value");
+        Check((int)FlashingCommand.GetUnlockAbility == 4, "flashing ability enum value");
+        Check((int)GsiCommand.Status == 2, "GSI status enum value");
+        Check((int)SnapshotUpdateCommand.Merge == 1, "snapshot merge enum value");
+
+        var managementMethods = expected
+            .Skip(3)
+            .Take(6)
+            .Select(name => typeof(Context)
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .Single(method => method.Name == name))
+            .ToList();
+        Check(
+            managementMethods.All(method =>
+                method.GetParameters()
+                    .Single(parameter => parameter.Name == "deviceSelector")
+                    .DefaultValue == null),
+            "management selector defaults to null");
+        Check(
+            managementMethods
+                .Where(method => method.Name == "CreateLogicalPartitionAsync" ||
+                    method.Name == "ResizeLogicalPartitionAsync")
+                .All(method => method.GetParameters()[1].ParameterType == typeof(ulong)),
+            "logical partition sizes are UInt64");
     }
 
     private static void CheckExtendedException()
@@ -478,6 +524,8 @@ internal static class Program
         using (var context = Context.Create())
         {
             Expect<ArgumentException>(() => _ = context.StageAsync(Array.Empty<byte>()));
+            Expect<ArgumentException>(
+                () => _ = context.CreateLogicalPartitionAsync("system\0other", 0));
         }
     }
 
@@ -571,35 +619,244 @@ internal static class Program
                 disconnected.DeviceIdentifier == server.Selector,
                 "scripted TCP disconnect selector passthrough");
 
-            using (var cancellation = new CancellationTokenSource())
-            {
-                var pending = context.GetVarAsync(
-                    "cancel",
-                    server.Selector,
-                    options,
-                    cancellationToken: cancellation.Token);
-                Check(
-                    server.WaitForCancellationCommand(TimeSpan.FromSeconds(5)),
-                    "scripted TCP cancellation command observed");
-                cancellation.Cancel();
-                await ExpectAsync<OperationCanceledException>(() => pending)
-                    .ConfigureAwait(false);
-                Check(
-                    server.WaitForCancellationDrain(TimeSpan.FromSeconds(2)),
-                    "scripted TCP cancellation drained connection");
-            }
+            await CheckManagementNativeValidation(context, server, options)
+                .ConfigureAwait(false);
+            await CheckManagementTrace(context, server, options)
+                .ConfigureAwait(false);
+            await CheckManagementFail(context, server, options)
+                .ConfigureAwait(false);
+            await CheckManagementCancellation(context, server, options)
+                .ConfigureAwait(false);
 
             server.Finish();
-            Check(server.HandshakeCount == 4, "scripted TCP handshake count");
+            Check(server.HandshakeCount == 18, "scripted TCP handshake count");
             Check(
                 server.Commands.SequenceEqual(new[]
                 {
                     "getvar:product",
                     "erase:userdata",
                     "upload",
-                    "getvar:cancel",
+                    "flashing lock",
+                    "flashing unlock",
+                    "flashing lock_critical",
+                    "flashing unlock_critical",
+                    "flashing get_unlock_ability",
+                    "gsi:wipe",
+                    "gsi:disable",
+                    "gsi:status",
+                    "snapshot-update:cancel",
+                    "snapshot-update:merge",
+                    "create-logical-partition:system_ext:0",
+                    "delete-logical-partition:system_ext",
+                    "resize-logical-partition:system_ext:18446744073709551615",
+                    "gsi:status",
+                    "snapshot-update:merge",
                 }),
                 "scripted TCP normalized command trace");
+        }
+    }
+
+    private static async Task CheckManagementNativeValidation(
+        Context context,
+        ScriptedTcpDevice server,
+        CommandOptions options)
+    {
+        var invalidFlashing = await ExpectAsync<KairosBootException>(
+            () => context.FlashingAsync(
+                (FlashingCommand)int.MaxValue,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(invalidFlashing.Status == KairosBootStatus.InvalidArgument, "native flashing enum validation");
+        Check(invalidFlashing.DeviceIdentifier == server.Selector, "invalid flashing selector");
+
+        var invalidGsi = await ExpectAsync<KairosBootException>(
+            () => context.GsiAsync(
+                (GsiCommand)int.MaxValue,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(invalidGsi.Status == KairosBootStatus.InvalidArgument, "native GSI enum validation");
+
+        var invalidSnapshot = await ExpectAsync<KairosBootException>(
+            () => context.SnapshotUpdateAsync(
+                (SnapshotUpdateCommand)int.MaxValue,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(invalidSnapshot.Status == KairosBootStatus.InvalidArgument, "native snapshot enum validation");
+
+        var emptyName = await ExpectAsync<KairosBootException>(
+            () => context.CreateLogicalPartitionAsync(
+                string.Empty,
+                0,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(emptyName.Status == KairosBootStatus.InvalidArgument, "native empty logical name validation");
+
+        var nullName = await ExpectAsync<KairosBootException>(
+            () => context.DeleteLogicalPartitionAsync(
+                null!,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(nullName.Status == KairosBootStatus.InvalidArgument, "native null logical name validation");
+
+        var injectedName = await ExpectAsync<KairosBootException>(
+            () => context.DeleteLogicalPartitionAsync(
+                "system:other",
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(injectedName.Status == KairosBootStatus.InvalidArgument, "native logical name injection validation");
+
+        var controlName = await ExpectAsync<KairosBootException>(
+            () => context.ResizeLogicalPartitionAsync(
+                "bad\nname",
+                1,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(controlName.Status == KairosBootStatus.InvalidArgument, "native logical control validation");
+
+        var overlongName = await ExpectAsync<KairosBootException>(
+            () => context.CreateLogicalPartitionAsync(
+                new string('x', 4096),
+                ulong.MaxValue,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(overlongName.Status == KairosBootStatus.InvalidArgument, "native logical length validation");
+        Check(server.HandshakeCount == 3, "invalid management calls do not reach transport");
+    }
+
+    private static async Task CheckManagementTrace(
+        Context context,
+        ScriptedTcpDevice server,
+        CommandOptions options)
+    {
+        var first = await context.FlashingAsync(
+            FlashingCommand.Lock,
+            server.Selector,
+            options).ConfigureAwait(false);
+        Check(first.TerminalPayload.SequenceEqual(new byte[] { (byte)'m', 0, 0xfd }), "management binary OKAY");
+        Check(first.Messages.Count == 2, "management binary message count");
+        Check(first.Messages[0].Kind == CommandMessageKind.Info, "management binary INFO kind");
+        Check(first.Messages[0].Payload.SequenceEqual(new byte[] { (byte)'i', 0, 0xff }), "management binary INFO");
+        Check(first.Messages[1].Kind == CommandMessageKind.Text, "management binary TEXT kind");
+        Check(first.Messages[1].Payload.SequenceEqual(new byte[] { (byte)'t', 0, 0xfe }), "management binary TEXT");
+        Check(first.DeviceIdentifier == server.Selector, "management selector passthrough");
+
+        await CheckManagementSuccess(
+            context.FlashingAsync(FlashingCommand.Unlock, server.Selector, options),
+            server.Selector,
+            "flashing unlock").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.FlashingAsync(FlashingCommand.LockCritical, server.Selector, options),
+            server.Selector,
+            "flashing lock critical").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.FlashingAsync(FlashingCommand.UnlockCritical, server.Selector, options),
+            server.Selector,
+            "flashing unlock critical").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.FlashingAsync(FlashingCommand.GetUnlockAbility, server.Selector, options),
+            server.Selector,
+            "flashing unlock ability").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.GsiAsync(GsiCommand.Wipe, server.Selector, options),
+            server.Selector,
+            "GSI wipe").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.GsiAsync(GsiCommand.Disable, server.Selector, options),
+            server.Selector,
+            "GSI disable").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.GsiAsync(GsiCommand.Status, server.Selector, options),
+            server.Selector,
+            "GSI status").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.SnapshotUpdateAsync(SnapshotUpdateCommand.Cancel, server.Selector, options),
+            server.Selector,
+            "snapshot cancel").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.SnapshotUpdateAsync(SnapshotUpdateCommand.Merge, server.Selector, options),
+            server.Selector,
+            "snapshot merge").ConfigureAwait(false);
+
+        string? temporaryName = new string("system_ext".ToCharArray());
+        var create = context.CreateLogicalPartitionAsync(
+            temporaryName,
+            0,
+            server.Selector,
+            options);
+        temporaryName = null;
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        await CheckManagementSuccess(create, server.Selector, "create logical lifetime")
+            .ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.DeleteLogicalPartitionAsync("system_ext", server.Selector, options),
+            server.Selector,
+            "delete logical").ConfigureAwait(false);
+        await CheckManagementSuccess(
+            context.ResizeLogicalPartitionAsync(
+                "system_ext",
+                ulong.MaxValue,
+                server.Selector,
+                options),
+            server.Selector,
+            "resize logical UInt64").ConfigureAwait(false);
+    }
+
+    private static async Task CheckManagementSuccess(
+        Task<CommandResult> pending,
+        string selector,
+        string name)
+    {
+        var result = await pending.ConfigureAwait(false);
+        Check(
+            result.TerminalPayload.SequenceEqual(System.Text.Encoding.ASCII.GetBytes("done")),
+            $"{name} terminal result");
+        Check(result.DeviceIdentifier == selector, $"{name} selector");
+    }
+
+    private static async Task CheckManagementFail(
+        Context context,
+        ScriptedTcpDevice server,
+        CommandOptions options)
+    {
+        var failure = await ExpectAsync<KairosBootException>(
+            () => context.GsiAsync(
+                GsiCommand.Status,
+                server.Selector,
+                options)).ConfigureAwait(false);
+        Check(failure.Status == KairosBootStatus.DeviceFail, "management FAIL status");
+        Check(failure.DeviceMessage.SequenceEqual(new byte[] { (byte)'e', 0, 0xfa }), "management binary FAIL");
+        Check(failure.CommandMessages.Count == 2, "management FAIL message count");
+        Check(failure.CommandMessages[0].Kind == CommandMessageKind.Info, "management FAIL INFO kind");
+        Check(failure.CommandMessages[0].Payload.SequenceEqual(new byte[] { (byte)'w', 0, 0xfc }), "management FAIL INFO");
+        Check(failure.CommandMessages[1].Kind == CommandMessageKind.Text, "management FAIL TEXT kind");
+        Check(failure.CommandMessages[1].Payload.SequenceEqual(new byte[] { (byte)'h', 0, 0xfb }), "management FAIL TEXT");
+        Check(failure.TransferState == TransferState.FullyTransferred, "management FAIL outbound certainty");
+        Check(!failure.SessionPoisoned, "management FAIL session reusable");
+        Check(failure.DeviceIdentifier == server.Selector, "management FAIL selector");
+    }
+
+    private static async Task CheckManagementCancellation(
+        Context context,
+        ScriptedTcpDevice server,
+        CommandOptions options)
+    {
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var pending = context.SnapshotUpdateAsync(
+                SnapshotUpdateCommand.Merge,
+                server.Selector,
+                options,
+                cancellationToken: cancellation.Token);
+            Check(
+                server.WaitForCancellationCommand(TimeSpan.FromSeconds(5)),
+                "management cancellation command observed");
+            cancellation.Cancel();
+            await ExpectAsync<OperationCanceledException>(() => pending)
+                .ConfigureAwait(false);
+            Check(
+                server.WaitForCancellationDrain(TimeSpan.FromSeconds(2)),
+                "management cancellation drained connection");
         }
     }
 #endif

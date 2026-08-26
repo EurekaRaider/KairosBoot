@@ -226,6 +226,151 @@ public sealed class Context : IDisposable
                     out error));
     }
 
+    /// <summary>Runs a Fastboot flashing-state command.</summary>
+    public Task<CommandResult> FlashingAsync(
+        FlashingCommand command,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.FlashingAsync(
+                    handle,
+                    deviceSelector,
+                    (int)command,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Runs a Fastboot GSI management command.</summary>
+    public Task<CommandResult> GsiAsync(
+        GsiCommand command,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.GsiAsync(
+                    handle,
+                    deviceSelector,
+                    (int)command,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Runs a Fastboot snapshot-update command.</summary>
+    public Task<CommandResult> SnapshotUpdateAsync(
+        SnapshotUpdateCommand command,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.SnapshotUpdateAsync(
+                    handle,
+                    deviceSelector,
+                    (int)command,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Creates a logical partition with the requested byte size.</summary>
+    public Task<CommandResult> CreateLogicalPartitionAsync(
+        string partitionName,
+        ulong size,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateNativeText(partitionName, nameof(partitionName));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.CreateLogicalPartitionAsync(
+                    handle,
+                    deviceSelector,
+                    partitionName,
+                    size,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Deletes a logical partition.</summary>
+    public Task<CommandResult> DeleteLogicalPartitionAsync(
+        string partitionName,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateNativeText(partitionName, nameof(partitionName));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.DeleteLogicalPartitionAsync(
+                    handle,
+                    deviceSelector,
+                    partitionName,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Resizes a logical partition to the requested byte size.</summary>
+    public Task<CommandResult> ResizeLogicalPartitionAsync(
+        string partitionName,
+        ulong size,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateNativeText(partitionName, nameof(partitionName));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.ResizeLogicalPartitionAsync(
+                    handle,
+                    deviceSelector,
+                    partitionName,
+                    size,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
     /// <summary>Reboots the selected device.</summary>
     public Task<CommandResult> RebootAsync(
         RebootTarget target = RebootTarget.System,
@@ -646,6 +791,17 @@ public sealed class Context : IDisposable
         }
 
         if (value.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException("Value must not contain a NUL character.", parameterName);
+        }
+    }
+
+    private static void ValidateNativeText(string value, string parameterName)
+    {
+        // Empty, null-at-runtime, malformed, and overlong command arguments are
+        // intentionally left to the stable C ABI. Embedded NUL cannot be
+        // represented faithfully by its null-terminated UTF-8 contract.
+        if (value != null && value.IndexOf('\0') >= 0)
         {
             throw new ArgumentException("Value must not contain a NUL character.", parameterName);
         }

@@ -27,6 +27,41 @@ public enum RebootTarget
     Fastboot = 3,
 }
 
+/// <summary>Selects a Fastboot flashing-state command.</summary>
+public enum FlashingCommand
+{
+    /// <summary>Locks the device.</summary>
+    Lock = 0,
+    /// <summary>Unlocks the device.</summary>
+    Unlock = 1,
+    /// <summary>Locks critical partitions.</summary>
+    LockCritical = 2,
+    /// <summary>Unlocks critical partitions.</summary>
+    UnlockCritical = 3,
+    /// <summary>Queries whether unlocking is allowed.</summary>
+    GetUnlockAbility = 4,
+}
+
+/// <summary>Selects a Fastboot GSI management command.</summary>
+public enum GsiCommand
+{
+    /// <summary>Wipes the current GSI installation.</summary>
+    Wipe = 0,
+    /// <summary>Disables the current GSI installation.</summary>
+    Disable = 1,
+    /// <summary>Queries the current GSI state.</summary>
+    Status = 2,
+}
+
+/// <summary>Selects a Fastboot snapshot-update command.</summary>
+public enum SnapshotUpdateCommand
+{
+    /// <summary>Cancels the current snapshot update.</summary>
+    Cancel = 0,
+    /// <summary>Starts or continues merging the snapshot update.</summary>
+    Merge = 1,
+}
+
 /// <summary>Controls a typed Fastboot command.</summary>
 public readonly struct CommandOptions
 {

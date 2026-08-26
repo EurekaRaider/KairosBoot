@@ -124,6 +124,118 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_flashing_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashingAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_flashing", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int Flashing(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_gsi_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int GsiAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_gsi", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int Gsi(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_snapshot_update_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int SnapshotUpdateAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_snapshot_update", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int SnapshotUpdate(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_create_logical_partition_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int CreateLogicalPartitionAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_create_logical_partition", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int CreateLogicalPartition(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_delete_logical_partition_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int DeleteLogicalPartitionAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partitionName,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_delete_logical_partition", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int DeleteLogicalPartition(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partitionName,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_resize_logical_partition_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int ResizeLogicalPartitionAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_resize_logical_partition", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int ResizeLogicalPartition(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_reboot_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int RebootAsync(
         ContextSafeHandle context,

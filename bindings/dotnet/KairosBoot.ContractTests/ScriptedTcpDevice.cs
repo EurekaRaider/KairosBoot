@@ -107,6 +107,8 @@ internal sealed class ScriptedTcpDevice : IDisposable
             ServeGetVarSuccess();
             ServeDeviceFail();
             ServePartialUploadDisconnect();
+            ServeManagementCommands();
+            ServeManagementFail();
             ServeCancellationDrain();
         }
         catch (Exception exception)
@@ -164,12 +166,63 @@ internal sealed class ScriptedTcpDevice : IDisposable
         }
     }
 
+    private void ServeManagementCommands()
+    {
+        var expected = new[]
+        {
+            "flashing lock",
+            "flashing unlock",
+            "flashing lock_critical",
+            "flashing unlock_critical",
+            "flashing get_unlock_ability",
+            "gsi:wipe",
+            "gsi:disable",
+            "gsi:status",
+            "snapshot-update:cancel",
+            "snapshot-update:merge",
+            "create-logical-partition:system_ext:0",
+            "delete-logical-partition:system_ext",
+            "resize-logical-partition:system_ext:18446744073709551615",
+        };
+
+        for (var index = 0; index < expected.Length; index++)
+        {
+            using (var client = Accept())
+            using (var stream = client.GetStream())
+            {
+                ExpectCommand(stream, expected[index]);
+                if (index == 0)
+                {
+                    WriteResponse(stream, "INFO", new byte[] { (byte)'i', 0, 0xff });
+                    WriteResponse(stream, "TEXT", new byte[] { (byte)'t', 0, 0xfe });
+                    WriteResponse(stream, "OKAY", new byte[] { (byte)'m', 0, 0xfd });
+                }
+                else
+                {
+                    WriteResponse(stream, "OKAY", Encoding.ASCII.GetBytes("done"));
+                }
+            }
+        }
+    }
+
+    private void ServeManagementFail()
+    {
+        using (var client = Accept())
+        using (var stream = client.GetStream())
+        {
+            ExpectCommand(stream, "gsi:status");
+            WriteResponse(stream, "INFO", new byte[] { (byte)'w', 0, 0xfc });
+            WriteResponse(stream, "TEXT", new byte[] { (byte)'h', 0, 0xfb });
+            WriteResponse(stream, "FAIL", new byte[] { (byte)'e', 0, 0xfa });
+        }
+    }
+
     private void ServeCancellationDrain()
     {
         using (var client = Accept())
         using (var stream = client.GetStream())
         {
-            ExpectCommand(stream, "getvar:cancel");
+            ExpectCommand(stream, "snapshot-update:merge");
             cancellationCommandReceived.Set();
             try
             {
