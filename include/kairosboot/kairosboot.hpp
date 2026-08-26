@@ -3,6 +3,7 @@
 
 #include <kairosboot/kairosboot.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -562,10 +563,20 @@ public:
     if (!native_timeout) {
       return std::unexpected(std::move(native_timeout.error()));
     }
-    std::stop_callback cancel_on_stop{
-        stop_token,
-        [handle = resources_.handle()] { (void)kb_operation_cancel(handle); }};
-    return wait_result(*native_timeout);
+    std::atomic<bool> stop_observed{false};
+    auto result = [&] {
+      std::stop_callback cancel_on_stop{
+          stop_token, [handle = resources_.handle(), &stop_observed] {
+            stop_observed.store(true, std::memory_order_release);
+            (void)kb_operation_cancel(handle);
+          }};
+      return wait_result(*native_timeout);
+    }();
+    if (!result && result.error().status() == KB_E_TIMEOUT &&
+        stop_observed.load(std::memory_order_acquire)) {
+      return wait_result(KB_WAIT_INFINITE);
+    }
+    return result;
   }
 
 private:
