@@ -245,6 +245,45 @@ struct LocalRuntimeError {
   std::string message;
 };
 
+#if defined(_WIN32)
+std::expected<std::string, LocalRuntimeError>
+utf8_from_wide(const std::wstring_view value) {
+  if (value.empty()) {
+    return std::string{};
+  }
+  if (value.size() >
+      static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return std::unexpected(
+        LocalRuntimeError{KB_E_INVALID_ARGUMENT,
+                          "Windows command-line argument is too long"});
+  }
+
+  const int input_size = static_cast<int>(value.size());
+  const int output_size = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), input_size, nullptr, 0,
+      nullptr, nullptr);
+  if (output_size == 0) {
+    const unsigned long error = GetLastError();
+    return std::unexpected(LocalRuntimeError{
+        KB_E_INVALID_ARGUMENT,
+        "cannot convert Windows command-line argument to UTF-8: " +
+            std::to_string(error)});
+  }
+
+  std::string result(static_cast<std::size_t>(output_size), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                          input_size, result.data(), output_size, nullptr,
+                          nullptr) != output_size) {
+    const unsigned long error = GetLastError();
+    return std::unexpected(LocalRuntimeError{
+        KB_E_INVALID_ARGUMENT,
+        "cannot convert Windows command-line argument to UTF-8: " +
+            std::to_string(error)});
+  }
+  return result;
+}
+#endif
+
 bool is_global_option(const std::string_view value) noexcept {
   return value == "--json" || value == "--device" || value == "--serial" ||
          value == "--timeout-ms" || value == "--max-receive-bytes";
@@ -859,6 +898,9 @@ public:
   TemporaryOutput(const TemporaryOutput &) = delete;
   TemporaryOutput &operator=(const TemporaryOutput &) = delete;
 
+  [[nodiscard]] const std::filesystem::path &path() const noexcept {
+    return path_;
+  }
   void commit() noexcept { committed_ = true; }
 
 private:
@@ -877,7 +919,7 @@ write_output_atomically(const std::string_view output_name,
 
   static std::atomic<std::uint64_t> sequence{0};
   std::filesystem::path temporary;
-  std::error_code exists_error;
+  std::ofstream stream;
   for (std::uint32_t attempt = 0; attempt < 32U; ++attempt) {
     const std::uint64_t clock = static_cast<std::uint64_t>(
         std::chrono::steady_clock::now().time_since_epoch().count());
@@ -897,9 +939,21 @@ write_output_atomically(const std::string_view output_name,
     const std::string name =
         ".kairosboot-" + std::string{encoded.data(), end} + ".tmp";
     temporary = directory / path_from_utf8(name);
-    exists_error.clear();
-    if (!std::filesystem::exists(temporary, exists_error) && !exists_error) {
+    stream.open(temporary,
+                std::ios::binary | std::ios::out | std::ios::noreplace);
+    if (stream) {
       break;
+    }
+
+    // `noreplace` makes creation atomic: an existing file or symlink is never
+    // opened or truncated. Retry only an actual name collision; other failures
+    // (missing directory, permissions, and unsupported paths) are actionable.
+    stream.clear();
+    std::error_code exists_error;
+    if (!std::filesystem::exists(temporary, exists_error) || exists_error) {
+      return std::unexpected(LocalRuntimeError{
+          KB_E_IO, "cannot create temporary output beside: " +
+                       std::string{output_name}});
     }
     temporary.clear();
   }
@@ -909,13 +963,7 @@ write_output_atomically(const std::string_view output_name,
                      std::string{output_name}});
   }
 
-  TemporaryOutput cleanup{temporary};
-  std::ofstream stream{temporary, std::ios::binary | std::ios::trunc};
-  if (!stream) {
-    return std::unexpected(
-        LocalRuntimeError{KB_E_IO, "cannot create temporary output beside: " +
-                                       std::string{output_name}});
-  }
+  TemporaryOutput cleanup{std::move(temporary)};
   constexpr std::size_t maximum_chunk = 1024U * 1024U;
   std::size_t offset = 0;
   while (offset < data.size()) {
@@ -938,18 +986,19 @@ write_output_atomically(const std::string_view output_name,
 
   std::error_code rename_error;
 #if defined(_WIN32)
-  if (MoveFileExW(temporary.c_str(), output.c_str(),
+  if (MoveFileExW(cleanup.path().c_str(), output.c_str(),
                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
     rename_error = std::error_code{static_cast<int>(GetLastError()),
                                    std::system_category()};
   }
 #else
-  std::filesystem::rename(temporary, output, rename_error);
+  std::filesystem::rename(cleanup.path(), output, rename_error);
 #endif
   if (rename_error) {
     return std::unexpected(LocalRuntimeError{
         KB_E_IO, "cannot atomically publish output " +
-                     std::string{output_name} + ": " + rename_error.message()});
+                     std::string{output_name} + " (native error " +
+                     std::to_string(rename_error.value()) + ")"});
   }
   cleanup.commit();
   return {};
@@ -1155,6 +1204,17 @@ bool json_requested(const int argc, char **argv) noexcept {
   return false;
 }
 
+#if defined(_WIN32)
+bool json_requested(const int argc, wchar_t **argv) noexcept {
+  for (int index = 1; index < argc; ++index) {
+    if (std::wstring_view{argv[index]} == L"--json") {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 int run_cli(const int argc, char **argv) {
   // Preserve the original trailing-JSON spellings while requiring all global
   // options before the command for the general parser.
@@ -1210,7 +1270,7 @@ int run_cli(const int argc, char **argv) {
 
 } // namespace
 
-int main(const int argc, char **argv) {
+int run_cli_with_exception_boundary(const int argc, char **argv) {
   try {
     return run_cli(argc, argv);
   } catch (const std::bad_alloc &) {
@@ -1229,3 +1289,43 @@ int main(const int argc, char **argv) {
         json_requested(argc, argv));
   }
 }
+
+#if defined(_WIN32)
+int wmain(const int argc, wchar_t **argv) {
+  const bool json = json_requested(argc, argv);
+  try {
+    std::vector<std::string> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+      auto converted = utf8_from_wide(argv[index]);
+      if (!converted) {
+        return print_local_runtime_error(converted.error(), json);
+      }
+      arguments.push_back(std::move(*converted));
+    }
+
+    std::vector<char *> pointers;
+    pointers.reserve(arguments.size());
+    for (std::string &argument : arguments) {
+      pointers.push_back(argument.data());
+    }
+    return run_cli_with_exception_boundary(argc, pointers.data());
+  } catch (const std::bad_alloc &) {
+    return print_local_runtime_error(
+        LocalRuntimeError{KB_E_OUT_OF_MEMORY, "out of memory"}, json);
+  } catch (const std::exception &exception) {
+    return print_local_runtime_error(
+        LocalRuntimeError{KB_E_INTERNAL,
+                          std::string{"unexpected CLI failure: "} +
+                              exception.what()},
+        json);
+  } catch (...) {
+    return print_local_runtime_error(
+        LocalRuntimeError{KB_E_INTERNAL, "unexpected CLI failure"}, json);
+  }
+}
+#else
+int main(const int argc, char **argv) {
+  return run_cli_with_exception_boundary(argc, argv);
+}
+#endif
