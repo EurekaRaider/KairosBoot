@@ -14,6 +14,7 @@
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -129,6 +130,47 @@ private:
     std::size_t max_read_;
     std::optional<std::size_t> failing_call_;
     mutable std::vector<Read> reads_;
+};
+
+class CancellingSource final : public IImageSource {
+public:
+    CancellingSource(
+        std::vector<std::byte> bytes,
+        std::stop_source& cancellation,
+        const std::uint64_t trigger_offset,
+        const std::size_t max_read = std::numeric_limits<std::size_t>::max())
+        : bytes_(std::move(bytes)),
+          cancellation_(cancellation),
+          trigger_offset_(trigger_offset),
+          max_read_(max_read) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return bytes_.size();
+    }
+
+    [[nodiscard]] std::expected<std::size_t, ImageSourceError> read_at(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) const override {
+        if (offset >= bytes_.size() || destination.empty()) {
+            return 0;
+        }
+        const auto available = bytes_.size() - static_cast<std::size_t>(offset);
+        const auto amount = std::min({available, destination.size(), max_read_});
+        std::ranges::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+            amount,
+            destination.begin());
+        if (offset == trigger_offset_) {
+            cancellation_.request_stop();
+        }
+        return amount;
+    }
+
+private:
+    std::vector<std::byte> bytes_;
+    std::stop_source& cancellation_;
+    std::uint64_t trigger_offset_;
+    std::size_t max_read_;
 };
 
 void append_u16(std::vector<std::byte>& bytes, const std::uint16_t value) {
@@ -264,6 +306,105 @@ struct MixedImage {
         completed += *read;
     }
     return result;
+}
+
+void pre_cancelled_entry_points_do_not_read_sources() {
+    std::vector<std::byte> sparse;
+    append_header(sparse, 4, 0, 0);
+    auto sparse_source = std::make_shared<ObservingSource>(std::move(sparse));
+    std::stop_source sparse_cancellation;
+    sparse_cancellation.request_stop();
+
+    const auto parsed = SparseImage::open(
+        sparse_source, sparse_cancellation.get_token());
+    CHECK(!parsed);
+    CHECK(parsed.error().kind == SparseErrorKind::Cancelled);
+    CHECK(parsed.error().input_offset == 0);
+    CHECK(parsed.error().message ==
+          "sparse image parsing cancelled while reading the file header");
+    CHECK(sparse_source->reads().empty());
+
+    auto artifact_source = std::make_shared<ObservingSource>(
+        std::vector<std::byte>(16, std::byte{0xA5}));
+    std::stop_source artifact_cancellation;
+    artifact_cancellation.request_stop();
+
+    const auto artifact = FlashArtifact::inspect(
+        artifact_source, artifact_cancellation.get_token());
+    CHECK(!artifact);
+    CHECK(artifact.error().kind == SparseErrorKind::Cancelled);
+    CHECK(artifact.error().input_offset == 0);
+    CHECK(artifact.error().message ==
+          "flash artifact inspection cancelled while classifying the input");
+    CHECK(artifact_source->reads().empty());
+}
+
+void short_header_reads_are_cancellable_at_the_exact_cursor() {
+    std::vector<std::byte> sparse;
+    append_header(sparse, 4, 0, 0);
+    std::stop_source cancellation;
+    constexpr std::uint64_t cancellation_offset = 7;
+    auto source = std::make_shared<CancellingSource>(
+        std::move(sparse), cancellation, cancellation_offset, 1);
+
+    const auto parsed = SparseImage::open(source, cancellation.get_token());
+    CHECK(!parsed);
+    CHECK(parsed.error().kind == SparseErrorKind::Cancelled);
+    CHECK(parsed.error().input_offset == cancellation_offset);
+    CHECK(parsed.error().message ==
+          "sparse image parsing cancelled while reading the file header");
+}
+
+void chunk_table_parsing_is_cancellable_at_the_exact_chunk() {
+    std::vector<std::byte> sparse;
+    append_header(sparse, 4, 2, 2);
+    append_chunk(sparse, kSparseChunkDontCare, 1, {});
+    append_chunk(sparse, kSparseChunkDontCare, 1, {});
+
+    std::stop_source cancellation;
+    constexpr std::uint64_t first_chunk_offset = 28;
+    auto source = std::make_shared<CancellingSource>(
+        std::move(sparse), cancellation, first_chunk_offset);
+
+    const auto parsed = SparseImage::open(source, cancellation.get_token());
+    CHECK(!parsed);
+    CHECK(parsed.error().kind == SparseErrorKind::Cancelled);
+    CHECK(parsed.error().input_offset == first_chunk_offset);
+    CHECK(parsed.error().message ==
+          "sparse image parsing cancelled while reading the chunk table");
+}
+
+void raw_checksum_scans_are_cancellable_between_64k_windows() {
+    constexpr std::size_t checksum_window_size = 64U * 1024U;
+    constexpr std::size_t raw_size = checksum_window_size * 3U;
+    constexpr std::uint64_t raw_payload_offset = 28U + 12U;
+    constexpr std::uint64_t second_window_offset =
+        raw_payload_offset + checksum_window_size;
+
+    std::vector<std::byte> raw(raw_size, std::byte{0xA5});
+    std::vector<std::byte> sparse;
+    append_header(
+        sparse,
+        4,
+        static_cast<std::uint32_t>(raw_size / 4U),
+        1,
+        1);
+    append_chunk(
+        sparse,
+        kSparseChunkRaw,
+        static_cast<std::uint32_t>(raw_size / 4U),
+        raw);
+
+    std::stop_source cancellation;
+    auto source = std::make_shared<CancellingSource>(
+        std::move(sparse), cancellation, second_window_offset);
+
+    const auto parsed = SparseImage::open(source, cancellation.get_token());
+    CHECK(!parsed);
+    CHECK(parsed.error().kind == SparseErrorKind::Cancelled);
+    CHECK(parsed.error().input_offset == second_window_offset);
+    CHECK(parsed.error().message ==
+          "sparse checksum verification cancelled while scanning RAW data");
 }
 
 void sparse_flash_plan_preserves_payloads_that_fit() {
@@ -786,6 +927,14 @@ void malformed_sizes_and_magic_are_rejected() {
 
 int main() {
     const std::vector<std::pair<std::string_view, void (*)()>> tests{
+        {"pre-cancelled entry points",
+         pre_cancelled_entry_points_do_not_read_sources},
+        {"short-read cancellation",
+         short_header_reads_are_cancellable_at_the_exact_cursor},
+        {"chunk-table cancellation",
+         chunk_table_parsing_is_cancellable_at_the_exact_chunk},
+        {"RAW checksum cancellation",
+         raw_checksum_scans_are_cancellable_between_64k_windows},
         {"sparse flash plan preserves fitting payloads",
          sparse_flash_plan_preserves_payloads_that_fit},
         {"raw sparse split", raw_images_are_split_without_materializing_their_expansion},

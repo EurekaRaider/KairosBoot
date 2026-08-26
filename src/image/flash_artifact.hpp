@@ -7,6 +7,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <stop_token>
 
 namespace kairosboot::image {
 
@@ -30,7 +31,8 @@ struct FlashArtifactMetadata final {
 class FlashArtifact final {
 public:
     [[nodiscard]] static std::expected<FlashArtifact, SparseError> inspect(
-        std::shared_ptr<const IImageSource> source);
+        std::shared_ptr<const IImageSource> source,
+        std::stop_token cancellation = {});
 
     FlashArtifact(const FlashArtifact&) = delete;
     FlashArtifact& operator=(const FlashArtifact&) = delete;

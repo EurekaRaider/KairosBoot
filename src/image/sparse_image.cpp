@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <string_view>
 #include <utility>
 
 namespace kairosboot::image {
@@ -13,12 +14,34 @@ namespace {
 inline constexpr std::size_t kSparseHeaderSize = 28;
 inline constexpr std::size_t kChunkHeaderSize = 12;
 inline constexpr std::size_t kChecksumWindowSize = 64 * 1024;
+inline constexpr std::size_t kChecksumCancellationGranularity = 4 * 1024;
+
+inline constexpr std::string_view kCancelledFileHeader =
+    "sparse image parsing cancelled while reading the file header";
+inline constexpr std::string_view kCancelledChunkTable =
+    "sparse image parsing cancelled while reading the chunk table";
+inline constexpr std::string_view kCancelledChecksumSearch =
+    "sparse checksum verification cancelled while locating checksum chunks";
+inline constexpr std::string_view kCancelledChecksumProcessing =
+    "sparse checksum verification cancelled while processing chunks";
+inline constexpr std::string_view kCancelledRawChecksum =
+    "sparse checksum verification cancelled while scanning RAW data";
+inline constexpr std::string_view kCancelledVirtualChecksum =
+    "sparse checksum verification cancelled while processing virtual data";
+inline constexpr std::string_view kCancelledArtifactInspection =
+    "flash artifact inspection cancelled while classifying the input";
 
 [[nodiscard]] SparseError error(
     const SparseErrorKind kind,
     const std::uint64_t offset,
     std::string message) {
     return SparseError{kind, offset, std::move(message)};
+}
+
+[[nodiscard]] SparseError cancelled_error(
+    const std::uint64_t offset,
+    const std::string_view message) {
+    return error(SparseErrorKind::Cancelled, offset, std::string(message));
 }
 
 [[nodiscard]] bool checked_add(
@@ -64,7 +87,13 @@ inline constexpr std::size_t kChecksumWindowSize = 64 * 1024;
     const IImageSource& source,
     const std::uint64_t source_size,
     const std::uint64_t offset,
-    const std::span<std::byte> destination) {
+    const std::span<std::byte> destination,
+    const std::stop_token cancellation = {},
+    const std::string_view cancellation_message = {}) {
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(offset, cancellation_message));
+    }
+
     std::uint64_t end = 0;
     if (!checked_add(offset, destination.size(), end)) {
         return std::unexpected(error(
@@ -82,7 +111,13 @@ inline constexpr std::size_t kChecksumWindowSize = 64 * 1024;
             return std::unexpected(error(
                 SparseErrorKind::Malformed, offset, "input read cursor overflows 64-bit space"));
         }
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(current_offset, cancellation_message));
+        }
         auto result = source.read_at(current_offset, destination.subspan(completed));
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(current_offset, cancellation_message));
+        }
         if (!result) {
             return std::unexpected(error(
                 SparseErrorKind::Source, current_offset, result.error().message));
@@ -117,6 +152,43 @@ inline constexpr std::size_t kChecksumWindowSize = 64 * 1024;
         }
     }
     return ~crc;
+}
+
+[[nodiscard]] std::expected<std::uint32_t, SparseError> update_crc32_cancellable(
+    std::uint32_t crc,
+    const std::span<const std::byte> bytes,
+    const std::stop_token cancellation,
+    const std::uint64_t input_offset) {
+    std::size_t completed = 0;
+    while (completed < bytes.size()) {
+        std::uint64_t current_offset = 0;
+        if (!checked_add(input_offset, completed, current_offset)) {
+            return std::unexpected(error(
+                SparseErrorKind::Malformed,
+                input_offset,
+                "CRC input cursor overflows 64-bit offset space"));
+        }
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(current_offset, kCancelledRawChecksum));
+        }
+
+        const auto amount = std::min(
+            kChecksumCancellationGranularity, bytes.size() - completed);
+        crc = update_crc32(crc, bytes.subspan(completed, amount));
+        completed += amount;
+    }
+
+    if (cancellation.stop_requested()) {
+        std::uint64_t current_offset = 0;
+        if (!checked_add(input_offset, completed, current_offset)) {
+            return std::unexpected(error(
+                SparseErrorKind::Malformed,
+                input_offset,
+                "CRC input cursor overflows 64-bit offset space"));
+        }
+        return std::unexpected(cancelled_error(current_offset, kCancelledRawChecksum));
+    }
+    return crc;
 }
 
 // A CRC state is a 32-bit vector over GF(2). Each entry stores where one basis
@@ -169,17 +241,34 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
     const std::uint64_t source_size,
     std::uint64_t input_offset,
     std::uint64_t byte_count,
-    std::uint32_t crc) {
+    std::uint32_t crc,
+    const std::stop_token cancellation) {
     std::array<std::byte, kChecksumWindowSize> buffer{};
     while (byte_count != 0) {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(input_offset, kCancelledRawChecksum));
+        }
         const auto amount = static_cast<std::size_t>(
             std::min<std::uint64_t>(byte_count, buffer.size()));
         if (const auto read = read_exact(
-                source, source_size, input_offset, std::span(buffer).first(amount));
+                source,
+                source_size,
+                input_offset,
+                std::span(buffer).first(amount),
+                cancellation,
+                kCancelledRawChecksum);
             !read) {
             return std::unexpected(read.error());
         }
-        crc = update_crc32(crc, std::span<const std::byte>(buffer).first(amount));
+        auto updated = update_crc32_cancellable(
+            crc,
+            std::span<const std::byte>(buffer).first(amount),
+            cancellation,
+            input_offset);
+        if (!updated) {
+            return std::unexpected(updated.error());
+        }
+        crc = *updated;
         if (!checked_add(input_offset, amount, input_offset)) {
             return std::unexpected(error(
                 SparseErrorKind::Malformed,
@@ -191,10 +280,16 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
     return crc;
 }
 
-[[nodiscard]] std::uint32_t update_crc_repeated(
+[[nodiscard]] std::expected<std::uint32_t, SparseError> update_crc_repeated(
     const std::uint32_t prefix_crc,
     const std::array<std::byte, 4>& pattern,
-    const std::uint64_t byte_count) {
+    const std::uint64_t byte_count,
+    const std::stop_token cancellation,
+    const std::uint64_t input_offset) {
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(input_offset, kCancelledVirtualChecksum));
+    }
+
     auto remaining_repetitions = byte_count / pattern.size();
     const auto remainder = static_cast<std::size_t>(byte_count % pattern.size());
 
@@ -208,6 +303,9 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
     auto power_bias = update_crc32(0, pattern);
     auto crc = prefix_crc;
     while (remaining_repetitions != 0) {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(input_offset, kCancelledVirtualChecksum));
+        }
         if ((remaining_repetitions & 1U) != 0) {
             crc = apply_crc_operator(power_operator, crc) ^ power_bias;
         }
@@ -218,6 +316,9 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
         }
     }
 
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(input_offset, kCancelledVirtualChecksum));
+    }
     if (remainder != 0) {
         crc = update_crc32(
             crc, std::span<const std::byte>(pattern).first(remainder));
@@ -238,10 +339,19 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
     const IImageSource& source,
     const std::uint64_t source_size,
     const SparseHeader& header,
-    const std::span<const SparseChunk> chunks) {
-    const auto has_crc_chunk = std::ranges::any_of(chunks, [](const SparseChunk& chunk) {
-        return chunk.kind == SparseChunkKind::Crc32;
-    });
+    const std::span<const SparseChunk> chunks,
+    const std::stop_token cancellation) {
+    bool has_crc_chunk = false;
+    for (const auto& chunk : chunks) {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(
+                chunk.input_offset, kCancelledChecksumSearch));
+        }
+        if (chunk.kind == SparseChunkKind::Crc32) {
+            has_crc_chunk = true;
+            break;
+        }
+    }
     if (!has_crc_chunk && header.image_checksum == 0) {
         return {};
     }
@@ -249,10 +359,19 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
     std::uint32_t crc = 0;
     const std::array<std::byte, 4> zeros{};
     for (const auto& chunk : chunks) {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(
+                chunk.input_offset, kCancelledChecksumProcessing));
+        }
         switch (chunk.kind) {
             case SparseChunkKind::Raw: {
                 auto result = update_crc_from_source(
-                    source, source_size, chunk.input_offset, chunk.output_size, crc);
+                    source,
+                    source_size,
+                    chunk.input_offset,
+                    chunk.output_size,
+                    crc,
+                    cancellation);
                 if (!result) {
                     return std::unexpected(result.error());
                 }
@@ -260,12 +379,29 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
                 break;
             }
             case SparseChunkKind::Fill: {
-                crc = update_crc_repeated(
-                    crc, fill_pattern(*chunk.fill_value), chunk.output_size);
+                auto result = update_crc_repeated(
+                    crc,
+                    fill_pattern(*chunk.fill_value),
+                    chunk.output_size,
+                    cancellation,
+                    chunk.input_offset);
+                if (!result) {
+                    return std::unexpected(result.error());
+                }
+                crc = *result;
                 break;
             }
             case SparseChunkKind::DontCare: {
-                crc = update_crc_repeated(crc, zeros, chunk.output_size);
+                auto result = update_crc_repeated(
+                    crc,
+                    zeros,
+                    chunk.output_size,
+                    cancellation,
+                    chunk.input_offset);
+                if (!result) {
+                    return std::unexpected(result.error());
+                }
+                crc = *result;
                 break;
             }
             case SparseChunkKind::Crc32:
@@ -291,15 +427,26 @@ using CrcLinearOperator = std::array<std::uint32_t, 32>;
 }  // namespace
 
 std::expected<SparseImage, SparseError> SparseImage::open(
-    std::shared_ptr<const IImageSource> source) {
+    std::shared_ptr<const IImageSource> source,
+    const std::stop_token cancellation) {
     if (!source) {
         return std::unexpected(error(
             SparseErrorKind::InvalidArgument, 0, "sparse image source is null"));
     }
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(0, kCancelledFileHeader));
+    }
 
     const auto source_size = source->size();
     std::array<std::byte, kSparseHeaderSize> raw_header{};
-    if (const auto read = read_exact(*source, source_size, 0, raw_header); !read) {
+    if (const auto read = read_exact(
+            *source,
+            source_size,
+            0,
+            raw_header,
+            cancellation,
+            kCancelledFileHeader);
+        !read) {
         return std::unexpected(read.error());
     }
 
@@ -377,8 +524,16 @@ std::expected<SparseImage, SparseError> SparseImage::open(
         return std::unexpected(error(
             SparseErrorKind::Unsupported, 20, "declared sparse chunk count is not addressable"));
     }
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(
+            header.file_header_size, kCancelledChunkTable));
+    }
     chunks.reserve(header.total_chunks);
     output_chunk_indices.reserve(header.total_chunks);
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(
+            header.file_header_size, kCancelledChunkTable));
+    }
 
     std::uint64_t input_offset = header.file_header_size;
     std::uint64_t output_offset = 0;
@@ -386,7 +541,12 @@ std::expected<SparseImage, SparseError> SparseImage::open(
     for (std::uint32_t index = 0; index < header.total_chunks; ++index) {
         std::array<std::byte, kChunkHeaderSize> raw_chunk_header{};
         if (const auto read = read_exact(
-                *source, source_size, input_offset, raw_chunk_header);
+                *source,
+                source_size,
+                input_offset,
+                raw_chunk_header,
+                cancellation,
+                kCancelledChunkTable);
             !read) {
             return std::unexpected(read.error());
         }
@@ -460,7 +620,12 @@ std::expected<SparseImage, SparseError> SparseImage::open(
             }
             std::array<std::byte, 4> crc_bytes{};
             if (const auto read = read_exact(
-                    *source, source_size, payload_offset, crc_bytes);
+                    *source,
+                    source_size,
+                    payload_offset,
+                    crc_bytes,
+                    cancellation,
+                    kCancelledChunkTable);
                 !read) {
                 return std::unexpected(read.error());
             }
@@ -507,7 +672,12 @@ std::expected<SparseImage, SparseError> SparseImage::open(
                     }
                     std::array<std::byte, 4> fill_bytes{};
                     if (const auto read = read_exact(
-                            *source, source_size, payload_offset, fill_bytes);
+                            *source,
+                            source_size,
+                            payload_offset,
+                            fill_bytes,
+                            cancellation,
+                            kCancelledChunkTable);
                         !read) {
                         return std::unexpected(read.error());
                     }
@@ -543,6 +713,10 @@ std::expected<SparseImage, SparseError> SparseImage::open(
         input_offset = chunk_end;
     }
 
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(input_offset, kCancelledChunkTable));
+    }
+
     if (input_offset != source_size) {
         return std::unexpected(error(
             SparseErrorKind::Malformed,
@@ -556,7 +730,7 @@ std::expected<SparseImage, SparseError> SparseImage::open(
             "sparse chunks do not produce the declared total block count"));
     }
     if (const auto verified = verify_checksums(
-            *source, source_size, header, chunks);
+            *source, source_size, header, chunks, cancellation);
         !verified) {
         return std::unexpected(verified.error());
     }
@@ -692,15 +866,22 @@ std::expected<std::size_t, SparseError> SparseImage::read_at(
 }
 
 std::expected<FlashArtifact, SparseError> FlashArtifact::inspect(
-    std::shared_ptr<const IImageSource> source) {
+    std::shared_ptr<const IImageSource> source,
+    const std::stop_token cancellation) {
     if (!source) {
         return std::unexpected(error(
             SparseErrorKind::InvalidArgument, 0, "flash artifact source is null"));
+    }
+    if (cancellation.stop_requested()) {
+        return std::unexpected(cancelled_error(0, kCancelledArtifactInspection));
     }
 
     const auto source_size = source->size();
     std::array<std::byte, sizeof(std::uint32_t)> magic_bytes{};
     if (source_size < magic_bytes.size()) {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(cancelled_error(0, kCancelledArtifactInspection));
+        }
         return FlashArtifact(
             std::move(source),
             FlashArtifactMetadata{
@@ -712,7 +893,12 @@ std::expected<FlashArtifact, SparseError> FlashArtifact::inspect(
     }
 
     if (const auto read = read_exact(
-            *source, source_size, 0, magic_bytes);
+            *source,
+            source_size,
+            0,
+            magic_bytes,
+            cancellation,
+            kCancelledArtifactInspection);
         !read) {
         return std::unexpected(read.error());
     }
@@ -728,7 +914,7 @@ std::expected<FlashArtifact, SparseError> FlashArtifact::inspect(
             std::nullopt);
     }
 
-    auto sparse = SparseImage::open(source);
+    auto sparse = SparseImage::open(source, cancellation);
     if (!sparse) {
         return std::unexpected(std::move(sparse.error()));
     }
