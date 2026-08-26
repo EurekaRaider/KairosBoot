@@ -5,8 +5,7 @@
 **A cross-platform Fastboot SDK and CLI engineered for direct integration.**
 
 ![Version](https://img.shields.io/badge/version-0.1.0--dev-111827)
-[![CI](https://github.com/EurekaRaider/KairosBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/EurekaRaider/KairosBoot/actions/workflows/ci.yml)
-[![Release](https://github.com/EurekaRaider/KairosBoot/actions/workflows/release.yml/badge.svg)](https://github.com/EurekaRaider/KairosBoot/actions/workflows/release.yml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-2563EB)](#target-platforms)
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![CMake](https://img.shields.io/badge/CMake-3.22%2B-064F8C?logo=cmake&logoColor=white)](https://cmake.org/)
 [![.NET](https://img.shields.io/badge/.NET-4.8%20%7C%2010.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
