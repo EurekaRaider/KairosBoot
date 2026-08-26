@@ -63,6 +63,9 @@ struct ArtifactSourceLimits final {
     // Internal observation seam used to prove the per-resolver archive-reader
     // concurrency ceiling without exposing miniz state.
     std::function<void()> archive_reader_observer{};
+    // Internal deterministic test seam. Package snapshots invoke it immediately
+    // before revalidating and resolving one exact entry name.
+    std::function<void(std::string_view)> package_entry_observer{};
 };
 
 enum class ArtifactSourceOrigin : std::uint8_t {
@@ -78,6 +81,36 @@ struct ResolvedArtifact final {
     std::string logical_name;
 };
 
+// One bounded, immutable view of a directory or ZIP update package. ZIP bytes
+// and central-directory inventory are captured once. Directory entries are
+// inventoried with exact cross-platform names and filesystem identities, then
+// revalidated around every materialization and once more before publication.
+class ArtifactPackageSnapshot final {
+public:
+    ArtifactPackageSnapshot(const ArtifactPackageSnapshot&) = delete;
+    ArtifactPackageSnapshot& operator=(const ArtifactPackageSnapshot&) = delete;
+    ArtifactPackageSnapshot(ArtifactPackageSnapshot&&) noexcept;
+    ArtifactPackageSnapshot& operator=(ArtifactPackageSnapshot&&) noexcept;
+    ~ArtifactPackageSnapshot();
+
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    resolve(std::string_view entry_name);
+
+    // Checks the shared absolute deadline and proves that the source container
+    // still matches the identity/inventory captured at snapshot creation.
+    [[nodiscard]] std::expected<void, ArtifactSourceError> verify_unchanged();
+
+    [[nodiscard]] std::stop_token cancellation() const noexcept;
+
+private:
+    struct Impl;
+    explicit ArtifactPackageSnapshot(std::unique_ptr<Impl> impl) noexcept;
+
+    std::unique_ptr<Impl> impl_;
+    friend class ArtifactSourceResolver;
+};
+
 // Batch-scoped resolver. A successful key is materialized exactly once for the
 // resolver lifetime, so every device receives the same immutable spool.
 class ArtifactSourceResolver final {
@@ -88,6 +121,13 @@ class ArtifactSourceResolver final {
                                 ArtifactSourceError>
     resolve(const std::filesystem::path& archive_directory_or_file,
             std::string_view entry_name = {}, std::stop_token cancellation = {});
+
+    // Opens one package snapshot with a single absolute deadline shared by
+    // inventory and every subsequent entry materialization.
+    [[nodiscard]] std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
+    open_package_snapshot(
+        const std::filesystem::path& archive_or_directory,
+        std::stop_token cancellation = {});
 
     private:
     struct CacheKey final {
@@ -134,5 +174,9 @@ preflight_flash_artifact(ArtifactSourceResolver& resolver,
                          const std::filesystem::path& archive_directory_or_file,
                          std::string_view entry_name = {},
                          std::stop_token cancellation = {});
+
+[[nodiscard]] std::expected<PreflightFlashArtifact, ArtifactSourceError>
+preflight_flash_artifact(ArtifactPackageSnapshot& snapshot,
+                         std::string_view entry_name);
 
 }  // namespace kairosboot::image

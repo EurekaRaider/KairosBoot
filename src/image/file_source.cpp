@@ -56,6 +56,40 @@ namespace {
     return {static_cast<int>(value), std::system_category()};
 }
 
+[[nodiscard]] std::expected<FileSnapshotIdentity, FileSourceError>
+snapshot_identity_from_handle(
+    const HANDLE handle,
+    const BY_HANDLE_FILE_INFORMATION& information) {
+    FILE_BASIC_INFO basic{};
+    if (::GetFileInformationByHandleEx(
+            handle, FileBasicInfo, &basic, sizeof(basic)) == FALSE) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable,
+            windows_error(::GetLastError()),
+            "unable to inspect image snapshot timestamps"));
+    }
+    const bool directory =
+        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U;
+    const auto size = directory
+                          ? std::uint64_t{0}
+                          : (static_cast<std::uint64_t>(information.nFileSizeHigh)
+                             << 32U) |
+                                information.nFileSizeLow;
+    return FileSnapshotIdentity{
+        .device = information.dwVolumeSerialNumber,
+        .object = (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32U) |
+                  information.nFileIndexLow,
+        .size = size,
+        // Windows exposes 100-nanosecond ticks rather than POSIX seconds. Only
+        // equality is used, so retain the exact native value without conversion.
+        .modified_seconds = basic.LastWriteTime.QuadPart,
+        .modified_nanoseconds = 0U,
+        .changed_seconds = basic.ChangeTime.QuadPart,
+        .changed_nanoseconds = 0U,
+        .directory = directory,
+    };
+}
+
 [[nodiscard]] bool windows_reserved_component(
     const std::wstring_view component) noexcept {
     const auto separator = component.find(L'.');
@@ -200,6 +234,56 @@ private:
 
 [[nodiscard]] std::error_code posix_error(const int value) {
     return {value, std::generic_category()};
+}
+
+[[nodiscard]] std::expected<FileSnapshotIdentity, FileSourceError>
+snapshot_identity_from_stat(const struct stat& information) {
+    const bool directory = S_ISDIR(information.st_mode);
+    if (!directory && !S_ISREG(information.st_mode)) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::NotRegularFile,
+            {},
+            "image snapshot path is neither a regular file nor a directory"));
+    }
+    if (!directory &&
+        (information.st_size < 0 ||
+         !std::in_range<std::uint64_t>(information.st_size))) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable,
+            {},
+            "unable to determine image snapshot size"));
+    }
+#if defined(__APPLE__)
+    const auto modified_seconds = information.st_mtimespec.tv_sec;
+    const auto modified_nanoseconds = information.st_mtimespec.tv_nsec;
+    const auto changed_seconds = information.st_ctimespec.tv_sec;
+    const auto changed_nanoseconds = information.st_ctimespec.tv_nsec;
+#else
+    const auto modified_seconds = information.st_mtim.tv_sec;
+    const auto modified_nanoseconds = information.st_mtim.tv_nsec;
+    const auto changed_seconds = information.st_ctim.tv_sec;
+    const auto changed_nanoseconds = information.st_ctim.tv_nsec;
+#endif
+    if (!std::in_range<std::int64_t>(modified_seconds) ||
+        !std::in_range<std::uint32_t>(modified_nanoseconds) ||
+        !std::in_range<std::int64_t>(changed_seconds) ||
+        !std::in_range<std::uint32_t>(changed_nanoseconds)) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable,
+            {},
+            "image snapshot timestamps are not representable"));
+    }
+    return FileSnapshotIdentity{
+        .device = static_cast<std::uint64_t>(information.st_dev),
+        .object = static_cast<std::uint64_t>(information.st_ino),
+        .size = directory ? std::uint64_t{0}
+                          : static_cast<std::uint64_t>(information.st_size),
+        .modified_seconds = static_cast<std::int64_t>(modified_seconds),
+        .modified_nanoseconds = static_cast<std::uint32_t>(modified_nanoseconds),
+        .changed_seconds = static_cast<std::int64_t>(changed_seconds),
+        .changed_nanoseconds = static_cast<std::uint32_t>(changed_nanoseconds),
+        .directory = directory,
+    };
 }
 
 [[nodiscard]] std::expected<void, FileSourceError> make_close_on_exec(
@@ -442,10 +526,106 @@ FileImageSource::open(const std::filesystem::path& path) {
 #endif
 }
 
+std::expected<FileSnapshotIdentity, FileSourceError>
+FileImageSource::inspect_snapshot_identity(const std::filesystem::path& path) {
+    if (path.empty()) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::InvalidArgument, {}, "image snapshot path is empty"));
+    }
+    if (path_contains_nul(path)) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath, {},
+            "image snapshot path contains an embedded NUL"));
+    }
+
+#if defined(_WIN32)
+    if (windows_path_has_alias(path)) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath, {},
+            "image snapshot path aliases a Win32-normalized or reserved name"));
+    }
+    const auto native_handle = ::CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (native_handle == INVALID_HANDLE_VALUE) {
+        const auto native = ::GetLastError();
+        const auto kind = native == ERROR_FILE_NOT_FOUND || native == ERROR_PATH_NOT_FOUND
+                              ? FileSourceErrorKind::NotFound
+                              : FileSourceErrorKind::OpenFailed;
+        return std::unexpected(file_error(
+            kind, windows_error(native),
+            kind == FileSourceErrorKind::NotFound
+                ? "image snapshot path does not exist"
+                : "unable to open image snapshot path"));
+    }
+    ScopedHandle handle(native_handle);
+    if (auto inherited = make_non_inheritable(handle.get(), "image snapshot path");
+        !inherited) {
+        return std::unexpected(std::move(inherited.error()));
+    }
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (::GetFileInformationByHandle(handle.get(), &information) == FALSE) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable,
+            windows_error(::GetLastError()),
+            "unable to inspect image snapshot path"));
+    }
+    if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath, {},
+            "image snapshot path is a reparse point"));
+    }
+    if (::GetFileType(handle.get()) != FILE_TYPE_DISK) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::NotRegularFile, {},
+            "image snapshot path is not a disk file or directory"));
+    }
+    return snapshot_identity_from_handle(handle.get(), information);
+#else
+    int flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW;
+#if defined(O_CLOEXEC)
+    flags |= O_CLOEXEC;
+#endif
+    const int native_descriptor = ::open(path.c_str(), flags);
+    if (native_descriptor < 0) {
+        const int native = errno;
+        const auto kind = native == ENOENT || native == ENOTDIR
+                              ? FileSourceErrorKind::NotFound
+                          : native == ELOOP
+                              ? FileSourceErrorKind::UnsafePath
+                              : FileSourceErrorKind::OpenFailed;
+        return std::unexpected(file_error(
+            kind, posix_error(native),
+            kind == FileSourceErrorKind::NotFound
+                ? "image snapshot path does not exist"
+            : kind == FileSourceErrorKind::UnsafePath
+                ? "image snapshot path is a symbolic link"
+                : "unable to open image snapshot path"));
+    }
+    ScopedFileDescriptor descriptor(native_descriptor);
+    if (auto inherited = make_close_on_exec(descriptor.get(), "image snapshot path");
+        !inherited) {
+        return std::unexpected(std::move(inherited.error()));
+    }
+    struct stat information {};
+    if (::fstat(descriptor.get(), &information) != 0) {
+        const int native = errno;
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable, posix_error(native),
+            "unable to inspect image snapshot path"));
+    }
+    return snapshot_identity_from_stat(information);
+#endif
+}
+
 std::expected<std::shared_ptr<FileImageSource>, FileSourceError>
 FileImageSource::open_beneath(
     const std::filesystem::path& directory,
-    const std::filesystem::path& relative_path) {
+    const std::filesystem::path& relative_path,
+    const FileSnapshotIdentity* const expected_directory_identity,
+    const FileSnapshotIdentity* const expected_file_identity) {
     if (directory.empty()) {
         return std::unexpected(file_error(
             FileSourceErrorKind::InvalidArgument,
@@ -524,6 +704,17 @@ FileImageSource::open_beneath(
             FileSourceErrorKind::NotRegularFile,
             {},
             "image base path is not a directory"));
+    }
+    auto root_identity = snapshot_identity_from_handle(
+        held_directories.front().get(), root_information);
+    if (!root_identity) {
+        return std::unexpected(std::move(root_identity.error()));
+    }
+    if (expected_directory_identity != nullptr &&
+        *root_identity != *expected_directory_identity) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath, {},
+            "image base directory changed after package inventory"));
     }
     auto current_final_path = final_path(held_directories.front().get());
     if (!current_final_path) {
@@ -604,6 +795,16 @@ FileImageSource::open_beneath(
                 {},
                 "image path below directory is not a regular file"));
         }
+        auto file_identity = snapshot_identity_from_handle(opened.get(), information);
+        if (!file_identity) {
+            return std::unexpected(std::move(file_identity.error()));
+        }
+        if (expected_file_identity != nullptr &&
+            *file_identity != *expected_file_identity) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::UnsafePath, {},
+                "image file changed after package inventory"));
+        }
         LARGE_INTEGER native_size{};
         if (::GetFileSizeEx(opened.get(), &native_size) == FALSE) {
             const auto native = ::GetLastError();
@@ -663,6 +864,16 @@ FileImageSource::open_beneath(
             {},
             "image base path is not a directory"));
     }
+    auto root_identity = snapshot_identity_from_stat(root_information);
+    if (!root_identity) {
+        return std::unexpected(std::move(root_identity.error()));
+    }
+    if (expected_directory_identity != nullptr &&
+        *root_identity != *expected_directory_identity) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath, {},
+            "image base directory changed after package inventory"));
+    }
 
     for (std::size_t index = 0; index < components.size(); ++index) {
         const bool leaf = index + 1U == components.size();
@@ -721,6 +932,16 @@ FileImageSource::open_beneath(
                 {},
                 "image path below directory is not a regular file"));
         }
+        auto file_identity = snapshot_identity_from_stat(information);
+        if (!file_identity) {
+            return std::unexpected(std::move(file_identity.error()));
+        }
+        if (expected_file_identity != nullptr &&
+            *file_identity != *expected_file_identity) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::UnsafePath, {},
+                "image file changed after package inventory"));
+        }
         if (information.st_size < 0 ||
             !std::in_range<std::uint64_t>(information.st_size)) {
             return std::unexpected(file_error(
@@ -764,6 +985,30 @@ FileImageSource::~FileImageSource() {
 
 std::uint64_t FileImageSource::size() const noexcept {
     return size_;
+}
+
+std::expected<FileSnapshotIdentity, FileSourceError>
+FileImageSource::snapshot_identity() const {
+#if defined(_WIN32)
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (::GetFileInformationByHandle(
+            static_cast<HANDLE>(handle_), &information) == FALSE) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable,
+            windows_error(::GetLastError()),
+            "unable to revalidate image snapshot identity"));
+    }
+    return snapshot_identity_from_handle(static_cast<HANDLE>(handle_), information);
+#else
+    struct stat information {};
+    if (::fstat(handle_, &information) != 0) {
+        const int native = errno;
+        return std::unexpected(file_error(
+            FileSourceErrorKind::SizeUnavailable, posix_error(native),
+            "unable to revalidate image snapshot identity"));
+    }
+    return snapshot_identity_from_stat(information);
+#endif
 }
 
 std::expected<std::size_t, ImageSourceError> FileImageSource::read_at(
