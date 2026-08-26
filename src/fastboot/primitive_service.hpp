@@ -19,9 +19,11 @@ enum class PrimitiveOperation : std::uint8_t {
     Download,
     Flash,
     Erase,
+    SetActive,
     Reboot,
     ContinueBoot,
     Oem,
+    RawCommand,
 };
 
 enum class PrimitiveErrorCode : std::uint8_t {
@@ -106,11 +108,15 @@ public:
         const protocol::TransferProgressObserver& observer = {});
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> erase(
         std::string_view partition);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> set_active(
+        std::string_view slot);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> reboot(
         RebootTarget target = RebootTarget::System);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> continue_boot();
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> oem(
         std::string_view raw_suffix);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> raw_command(
+        std::string_view command_text);
 
     void request_cancel() noexcept;
 

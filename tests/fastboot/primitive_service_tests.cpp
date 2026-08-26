@@ -37,6 +37,7 @@ using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::ITransferSource;
 using kairosboot::protocol::ITransportSession;
 using kairosboot::protocol::ProtocolPhase;
+using kairosboot::protocol::ResponseKind;
 using kairosboot::protocol::SessionState;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::protocol::TransferProgressAction;
@@ -202,6 +203,103 @@ void exact_non_data_commands_are_emitted() {
     CHECK(session.state() == SessionState::Ready);
 }
 
+void set_active_and_raw_commands_preserve_response_order() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("set_active:b");
+    script->respond("INFOselecting slot");
+    script->respond("TEXTupdating metadata");
+    script->respond("OKAYb");
+    script->expect_write("flashing get_unlock_ability");
+    script->respond("INFOchecking policy");
+    script->respond("TEXTdevice response follows");
+    script->respond("OKAY1");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+
+    const auto activated = service.set_active("b");
+    CHECK(activated.has_value());
+    CHECK(activated->terminal.kind == ResponseKind::Okay);
+    CHECK(activated->terminal.payload == "b");
+    CHECK(activated->informational.size() == 2);
+    CHECK(activated->informational[0].kind == ResponseKind::Info);
+    CHECK(activated->informational[0].payload == "selecting slot");
+    CHECK(activated->informational[1].kind == ResponseKind::Text);
+    CHECK(activated->informational[1].payload == "updating metadata");
+    CHECK(session.state() == SessionState::Ready);
+
+    const auto raw = service.raw_command("flashing get_unlock_ability");
+    CHECK(raw.has_value());
+    CHECK(raw->terminal.kind == ResponseKind::Okay);
+    CHECK(raw->terminal.payload == "1");
+    CHECK(raw->informational.size() == 2);
+    CHECK(raw->informational[0].kind == ResponseKind::Info);
+    CHECK(raw->informational[0].payload == "checking policy");
+    CHECK(raw->informational[1].kind == ResponseKind::Text);
+    CHECK(raw->informational[1].payload == "device response follows");
+    CHECK(raw->outbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(accepted_text(*script) ==
+          "set_active:bflashing get_unlock_ability");
+    CHECK(script->complete());
+}
+
+void raw_fail_preserves_response_order_and_session() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("oem vendor-check");
+    script->respond("INFOchecking");
+    script->respond("TEXTpolicy denied");
+    script->respond("FAILlocked");
+    script->expect_write("getvar:product");
+    script->respond("OKAYkairos");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto raw = service.raw_command("oem vendor-check");
+    CHECK(!raw);
+    CHECK(raw.error().code == PrimitiveErrorCode::DeviceFail);
+    CHECK(raw.error().operation == PrimitiveOperation::RawCommand);
+    CHECK(raw.error().device_message == "locked");
+    CHECK(raw.error().informational.size() == 2);
+    CHECK(raw.error().informational[0].kind == ResponseKind::Info);
+    CHECK(raw.error().informational[0].payload == "checking");
+    CHECK(raw.error().informational[1].kind == ResponseKind::Text);
+    CHECK(raw.error().informational[1].payload == "policy denied");
+    CHECK(raw.error().outbound_certainty ==
+          TransferCertainty::FullyTransferred);
+    CHECK(!raw.error().session_poisoned);
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(service.getvar("product").has_value());
+    CHECK(script->complete());
+}
+
+void raw_data_response_is_unsupported_and_poisons_session() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("download:00000001");
+    script->respond("DATA00000001");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto raw = service.raw_command("download:00000001");
+    CHECK(!raw);
+    CHECK(raw.error().code == PrimitiveErrorCode::Unsupported);
+    CHECK(raw.error().operation == PrimitiveOperation::RawCommand);
+    CHECK(raw.error().phase == ProtocolPhase::FinalResponse);
+    CHECK(raw.error().message.find("DATA") != std::string::npos);
+    CHECK(raw.error().outbound_certainty ==
+          TransferCertainty::FullyTransferred);
+    CHECK(raw.error().session_poisoned);
+    CHECK(session.state() == SessionState::Poisoned);
+
+    const auto retry = service.raw_command("getvar:product");
+    CHECK(!retry);
+    CHECK(retry.error().code == PrimitiveErrorCode::Poisoned);
+    CHECK(script->complete());
+}
+
 void reboot_variants_and_continue_are_terminal() {
     constexpr std::array cases{
         std::pair{RebootTarget::System, std::string_view{"reboot"}},
@@ -234,6 +332,23 @@ void reboot_variants_and_continue_are_terminal() {
     CHECK(session.state() == SessionState::Closed);
     CHECK(script->closed());
     CHECK(script->complete());
+
+    auto failed_transport = std::make_unique<ScriptedTransport>();
+    auto* failed_script = failed_transport.get();
+    failed_script->expect_write("reboot-fastboot");
+    failed_script->respond("FAILnot supported");
+    failed_script->expect_write("getvar:product");
+    failed_script->respond("OKAYkairos");
+    FastbootSession failed_session(std::move(failed_transport));
+    PrimitiveService failed_service(failed_session);
+    const auto failed = failed_service.reboot(RebootTarget::Fastboot);
+    CHECK(!failed);
+    CHECK(failed.error().operation == PrimitiveOperation::Reboot);
+    CHECK(failed.error().code == PrimitiveErrorCode::DeviceFail);
+    CHECK(!failed.error().session_poisoned);
+    CHECK(failed_session.state() == SessionState::Ready);
+    CHECK(failed_service.getvar("product").has_value());
+    CHECK(failed_script->complete());
 }
 
 void canonical_download_and_flash_trace() {
@@ -360,11 +475,18 @@ void invalid_inputs_never_touch_the_wire() {
     CHECK(!service.getvar(""));
     CHECK(!service.erase(""));
     CHECK(!service.oem(""));
+    CHECK(!service.set_active(""));
+    CHECK(!service.raw_command(""));
     CHECK(!service.getvar(std::string_view{"bad\tkey", 7}));
+    CHECK(!service.set_active(std::string_view{"bad\nslot", 8}));
+    CHECK(!service.raw_command(std::string_view{"getvar:\n", 8}));
     const std::array non_ascii{static_cast<char>(0xC3), static_cast<char>(0xA9)};
     CHECK(!service.erase(std::string_view(non_ascii.data(), non_ascii.size())));
     const std::string oversized(4090, 'x');
     CHECK(!service.getvar(oversized));
+    CHECK(!service.set_active(std::string(
+        4096U - std::string_view{"set_active:"}.size() + 1U, 'a')));
+    CHECK(!service.raw_command(std::string(4097, 'x')));
 
     const std::span<const std::byte> empty;
     const auto zero = service.download(empty);
@@ -393,12 +515,21 @@ void command_size_limit_is_inclusive() {
     const std::string command_text = "getvar:" + key;
     script->expect_write(command_text);
     script->respond("OKAYvalue");
+    const std::string slot(
+        4096U - std::string_view{"set_active:"}.size(), 'a');
+    script->expect_write("set_active:" + slot);
+    script->respond("OKAY");
+    const std::string raw(4096, 'r');
+    script->expect_write(raw);
+    script->respond("OKAY");
 
     FastbootSession session(std::move(transport));
     PrimitiveService service(session);
     const auto result = service.getvar(key);
     CHECK(result.has_value());
     CHECK(result->terminal.payload == "value");
+    CHECK(service.set_active(slot).has_value());
+    CHECK(service.raw_command(raw).has_value());
     CHECK(script->complete());
 }
 
@@ -426,6 +557,51 @@ void cancellation_and_native_codes_are_preserved() {
         const auto retry = service.getvar("product");
         CHECK(!retry);
         CHECK(retry.error().code == PrimitiveErrorCode::Poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write(
+            "set_active:b",
+            4,
+            TransportStatus::Cancelled,
+            TransferCertainty::PartialOrUnknown,
+            125,
+            "cancelled while selecting slot");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.set_active("b");
+        CHECK(!result);
+        CHECK(result.error().operation == PrimitiveOperation::SetActive);
+        CHECK(result.error().code == PrimitiveErrorCode::Cancelled);
+        CHECK(result.error().phase == ProtocolPhase::CommandWrite);
+        CHECK(result.error().transport_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().native_code == 125);
+        CHECK(result.error().session_poisoned);
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(accepted_text(*script) == "set_");
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        service.request_cancel();
+        const auto result = service.raw_command("getvar:product");
+        CHECK(!result);
+        CHECK(result.error().operation == PrimitiveOperation::RawCommand);
+        CHECK(result.error().code == PrimitiveErrorCode::Cancelled);
+        CHECK(result.error().phase == ProtocolPhase::Validation);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(result.error().session_poisoned);
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->cancellation_requested());
         CHECK(script->complete());
     }
     {
@@ -1123,6 +1299,10 @@ void current_slot_must_belong_to_discovered_topology() {
 int main() {
     const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
         {"exact primitive commands", exact_non_data_commands_are_emitted},
+        {"set-active and raw response order",
+         set_active_and_raw_commands_preserve_response_order},
+        {"raw FAIL response order", raw_fail_preserves_response_order_and_session},
+        {"raw DATA rejection", raw_data_response_is_unsupported_and_poisons_session},
         {"terminal reboot and continue", reboot_variants_and_continue_are_terminal},
         {"canonical download and flash trace", canonical_download_and_flash_trace},
         {"pre-DATA FAIL", pre_data_fail_is_not_sent_and_reusable},
