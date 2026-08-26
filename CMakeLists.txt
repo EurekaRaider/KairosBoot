@@ -292,6 +292,15 @@ if(BUILD_TESTING)
   add_test(NAME primitive_service COMMAND kairosboot_primitive_service_tests)
   set_tests_properties(primitive_service PROPERTIES TIMEOUT 15)
 
+  add_executable(kairosboot_variable_parser_tests
+                 tests/fastboot/variable_parser_tests.cpp)
+  target_compile_features(kairosboot_variable_parser_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_variable_parser_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  kairosboot_enable_strict_warnings(kairosboot_variable_parser_tests)
+  add_test(NAME variable_parser COMMAND kairosboot_variable_parser_tests)
+  set_tests_properties(variable_parser PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_device_selection_tests
                  tests/api/device_selection_tests.cpp)
   target_compile_features(kairosboot_device_selection_tests PRIVATE cxx_std_23)
