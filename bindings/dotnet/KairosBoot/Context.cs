@@ -512,7 +512,7 @@ public sealed class Context : IDisposable
             options,
             progress,
             cancellationToken,
-            delegate(
+            delegate (
                 ref NativeCommandOptions nativeOptions,
                 out IntPtr operation,
                 out IntPtr error)
