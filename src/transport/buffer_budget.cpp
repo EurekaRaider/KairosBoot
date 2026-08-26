@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <utility>
+#include <vector>
 
 namespace kairosboot::transport {
 
@@ -16,44 +17,55 @@ struct BufferBudgetState final {
     std::atomic<std::size_t> peak{0};
 };
 
+struct BufferLeaseStorage final {
+    BufferLeaseStorage(std::shared_ptr<BufferBudgetState> budget_state,
+                       const std::size_t bytes)
+        : budget(std::move(budget_state)), buffer(bytes), reserved_bytes(bytes) {}
+
+    ~BufferLeaseStorage() {
+        budget->used.fetch_sub(reserved_bytes, std::memory_order_acq_rel);
+    }
+
+    std::shared_ptr<BufferBudgetState> budget;
+    std::vector<std::byte> buffer;
+    std::size_t reserved_bytes{};
+};
+
 }  // namespace detail
 
-BufferLease::BufferLease(std::shared_ptr<detail::BufferBudgetState> state,
-                         const std::size_t bytes)
-    : state_(std::move(state)), storage_(bytes), reserved_bytes_(bytes) {}
+BufferLease::BufferLease(std::shared_ptr<detail::BufferLeaseStorage> storage)
+    : storage_(std::move(storage)) {}
 
 BufferLease::BufferLease(BufferLease&& other) noexcept
-    : state_(std::move(other.state_)),
-      storage_(std::move(other.storage_)),
-      reserved_bytes_(std::exchange(other.reserved_bytes_, 0)) {}
+    : storage_(std::move(other.storage_)) {}
 
 BufferLease& BufferLease::operator=(BufferLease&& other) noexcept {
     if (this != &other) {
-        release();
-        state_ = std::move(other.state_);
         storage_ = std::move(other.storage_);
-        reserved_bytes_ = std::exchange(other.reserved_bytes_, 0);
     }
     return *this;
 }
 
-BufferLease::~BufferLease() { release(); }
+BufferLease::~BufferLease() = default;
 
-BufferLease::operator bool() const noexcept { return state_ != nullptr; }
+BufferLease::operator bool() const noexcept { return storage_ != nullptr; }
 
-std::size_t BufferLease::size() const noexcept { return storage_.size(); }
+std::size_t BufferLease::size() const noexcept {
+    return storage_ == nullptr ? 0 : storage_->buffer.size();
+}
 
-std::span<std::byte> BufferLease::bytes() noexcept { return storage_; }
+std::span<std::byte> BufferLease::bytes() noexcept {
+    return storage_ == nullptr ? std::span<std::byte>{}
+                               : std::span<std::byte>{storage_->buffer};
+}
 
-std::span<const std::byte> BufferLease::bytes() const noexcept { return storage_; }
+std::span<const std::byte> BufferLease::bytes() const noexcept {
+    return storage_ == nullptr ? std::span<const std::byte>{}
+                               : std::span<const std::byte>{storage_->buffer};
+}
 
-void BufferLease::release() noexcept {
-    if (state_ != nullptr) {
-        state_->used.fetch_sub(reserved_bytes_, std::memory_order_acq_rel);
-        state_.reset();
-        reserved_bytes_ = 0;
-        storage_.clear();
-    }
+std::shared_ptr<const void> BufferLease::lifetime_token() const noexcept {
+    return storage_;
 }
 
 BufferBudget::BufferBudget(const std::size_t limit_bytes)
@@ -61,7 +73,7 @@ BufferBudget::BufferBudget(const std::size_t limit_bytes)
 
 std::optional<BufferLease> BufferBudget::try_acquire(const std::size_t bytes) const {
     if (bytes == 0) {
-        return BufferLease{state_, 0};
+        return BufferLease{std::make_shared<detail::BufferLeaseStorage>(state_, 0)};
     }
 
     auto current = state_->used.load(std::memory_order_acquire);
@@ -86,7 +98,8 @@ std::optional<BufferLease> BufferBudget::try_acquire(const std::size_t bytes) co
     }
 
     try {
-        return BufferLease{state_, bytes};
+        auto storage = std::make_shared<detail::BufferLeaseStorage>(state_, bytes);
+        return BufferLease{std::move(storage)};
     } catch (...) {
         state_->used.fetch_sub(bytes, std::memory_order_acq_rel);
         throw;

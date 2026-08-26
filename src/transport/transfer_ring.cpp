@@ -122,7 +122,10 @@ bool TransferRing::pump() {
             break;
         }
 
-        const TransferSubmission submission{id, offset, entry->second.buffer.bytes()};
+        const TransferSubmission submission{id,
+                                            offset,
+                                            entry->second.buffer.bytes(),
+                                            entry->second.buffer.lifetime_token()};
         const auto result = backend_.submit(submission);
         if (result != SubmitResult::accepted) {
             in_flight_.erase(entry);

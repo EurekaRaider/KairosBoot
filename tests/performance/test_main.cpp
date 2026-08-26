@@ -120,6 +120,7 @@ private:
 
 void test_buffer_lease_lifetime_and_limit() {
     const auto budget = std::make_shared<BufferBudget>(16);
+    std::shared_ptr<const void> lifetime;
     {
         auto first = budget->try_acquire(10);
         KB_CHECK(first.has_value());
@@ -131,7 +132,10 @@ void test_buffer_lease_lifetime_and_limit() {
         KB_CHECK(static_cast<bool>(moved));
         KB_CHECK(moved.size() == 10);
         KB_CHECK(budget->used() == 10);
+        lifetime = moved.lifetime_token();
     }
+    KB_CHECK(budget->used() == 10);
+    lifetime.reset();
     KB_CHECK(budget->used() == 0);
     KB_CHECK(budget->peak_used() == 10);
 }

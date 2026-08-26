@@ -67,6 +67,9 @@ struct TransferSubmission final {
     TransferId id{};
     std::uint64_t offset{};
     std::span<const std::byte> payload;
+    // Keeps payload storage alive through backend completion. Backends must
+    // take their own copy when this token is empty.
+    std::shared_ptr<const void> payload_lifetime;
 };
 
 struct TransferCompletion final {

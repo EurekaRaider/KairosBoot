@@ -1,16 +1,15 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
-#include <vector>
 
 namespace kairosboot::transport {
 
 namespace detail {
 struct BufferBudgetState;
+struct BufferLeaseStorage;
 }
 
 // A move-only reservation whose storage and budget charge have the same lifetime.
@@ -27,16 +26,14 @@ public:
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] std::span<std::byte> bytes() noexcept;
     [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
+    [[nodiscard]] std::shared_ptr<const void> lifetime_token() const noexcept;
 
 private:
     friend class BufferBudget;
 
-    BufferLease(std::shared_ptr<detail::BufferBudgetState> state, std::size_t bytes);
-    void release() noexcept;
+    explicit BufferLease(std::shared_ptr<detail::BufferLeaseStorage> storage);
 
-    std::shared_ptr<detail::BufferBudgetState> state_;
-    std::vector<std::byte> storage_;
-    std::size_t reserved_bytes_{0};
+    std::shared_ptr<detail::BufferLeaseStorage> storage_;
 };
 
 // Thread-safe accounting shared by transfer rings and fleet dispatchers.
