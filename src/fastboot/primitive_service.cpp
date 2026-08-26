@@ -15,6 +15,8 @@ namespace {
         .operation = operation,
         .phase = protocol::ProtocolPhase::Validation,
         .message = std::move(message),
+        .device_message = {},
+        .informational = {},
         .transport_certainty = protocol::TransferCertainty::NotTransferred,
         .outbound_certainty = protocol::TransferCertainty::NotTransferred,
     };
@@ -325,6 +327,8 @@ PrimitiveError PrimitiveService::protocol_error(
         .operation = operation,
         .phase = error.phase,
         .message = error.message,
+        .device_message = {},
+        .informational = {},
         .transport_status = error.transport_status,
         .transport_certainty = error.transfer_certainty,
         .outbound_certainty = download_semantics

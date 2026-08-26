@@ -168,12 +168,11 @@ void primitive_kinds_have_stable_public_status() {
     };
 
     for (const auto& test : cases) {
-        const PrimitiveError error{
-            .code = test.code,
-            .message = "primitive failed",
-            .outbound_certainty = TransferCertainty::NotTransferred,
-            .native_code = -19,
-        };
+        PrimitiveError error{};
+        error.code = test.code;
+        error.message = "primitive failed";
+        error.outbound_certainty = TransferCertainty::NotTransferred;
+        error.native_code = -19;
         const auto result = normalize_public_error(error, "SERIAL-P");
         check_common(
             result,
@@ -198,24 +197,22 @@ void primitive_outbound_certainty_maps_to_public_three_state() {
     };
 
     for (const auto& test : cases) {
-        const PrimitiveError error{
-            .code = PrimitiveErrorCode::TransportIo,
-            .message = "transport failed",
-            .outbound_certainty = test.source,
-            .native_code = 32,
-        };
+        PrimitiveError error{};
+        error.code = PrimitiveErrorCode::TransportIo;
+        error.message = "transport failed";
+        error.outbound_certainty = test.source;
+        error.native_code = 32;
         const auto result = normalize_public_error(error, "SERIAL-C");
         check_common(result, KB_E_IO, 32, test.destination, "SERIAL-C");
     }
 }
 
 void device_fail_message_retains_target_payload() {
-    const PrimitiveError error{
-        .code = PrimitiveErrorCode::DeviceFail,
-        .message = "Fastboot device rejected the command",
-        .device_message = "partition is locked",
-        .outbound_certainty = TransferCertainty::FullyTransferred,
-    };
+    PrimitiveError error{};
+    error.code = PrimitiveErrorCode::DeviceFail;
+    error.message = "Fastboot device rejected the command";
+    error.device_message = "partition is locked";
+    error.outbound_certainty = TransferCertainty::FullyTransferred;
     const auto result = normalize_public_error(error, "设备-三");
 
     check_common(
