@@ -1654,6 +1654,7 @@ void test_usb_source_progress_cancel_runs_on_owner_and_drains() {
     KB_CHECK(result.status == TransportStatus::Cancelled);
     KB_CHECK(result.transferred == 4);
     KB_CHECK(result.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(result.native_code == 0);
     KB_CHECK(observer_calls.load(std::memory_order_acquire) == 1);
     KB_CHECK(observed_watermark == 4);
     KB_CHECK(observed_total == 12);
@@ -1663,6 +1664,79 @@ void test_usb_source_progress_cancel_runs_on_owner_and_drains() {
     KB_CHECK(fake->cancel_calls >= 2);
     KB_CHECK(budget->used() == 0);
     KB_CHECK(!transport->is_open());
+
+    runtime->stop();
+}
+
+void test_usb_source_cross_thread_cancel_is_non_blocking_and_releases_resources() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    const auto budget = std::make_shared<BufferBudget>(8);
+    options.buffer_budget = budget;
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto source = std::make_shared<PatternTransferSource>(12);
+    auto write = std::async(std::launch::async, [&] {
+        return transport->write_source(source, std::chrono::seconds(5));
+    });
+
+    wait_for_submissions(*fake, 2);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    wait_for_submissions(*fake, 3);
+
+    // With native cancel callbacks suppressed, a cancel implementation that
+    // waits for drain would block here. request_cancel() must only signal the
+    // active backend and return independently of the serialized writer.
+    fake->suppress_cancel_completion = true;
+    std::promise<void> cancel_started;
+    auto cancel_started_signal = cancel_started.get_future();
+    auto cancel_call = std::async(std::launch::async, [&] {
+        cancel_started.set_value();
+        const auto started = std::chrono::steady_clock::now();
+        transport->request_cancel();
+        return std::chrono::steady_clock::now() - started;
+    });
+    cancel_started_signal.wait();
+    KB_CHECK(cancel_call.wait_for(std::chrono::milliseconds(100)) ==
+             std::future_status::ready);
+    KB_CHECK(cancel_call.get() < std::chrono::milliseconds(100));
+    KB_CHECK(write.wait_for(std::chrono::milliseconds::zero()) ==
+             std::future_status::timeout);
+    KB_CHECK(fake->cancel_calls >= 2);
+    KB_CHECK(!transport->is_open());
+    KB_CHECK(!runtime->shutdown_quarantined());
+
+    const auto drain_started = std::chrono::steady_clock::now();
+    fake->complete_submission(1, LIBUSB_TRANSFER_CANCELLED, 0);
+    fake->complete_submission(2, LIBUSB_TRANSFER_CANCELLED, 0);
+    KB_CHECK(write.wait_for(std::chrono::milliseconds(500)) ==
+             std::future_status::ready);
+    const auto result = write.get();
+    KB_CHECK(std::chrono::steady_clock::now() - drain_started <
+             std::chrono::milliseconds(500));
+    KB_CHECK(result.status == TransportStatus::Cancelled);
+    KB_CHECK(result.transferred == 4);
+    KB_CHECK(result.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(result.native_code == 0);
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(fake->release_calls == 1);
+    KB_CHECK(fake->close_calls == 1);
+    KB_CHECK(!runtime->shutdown_quarantined());
+
+    // The drained backend has released the physical-interface reservation, so
+    // the same snapshot and shared budget can be safely opened again.
+    auto reopened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(reopened.has_value());
+    auto replacement = std::move(*reopened);
+    replacement->close();
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(fake->release_calls == 2);
+    KB_CHECK(fake->close_calls == 2);
 
     runtime->stop();
 }
@@ -1852,6 +1926,8 @@ int main() {
          test_usb_source_read_failure_poison_and_certainty},
         {"USB source progress cancellation",
          test_usb_source_progress_cancel_runs_on_owner_and_drains},
+        {"USB source cross-thread cancellation",
+         test_usb_source_cross_thread_cancel_is_non_blocking_and_releases_resources},
         {"USB backend timeout reservation lifecycle",
          test_usb_backend_timeout_releases_reservation_and_preserves_runtime},
         {"backend isolation and two-phase quarantine", test_backend_local_isolation_and_two_phase_global_quarantine},
