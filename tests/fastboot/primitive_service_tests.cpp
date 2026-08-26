@@ -481,6 +481,197 @@ void reboot_variants_and_continue_are_terminal() {
     CHECK(failed_script->complete());
 }
 
+void boot_downloaded_emits_exact_command_and_retires() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("boot");
+    script->respond("INFOvalidating boot image");
+    script->respond("TEXTstarting kernel");
+    script->respond("OKAYbooting");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.boot_downloaded();
+    CHECK(result.has_value());
+    CHECK(result->terminal.kind == ResponseKind::Okay);
+    CHECK(result->terminal.payload == "booting");
+    CHECK(result->informational.size() == 2);
+    CHECK(result->informational[0].kind == ResponseKind::Info);
+    CHECK(result->informational[0].payload == "validating boot image");
+    CHECK(result->informational[1].kind == ResponseKind::Text);
+    CHECK(result->informational[1].payload == "starting kernel");
+    CHECK(result->outbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(accepted_text(*script) == "boot");
+    CHECK(session.state() == SessionState::Closed);
+    CHECK(script->closed());
+    CHECK(script->complete());
+}
+
+void boot_fail_preserves_history_and_session() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("boot");
+    script->respond("INFOvalidating boot image");
+    script->respond("TEXTverification failed");
+    script->respond("FAILboot image is not signed");
+    script->expect_write("getvar:product");
+    script->respond("OKAYkairos");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.boot_downloaded();
+    CHECK(!result);
+    CHECK(result.error().code == PrimitiveErrorCode::DeviceFail);
+    CHECK(result.error().operation == PrimitiveOperation::Boot);
+    CHECK(result.error().phase == ProtocolPhase::FinalResponse);
+    CHECK(result.error().device_message == "boot image is not signed");
+    CHECK(result.error().informational.size() == 2);
+    CHECK(result.error().informational[0].kind == ResponseKind::Info);
+    CHECK(result.error().informational[0].payload == "validating boot image");
+    CHECK(result.error().informational[1].kind == ResponseKind::Text);
+    CHECK(result.error().informational[1].payload == "verification failed");
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::FullyTransferred);
+    CHECK(!result.error().session_poisoned);
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(!script->closed());
+
+    CHECK(service.getvar("product").has_value());
+    CHECK(script->complete());
+}
+
+void canonical_download_and_boot_trace() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto payload = to_bytes("abcdef");
+    script->expect_write("download:00000006");
+    script->respond("INFOpreparing");
+    script->respond("DATA00000006");
+    script->expect_write(payload);
+    script->respond("TEXTdownloaded");
+    script->respond("OKAYstaged");
+    script->expect_write("boot");
+    script->respond("INFOstarting");
+    script->respond("OKAYbooting");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.download_and_boot(payload);
+    CHECK(result.has_value());
+    CHECK(result->download.terminal.payload == "staged");
+    CHECK(result->download.informational.size() == 2);
+    CHECK(result->download.outbound_certainty ==
+          TransferCertainty::FullyTransferred);
+    CHECK(result->boot.terminal.payload == "booting");
+    CHECK(result->boot.informational.size() == 1);
+    CHECK(result->boot.outbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(accepted_text(*script) == "download:00000006abcdefboot");
+    CHECK(session.state() == SessionState::Closed);
+    CHECK(script->closed());
+    CHECK(script->complete());
+}
+
+void boot_download_failures_do_not_issue_boot() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        const auto payload = to_bytes("abcdef");
+        script->expect_write("download:00000006");
+        script->respond("INFOchecking");
+        script->respond("FAILtoo large");
+        script->expect_write("getvar:product");
+        script->respond("OKAYkairos");
+
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_and_boot(payload);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::DeviceFail);
+        CHECK(result.error().operation == PrimitiveOperation::Download);
+        CHECK(result.error().phase == ProtocolPhase::InitialResponse);
+        CHECK(result.error().device_message == "too large");
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(!result.error().session_poisoned);
+        CHECK(accepted_text(*script) == "download:00000006");
+        CHECK(session.state() == SessionState::Ready);
+        CHECK(!script->closed());
+
+        CHECK(service.getvar("product").has_value());
+        CHECK(script->complete());
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        const auto payload = to_bytes("abcdef");
+        script->expect_write("download:00000006");
+        script->respond("DATA00000006");
+        script->expect_write(
+            payload,
+            2,
+            TransportStatus::Cancelled,
+            TransferCertainty::PartialOrUnknown,
+            125,
+            "cancelled while downloading boot image");
+
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.download_and_boot(payload);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::Cancelled);
+        CHECK(result.error().operation == PrimitiveOperation::Download);
+        CHECK(result.error().phase == ProtocolPhase::DataWrite);
+        CHECK(result.error().transport_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().native_code == 125);
+        CHECK(result.error().session_poisoned);
+        CHECK(accepted_text(*script) == "download:00000006ab");
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(!script->closed());
+        CHECK(script->complete());
+    }
+}
+
+void boot_command_partial_failure_is_poisoned() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto payload = to_bytes("abcdef");
+    script->expect_write("download:00000006");
+    script->respond("DATA00000006");
+    script->expect_write(payload);
+    script->respond("OKAYstaged");
+    script->expect_write(
+        "boot",
+        2,
+        TransportStatus::Cancelled,
+        TransferCertainty::PartialOrUnknown,
+        125,
+        "cancelled while sending boot command");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.download_and_boot(payload);
+    CHECK(!result);
+    CHECK(result.error().code == PrimitiveErrorCode::Cancelled);
+    CHECK(result.error().operation == PrimitiveOperation::Boot);
+    CHECK(result.error().phase == ProtocolPhase::CommandWrite);
+    CHECK(result.error().transport_status == TransportStatus::Cancelled);
+    CHECK(result.error().transport_certainty ==
+          TransferCertainty::PartialOrUnknown);
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::PartialOrUnknown);
+    CHECK(result.error().native_code == 125);
+    CHECK(result.error().session_poisoned);
+    CHECK(accepted_text(*script) == "download:00000006abcdefbo");
+    CHECK(session.state() == SessionState::Poisoned);
+    CHECK(!script->closed());
+    CHECK(script->complete());
+}
+
 void canonical_download_and_flash_trace() {
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
@@ -623,6 +814,12 @@ void invalid_inputs_never_touch_the_wire() {
     CHECK(!zero);
     CHECK(zero.error().code == PrimitiveErrorCode::InvalidArgument);
     CHECK(zero.error().outbound_certainty == TransferCertainty::NotTransferred);
+    const auto zero_boot = service.download_and_boot(empty);
+    CHECK(!zero_boot);
+    CHECK(zero_boot.error().code == PrimitiveErrorCode::InvalidArgument);
+    CHECK(zero_boot.error().operation == PrimitiveOperation::Download);
+    CHECK(zero_boot.error().outbound_certainty ==
+          TransferCertainty::NotTransferred);
 
     const auto too_large = validate_download_size(
         static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1U);
@@ -915,6 +1112,43 @@ void source_download_uses_bounded_random_reads() {
     CHECK(session.state() == SessionState::Ready);
 }
 
+void source_download_and_boot_is_terminal() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto payload = to_bytes("abcdefghij");
+    script->expect_write("download:0000000a");
+    script->respond("DATA0000000a");
+    script->expect_source_write(
+        payload,
+        {
+            {.offset = 6, .size = 4, .progress_watermark = 0},
+            {.offset = 0, .size = 3, .progress_watermark = 3},
+            {.offset = 3, .size = 3, .progress_watermark = 10},
+        });
+    script->respond("OKAYstaged");
+    script->expect_write("boot");
+    script->respond("OKAYbooting");
+
+    auto source = std::make_shared<RecordingSource>(payload, 4);
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = service.download_and_boot_source(source);
+
+    CHECK(result.has_value());
+    CHECK(result->download.terminal.payload == "staged");
+    CHECK(result->boot.terminal.payload == "booting");
+    constexpr std::array expected_reads{
+        RecordingSource::Read{6, 4},
+        RecordingSource::Read{0, 3},
+        RecordingSource::Read{3, 3},
+    };
+    CHECK(std::ranges::equal(source->reads(), expected_reads));
+    CHECK(accepted_text(*script) == "download:0000000aabcdefghijboot");
+    CHECK(session.state() == SessionState::Closed);
+    CHECK(script->closed());
+    CHECK(script->complete());
+}
+
 void source_device_fail_phases_are_reusable() {
     {
         auto transport = std::make_unique<ScriptedTransport>();
@@ -1090,6 +1324,17 @@ void source_preflight_and_capability_fail_without_wire_io() {
             std::make_shared<SizedSource>(0));
         CHECK(!zero);
         CHECK(zero.error().code == PrimitiveErrorCode::InvalidArgument);
+
+        const auto null_boot = service.download_and_boot_source(nullptr);
+        CHECK(!null_boot);
+        CHECK(null_boot.error().code == PrimitiveErrorCode::InvalidArgument);
+        CHECK(null_boot.error().operation == PrimitiveOperation::Download);
+
+        const auto zero_boot = service.download_and_boot_source(
+            std::make_shared<SizedSource>(0));
+        CHECK(!zero_boot);
+        CHECK(zero_boot.error().code == PrimitiveErrorCode::InvalidArgument);
+        CHECK(zero_boot.error().operation == PrimitiveOperation::Download);
 
         const auto too_large = service.download_source(
             std::make_shared<SizedSource>(
@@ -1479,6 +1724,12 @@ int main() {
         {"protocol error informational history",
          protocol_errors_preserve_bounded_informational_history},
         {"terminal reboot and continue", reboot_variants_and_continue_are_terminal},
+        {"boot exact command and retirement",
+         boot_downloaded_emits_exact_command_and_retires},
+        {"boot FAIL history and retry", boot_fail_preserves_history_and_session},
+        {"canonical download and boot trace", canonical_download_and_boot_trace},
+        {"boot download failures", boot_download_failures_do_not_issue_boot},
+        {"boot command partial failure", boot_command_partial_failure_is_poisoned},
         {"canonical download and flash trace", canonical_download_and_flash_trace},
         {"pre-DATA FAIL", pre_data_fail_is_not_sent_and_reusable},
         {"post-payload FAIL", post_payload_fail_is_fully_transferred_and_reusable},
@@ -1490,6 +1741,7 @@ int main() {
         {"malformed download handshake", malformed_download_handshake_poisons_without_payload},
         {"terminal FAIL remains reusable", terminal_device_fail_does_not_retire_session},
         {"source bounded random reads", source_download_uses_bounded_random_reads},
+        {"source download and boot", source_download_and_boot_is_terminal},
         {"source FAIL phases remain reusable", source_device_fail_phases_are_reusable},
         {"source DATA mismatch", source_data_mismatch_never_reads_payload},
         {"source cancellation and failure", source_cancel_and_failure_poison_with_native_codes},

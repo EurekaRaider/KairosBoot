@@ -17,6 +17,7 @@ namespace kairosboot::fastboot {
 enum class PrimitiveOperation : std::uint8_t {
     GetVar,
     Download,
+    Boot,
     Flash,
     Erase,
     SetActive,
@@ -78,6 +79,11 @@ struct DownloadAndFlashResult final {
     PrimitiveReply flash;
 };
 
+struct DownloadAndBootResult final {
+    PrimitiveReply download;
+    PrimitiveReply boot;
+};
+
 [[nodiscard]] std::expected<void, PrimitiveError> validate_download_size(
     std::uint64_t size);
 
@@ -93,6 +99,13 @@ public:
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> download(
         std::span<const std::byte> bytes);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> download_source(
+        std::shared_ptr<protocol::ITransferSource> source,
+        const protocol::TransferProgressObserver& observer = {});
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> boot_downloaded();
+    [[nodiscard]] std::expected<DownloadAndBootResult, PrimitiveError>
+    download_and_boot(std::span<const std::byte> bytes);
+    [[nodiscard]] std::expected<DownloadAndBootResult, PrimitiveError>
+    download_and_boot_source(
         std::shared_ptr<protocol::ITransferSource> source,
         const protocol::TransferProgressObserver& observer = {});
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> flash_downloaded(
