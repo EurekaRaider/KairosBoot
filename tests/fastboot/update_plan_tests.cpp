@@ -73,7 +73,7 @@ void source_derived_golden_preserves_order_and_conditions() {
 
     auto parsed = parse_update_manifest(android_info, fastboot_info);
     CHECK(parsed);
-    CHECK(parsed->fastboot_info_version == 1);
+    CHECK(parsed->fastboot_info_version == std::uint32_t{1});
     CHECK(parsed->requirements.size() == 5);
     CHECK(parsed->tasks.size() == 7);
 
@@ -437,7 +437,7 @@ void every_declared_bound_fails_without_partial_output() {
     const auto elapsed = std::chrono::steady_clock::now() - start;
     CHECK(parsed);
     CHECK(parsed->tasks.empty());
-    CHECK(parsed->fastboot_info_version == 1);
+    CHECK(parsed->fastboot_info_version == std::uint32_t{1});
     return elapsed;
 }
 
@@ -466,8 +466,12 @@ void hundred_thousand_lines_remain_near_linear() {
              ? std::to_string(*plan.fastboot_info_version)
              : "none");
     for (const auto& task : plan.tasks) {
-        result += "|" + std::to_string(static_cast<unsigned>(task.kind)) +
-                  ":" + task.partition + ":" + task.artifact;
+        result.push_back('|');
+        result += std::to_string(static_cast<unsigned>(task.kind));
+        result.push_back(':');
+        result += task.partition;
+        result.push_back(':');
+        result += task.artifact;
     }
     return result;
 }
