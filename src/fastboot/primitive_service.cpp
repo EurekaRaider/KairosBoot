@@ -240,6 +240,44 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::download_source(
         session_.download_source(std::move(source), observer));
 }
 
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::boot_downloaded() {
+    return command(PrimitiveOperation::Boot, "boot", true);
+}
+
+std::expected<DownloadAndBootResult, PrimitiveError>
+PrimitiveService::download_and_boot(const std::span<const std::byte> bytes) {
+    auto downloaded = download(bytes);
+    if (!downloaded) {
+        return std::unexpected(std::move(downloaded.error()));
+    }
+    auto booted = boot_downloaded();
+    if (!booted) {
+        return std::unexpected(std::move(booted.error()));
+    }
+    return DownloadAndBootResult{
+        .download = std::move(*downloaded),
+        .boot = std::move(*booted),
+    };
+}
+
+std::expected<DownloadAndBootResult, PrimitiveError>
+PrimitiveService::download_and_boot_source(
+    std::shared_ptr<protocol::ITransferSource> source,
+    const protocol::TransferProgressObserver& observer) {
+    auto downloaded = download_source(std::move(source), observer);
+    if (!downloaded) {
+        return std::unexpected(std::move(downloaded.error()));
+    }
+    auto booted = boot_downloaded();
+    if (!booted) {
+        return std::unexpected(std::move(booted.error()));
+    }
+    return DownloadAndBootResult{
+        .download = std::move(*downloaded),
+        .boot = std::move(*booted),
+    };
+}
+
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::flash_downloaded(
     const std::string_view partition) {
     auto command_text = parameter_command(
