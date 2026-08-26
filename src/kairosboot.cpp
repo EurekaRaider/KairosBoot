@@ -211,6 +211,36 @@ bool valid_fastboot_parameter(const std::string_view value,
   return true;
 }
 
+size_t decimal_digit_count(std::uint64_t value) noexcept {
+  size_t result = 1;
+  while (value >= 10) {
+    value /= 10;
+    ++result;
+  }
+  return result;
+}
+
+kb_status_t validate_logical_partition_name(
+    const char *name, const size_t command_overhead,
+    const char *device_selector, kb_error_t **error) noexcept {
+  if (name == nullptr || name[0] == '\0') {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "logical partition name must not be empty", device_selector);
+  }
+  const std::string_view value{name};
+  if (value.find(':') != std::string_view::npos) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "logical partition name must not contain ':'",
+                device_selector);
+  }
+  if (!valid_fastboot_parameter(value, command_overhead)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "logical partition name must be printable ASCII and the command must fit the Fastboot limit",
+                device_selector);
+  }
+  return KB_OK;
+}
+
 bool valid_fetch_partition(const std::string_view value) noexcept {
   if (value.empty()) {
     return false;
@@ -580,6 +610,17 @@ struct PrimitiveExecution final {
   kairosboot::fastboot::PrimitiveReply reply;
   std::vector<std::byte> data;
 };
+
+[[nodiscard]] std::expected<PrimitiveExecution,
+                            kairosboot::fastboot::PrimitiveError>
+primitive_execution(
+    std::expected<kairosboot::fastboot::PrimitiveReply,
+                  kairosboot::fastboot::PrimitiveError> reply) {
+  if (!reply) {
+    return std::unexpected(std::move(reply.error()));
+  }
+  return PrimitiveExecution{.reply = std::move(*reply)};
+}
 
 using PrimitiveExecutor = std::function<std::expected<
     PrimitiveExecution, kairosboot::fastboot::PrimitiveError>(
@@ -1549,6 +1590,285 @@ kb_status_t KB_CALL kb_set_active(
   return run_blocking_command(
       kb_set_active_async, result, error, context, device_selector_or_null,
       slot, options_or_null);
+}
+
+kb_status_t KB_CALL kb_flashing_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const kb_flashing_command_t command,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  kairosboot::fastboot::FlashingCommand native_command;
+  switch (command) {
+  case KB_FLASHING_LOCK:
+    native_command = kairosboot::fastboot::FlashingCommand::Lock;
+    break;
+  case KB_FLASHING_UNLOCK:
+    native_command = kairosboot::fastboot::FlashingCommand::Unlock;
+    break;
+  case KB_FLASHING_LOCK_CRITICAL:
+    native_command = kairosboot::fastboot::FlashingCommand::LockCritical;
+    break;
+  case KB_FLASHING_UNLOCK_CRITICAL:
+    native_command = kairosboot::fastboot::FlashingCommand::UnlockCritical;
+    break;
+  case KB_FLASHING_GET_UNLOCK_ABILITY:
+    native_command = kairosboot::fastboot::FlashingCommand::GetUnlockAbility;
+    break;
+  default:
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "flashing command is invalid", device_selector_or_null);
+  }
+  return start_primitive_async(
+      context, device_selector_or_null, options_or_null,
+      [native_command](kairosboot::fastboot::PrimitiveService &service,
+                       kairosboot::api::OperationState::TaskContext &,
+                       const kb_command_options_t &, const std::string &)
+          -> std::expected<PrimitiveExecution,
+                           kairosboot::fastboot::PrimitiveError> {
+        return primitive_execution(service.flashing(native_command));
+      },
+      operation, error);
+}
+
+kb_status_t KB_CALL kb_flashing(
+    kb_context_t *context, const char *device_selector_or_null,
+    const kb_flashing_command_t command,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_flashing_async, result, error, context, device_selector_or_null,
+      command, options_or_null);
+}
+
+kb_status_t KB_CALL kb_gsi_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const kb_gsi_command_t command,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  kairosboot::fastboot::GsiCommand native_command;
+  switch (command) {
+  case KB_GSI_WIPE:
+    native_command = kairosboot::fastboot::GsiCommand::Wipe;
+    break;
+  case KB_GSI_DISABLE:
+    native_command = kairosboot::fastboot::GsiCommand::Disable;
+    break;
+  case KB_GSI_STATUS:
+    native_command = kairosboot::fastboot::GsiCommand::Status;
+    break;
+  default:
+    return fail(error, KB_E_INVALID_ARGUMENT, "GSI command is invalid",
+                device_selector_or_null);
+  }
+  return start_primitive_async(
+      context, device_selector_or_null, options_or_null,
+      [native_command](kairosboot::fastboot::PrimitiveService &service,
+                       kairosboot::api::OperationState::TaskContext &,
+                       const kb_command_options_t &, const std::string &)
+          -> std::expected<PrimitiveExecution,
+                           kairosboot::fastboot::PrimitiveError> {
+        return primitive_execution(service.gsi(native_command));
+      },
+      operation, error);
+}
+
+kb_status_t KB_CALL kb_gsi(
+    kb_context_t *context, const char *device_selector_or_null,
+    const kb_gsi_command_t command,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_gsi_async, result, error, context, device_selector_or_null, command,
+      options_or_null);
+}
+
+kb_status_t KB_CALL kb_snapshot_update_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const kb_snapshot_update_command_t command,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  kairosboot::fastboot::SnapshotUpdateCommand native_command;
+  switch (command) {
+  case KB_SNAPSHOT_UPDATE_CANCEL:
+    native_command = kairosboot::fastboot::SnapshotUpdateCommand::Cancel;
+    break;
+  case KB_SNAPSHOT_UPDATE_MERGE:
+    native_command = kairosboot::fastboot::SnapshotUpdateCommand::Merge;
+    break;
+  default:
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "snapshot-update command is invalid",
+                device_selector_or_null);
+  }
+  return start_primitive_async(
+      context, device_selector_or_null, options_or_null,
+      [native_command](kairosboot::fastboot::PrimitiveService &service,
+                       kairosboot::api::OperationState::TaskContext &,
+                       const kb_command_options_t &, const std::string &)
+          -> std::expected<PrimitiveExecution,
+                           kairosboot::fastboot::PrimitiveError> {
+        return primitive_execution(service.snapshot_update(native_command));
+      },
+      operation, error);
+}
+
+kb_status_t KB_CALL kb_snapshot_update(
+    kb_context_t *context, const char *device_selector_or_null,
+    const kb_snapshot_update_command_t command,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_snapshot_update_async, result, error, context,
+      device_selector_or_null, command, options_or_null);
+}
+
+kb_status_t KB_CALL kb_create_logical_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, const uint64_t size,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  const auto overhead =
+      std::string_view{"create-logical-partition:"}.size() + 1U +
+      decimal_digit_count(size);
+  if (const auto valid = validate_logical_partition_name(
+          partition_name, overhead, device_selector_or_null, error);
+      valid != KB_OK) {
+    return valid;
+  }
+  try {
+    std::string name_copy{partition_name};
+    return start_primitive_async(
+        context, device_selector_or_null, options_or_null,
+        [name_copy = std::move(name_copy), size](
+            kairosboot::fastboot::PrimitiveService &service,
+            kairosboot::api::OperationState::TaskContext &,
+            const kb_command_options_t &, const std::string &)
+            -> std::expected<PrimitiveExecution,
+                             kairosboot::fastboot::PrimitiveError> {
+          return primitive_execution(
+              service.create_logical_partition(name_copy, size));
+        },
+        operation, error);
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the create-logical-partition operation",
+                device_selector_or_null);
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the create-logical-partition operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_create_logical_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, const uint64_t size,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_create_logical_partition_async, result, error, context,
+      device_selector_or_null, partition_name, size, options_or_null);
+}
+
+kb_status_t KB_CALL kb_delete_logical_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  const auto overhead =
+      std::string_view{"delete-logical-partition:"}.size();
+  if (const auto valid = validate_logical_partition_name(
+          partition_name, overhead, device_selector_or_null, error);
+      valid != KB_OK) {
+    return valid;
+  }
+  try {
+    std::string name_copy{partition_name};
+    return start_primitive_async(
+        context, device_selector_or_null, options_or_null,
+        [name_copy = std::move(name_copy)](
+            kairosboot::fastboot::PrimitiveService &service,
+            kairosboot::api::OperationState::TaskContext &,
+            const kb_command_options_t &, const std::string &)
+            -> std::expected<PrimitiveExecution,
+                             kairosboot::fastboot::PrimitiveError> {
+          return primitive_execution(
+              service.delete_logical_partition(name_copy));
+        },
+        operation, error);
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the delete-logical-partition operation",
+                device_selector_or_null);
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the delete-logical-partition operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_delete_logical_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_delete_logical_partition_async, result, error, context,
+      device_selector_or_null, partition_name, options_or_null);
+}
+
+kb_status_t KB_CALL kb_resize_logical_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, const uint64_t size,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  const auto overhead =
+      std::string_view{"resize-logical-partition:"}.size() + 1U +
+      decimal_digit_count(size);
+  if (const auto valid = validate_logical_partition_name(
+          partition_name, overhead, device_selector_or_null, error);
+      valid != KB_OK) {
+    return valid;
+  }
+  try {
+    std::string name_copy{partition_name};
+    return start_primitive_async(
+        context, device_selector_or_null, options_or_null,
+        [name_copy = std::move(name_copy), size](
+            kairosboot::fastboot::PrimitiveService &service,
+            kairosboot::api::OperationState::TaskContext &,
+            const kb_command_options_t &, const std::string &)
+            -> std::expected<PrimitiveExecution,
+                             kairosboot::fastboot::PrimitiveError> {
+          return primitive_execution(
+              service.resize_logical_partition(name_copy, size));
+        },
+        operation, error);
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the resize-logical-partition operation",
+                device_selector_or_null);
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the resize-logical-partition operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_resize_logical_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, const uint64_t size,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_resize_logical_partition_async, result, error, context,
+      device_selector_or_null, partition_name, size, options_or_null);
 }
 
 kb_status_t KB_CALL kb_reboot_async(

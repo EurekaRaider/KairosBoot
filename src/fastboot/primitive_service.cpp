@@ -195,6 +195,61 @@ namespace {
     return command;
 }
 
+[[nodiscard]] std::expected<std::string, PrimitiveError>
+logical_partition_command(
+    const PrimitiveOperation operation,
+    const std::string_view prefix,
+    const std::string_view name,
+    const std::optional<std::uint64_t> size) {
+    if (name.empty()) {
+        return std::unexpected(invalid_argument(
+            operation, "Fastboot logical partition name must not be empty"));
+    }
+    if (!is_printable_ascii(name)) {
+        return std::unexpected(invalid_argument(
+            operation,
+            "Fastboot logical partition name must contain printable ASCII only"));
+    }
+    if (name.contains(':')) {
+        return std::unexpected(invalid_argument(
+            operation,
+            "Fastboot logical partition name must not contain ':'"));
+    }
+
+    std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 1> digits{};
+    std::string_view formatted_size;
+    if (size.has_value()) {
+        const auto [end, error] = std::to_chars(
+            digits.data(), digits.data() + digits.size(), *size, 10);
+        if (error != std::errc{}) {
+            return std::unexpected(invalid_argument(
+                operation,
+                "Fastboot logical partition size could not be formatted"));
+        }
+        formatted_size = std::string_view{
+            digits.data(), static_cast<std::size_t>(end - digits.data())};
+    }
+
+    const auto suffix_size = size.has_value() ? 1U + formatted_size.size() : 0U;
+    const auto fixed_size = prefix.size() + suffix_size;
+    if (fixed_size > protocol::kDefaultMaxCommandBytes ||
+        name.size() > protocol::kDefaultMaxCommandBytes - fixed_size) {
+        return std::unexpected(invalid_argument(
+            operation,
+            "Fastboot logical partition command exceeds the 4096-byte protocol limit"));
+    }
+
+    std::string result;
+    result.reserve(fixed_size + name.size());
+    result.append(prefix);
+    result.append(name);
+    if (size.has_value()) {
+        result.push_back(':');
+        result.append(formatted_size);
+    }
+    return result;
+}
+
 [[nodiscard]] std::expected<std::string, SlotError> normalize_slot_name(
     std::string_view value,
     const SlotErrorCode error_code,
@@ -479,6 +534,96 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::set_active(
         return std::unexpected(std::move(command_text.error()));
     }
     return command(PrimitiveOperation::SetActive, *command_text);
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::flashing(
+    const FlashingCommand flashing_command) {
+    switch (flashing_command) {
+        case FlashingCommand::Lock:
+            return command(PrimitiveOperation::Flashing, "flashing lock");
+        case FlashingCommand::Unlock:
+            return command(PrimitiveOperation::Flashing, "flashing unlock");
+        case FlashingCommand::LockCritical:
+            return command(
+                PrimitiveOperation::Flashing, "flashing lock_critical");
+        case FlashingCommand::UnlockCritical:
+            return command(
+                PrimitiveOperation::Flashing, "flashing unlock_critical");
+        case FlashingCommand::GetUnlockAbility:
+            return command(
+                PrimitiveOperation::Flashing,
+                "flashing get_unlock_ability");
+    }
+    return std::unexpected(invalid_argument(
+        PrimitiveOperation::Flashing, "Fastboot flashing command is invalid"));
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::gsi(
+    const GsiCommand gsi_command) {
+    switch (gsi_command) {
+        case GsiCommand::Wipe:
+            return command(PrimitiveOperation::Gsi, "gsi:wipe");
+        case GsiCommand::Disable:
+            return command(PrimitiveOperation::Gsi, "gsi:disable");
+        case GsiCommand::Status:
+            return command(PrimitiveOperation::Gsi, "gsi:status");
+    }
+    return std::unexpected(invalid_argument(
+        PrimitiveOperation::Gsi, "Fastboot GSI command is invalid"));
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::snapshot_update(
+    const SnapshotUpdateCommand snapshot_command) {
+    switch (snapshot_command) {
+        case SnapshotUpdateCommand::Cancel:
+            return command(
+                PrimitiveOperation::SnapshotUpdate,
+                "snapshot-update:cancel");
+        case SnapshotUpdateCommand::Merge:
+            return command(
+                PrimitiveOperation::SnapshotUpdate,
+                "snapshot-update:merge");
+    }
+    return std::unexpected(invalid_argument(
+        PrimitiveOperation::SnapshotUpdate,
+        "Fastboot snapshot-update command is invalid"));
+}
+
+std::expected<PrimitiveReply, PrimitiveError>
+PrimitiveService::create_logical_partition(
+    const std::string_view name,
+    const std::uint64_t size) {
+    auto command_text = logical_partition_command(
+        PrimitiveOperation::CreateLogicalPartition,
+        "create-logical-partition:", name, size);
+    if (!command_text) {
+        return std::unexpected(std::move(command_text.error()));
+    }
+    return command(PrimitiveOperation::CreateLogicalPartition, *command_text);
+}
+
+std::expected<PrimitiveReply, PrimitiveError>
+PrimitiveService::delete_logical_partition(const std::string_view name) {
+    auto command_text = logical_partition_command(
+        PrimitiveOperation::DeleteLogicalPartition,
+        "delete-logical-partition:", name, std::nullopt);
+    if (!command_text) {
+        return std::unexpected(std::move(command_text.error()));
+    }
+    return command(PrimitiveOperation::DeleteLogicalPartition, *command_text);
+}
+
+std::expected<PrimitiveReply, PrimitiveError>
+PrimitiveService::resize_logical_partition(
+    const std::string_view name,
+    const std::uint64_t size) {
+    auto command_text = logical_partition_command(
+        PrimitiveOperation::ResizeLogicalPartition,
+        "resize-logical-partition:", name, size);
+    if (!command_text) {
+        return std::unexpected(std::move(command_text.error()));
+    }
+    return command(PrimitiveOperation::ResizeLogicalPartition, *command_text);
 }
 
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::reboot(

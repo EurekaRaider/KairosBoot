@@ -138,6 +138,44 @@ private:
         CHECK(as_string(read_frame(socket)) == "upload");
         write_frame(socket, "DATA00000020");
       }
+      constexpr std::array<const char*, 13> management_commands{
+          "flashing lock",
+          "flashing unlock",
+          "flashing lock_critical",
+          "flashing unlock_critical",
+          "flashing get_unlock_ability",
+          "gsi:wipe",
+          "gsi:disable",
+          "gsi:status",
+          "snapshot-update:cancel",
+          "snapshot-update:merge",
+          "create-logical-partition:system_ext:0",
+          "delete-logical-partition:system_ext",
+          "resize-logical-partition:system_ext:18446744073709551615",
+      };
+      for (std::size_t index = 0; index < management_commands.size(); ++index) {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == management_commands[index]);
+        if (index == 0) {
+          write_frame(socket, std::string("INFOone\0two", 11));
+          write_frame(socket, std::string("TEXThuman\0text", 14));
+          write_frame(socket, std::string("OKAYdone\0x", 10));
+        } else {
+          write_frame(socket, "OKAYdone");
+        }
+      }
+      constexpr std::array<const char*, 4> rejected_commands{
+          "flashing unlock",
+          "gsi:status",
+          "snapshot-update:merge",
+          "delete-logical-partition:system_ext",
+      };
+      for (const auto* command : rejected_commands) {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == command);
+        write_frame(socket, "INFOpolicy");
+        write_frame(socket, std::string("FAILdenied\0x", 12));
+      }
     } catch (...) {
       failure_ = std::current_exception();
     }
@@ -251,6 +289,94 @@ void run_contract() {
         KB_TRANSFER_PARTIAL_OR_UNKNOWN);
   CHECK(kb_error_session_poisoned(error) == 1);
   kb_error_release(error);
+  error = nullptr;
+
+  kb_operation_t* management_operation = nullptr;
+  CHECK(kb_flashing_async(context, selector.c_str(), KB_FLASHING_LOCK,
+                          nullptr, &management_operation, &error) == KB_OK);
+  CHECK(management_operation != nullptr);
+  CHECK(error == nullptr);
+  CHECK(kb_operation_wait(management_operation, KB_WAIT_INFINITE) == KB_OK);
+  CHECK(kb_operation_command_result(management_operation, &result, &error) ==
+        KB_OK);
+  kb_operation_release(management_operation);
+  CHECK(result != nullptr);
+  terminal = kb_command_result_terminal_payload(result, &size);
+  CHECK(size == 6U);
+  CHECK(std::memcmp(terminal, "done\0x", size) == 0);
+  CHECK(kb_command_result_message_count(result) == 2U);
+  first = kb_command_result_message_payload(result, 0, &size);
+  CHECK(size == 7U);
+  CHECK(std::memcmp(first, "one\0two", size) == 0);
+  CHECK(kb_command_result_message_kind(result, 0) == KB_COMMAND_MESSAGE_INFO);
+  CHECK(kb_command_result_message_kind(result, 1) == KB_COMMAND_MESSAGE_TEXT);
+  kb_command_result_release(result);
+  result = nullptr;
+
+  const auto check_management_success = [&](const kb_status_t status) {
+    CHECK(status == KB_OK);
+    CHECK(result != nullptr);
+    CHECK(error == nullptr);
+    CHECK(std::strcmp(kb_command_result_device_identifier(result),
+                      selector.c_str()) == 0);
+    kb_command_result_release(result);
+    result = nullptr;
+  };
+  check_management_success(kb_flashing(
+      context, selector.c_str(), KB_FLASHING_UNLOCK, nullptr, &result, &error));
+  check_management_success(kb_flashing(
+      context, selector.c_str(), KB_FLASHING_LOCK_CRITICAL, nullptr, &result,
+      &error));
+  check_management_success(kb_flashing(
+      context, selector.c_str(), KB_FLASHING_UNLOCK_CRITICAL, nullptr, &result,
+      &error));
+  check_management_success(kb_flashing(
+      context, selector.c_str(), KB_FLASHING_GET_UNLOCK_ABILITY, nullptr,
+      &result, &error));
+  check_management_success(kb_gsi(
+      context, selector.c_str(), KB_GSI_WIPE, nullptr, &result, &error));
+  check_management_success(kb_gsi(
+      context, selector.c_str(), KB_GSI_DISABLE, nullptr, &result, &error));
+  check_management_success(kb_gsi(
+      context, selector.c_str(), KB_GSI_STATUS, nullptr, &result, &error));
+  check_management_success(kb_snapshot_update(
+      context, selector.c_str(), KB_SNAPSHOT_UPDATE_CANCEL, nullptr, &result,
+      &error));
+  check_management_success(kb_snapshot_update(
+      context, selector.c_str(), KB_SNAPSHOT_UPDATE_MERGE, nullptr, &result,
+      &error));
+  check_management_success(kb_create_logical_partition(
+      context, selector.c_str(), "system_ext", 0, nullptr, &result, &error));
+  check_management_success(kb_delete_logical_partition(
+      context, selector.c_str(), "system_ext", nullptr, &result, &error));
+  check_management_success(kb_resize_logical_partition(
+      context, selector.c_str(), "system_ext", UINT64_MAX, nullptr, &result,
+      &error));
+
+  const auto check_management_failure = [&](const kb_status_t status) {
+    CHECK(status == KB_E_DEVICE_FAIL);
+    CHECK(result == nullptr);
+    CHECK(error != nullptr);
+    CHECK(kb_error_status(error) == KB_E_DEVICE_FAIL);
+    const auto* message = kb_error_device_message(error, &size);
+    CHECK(size == 8U);
+    CHECK(std::memcmp(message, "denied\0x", size) == 0);
+    CHECK(kb_error_command_message_count(error) == 1U);
+    CHECK(kb_error_command_message_kind(error, 0) == KB_COMMAND_MESSAGE_INFO);
+    CHECK(kb_error_session_poisoned(error) == 0);
+    kb_error_release(error);
+    error = nullptr;
+  };
+  check_management_failure(kb_flashing(
+      context, selector.c_str(), KB_FLASHING_UNLOCK, nullptr, &result, &error));
+  check_management_failure(kb_gsi(
+      context, selector.c_str(), KB_GSI_STATUS, nullptr, &result, &error));
+  check_management_failure(kb_snapshot_update(
+      context, selector.c_str(), KB_SNAPSHOT_UPDATE_MERGE, nullptr, &result,
+      &error));
+  check_management_failure(kb_delete_logical_partition(
+      context, selector.c_str(), "system_ext", nullptr, &result, &error));
+
   kb_context_release(context);
   server.finish();
 }

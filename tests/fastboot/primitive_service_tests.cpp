@@ -30,7 +30,10 @@ using kairosboot::fastboot::PrimitiveErrorCode;
 using kairosboot::fastboot::PrimitiveOperation;
 using kairosboot::fastboot::PrimitiveService;
 using kairosboot::fastboot::FetchRange;
+using kairosboot::fastboot::FlashingCommand;
+using kairosboot::fastboot::GsiCommand;
 using kairosboot::fastboot::RebootTarget;
+using kairosboot::fastboot::SnapshotUpdateCommand;
 using kairosboot::fastboot::SlotErrorCode;
 using kairosboot::fastboot::SlotPlanner;
 using kairosboot::fastboot::SlotSelectionKind;
@@ -267,6 +270,73 @@ public:
     return result;
 }
 
+template <typename Invoke>
+void check_management_device_fail(
+    const std::string_view expected_command,
+    const PrimitiveOperation expected_operation,
+    Invoke&& invoke) {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write(expected_command);
+    script->respond("INFOchecking");
+    script->respond("TEXTpolicy denied");
+    script->respond(std::string("FAILlocked\0x", 12));
+    script->expect_write("getvar:product");
+    script->respond("OKAYkairos");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = std::forward<Invoke>(invoke)(service);
+    CHECK(!result);
+    CHECK(result.error().code == PrimitiveErrorCode::DeviceFail);
+    CHECK(result.error().operation == expected_operation);
+    CHECK(result.error().device_message == std::string("locked\0x", 8));
+    CHECK(result.error().informational.size() == 2);
+    CHECK(result.error().informational[0].kind == ResponseKind::Info);
+    CHECK(result.error().informational[0].payload == "checking");
+    CHECK(result.error().informational[1].kind == ResponseKind::Text);
+    CHECK(result.error().informational[1].payload == "policy denied");
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::FullyTransferred);
+    CHECK(!result.error().session_poisoned);
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(service.getvar("product").has_value());
+    CHECK(accepted_text(*script) ==
+          std::string(expected_command) + "getvar:product");
+    CHECK(script->complete());
+}
+
+template <typename Invoke>
+void check_management_cancellation(
+    const std::string_view expected_command,
+    const PrimitiveOperation expected_operation,
+    Invoke&& invoke) {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write(
+        expected_command,
+        3,
+        TransportStatus::Cancelled,
+        TransferCertainty::PartialOrUnknown,
+        125,
+        "cancelled by caller");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto result = std::forward<Invoke>(invoke)(service);
+    CHECK(!result);
+    CHECK(result.error().code == PrimitiveErrorCode::Cancelled);
+    CHECK(result.error().operation == expected_operation);
+    CHECK(result.error().phase == ProtocolPhase::CommandWrite);
+    CHECK(result.error().native_code == 125);
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::PartialOrUnknown);
+    CHECK(result.error().session_poisoned);
+    CHECK(session.state() == SessionState::Poisoned);
+    CHECK(accepted_text(*script) == expected_command.substr(0, 3));
+    CHECK(script->complete());
+}
+
 void exact_non_data_commands_are_emitted() {
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
@@ -369,6 +439,154 @@ void raw_fail_preserves_response_order_and_session() {
     CHECK(session.state() == SessionState::Ready);
     CHECK(service.getvar("product").has_value());
     CHECK(script->complete());
+}
+
+void flashing_commands_use_locked_aosp_wire_names() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("flashing lock");
+    script->respond("OKAY");
+    script->expect_write("flashing unlock");
+    script->respond("OKAY");
+    script->expect_write("flashing lock_critical");
+    script->respond("OKAY");
+    script->expect_write("flashing unlock_critical");
+    script->respond("OKAY");
+    script->expect_write("flashing get_unlock_ability");
+    script->respond(std::string("INFOpolicy\0state", 16));
+    script->respond("OKAY1");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    CHECK(service.flashing(FlashingCommand::Lock).has_value());
+    CHECK(service.flashing(FlashingCommand::Unlock).has_value());
+    CHECK(service.flashing(FlashingCommand::LockCritical).has_value());
+    CHECK(service.flashing(FlashingCommand::UnlockCritical).has_value());
+    const auto ability =
+        service.flashing(FlashingCommand::GetUnlockAbility);
+    CHECK(ability.has_value());
+    CHECK(ability->terminal.payload == "1");
+    CHECK(ability->informational.size() == 1);
+    CHECK(ability->informational[0].payload ==
+          std::string("policy\0state", 12));
+    CHECK(accepted_text(*script) ==
+          "flashing lockflashing unlockflashing lock_critical"
+          "flashing unlock_criticalflashing get_unlock_ability");
+    CHECK(script->complete());
+}
+
+void gsi_commands_use_colon_delimited_aosp_wire_names() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("gsi:wipe");
+    script->respond("OKAY");
+    script->expect_write("gsi:disable");
+    script->respond("OKAY");
+    script->expect_write("gsi:status");
+    script->respond("OKAYenabled");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    CHECK(service.gsi(GsiCommand::Wipe).has_value());
+    CHECK(service.gsi(GsiCommand::Disable).has_value());
+    const auto status = service.gsi(GsiCommand::Status);
+    CHECK(status.has_value());
+    CHECK(status->terminal.payload == "enabled");
+    CHECK(accepted_text(*script) == "gsi:wipegsi:disablegsi:status");
+    CHECK(script->complete());
+}
+
+void snapshot_commands_use_colon_delimited_aosp_wire_names() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("snapshot-update:cancel");
+    script->respond("OKAY");
+    script->expect_write("snapshot-update:merge");
+    script->respond("OKAYmerging");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    CHECK(service.snapshot_update(SnapshotUpdateCommand::Cancel).has_value());
+    const auto merged =
+        service.snapshot_update(SnapshotUpdateCommand::Merge);
+    CHECK(merged.has_value());
+    CHECK(merged->terminal.payload == "merging");
+    CHECK(accepted_text(*script) ==
+          "snapshot-update:cancelsnapshot-update:merge");
+    CHECK(script->complete());
+}
+
+void logical_partition_commands_use_decimal_aosp_wire_names() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("create-logical-partition:system_ext:0");
+    script->respond("OKAYcreated");
+    script->expect_write("delete-logical-partition:system_ext");
+    script->respond("OKAYdeleted");
+    script->expect_write(
+        "resize-logical-partition:system_ext:18446744073709551615");
+    script->respond("OKAYresized");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    CHECK(service.create_logical_partition("system_ext", 0).has_value());
+    CHECK(service.delete_logical_partition("system_ext").has_value());
+    CHECK(service.resize_logical_partition(
+              "system_ext", std::numeric_limits<std::uint64_t>::max())
+              .has_value());
+    CHECK(accepted_text(*script) ==
+          "create-logical-partition:system_ext:0"
+          "delete-logical-partition:system_ext"
+          "resize-logical-partition:system_ext:18446744073709551615");
+    CHECK(script->complete());
+}
+
+void management_device_failures_preserve_diagnostics() {
+    check_management_device_fail(
+        "flashing unlock", PrimitiveOperation::Flashing,
+        [](PrimitiveService& service) {
+            return service.flashing(FlashingCommand::Unlock);
+        });
+    check_management_device_fail(
+        "gsi:status", PrimitiveOperation::Gsi,
+        [](PrimitiveService& service) {
+            return service.gsi(GsiCommand::Status);
+        });
+    check_management_device_fail(
+        "snapshot-update:merge", PrimitiveOperation::SnapshotUpdate,
+        [](PrimitiveService& service) {
+            return service.snapshot_update(SnapshotUpdateCommand::Merge);
+        });
+    check_management_device_fail(
+        "delete-logical-partition:system_ext",
+        PrimitiveOperation::DeleteLogicalPartition,
+        [](PrimitiveService& service) {
+            return service.delete_logical_partition("system_ext");
+        });
+}
+
+void management_cancellation_preserves_operation_and_certainty() {
+    check_management_cancellation(
+        "flashing lock", PrimitiveOperation::Flashing,
+        [](PrimitiveService& service) {
+            return service.flashing(FlashingCommand::Lock);
+        });
+    check_management_cancellation(
+        "gsi:wipe", PrimitiveOperation::Gsi,
+        [](PrimitiveService& service) {
+            return service.gsi(GsiCommand::Wipe);
+        });
+    check_management_cancellation(
+        "snapshot-update:cancel", PrimitiveOperation::SnapshotUpdate,
+        [](PrimitiveService& service) {
+            return service.snapshot_update(SnapshotUpdateCommand::Cancel);
+        });
+    check_management_cancellation(
+        "resize-logical-partition:system_ext:4096",
+        PrimitiveOperation::ResizeLogicalPartition,
+        [](PrimitiveService& service) {
+            return service.resize_logical_partition("system_ext", 4096);
+        });
 }
 
 void raw_data_response_is_unsupported_and_poisons_session() {
@@ -1028,6 +1246,17 @@ void invalid_inputs_never_touch_the_wire() {
     CHECK(!service.set_active(std::string(
         4096U - std::string_view{"set_active:"}.size() + 1U, 'a')));
     CHECK(!service.raw_command(std::string(4097, 'x')));
+    CHECK(!service.flashing(static_cast<FlashingCommand>(0xFF)));
+    CHECK(!service.gsi(static_cast<GsiCommand>(0xFF)));
+    CHECK(!service.snapshot_update(
+        static_cast<SnapshotUpdateCommand>(0xFF)));
+    CHECK(!service.create_logical_partition("", 0));
+    CHECK(!service.delete_logical_partition("system:other"));
+    CHECK(!service.resize_logical_partition(
+        std::string_view{"bad\nname", 8}, 1));
+    CHECK(!service.create_logical_partition(std::string(4096, 'c'), 0));
+    CHECK(!service.delete_logical_partition(std::string(4096, 'd')));
+    CHECK(!service.resize_logical_partition(std::string(4096, 'r'), 0));
 
     const std::span<const std::byte> empty;
     const auto zero = service.download(empty);
@@ -1088,6 +1317,23 @@ void command_size_limit_is_inclusive() {
     const std::string raw(4096, 'r');
     script->expect_write(raw);
     script->respond("OKAY");
+    constexpr std::string_view maximum_size = "18446744073709551615";
+    constexpr std::string_view create_prefix = "create-logical-partition:";
+    const std::string create_name(
+        4096U - create_prefix.size() - 1U - maximum_size.size(), 'c');
+    script->expect_write(
+        std::string(create_prefix) + create_name + ":" +
+        std::string(maximum_size));
+    script->respond("OKAY");
+    constexpr std::string_view delete_prefix = "delete-logical-partition:";
+    const std::string delete_name(4096U - delete_prefix.size(), 'd');
+    script->expect_write(std::string(delete_prefix) + delete_name);
+    script->respond("OKAY");
+    constexpr std::string_view resize_prefix = "resize-logical-partition:";
+    const std::string resize_name(
+        4096U - resize_prefix.size() - 2U, 'z');
+    script->expect_write(std::string(resize_prefix) + resize_name + ":0");
+    script->respond("OKAY");
 
     FastbootSession session(std::move(transport));
     PrimitiveService service(session);
@@ -1096,6 +1342,11 @@ void command_size_limit_is_inclusive() {
     CHECK(result->terminal.payload == "value");
     CHECK(service.set_active(slot).has_value());
     CHECK(service.raw_command(raw).has_value());
+    CHECK(service.create_logical_partition(
+              create_name, std::numeric_limits<std::uint64_t>::max())
+              .has_value());
+    CHECK(service.delete_logical_partition(delete_name).has_value());
+    CHECK(service.resize_logical_partition(resize_name, 0).has_value());
     CHECK(script->complete());
 }
 
@@ -1967,6 +2218,18 @@ int main() {
         {"set-active and raw response order",
          set_active_and_raw_commands_preserve_response_order},
         {"raw FAIL response order", raw_fail_preserves_response_order_and_session},
+        {"flashing AOSP wire commands",
+         flashing_commands_use_locked_aosp_wire_names},
+        {"GSI AOSP wire commands",
+         gsi_commands_use_colon_delimited_aosp_wire_names},
+        {"snapshot AOSP wire commands",
+         snapshot_commands_use_colon_delimited_aosp_wire_names},
+        {"logical partition AOSP wire commands",
+         logical_partition_commands_use_decimal_aosp_wire_names},
+        {"management FAIL diagnostics",
+         management_device_failures_preserve_diagnostics},
+        {"management cancellation",
+         management_cancellation_preserves_operation_and_certainty},
         {"raw DATA rejection", raw_data_response_is_unsupported_and_poisons_session},
         {"protocol error informational history",
          protocol_errors_preserve_bounded_informational_history},

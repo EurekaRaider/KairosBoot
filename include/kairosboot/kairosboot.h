@@ -80,6 +80,28 @@ enum {
   KB_REBOOT_FASTBOOT = 3
 };
 
+typedef int32_t kb_flashing_command_t;
+enum {
+  KB_FLASHING_LOCK = 0,
+  KB_FLASHING_UNLOCK = 1,
+  KB_FLASHING_LOCK_CRITICAL = 2,
+  KB_FLASHING_UNLOCK_CRITICAL = 3,
+  KB_FLASHING_GET_UNLOCK_ABILITY = 4
+};
+
+typedef int32_t kb_gsi_command_t;
+enum {
+  KB_GSI_WIPE = 0,
+  KB_GSI_DISABLE = 1,
+  KB_GSI_STATUS = 2
+};
+
+typedef int32_t kb_snapshot_update_command_t;
+enum {
+  KB_SNAPSHOT_UPDATE_CANCEL = 0,
+  KB_SNAPSHOT_UPDATE_MERGE = 1
+};
+
 typedef struct kb_context kb_context_t;
 typedef struct kb_device_list kb_device_list_t;
 typedef struct kb_error kb_error_t;
@@ -223,6 +245,64 @@ KB_API kb_status_t KB_CALL kb_set_active_async(
 KB_API kb_status_t KB_CALL kb_set_active(
     kb_context_t *context, const char *device_selector_or_null,
     const char *slot, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flashing_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    kb_flashing_command_t command,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flashing(
+    kb_context_t *context, const char *device_selector_or_null,
+    kb_flashing_command_t command,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_gsi_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    kb_gsi_command_t command, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_gsi(
+    kb_context_t *context, const char *device_selector_or_null,
+    kb_gsi_command_t command, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_snapshot_update_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    kb_snapshot_update_command_t command,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_snapshot_update(
+    kb_context_t *context, const char *device_selector_or_null,
+    kb_snapshot_update_command_t command,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_create_logical_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, uint64_t size,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_create_logical_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, uint64_t size,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_delete_logical_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_delete_logical_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_resize_logical_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, uint64_t size,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_resize_logical_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition_name, uint64_t size,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_reboot_async(
     kb_context_t *context, const char *device_selector_or_null,
