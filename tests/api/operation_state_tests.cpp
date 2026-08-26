@@ -95,6 +95,7 @@ void cancellation_is_idempotent_and_publishes_after_drain() {
             "cancelled after transport drain",
             17,
             KB_TRANSFER_PARTIAL_OR_UNKNOWN,
+            {},
         });
     });
     operation_address = &operation;
@@ -171,6 +172,7 @@ void failure_payload_is_synchronized_and_immutable() {
         "short USB transfer",
         -7,
         KB_TRANSFER_PARTIAL_OR_UNKNOWN,
+        "usb:2-3",
     };
     OperationState operation([&](OperationState::TaskContext&) {
         return OperationOutcome::failed(expected);

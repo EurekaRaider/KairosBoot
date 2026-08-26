@@ -14,6 +14,7 @@ namespace {
         "operation cancelled",
         0,
         KB_TRANSFER_NOT_SENT,
+        {},
     };
 }
 
@@ -23,6 +24,7 @@ namespace {
         message,
         0,
         KB_TRANSFER_NOT_SENT,
+        {},
     };
 }
 
@@ -344,6 +346,7 @@ void OperationState::run() noexcept {
                 "operation task exhausted memory",
                 0,
                 KB_TRANSFER_NOT_SENT,
+                {},
             });
         } catch (const std::exception& error) {
             outcome = OperationOutcome::failed({
@@ -351,6 +354,7 @@ void OperationState::run() noexcept {
                 error.what(),
                 0,
                 KB_TRANSFER_NOT_SENT,
+                {},
             });
         } catch (...) {
             outcome = OperationOutcome::failed(

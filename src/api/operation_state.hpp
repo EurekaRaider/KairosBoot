@@ -29,6 +29,7 @@ struct OperationErrorPayload final {
     std::string message;
     std::int32_t native_code{0};
     kb_transfer_state_t transfer_state{KB_TRANSFER_NOT_SENT};
+    std::string device_identifier;
 
     [[nodiscard]] bool operator==(const OperationErrorPayload&) const = default;
 };
@@ -45,6 +46,7 @@ struct OperationOutcome final {
             "operation cancelled",
             0,
             KB_TRANSFER_NOT_SENT,
+            {},
         });
 };
 
