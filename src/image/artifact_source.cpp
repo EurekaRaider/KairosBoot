@@ -1696,8 +1696,632 @@ resolve_uncached(const std::filesystem::path& container, const std::string_view 
 
 }  // namespace
 
+struct ArtifactPackageSnapshot::Impl final {
+    enum class Kind : std::uint8_t {
+        Directory,
+        Zip,
+    };
+
+    struct DirectoryEntry final {
+        FileSnapshotIdentity identity;
+
+        friend bool operator==(const DirectoryEntry&,
+                               const DirectoryEntry&) = default;
+    };
+
+    using DirectoryInventory =
+        std::map<std::string, DirectoryEntry, std::less<>>;
+
+    Impl(ArtifactSourceLimits limits, std::filesystem::path container,
+         const std::stop_token cancellation)
+        : limits_(std::move(limits)),
+          budget_(cancellation, deadline_for(limits_)),
+          container_(std::move(container)) {}
+
+    [[nodiscard]] std::expected<void, ArtifactSourceError> initialize() {
+        if (auto stopped = budget_.check()) {
+            return std::unexpected(std::move(*stopped));
+        }
+        std::error_code filesystem_error;
+        const auto status =
+            std::filesystem::symlink_status(container_, filesystem_error);
+        if (filesystem_error || !std::filesystem::exists(status)) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::NotFound,
+                "artifact package container does not exist",
+                filesystem_error.value()));
+        }
+        if (std::filesystem::is_symlink(status)) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::UnsafePath,
+                "artifact package container symlinks are forbidden"));
+        }
+        if (std::filesystem::is_directory(status)) {
+            kind_ = Kind::Directory;
+            auto identity = FileImageSource::inspect_snapshot_identity(container_);
+            if (!identity) {
+                return std::unexpected(from_file_error(identity.error()));
+            }
+            if (!identity->directory) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::UnsafePath,
+                    "artifact package directory changed type while opening"));
+            }
+            container_identity_ = *identity;
+            auto inventory = capture_directory_inventory();
+            if (!inventory) {
+                return std::unexpected(std::move(inventory.error()));
+            }
+            directory_entries_ = std::move(*inventory);
+            return {};
+        }
+        if (!std::filesystem::is_regular_file(status)) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::UnsafePath,
+                "artifact package container is not a regular ZIP or directory"));
+        }
+        kind_ = Kind::Zip;
+        return initialize_zip();
+    }
+
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    resolve(const std::string_view requested_entry) {
+        std::lock_guard operation_lock(operation_mutex_);
+        if (auto stopped = budget_.check()) {
+            return std::unexpected(std::move(*stopped));
+        }
+        auto selected = validate_name(
+            requested_entry, limits_.max_name_bytes, false);
+        if (!selected) {
+            return std::unexpected(std::move(selected.error()));
+        }
+        if (limits_.package_entry_observer) {
+            limits_.package_entry_observer(selected->path);
+        }
+        if (auto unchanged = verify_container_identity(); !unchanged) {
+            return std::unexpected(std::move(unchanged.error()));
+        }
+        if (const auto cached = resolved_entries_.find(selected->path);
+            cached != resolved_entries_.end()) {
+            return cached->second;
+        }
+
+        std::expected<std::shared_ptr<const ResolvedArtifact>, ArtifactSourceError>
+            materialized = kind_ == Kind::Zip
+                               ? materialize_zip(selected->path)
+                               : materialize_directory(selected->path);
+        if (!materialized) {
+            return std::unexpected(std::move(materialized.error()));
+        }
+        resolved_entries_.emplace(selected->path, *materialized);
+        return *materialized;
+    }
+
+    [[nodiscard]] std::expected<void, ArtifactSourceError> verify_unchanged() {
+        std::lock_guard operation_lock(operation_mutex_);
+        if (auto unchanged = verify_container_identity(); !unchanged) {
+            return unchanged;
+        }
+        if (kind_ == Kind::Zip) {
+            return {};
+        }
+        auto current = capture_directory_inventory();
+        if (!current) {
+            return std::unexpected(std::move(current.error()));
+        }
+        if (*current != directory_entries_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact package directory inventory changed during preflight"));
+        }
+        return {};
+    }
+
+    [[nodiscard]] const std::stop_token& cancellation() const noexcept {
+        return budget_.cancellation();
+    }
+
+private:
+    [[nodiscard]] std::expected<void, ArtifactSourceError> initialize_zip() {
+        auto opened = FileImageSource::open(container_);
+        if (!opened) {
+            return std::unexpected(from_file_error(opened.error()));
+        }
+        auto identity = (*opened)->snapshot_identity();
+        if (!identity) {
+            return std::unexpected(from_file_error(identity.error()));
+        }
+        if (identity->directory) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::UnsafePath,
+                "artifact ZIP changed type while opening"));
+        }
+        if ((*opened)->size() > limits_.max_archive_size) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::LimitExceeded,
+                "ZIP archive exceeds the configured archive size limit"));
+        }
+        container_identity_ = *identity;
+        zip_container_handle_ = *opened;
+
+        SpoolReservation reservation(
+            budget_mutex_, reserved_spool_bytes_, completed_spool_bytes_,
+            observed_spool_capacity_, zip_snapshot_reserved_bytes_, limits_);
+        auto snapshot = materialize_source(
+            **opened, (*opened)->size(), limits_, budget_, reservation,
+            ArtifactSourceOrigin::DirectFile, container_.filename().string());
+        if (!snapshot) {
+            return std::unexpected(std::move(snapshot.error()));
+        }
+        if (auto unchanged = verify_zip_identity(); !unchanged) {
+            return unchanged;
+        }
+        {
+            std::lock_guard budget_lock(budget_mutex_);
+            reservation.complete_locked();
+        }
+        zip_snapshot_ = std::move(*snapshot);
+
+        if (limits_.archive_reader_observer) {
+            limits_.archive_reader_observer();
+        }
+        auto eocd = inspect_eocd(*zip_snapshot_->source, limits_, budget_);
+        if (!eocd) {
+            return std::unexpected(std::move(eocd.error()));
+        }
+        zip_reader_ =
+            std::make_unique<ZipReader>(*zip_snapshot_->source, budget_);
+        if (auto initialized = zip_reader_->initialize(zip_snapshot_->source->size());
+            !initialized) {
+            return std::unexpected(std::move(initialized.error()));
+        }
+        auto entries = inventory_zip(*zip_reader_, *eocd, limits_, budget_);
+        if (!entries) {
+            return std::unexpected(std::move(entries.error()));
+        }
+        zip_entries_ = std::move(*entries);
+        for (std::size_t index = 0; index < zip_entries_.size(); ++index) {
+            if (!zip_entries_[index].directory) {
+                zip_entry_indices_.emplace(zip_entries_[index].name, index);
+            }
+        }
+        return verify_zip_identity();
+    }
+
+    [[nodiscard]] std::expected<DirectoryInventory, ArtifactSourceError>
+    capture_directory_inventory() const {
+        if (auto stopped = budget_.check()) {
+            return std::unexpected(std::move(*stopped));
+        }
+        auto root = FileImageSource::inspect_snapshot_identity(container_);
+        if (!root) {
+            return std::unexpected(from_file_error(root.error()));
+        }
+        if (*root != container_identity_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact package directory identity changed during preflight"));
+        }
+
+        DirectoryInventory inventory;
+        std::map<std::string, std::string, std::less<>> folded_names;
+        std::set<std::string, std::less<>> files;
+        std::set<std::string, std::less<>> folded_files;
+        std::uint64_t aggregate = 0U;
+        std::error_code filesystem_error;
+        std::filesystem::recursive_directory_iterator cursor(
+            container_, std::filesystem::directory_options::none,
+            filesystem_error);
+        const std::filesystem::recursive_directory_iterator end;
+        if (filesystem_error) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Io,
+                "unable to inventory artifact package directory",
+                filesystem_error.value()));
+        }
+        while (cursor != end) {
+            if (auto stopped = budget_.check()) {
+                return std::unexpected(std::move(*stopped));
+            }
+            if (inventory.size() >= limits_.max_entry_count) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::LimitExceeded,
+                    "directory package entry count exceeds the configured limit"));
+            }
+
+            const auto status = cursor->symlink_status(filesystem_error);
+            if (filesystem_error) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::Io,
+                    "unable to inspect artifact package directory entry",
+                    filesystem_error.value()));
+            }
+            if (std::filesystem::is_symlink(status)) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::UnsafePath,
+                    "directory package contains a symbolic link"));
+            }
+            const bool directory = std::filesystem::is_directory(status);
+            if (!directory && !std::filesystem::is_regular_file(status)) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::UnsafePath,
+                    "directory package contains a special filesystem entry"));
+            }
+
+            const auto relative = cursor->path().lexically_relative(container_);
+            const auto portable = relative.generic_u8string();
+            std::string raw_name(portable.begin(), portable.end());
+            if (directory) {
+                raw_name.push_back('/');
+            }
+            auto validated = validate_name(
+                raw_name, limits_.max_name_bytes, true);
+            if (!validated) {
+                return std::unexpected(std::move(validated.error()));
+            }
+            auto identity =
+                FileImageSource::inspect_snapshot_identity(cursor->path());
+            if (!identity) {
+                return std::unexpected(from_file_error(identity.error()));
+            }
+            if (identity->directory != directory) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::Integrity,
+                    "directory package entry changed type during inventory"));
+            }
+            if (!directory) {
+                if (identity->size > limits_.max_single_entry_size ||
+                    identity->size > kSha256MaxInputSize) {
+                    return std::unexpected(make_error(
+                        ArtifactSourceErrorKind::LimitExceeded,
+                        "directory package entry exceeds the configured size limit"));
+                }
+                if (aggregate > limits_.max_total_uncompressed_size ||
+                    identity->size >
+                        limits_.max_total_uncompressed_size - aggregate) {
+                    return std::unexpected(make_error(
+                        ArtifactSourceErrorKind::LimitExceeded,
+                        "directory package aggregate size exceeds the configured limit"));
+                }
+                aggregate += identity->size;
+            }
+
+            const auto folded = ascii_fold(validated->path);
+            if (const auto [position, inserted] =
+                    folded_names.emplace(folded, validated->path);
+                !inserted) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::UnsafePath,
+                    "directory package contains cross-platform case-folding name "
+                    "collisions: " +
+                        position->second + " and " + validated->path));
+            }
+            if (!directory) {
+                files.insert(validated->path);
+                folded_files.insert(folded);
+            }
+            if (!inventory.emplace(validated->path,
+                                   DirectoryEntry{.identity = *identity})
+                     .second) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::UnsafePath,
+                    "directory package contains duplicate exact names"));
+            }
+
+            cursor.increment(filesystem_error);
+            if (filesystem_error) {
+                return std::unexpected(make_error(
+                    ArtifactSourceErrorKind::Io,
+                    "unable to continue artifact package directory inventory",
+                    filesystem_error.value()));
+            }
+        }
+
+        for (const auto& [name, entry] : inventory) {
+            (void)entry;
+            std::size_t separator = name.find('/');
+            while (separator != std::string::npos) {
+                const auto prefix = name.substr(0U, separator);
+                if (files.contains(prefix) ||
+                    folded_files.contains(ascii_fold(prefix))) {
+                    return std::unexpected(make_error(
+                        ArtifactSourceErrorKind::UnsafePath,
+                        "directory package contains a file/directory path conflict"));
+                }
+                separator = name.find('/', separator + 1U);
+            }
+        }
+
+        auto final_root = FileImageSource::inspect_snapshot_identity(container_);
+        if (!final_root) {
+            return std::unexpected(from_file_error(final_root.error()));
+        }
+        if (*final_root != container_identity_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact package directory changed during inventory"));
+        }
+        return inventory;
+    }
+
+    [[nodiscard]] std::expected<void, ArtifactSourceError>
+    verify_zip_identity() const {
+        if (auto stopped = budget_.check()) {
+            return std::unexpected(std::move(*stopped));
+        }
+        if (!zip_container_handle_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact ZIP snapshot lost its source handle"));
+        }
+        auto handle_identity = zip_container_handle_->snapshot_identity();
+        if (!handle_identity || *handle_identity != container_identity_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact ZIP contents changed through the original handle",
+                handle_identity ? 0 : handle_identity.error().native_code));
+        }
+        auto path_identity =
+            FileImageSource::inspect_snapshot_identity(container_);
+        if (!path_identity || *path_identity != container_identity_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact ZIP path was replaced during preflight",
+                path_identity ? 0 : path_identity.error().native_code));
+        }
+        return {};
+    }
+
+    [[nodiscard]] std::expected<void, ArtifactSourceError>
+    verify_container_identity() const {
+        if (kind_ == Kind::Zip) {
+            return verify_zip_identity();
+        }
+        if (auto stopped = budget_.check()) {
+            return std::unexpected(std::move(*stopped));
+        }
+        auto current = FileImageSource::inspect_snapshot_identity(container_);
+        if (!current || *current != container_identity_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "artifact package directory identity changed during preflight",
+                current ? 0 : current.error().native_code));
+        }
+        return {};
+    }
+
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    materialize_zip(const std::string& name) {
+        const auto position = zip_entry_indices_.find(name);
+        if (position == zip_entry_indices_.end()) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::NotFound,
+                "requested file entry is not present in the ZIP snapshot"));
+        }
+        std::uint64_t entry_reserved_bytes = 0U;
+        SpoolReservation reservation(
+            budget_mutex_, reserved_spool_bytes_, completed_spool_bytes_,
+            observed_spool_capacity_, entry_reserved_bytes, limits_);
+        auto materialized = materialize_zip_entry(
+            *zip_reader_, zip_entries_[position->second], limits_, budget_,
+            reservation);
+        if (!materialized) {
+            return std::unexpected(std::move(materialized.error()));
+        }
+        if (auto unchanged = verify_zip_identity(); !unchanged) {
+            return std::unexpected(std::move(unchanged.error()));
+        }
+        {
+            std::lock_guard budget_lock(budget_mutex_);
+            reservation.complete_locked();
+        }
+        return materialized;
+    }
+
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    materialize_directory(const std::string& name) {
+        const auto position = directory_entries_.find(name);
+        if (position == directory_entries_.end() ||
+            position->second.identity.directory) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::NotFound,
+                "requested file is not present with exact case in the directory snapshot"));
+        }
+        auto source = FileImageSource::open_beneath(
+            container_, std::filesystem::path(name), &container_identity_,
+            &position->second.identity);
+        if (!source) {
+            return std::unexpected(from_file_error(source.error()));
+        }
+        std::uint64_t entry_reserved_bytes = 0U;
+        SpoolReservation reservation(
+            budget_mutex_, reserved_spool_bytes_, completed_spool_bytes_,
+            observed_spool_capacity_, entry_reserved_bytes, limits_);
+        auto materialized = materialize_source(
+            **source, position->second.identity.size, limits_, budget_, reservation,
+            ArtifactSourceOrigin::DirectoryEntry, name);
+        if (!materialized) {
+            return std::unexpected(std::move(materialized.error()));
+        }
+        auto handle_identity = (*source)->snapshot_identity();
+        auto path_identity = FileImageSource::inspect_snapshot_identity(
+            container_ / std::filesystem::path(name));
+        if (!handle_identity || !path_identity ||
+            *handle_identity != position->second.identity ||
+            *path_identity != position->second.identity) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::Integrity,
+                "directory package entry changed during materialization",
+                !handle_identity ? handle_identity.error().native_code
+                : !path_identity ? path_identity.error().native_code
+                                 : 0));
+        }
+        if (auto unchanged = verify_container_identity(); !unchanged) {
+            return std::unexpected(std::move(unchanged.error()));
+        }
+        {
+            std::lock_guard budget_lock(budget_mutex_);
+            reservation.complete_locked();
+        }
+        return materialized;
+    }
+
+    ArtifactSourceLimits limits_;
+    Budget budget_;
+    std::filesystem::path container_;
+    Kind kind_{Kind::Directory};
+    FileSnapshotIdentity container_identity_{};
+
+    mutable std::mutex operation_mutex_;
+    mutable std::mutex budget_mutex_;
+    std::uint64_t reserved_spool_bytes_{};
+    std::uint64_t completed_spool_bytes_{};
+    std::optional<std::uint64_t> observed_spool_capacity_;
+    std::uint64_t zip_snapshot_reserved_bytes_{};
+
+    DirectoryInventory directory_entries_;
+    std::shared_ptr<FileImageSource> zip_container_handle_;
+    std::shared_ptr<const ResolvedArtifact> zip_snapshot_;
+    std::unique_ptr<ZipReader> zip_reader_;
+    std::vector<ZipEntry> zip_entries_;
+    std::map<std::string, std::size_t, std::less<>> zip_entry_indices_;
+    std::map<std::string, std::shared_ptr<const ResolvedArtifact>, std::less<>>
+        resolved_entries_;
+};
+
+ArtifactPackageSnapshot::ArtifactPackageSnapshot(
+    std::unique_ptr<Impl> impl) noexcept
+    : impl_(std::move(impl)) {}
+
+ArtifactPackageSnapshot::ArtifactPackageSnapshot(
+    ArtifactPackageSnapshot&&) noexcept = default;
+
+ArtifactPackageSnapshot& ArtifactPackageSnapshot::operator=(
+    ArtifactPackageSnapshot&&) noexcept = default;
+
+ArtifactPackageSnapshot::~ArtifactPackageSnapshot() = default;
+
+std::expected<std::shared_ptr<const ResolvedArtifact>, ArtifactSourceError>
+ArtifactPackageSnapshot::resolve(const std::string_view entry_name) {
+    try {
+        if (!impl_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::InvalidArgument,
+                "artifact package snapshot is moved-from"));
+        }
+        return impl_->resolve(entry_name);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "memory allocation failed while resolving package snapshot entry"));
+    } catch (const std::filesystem::filesystem_error& error) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "filesystem failure while resolving package snapshot entry",
+            error.code().value()));
+    } catch (...) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "unexpected failure while resolving package snapshot entry"));
+    }
+}
+
+std::expected<void, ArtifactSourceError>
+ArtifactPackageSnapshot::verify_unchanged() {
+    try {
+        if (!impl_) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::InvalidArgument,
+                "artifact package snapshot is moved-from"));
+        }
+        return impl_->verify_unchanged();
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "memory allocation failed while verifying package snapshot"));
+    } catch (const std::filesystem::filesystem_error& error) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "filesystem failure while verifying package snapshot",
+            error.code().value()));
+    } catch (...) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "unexpected failure while verifying package snapshot"));
+    }
+}
+
+std::stop_token ArtifactPackageSnapshot::cancellation() const noexcept {
+    return impl_ ? impl_->cancellation() : std::stop_token{};
+}
+
 ArtifactSourceResolver::ArtifactSourceResolver(ArtifactSourceLimits limits)
     : limits_(std::move(limits)) {}
+
+std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
+ArtifactSourceResolver::open_package_snapshot(
+    const std::filesystem::path& archive_or_directory,
+    const std::stop_token cancellation) {
+    try {
+        if (archive_or_directory.empty()) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::InvalidArgument,
+                "artifact package container path is empty"));
+        }
+        if (limits_.max_elapsed.count() < 0 || limits_.max_name_bytes == 0U) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::InvalidArgument,
+                "artifact package source limits are invalid"));
+        }
+        if (path_contains_nul(archive_or_directory) ||
+            path_contains_nul(limits_.temporary_directory)) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::UnsafePath,
+                "artifact package source path contains an embedded NUL"));
+        }
+#if defined(_WIN32)
+        if (windows_path_has_alias(archive_or_directory) ||
+            windows_path_has_alias(limits_.temporary_directory)) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::UnsafePath,
+                "artifact package source path aliases a Win32-normalized or "
+                "reserved name"));
+        }
+#endif
+        std::error_code filesystem_error;
+        auto normalized =
+            std::filesystem::absolute(archive_or_directory, filesystem_error);
+        if (filesystem_error) {
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::InvalidArgument,
+                "unable to normalize artifact package container path",
+                filesystem_error.value()));
+        }
+        normalized = normalized.lexically_normal();
+        auto impl = std::make_unique<ArtifactPackageSnapshot::Impl>(
+            limits_, std::move(normalized), cancellation);
+        if (auto initialized = impl->initialize(); !initialized) {
+            return std::unexpected(std::move(initialized.error()));
+        }
+        return ArtifactPackageSnapshot(std::move(impl));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "memory allocation failed while opening package snapshot"));
+    } catch (const std::filesystem::filesystem_error& error) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "filesystem failure while opening package snapshot",
+            error.code().value()));
+    } catch (...) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "unexpected failure while opening package snapshot"));
+    }
+}
 
 std::expected<std::shared_ptr<const ResolvedArtifact>, ArtifactSourceError>
 ArtifactSourceResolver::resolve(const std::filesystem::path& archive_directory_or_file,
@@ -1864,6 +2488,28 @@ preflight_flash_artifact(ArtifactSourceResolver& resolver,
         return std::unexpected(std::move(resolved.error()));
     }
     auto inspected = FlashArtifact::inspect((*resolved)->source, cancellation);
+    if (!inspected) {
+        return std::unexpected(make_error(
+            inspected.error().kind == SparseErrorKind::Cancelled
+                ? ArtifactSourceErrorKind::Cancelled
+                : ArtifactSourceErrorKind::InvalidImage,
+            "flash artifact inspection failed: " + inspected.error().message));
+    }
+    return PreflightFlashArtifact{
+        .resolved = std::move(*resolved),
+        .artifact = std::move(*inspected),
+    };
+}
+
+std::expected<PreflightFlashArtifact, ArtifactSourceError>
+preflight_flash_artifact(ArtifactPackageSnapshot& snapshot,
+                         const std::string_view entry_name) {
+    auto resolved = snapshot.resolve(entry_name);
+    if (!resolved) {
+        return std::unexpected(std::move(resolved.error()));
+    }
+    auto inspected =
+        FlashArtifact::inspect((*resolved)->source, snapshot.cancellation());
     if (!inspected) {
         return std::unexpected(make_error(
             inspected.error().kind == SparseErrorKind::Cancelled

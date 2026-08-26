@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <map>
 #include <memory>
 #include <new>
 #include <set>
@@ -189,8 +190,7 @@ read_manifest(const image::ResolvedArtifact& resolved, const std::string_view na
 [[nodiscard]] std::expected<DeterministicUpdatePlan,
                             UpdatePackagePreflightError>
 make_hardcoded_update_plan(
-    image::ArtifactSourceResolver& resolver,
-    const std::filesystem::path& package_directory_or_zip,
+    image::ArtifactPackageSnapshot& snapshot,
     std::vector<PlannedRequirement> requirements,
     const std::stop_token cancellation) {
     DeterministicUpdatePlan plan{.requirements = std::move(requirements)};
@@ -209,8 +209,7 @@ make_hardcoded_update_plan(
                     std::string(specification.image_name)));
             }
 
-            auto resolved = resolver.resolve(
-                package_directory_or_zip, specification.image_name, cancellation);
+            auto resolved = snapshot.resolve(specification.image_name);
             if (!resolved) {
                 if (specification.optional_if_missing &&
                     resolved.error().kind ==
@@ -286,16 +285,20 @@ struct PreparedUpdateSuper final {
 
 [[nodiscard]] std::expected<PreparedUpdateSuper, UpdatePackagePreflightError>
 prepare_update_super(
-    image::ArtifactSourceResolver& resolver,
-    const std::filesystem::path& package_directory_or_zip,
+    image::ArtifactPackageSnapshot& snapshot,
     DeterministicUpdatePlan* plan,
     const std::stop_token cancellation) {
     if (!plan_requires_update_super(*plan)) {
         return PreparedUpdateSuper{};
     }
 
-    auto preflight = image::preflight_flash_artifact(
-        resolver, package_directory_or_zip, kSuperEmptyName, cancellation);
+    if (cancellation.stop_requested()) {
+        return std::unexpected(failure(
+            UpdatePackagePreflightErrorKind::Cancelled,
+            "update package preflight was cancelled",
+            std::string(kSuperEmptyName)));
+    }
+    auto preflight = image::preflight_flash_artifact(snapshot, kSuperEmptyName);
     if (!preflight) {
         if (preflight.error().kind == image::ArtifactSourceErrorKind::NotFound) {
             std::erase_if(plan->tasks, [](const PlannedUpdateTask& task) {
@@ -347,6 +350,16 @@ add_to_aggregate_bytes(
     return {};
 }
 
+[[nodiscard]] std::string ascii_fold(std::string_view value) {
+    std::string folded(value);
+    for (auto& character : folded) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    return folded;
+}
+
 }  // namespace
 
 PreparedSuperArtifact::PreparedSuperArtifact(
@@ -376,8 +389,15 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                                            "update package preflight was cancelled"));
         }
 
-        auto android =
-            resolver.resolve(package_directory_or_zip, kAndroidInfoName, cancellation);
+        auto opened_snapshot =
+            resolver.open_package_snapshot(package_directory_or_zip, cancellation);
+        if (!opened_snapshot) {
+            return std::unexpected(artifact_failure(
+                "update package", std::move(opened_snapshot.error())));
+        }
+        auto snapshot = std::move(*opened_snapshot);
+
+        auto android = snapshot.resolve(kAndroidInfoName);
         if (!android) {
             if (android.error().kind == image::ArtifactSourceErrorKind::NotFound) {
                 return std::unexpected(
@@ -397,8 +417,7 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
 
         std::string fastboot_text;
         bool use_hardcoded_fallback = false;
-        auto fastboot =
-            resolver.resolve(package_directory_or_zip, kFastbootInfoName, cancellation);
+        auto fastboot = snapshot.resolve(kFastbootInfoName);
         if (fastboot) {
             auto contents =
                 read_manifest(**fastboot, kFastbootInfoName,
@@ -427,8 +446,7 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
         DeterministicUpdatePlan plan;
         if (use_hardcoded_fallback) {
             auto fallback = make_hardcoded_update_plan(
-                resolver, package_directory_or_zip,
-                std::move(parsed->requirements), cancellation);
+                snapshot, std::move(parsed->requirements), cancellation);
             if (!fallback) {
                 return std::unexpected(std::move(fallback.error()));
             }
@@ -438,7 +456,7 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
         }
 
         auto prepared_super = prepare_update_super(
-            resolver, package_directory_or_zip, &plan, cancellation);
+            snapshot, &plan, cancellation);
         if (!prepared_super) {
             return std::unexpected(std::move(prepared_super.error()));
         }
@@ -452,6 +470,7 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
         std::vector<std::string> artifact_names;
         artifact_names.reserve(plan.tasks.size());
         std::set<std::string, std::less<>> unique_names;
+        std::map<std::string, std::string, std::less<>> folded_names;
         for (const auto& task : plan.tasks) {
             if (!task_references_artifact(task) ||
                 unique_names.contains(task.artifact)) {
@@ -461,6 +480,23 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                 return std::unexpected(failure(
                     UpdatePackagePreflightErrorKind::LimitExceeded,
                     "update plan exceeds the configured unique artifact limit"));
+            }
+            const auto folded = ascii_fold(task.artifact);
+            if (const auto [position, inserted] =
+                    folded_names.emplace(folded, task.artifact);
+                !inserted) {
+                auto error = failure(
+                    UpdatePackagePreflightErrorKind::Artifact,
+                    "update plan contains cross-platform case-folding artifact "
+                    "aliases: " +
+                        position->second + " and " + task.artifact,
+                    task.artifact);
+                error.artifact_error = image::ArtifactSourceError{
+                    .kind = image::ArtifactSourceErrorKind::UnsafePath,
+                    .message =
+                        "artifact names collide on case-insensitive filesystems",
+                };
+                return std::unexpected(std::move(error));
             }
             unique_names.insert(task.artifact);
             artifact_names.push_back(task.artifact);
@@ -485,8 +521,7 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                     failure(UpdatePackagePreflightErrorKind::Cancelled,
                             "update package preflight was cancelled", name));
             }
-            auto preflight = image::preflight_flash_artifact(
-                resolver, package_directory_or_zip, name, cancellation);
+            auto preflight = image::preflight_flash_artifact(snapshot, name);
             if (!preflight) {
                 return std::unexpected(
                     artifact_failure(name, std::move(preflight.error())));
@@ -523,6 +558,11 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                 !counted) {
                 return std::unexpected(std::move(counted.error()));
             }
+        }
+
+        if (auto unchanged = snapshot.verify_unchanged(); !unchanged) {
+            return std::unexpected(artifact_failure(
+                "update package", std::move(unchanged.error())));
         }
 
         const bool requires_device_validation = !plan.requirements.empty();

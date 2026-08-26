@@ -627,21 +627,160 @@ void duplicate_references_share_one_immutable_materialization() {
     write_text(package / "images/shared.img", "shared-payload");
 
     ArtifactSourceResolver resolver;
-    auto prewarmed = resolver.resolve(package, "images/shared.img");
-    CHECK(prewarmed);
     auto prepared = preflight_update_package(resolver, package, false);
     CHECK(prepared);
     CHECK(prepared->plan.tasks.size() == 2U);
     CHECK(prepared->artifacts.size() == 1U);
-    CHECK(prepared->artifacts[0].resolved == *prewarmed);
     CHECK(prepared->artifacts[0].artifact.metadata().transfer_size == 14U);
-    CHECK(sha256_hex(prepared->artifacts[0].resolved->sha256) ==
-          sha256_hex((*prewarmed)->sha256));
+    const auto immutable_hash =
+        sha256_hex(prepared->artifacts[0].resolved->sha256);
 
     std::filesystem::remove(package / "images/shared.img");
     auto repeated = preflight_update_package(resolver, package, false);
-    CHECK(repeated);
-    CHECK(repeated->artifacts[0].resolved == prepared->artifacts[0].resolved);
+    CHECK(!repeated);
+    CHECK(repeated.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(sha256_hex(prepared->artifacts[0].resolved->sha256) == immutable_hash);
+}
+
+void zip_replacement_between_entries_fails_closed_after_one_inventory() {
+    TemporaryDirectory temporary;
+    const std::array original_entries{
+        ZipEntry{.name = "android-info.txt", .payload = "product=atlas\n"},
+        ZipEntry{
+            .name = "fastboot-info.txt",
+            .payload = "flash boot boot.img\n",
+        },
+        ZipEntry{.name = "boot.img", .payload = "trusted-image"},
+    };
+    const auto archive = write_zip(temporary, original_entries, "replace.zip");
+    const std::array replacement_entries{
+        ZipEntry{.name = "android-info.txt", .payload = "product=atlas\n"},
+        ZipEntry{
+            .name = "fastboot-info.txt",
+            .payload = "flash boot boot.img\n",
+        },
+        ZipEntry{.name = "boot.img", .payload = "replacement-image-is-different"},
+    };
+    const auto replacement_archive =
+        write_zip(temporary, replacement_entries, "replacement-source.zip");
+
+    std::atomic<std::uint32_t> inventories{};
+    std::atomic<bool> replaced{};
+    ArtifactSourceLimits limits;
+    limits.archive_reader_observer = [&] {
+        inventories.fetch_add(1U, std::memory_order_relaxed);
+    };
+    limits.package_entry_observer = [&](const std::string_view name) {
+        if (name == "fastboot-info.txt" &&
+            !replaced.exchange(true, std::memory_order_relaxed)) {
+            std::error_code filesystem_error;
+            if (!std::filesystem::remove(archive, filesystem_error) ||
+                filesystem_error) {
+                throw CheckFailure("unable to remove ZIP replacement target");
+            }
+            std::filesystem::rename(
+                replacement_archive, archive, filesystem_error);
+            if (filesystem_error) {
+                throw CheckFailure("unable to install ZIP replacement fixture");
+            }
+        }
+    };
+    ArtifactSourceResolver resolver(limits);
+    auto prepared = preflight_update_package(resolver, archive, false);
+    CHECK(!prepared);
+    CHECK(prepared.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(prepared.error().artifact_error.has_value());
+    CHECK(prepared.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::Integrity);
+    CHECK(replaced.load(std::memory_order_relaxed));
+    CHECK(inventories.load(std::memory_order_relaxed) == 1U);
+}
+
+void directory_names_are_exact_and_case_folded_deterministically() {
+    TemporaryDirectory temporary;
+
+    const auto wrong_manifest = temporary.path() / "wrong-manifest";
+    std::filesystem::create_directory(wrong_manifest);
+    write_text(wrong_manifest / "ANDROID-INFO.TXT", "product=atlas\n");
+    ArtifactSourceResolver wrong_manifest_resolver;
+    auto manifest =
+        preflight_update_package(wrong_manifest_resolver, wrong_manifest, false);
+    CHECK(!manifest);
+    CHECK(manifest.error().kind ==
+          UpdatePackagePreflightErrorKind::MissingAndroidInfo);
+
+    const auto wrong_artifact = temporary.path() / "wrong-artifact";
+    create_directory_package(
+        wrong_artifact, "", "flash boot images/boot.img\n");
+    write_text(wrong_artifact / "images/Boot.img", "boot");
+    ArtifactSourceResolver wrong_artifact_resolver;
+    auto artifact =
+        preflight_update_package(wrong_artifact_resolver, wrong_artifact, false);
+    CHECK(!artifact);
+    CHECK(artifact.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(artifact.error().artifact_error.has_value());
+    CHECK(artifact.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::NotFound);
+
+    const auto aliased_plan = temporary.path() / "aliased-plan";
+    create_directory_package(
+        aliased_plan, "",
+        "flash boot images/Boot.img\nflash vendor images/boot.img\n");
+    write_text(aliased_plan / "images/Boot.img", "boot");
+    ArtifactSourceResolver aliased_resolver;
+    auto aliases =
+        preflight_update_package(aliased_resolver, aliased_plan, false);
+    CHECK(!aliases);
+    CHECK(aliases.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(aliases.error().artifact_error.has_value());
+    CHECK(aliases.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::UnsafePath);
+
+    const auto physical_alias = temporary.path() / "physical-alias";
+    create_directory_package(
+        physical_alias, "", "flash boot images/Boot.img\n");
+    write_text(physical_alias / "images/Boot.img", "upper");
+    write_text(physical_alias / "images/boot.img", "lower");
+    std::size_t image_entries = 0U;
+    for (const auto& ignored :
+         std::filesystem::directory_iterator(physical_alias / "images")) {
+        (void)ignored;
+        ++image_entries;
+    }
+    if (image_entries == 2U) {
+        ArtifactSourceResolver physical_resolver;
+        auto physical =
+            preflight_update_package(physical_resolver, physical_alias, false);
+        CHECK(!physical);
+        CHECK(physical.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+        CHECK(physical.error().artifact_error.has_value());
+        CHECK(physical.error().artifact_error->kind ==
+              ArtifactSourceErrorKind::UnsafePath);
+    }
+}
+
+void one_absolute_deadline_covers_all_snapshot_entries() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "deadline";
+    create_directory_package(package, "",
+                             "flash boot boot.img\n");
+    write_text(package / "boot.img", "boot");
+
+    std::atomic<std::uint32_t> observed{};
+    ArtifactSourceLimits limits;
+    limits.max_elapsed = std::chrono::milliseconds(300);
+    limits.package_entry_observer = [&](const std::string_view) {
+        observed.fetch_add(1U, std::memory_order_relaxed);
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    };
+    ArtifactSourceResolver resolver(limits);
+    auto prepared = preflight_update_package(resolver, package, false);
+    CHECK(!prepared);
+    CHECK(prepared.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(prepared.error().artifact_error.has_value());
+    CHECK(prepared.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::TimedOut);
+    CHECK(observed.load(std::memory_order_relaxed) >= 2U);
 }
 
 void transport_free_tasks_and_device_requirements_remain_explicit() {
@@ -755,7 +894,9 @@ void update_super_present_failures_abort_the_complete_preflight() {
     CHECK(!permission_error);
     CHECK(!io);
     CHECK(io.error().kind == UpdatePackagePreflightErrorKind::Artifact);
-    CHECK(io.error().artifact == "super_empty.img");
+    // The immutable directory snapshot inventories every entry before parsing
+    // the manifest, so an unreadable entry fails at the package boundary.
+    CHECK(io.error().artifact == "update package");
     CHECK(io.error().artifact_error.has_value());
     CHECK(io.error().artifact_error->kind == ArtifactSourceErrorKind::Io);
 #endif
@@ -764,20 +905,18 @@ void update_super_present_failures_abort_the_complete_preflight() {
     create_directory_package(cancelled_package, "", "update-super\n");
     write_bytes(cancelled_package / "super_empty.img", super_empty);
     std::stop_source cancellation;
-    std::atomic<bool> cancel_materialization{};
+    std::atomic<std::size_t> cancellation_reservations{};
     ArtifactSourceLimits cancellation_limits;
     cancellation_limits.available_space_provider =
         [&](const std::filesystem::path&)
         -> std::expected<std::uint64_t, std::error_code> {
-        if (cancel_materialization.load(std::memory_order_acquire)) {
+        if (cancellation_reservations.fetch_add(
+                1U, std::memory_order_acq_rel) == 2U) {
             cancellation.request_stop();
         }
         return 1ULL << 50U;
     };
     ArtifactSourceResolver cancellation_resolver(cancellation_limits);
-    CHECK(cancellation_resolver.resolve(cancelled_package, "android-info.txt"));
-    CHECK(cancellation_resolver.resolve(cancelled_package, "fastboot-info.txt"));
-    cancel_materialization.store(true, std::memory_order_release);
     auto cancelled = preflight_update_package(
         cancellation_resolver, cancelled_package, false, {},
         cancellation.get_token());
@@ -791,21 +930,19 @@ void update_super_present_failures_abort_the_complete_preflight() {
     const auto timed_package = temporary.path() / "timed-super";
     create_directory_package(timed_package, "", "update-super\n");
     write_bytes(timed_package / "super_empty.img", super_empty);
-    std::atomic<bool> delay_materialization{};
+    std::atomic<std::size_t> timeout_reservations{};
     ArtifactSourceLimits timeout_limits;
     timeout_limits.max_elapsed = std::chrono::milliseconds(500);
     timeout_limits.available_space_provider =
         [&](const std::filesystem::path&)
         -> std::expected<std::uint64_t, std::error_code> {
-        if (delay_materialization.load(std::memory_order_acquire)) {
+        if (timeout_reservations.fetch_add(
+                1U, std::memory_order_acq_rel) == 2U) {
             std::this_thread::sleep_for(std::chrono::milliseconds(650));
         }
         return 1ULL << 50U;
     };
     ArtifactSourceResolver timeout_resolver(timeout_limits);
-    CHECK(timeout_resolver.resolve(timed_package, "android-info.txt"));
-    CHECK(timeout_resolver.resolve(timed_package, "fastboot-info.txt"));
-    delay_materialization.store(true, std::memory_order_release);
     auto timed =
         preflight_update_package(timeout_resolver, timed_package, false);
     CHECK(!timed);
@@ -926,6 +1063,12 @@ int main() {
              inactive_wipe_paths_are_validated_but_unselected_artifacts_are_not_opened},
         Test{"single materialization for duplicate references",
              duplicate_references_share_one_immutable_materialization},
+        Test{"ZIP replacement fails closed",
+             zip_replacement_between_entries_fails_closed_after_one_inventory},
+        Test{"directory exact and folded names",
+             directory_names_are_exact_and_case_folded_deterministically},
+        Test{"shared snapshot deadline",
+             one_absolute_deadline_covers_all_snapshot_entries},
         Test{"transport-free tasks and device requirements",
              transport_free_tasks_and_device_requirements_remain_explicit},
         Test{"directory and ZIP parity",
