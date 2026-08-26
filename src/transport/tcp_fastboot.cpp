@@ -34,18 +34,29 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+[[nodiscard]] Clock::time_point deadline_from(
+    const Clock::time_point started,
+    const std::chrono::milliseconds timeout) noexcept {
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return started;
+    }
+    const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::time_point::max() - started);
+    return timeout >= room ? Clock::time_point::max() : started + timeout;
+}
+
+[[nodiscard]] bool deadline_expired_at(
+    const Clock::time_point deadline,
+    const Clock::time_point observed) noexcept {
+    return deadline != Clock::time_point::max() && observed >= deadline;
+}
+
 class Deadline {
 public:
-    explicit Deadline(std::chrono::milliseconds timeout) {
-        const auto now = Clock::now();
-        if (timeout <= std::chrono::milliseconds::zero()) {
-            end_ = now;
-            return;
-        }
-        const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(
-            Clock::time_point::max() - now);
-        end_ = timeout >= room ? Clock::time_point::max() : now + timeout;
-    }
+    explicit Deadline(const std::chrono::milliseconds timeout)
+        : end_(deadline_from(Clock::now(), timeout)) {}
+
+    explicit Deadline(const Clock::time_point absolute_end) : end_(absolute_end) {}
 
     [[nodiscard]] std::chrono::milliseconds remaining() const noexcept {
         if (end_ == Clock::time_point::max()) {
@@ -59,7 +70,7 @@ public:
     }
 
     [[nodiscard]] bool expired() const noexcept {
-        return end_ != Clock::time_point::max() && Clock::now() >= end_;
+        return deadline_expired_at(end_, Clock::now());
     }
 
 private:
@@ -347,6 +358,30 @@ void close_native_socket(const NativeSocketHandle socket) noexcept {
 
 #endif
 
+class NativeSocketGuard {
+public:
+    explicit NativeSocketGuard(const NativeSocketHandle socket) noexcept
+        : socket_(socket) {}
+
+    ~NativeSocketGuard() noexcept {
+        close_native_socket(socket_);
+    }
+
+    NativeSocketGuard(const NativeSocketGuard&) = delete;
+    NativeSocketGuard& operator=(const NativeSocketGuard&) = delete;
+
+    [[nodiscard]] NativeSocketHandle get() const noexcept {
+        return socket_;
+    }
+
+    [[nodiscard]] NativeSocketHandle release() noexcept {
+        return std::exchange(socket_, kInvalidNativeSocket);
+    }
+
+private:
+    NativeSocketHandle socket_{kInvalidNativeSocket};
+};
+
 [[nodiscard]] std::string native_error_message(const int error) {
     return std::system_category().message(error);
 }
@@ -566,6 +601,38 @@ private:
 };
 
 }  // namespace
+
+detail::ConnectResolvePhaseResult detail::run_connect_resolve_phase(
+    const std::chrono::milliseconds timeout,
+    const std::stop_token cancellation,
+    const ConnectResolveWork resolve,
+    void* const resolve_context,
+    const ConnectClockNow now,
+    void* const clock_context) noexcept {
+    const auto started = now(clock_context);
+    const auto deadline = deadline_from(started, timeout);
+    if (cancellation.stop_requested()) {
+        return {
+            .deadline = deadline,
+            .cancelled = true,
+        };
+    }
+    if (deadline_expired_at(deadline, started)) {
+        return {
+            .deadline = deadline,
+            .expired = true,
+        };
+    }
+
+    resolve(resolve_context);
+    const auto observed = now(clock_context);
+    return {
+        .deadline = deadline,
+        .resolver_ran = true,
+        .cancelled = cancellation.stop_requested(),
+        .expired = deadline_expired_at(deadline, observed),
+    };
+}
 
 std::expected<TcpEndpoint, TcpError> parse_tcp_endpoint(
     const std::string_view text,
@@ -874,13 +941,6 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             .message = "native TCP endpoint is empty or has port zero",
         });
     }
-    if (cancellation.stop_requested()) {
-        return std::unexpected(TcpError{
-            .kind = TcpErrorKind::Cancelled,
-            .message = "TCP connect was cancelled before resolution",
-        });
-    }
-
 #ifdef _WIN32
     static WinsockRuntime winsock;
     if (winsock.error() != 0) {
@@ -898,8 +958,50 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
     hints.ai_protocol = IPPROTO_TCP;
     addrinfo* addresses = nullptr;
     const auto service = std::to_string(endpoint.port);
-    const auto resolve_result = getaddrinfo(
-        endpoint.host.c_str(), service.c_str(), &hints, &addresses);
+    struct ResolveContext {
+        const char* host;
+        const char* service;
+        const addrinfo* hints;
+        addrinfo** addresses;
+        int result{0};
+    } resolve_context{
+        .host = endpoint.host.c_str(),
+        .service = service.c_str(),
+        .hints = &hints,
+        .addresses = &addresses,
+    };
+    const auto resolve = [](void* const opaque) noexcept {
+        auto& context = *static_cast<ResolveContext*>(opaque);
+        context.result = getaddrinfo(
+            context.host, context.service, context.hints, context.addresses);
+    };
+    const auto now = [](void*) noexcept {
+        return Clock::now();
+    };
+    const auto resolve_phase = detail::run_connect_resolve_phase(
+        timeout,
+        cancellation,
+        resolve,
+        &resolve_context,
+        now,
+        nullptr);
+    const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> address_list(
+        addresses, &freeaddrinfo);
+    if (resolve_phase.cancelled) {
+        return std::unexpected(TcpError{
+            .kind = TcpErrorKind::Cancelled,
+            .message = resolve_phase.resolver_ran
+                ? "TCP connect was cancelled during name resolution"
+                : "TCP connect was cancelled before name resolution",
+        });
+    }
+    if (resolve_phase.expired) {
+        return std::unexpected(TcpError{
+            .kind = TcpErrorKind::Timeout,
+            .message = "TCP connect deadline expired during name resolution",
+        });
+    }
+    const auto resolve_result = resolve_context.result;
     if (resolve_result != 0) {
         return std::unexpected(TcpError{
             .kind = TcpErrorKind::ResolveFailed,
@@ -908,10 +1010,8 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
                        std::to_string(resolve_result),
         });
     }
-    const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> address_list(
-        addresses, &freeaddrinfo);
 
-    Deadline deadline(timeout);
+    Deadline deadline(resolve_phase.deadline);
     int last_error = 0;
     std::string last_detail = "no address candidate connected";
     for (auto* address = address_list.get(); address != nullptr; address = address->ai_next) {
@@ -928,26 +1028,27 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             });
         }
 
-        const auto native_socket = ::socket(
-            address->ai_family, address->ai_socktype, address->ai_protocol);
-        if (native_socket == kInvalidNativeSocket) {
+        NativeSocketGuard native_socket(::socket(
+            address->ai_family, address->ai_socktype, address->ai_protocol));
+        if (native_socket.get() == kInvalidNativeSocket) {
             last_error = last_socket_error();
             last_detail = native_error_message(last_error);
             continue;
         }
-        if (!set_nonblocking(native_socket)) {
+        if (!set_nonblocking(native_socket.get())) {
             last_error = last_socket_error();
             last_detail = native_error_message(last_error);
-            close_native_socket(native_socket);
             continue;
         }
 
 #ifdef _WIN32
         const auto connect_result = ::connect(
-            native_socket, address->ai_addr, static_cast<int>(address->ai_addrlen));
+            native_socket.get(),
+            address->ai_addr,
+            static_cast<int>(address->ai_addrlen));
 #else
         const auto connect_result = ::connect(
-            native_socket,
+            native_socket.get(),
             address->ai_addr,
             static_cast<socklen_t>(address->ai_addrlen));
 #endif
@@ -956,24 +1057,21 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             if (!socket_error_connecting(connect_error)) {
                 last_error = connect_error;
                 last_detail = native_error_message(last_error);
-                close_native_socket(native_socket);
                 continue;
             }
 
             auto ready = wait_for_socket(
-                native_socket,
+                native_socket.get(),
                 true,
                 deadline,
                 CancellationSignal{.external = cancellation});
             if (ready.status == SocketIoStatus::Timeout) {
-                close_native_socket(native_socket);
                 return std::unexpected(TcpError{
                     .kind = TcpErrorKind::Timeout,
                     .message = "TCP connect deadline expired",
                 });
             }
             if (ready.status == SocketIoStatus::Cancelled) {
-                close_native_socket(native_socket);
                 return std::unexpected(TcpError{
                     .kind = TcpErrorKind::Cancelled,
                     .message = "TCP connect was cancelled",
@@ -982,7 +1080,6 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             if (ready.status != SocketIoStatus::Ok) {
                 last_error = ready.native_error;
                 last_detail = ready.detail;
-                close_native_socket(native_socket);
                 continue;
             }
 
@@ -990,7 +1087,7 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
 #ifdef _WIN32
             int pending_error_size = sizeof(pending_error);
             const auto option_result = getsockopt(
-                native_socket,
+                native_socket.get(),
                 SOL_SOCKET,
                 SO_ERROR,
                 reinterpret_cast<char*>(&pending_error),
@@ -998,12 +1095,15 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
 #else
             socklen_t pending_error_size = sizeof(pending_error);
             const auto option_result = getsockopt(
-                native_socket, SOL_SOCKET, SO_ERROR, &pending_error, &pending_error_size);
+                native_socket.get(),
+                SOL_SOCKET,
+                SO_ERROR,
+                &pending_error,
+                &pending_error_size);
 #endif
             if (option_result != 0 || pending_error != 0) {
                 last_error = option_result != 0 ? last_socket_error() : pending_error;
                 last_detail = native_error_message(last_error);
-                close_native_socket(native_socket);
                 continue;
             }
         }
@@ -1011,18 +1111,22 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
         int enabled = 1;
 #ifdef _WIN32
         setsockopt(
-            native_socket,
+            native_socket.get(),
             IPPROTO_TCP,
             TCP_NODELAY,
             reinterpret_cast<const char*>(&enabled),
             sizeof(enabled));
 #else
-        setsockopt(native_socket, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled));
+        setsockopt(
+            native_socket.get(), IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled));
 #ifdef SO_NOSIGPIPE
-        setsockopt(native_socket, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled));
+        setsockopt(
+            native_socket.get(), SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled));
 #endif
 #endif
-        return std::unique_ptr<ITcpSocket>(new NativeTcpSocket(native_socket));
+        auto owned_socket = std::make_unique<NativeTcpSocket>(native_socket.get());
+        static_cast<void>(native_socket.release());
+        return std::unique_ptr<ITcpSocket>(std::move(owned_socket));
     }
 
     return std::unexpected(TcpError{

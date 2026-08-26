@@ -45,6 +45,31 @@ struct TcpEndpoint {
     std::uint16_t port{kFastbootTcpDefaultPort};
 };
 
+namespace detail {
+
+using ConnectClock = std::chrono::steady_clock;
+using ConnectClockNow = ConnectClock::time_point (*)(void*) noexcept;
+using ConnectResolveWork = void (*)(void*) noexcept;
+
+// Internal deterministic seam. Production and tests both use this helper so
+// name resolution consumes the same absolute connect deadline as socket setup.
+struct ConnectResolvePhaseResult {
+    ConnectClock::time_point deadline;
+    bool resolver_ran{false};
+    bool cancelled{false};
+    bool expired{false};
+};
+
+[[nodiscard]] ConnectResolvePhaseResult run_connect_resolve_phase(
+    std::chrono::milliseconds timeout,
+    std::stop_token cancellation,
+    ConnectResolveWork resolve,
+    void* resolve_context,
+    ConnectClockNow now,
+    void* clock_context) noexcept;
+
+}  // namespace detail
+
 [[nodiscard]] std::expected<TcpEndpoint, TcpError> parse_tcp_endpoint(
     std::string_view text,
     std::uint16_t default_port = kFastbootTcpDefaultPort);

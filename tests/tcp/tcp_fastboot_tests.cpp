@@ -33,9 +33,12 @@ using kairosboot::transport::SocketIoStatus;
 using kairosboot::transport::TcpErrorKind;
 using kairosboot::transport::TcpFastbootTransport;
 using kairosboot::transport::TcpTransportOptions;
+using kairosboot::transport::connect_native_tcp_socket;
 using kairosboot::transport::decode_tcp_frame_length;
 using kairosboot::transport::encode_tcp_frame_length;
 using kairosboot::transport::parse_tcp_endpoint;
+using kairosboot::transport::detail::ConnectClock;
+using kairosboot::transport::detail::run_connect_resolve_phase;
 using kairosboot::transport::test::ScriptState;
 using kairosboot::transport::test::make_scripted_socket;
 using kairosboot::transport::test::to_bytes;
@@ -135,6 +138,26 @@ private:
     bool handshake_sent_{false};
 };
 
+struct ResolvePhaseProbe {
+    ConnectClock::time_point now;
+    std::chrono::milliseconds resolution_time{0};
+    std::stop_source* cancellation{nullptr};
+    std::size_t calls{0};
+};
+
+[[nodiscard]] ConnectClock::time_point probe_clock_now(void* const opaque) noexcept {
+    return static_cast<ResolvePhaseProbe*>(opaque)->now;
+}
+
+void run_probe_resolver(void* const opaque) noexcept {
+    auto& probe = *static_cast<ResolvePhaseProbe*>(opaque);
+    ++probe.calls;
+    probe.now += probe.resolution_time;
+    if (probe.cancellation != nullptr) {
+        probe.cancellation->request_stop();
+    }
+}
+
 void frame_length_codec_is_big_endian() {
     const std::array values{
         std::uint64_t{0},
@@ -207,6 +230,114 @@ void endpoint_parser_rejects_ambiguous_or_invalid_forms() {
     }
     CHECK(!parse_tcp_endpoint("device", 0));
     CHECK(!parse_tcp_endpoint(std::string_view{"host\0evil", 9}));
+}
+
+void connect_deadline_includes_name_resolution_time() {
+    const auto started = ConnectClock::time_point{10s};
+    ResolvePhaseProbe slow{
+        .now = started,
+        .resolution_time = 6s,
+    };
+    const auto expired = run_connect_resolve_phase(
+        5s,
+        {},
+        run_probe_resolver,
+        &slow,
+        probe_clock_now,
+        &slow);
+    CHECK(expired.resolver_ran);
+    CHECK(expired.expired);
+    CHECK(!expired.cancelled);
+    CHECK(expired.deadline == started + 5s);
+    CHECK(slow.calls == 1);
+
+    ResolvePhaseProbe fast{
+        .now = started,
+        .resolution_time = 2s,
+    };
+    const auto remaining = run_connect_resolve_phase(
+        5s,
+        {},
+        run_probe_resolver,
+        &fast,
+        probe_clock_now,
+        &fast);
+    CHECK(remaining.resolver_ran);
+    CHECK(!remaining.expired);
+    CHECK(remaining.deadline == started + 5s);
+    CHECK(fast.now == started + 2s);
+
+    ResolvePhaseProbe no_budget{
+        .now = started,
+    };
+    const auto already_expired = run_connect_resolve_phase(
+        0ms,
+        {},
+        run_probe_resolver,
+        &no_budget,
+        probe_clock_now,
+        &no_budget);
+    CHECK(already_expired.expired);
+    CHECK(!already_expired.resolver_ran);
+    CHECK(no_budget.calls == 0);
+}
+
+void connect_cancel_is_checked_around_name_resolution() {
+    {
+        std::stop_source cancellation;
+        ResolvePhaseProbe probe{
+            .now = ConnectClock::time_point{10s},
+            .resolution_time = 1s,
+            .cancellation = &cancellation,
+        };
+        const auto result = run_connect_resolve_phase(
+            5s,
+            cancellation.get_token(),
+            run_probe_resolver,
+            &probe,
+            probe_clock_now,
+            &probe);
+        CHECK(result.resolver_ran);
+        CHECK(result.cancelled);
+        CHECK(probe.calls == 1);
+    }
+    {
+        std::stop_source cancellation;
+        cancellation.request_stop();
+        ResolvePhaseProbe probe{
+            .now = ConnectClock::time_point{10s},
+        };
+        const auto result = run_connect_resolve_phase(
+            5s,
+            cancellation.get_token(),
+            run_probe_resolver,
+            &probe,
+            probe_clock_now,
+            &probe);
+        CHECK(!result.resolver_ran);
+        CHECK(result.cancelled);
+        CHECK(probe.calls == 0);
+    }
+}
+
+void native_connect_short_circuits_before_name_resolution() {
+    const kairosboot::transport::TcpEndpoint endpoint{
+        .host = "must-not-resolve.invalid",
+        .port = 5554,
+    };
+    {
+        std::stop_source cancellation;
+        cancellation.request_stop();
+        const auto result = connect_native_tcp_socket(
+            endpoint, 5s, cancellation.get_token());
+        CHECK(!result);
+        CHECK(result.error().kind == TcpErrorKind::Cancelled);
+    }
+    {
+        const auto result = connect_native_tcp_socket(endpoint, 0ms);
+        CHECK(!result);
+        CHECK(result.error().kind == TcpErrorKind::Timeout);
+    }
 }
 
 void handshake_completes_partial_send_and_receive() {
@@ -696,6 +827,12 @@ int main() {
          endpoint_parser_accepts_ipv4_names_and_ipv6},
         {"endpoint parser rejects ambiguous or invalid forms",
          endpoint_parser_rejects_ambiguous_or_invalid_forms},
+        {"connect deadline includes name resolution time",
+         connect_deadline_includes_name_resolution_time},
+        {"connect cancel is checked around name resolution",
+         connect_cancel_is_checked_around_name_resolution},
+        {"native connect short circuits before name resolution",
+         native_connect_short_circuits_before_name_resolution},
         {"handshake completes partial send and receive",
          handshake_completes_partial_send_and_receive},
         {"handshake accepts a newer peer version", handshake_accepts_a_newer_peer_version},

@@ -9,8 +9,9 @@ namespace kairosboot::transport::test {
 std::vector<std::byte> to_bytes(const std::string_view value) {
     std::vector<std::byte> result;
     result.reserve(value.size());
-    for (const unsigned char character : value) {
-        result.push_back(static_cast<std::byte>(character));
+    for (const char character : value) {
+        result.push_back(
+            static_cast<std::byte>(static_cast<unsigned char>(character)));
     }
     return result;
 }
@@ -137,7 +138,10 @@ SocketIoResult ScriptedSocket::receive_some(
         destination.size(),
         step.bytes.size(),
     });
-    std::ranges::copy_n(step.bytes.begin(), copied, destination.begin());
+    std::ranges::copy_n(
+        step.bytes.begin(),
+        static_cast<std::ptrdiff_t>(copied),
+        destination.begin());
     return step.result;
 }
 
