@@ -32,6 +32,12 @@ implementedSlices:
   - id: image.android-sparse
     status: implemented-core
     evidence: tests/sparse/sparse_image_tests.cpp
+  - id: plan.update-manifest-parser
+    status: implemented-core
+    scope: offline-manifest-parse-only
+    evidence:
+      - tests/fastboot/update_plan_tests.cpp
+      - tests/compat/aosp-update-plan-37.0.1.json
 
 pendingInventories:
   - image-types

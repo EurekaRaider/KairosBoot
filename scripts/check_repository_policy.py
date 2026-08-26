@@ -117,6 +117,11 @@ def check_compatibility_baseline() -> None:
     inventory = json.loads(
         (ROOT / "compat" / "generated-inventory.json").read_text(encoding="utf-8")
     )
+    update_plan_golden = json.loads(
+        (ROOT / "tests" / "compat" / "aosp-update-plan-37.0.1.json").read_text(
+            encoding="utf-8"
+        )
+    )
     if lock.get("baselineStatus") != "locked":
         fail("AOSP compatibility baseline must be locked")
     version = lock.get("aosp", {}).get("platformToolsVersion")
@@ -132,6 +137,59 @@ def check_compatibility_baseline() -> None:
         for field in ("sha256", "fastbootSha256"):
             if SHA256.fullmatch(archive.get(field, "")) is None:
                 fail(f"{platform} Platform-Tools {field} is not SHA-256")
+
+    if (
+        update_plan_golden.get("documentType")
+        != "kairosboot.aosp-update-plan-golden"
+        or update_plan_golden.get("schemaVersion") != 1
+    ):
+        fail("update-plan golden has an unsupported document contract")
+    update_oracle = update_plan_golden.get("oracle", {})
+    if update_oracle.get("platformToolsVersion") != version:
+        fail("update-plan golden and AOSP lock use different versions")
+    if update_oracle.get("aospSourceCommit") != lock.get("aosp", {}).get(
+        "sourceCommit"
+    ):
+        fail("update-plan golden and AOSP lock use different source commits")
+    if update_oracle.get("binaryCrossCheck", {}).get(
+        "darwinFastbootSha256"
+    ) != archives["darwin"].get("fastbootSha256"):
+        fail("update-plan golden and AOSP lock use different fastboot binaries")
+
+    update_plan_slices = inventory.get("implementedPlanSlices", [])
+    expected_update_plan_slice = {
+        "id": "update-manifest-parser",
+        "status": "implemented-core",
+        "scope": "offline-manifest-parse-only",
+        "evidence": [
+            "tests/fastboot/update_plan_tests.cpp",
+            "tests/compat/aosp-update-plan-37.0.1.json",
+        ],
+        "excluded": update_plan_golden.get("scope", {}).get("excluded", []),
+    }
+    if update_plan_slices != [expected_update_plan_slice]:
+        fail("compatibility inventory must lock the offline update-plan slice")
+
+    deviation_descriptions = [
+        deviation.get("description")
+        for deviation in inventory.get("intentionalDeviations", [])
+        if isinstance(deviation, dict)
+        and deviation.get("scope") == "update-manifest-parser"
+    ]
+    if deviation_descriptions != update_plan_golden.get("intentionalDeviations"):
+        fail("update-plan intentional deviations differ from the locked golden")
+
+    compatibility = (ROOT / "compat" / "compatibility.yaml").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "id: plan.update-manifest-parser",
+        "scope: offline-manifest-parse-only",
+        "tests/fastboot/update_plan_tests.cpp",
+        "tests/compat/aosp-update-plan-37.0.1.json",
+    ):
+        if marker not in compatibility:
+            fail(f"compatibility matrix is missing update-plan evidence: {marker}")
     libusb = lock.get("libusb", {})
     if libusb.get("requiredVersion") != "1.0.30":
         fail("libusb baseline must remain fixed at 1.0.30")

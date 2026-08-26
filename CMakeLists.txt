@@ -131,6 +131,7 @@ add_library(
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
   src/fastboot/primitive_service.cpp
+  src/fastboot/update_plan.cpp
   src/fleet/controller_scheduler.cpp
   src/image/file_source.cpp
   src/image/sha256.cpp
@@ -345,6 +346,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_variable_parser_tests)
   add_test(NAME variable_parser COMMAND kairosboot_variable_parser_tests)
   set_tests_properties(variable_parser PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_update_plan_tests
+                 tests/fastboot/update_plan_tests.cpp)
+  target_compile_features(kairosboot_update_plan_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_update_plan_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_update_plan_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_update_plan_tests)
+  add_test(NAME update_plan COMMAND kairosboot_update_plan_tests)
+  set_tests_properties(update_plan PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_device_selection_tests
                  tests/api/device_selection_tests.cpp)
