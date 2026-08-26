@@ -87,8 +87,14 @@ class TemporaryDirectory final {
     TemporaryDirectory() {
         static std::atomic<std::uint64_t> sequence{};
         const auto suffix = sequence.fetch_add(1U, std::memory_order_relaxed);
+#if defined(_WIN32)
+        const auto process_id = static_cast<std::uint64_t>(::GetCurrentProcessId());
+#else
+        const auto process_id = static_cast<std::uint64_t>(::getpid());
+#endif
         path_ = std::filesystem::temp_directory_path() /
-                ("kairosboot-artifact-source-test-" + std::to_string(suffix));
+                ("kairosboot-artifact-source-test-" +
+                 std::to_string(process_id) + "-" + std::to_string(suffix));
         std::filesystem::create_directory(path_);
     }
 
@@ -151,6 +157,23 @@ struct ZipFixtureEntry final {
     std::uint16_t version_made_by{static_cast<std::uint16_t>((3U << 8U) | 20U)};
     std::uint32_t external_attributes{0100000U << 16U};
 };
+
+[[nodiscard]] ZipFixtureEntry zip_fixture_entry(std::string name,
+                                                std::string payload) {
+    ZipFixtureEntry entry{};
+    entry.name = std::move(name);
+    entry.payload = std::move(payload);
+    return entry;
+}
+
+template <typename Configure>
+[[nodiscard]] ZipFixtureEntry zip_fixture_entry(std::string name,
+                                                std::string payload,
+                                                Configure&& configure) {
+    auto entry = zip_fixture_entry(std::move(name), std::move(payload));
+    std::forward<Configure>(configure)(entry);
+    return entry;
+}
 
 [[nodiscard]] std::vector<std::byte> as_bytes(const std::string_view value) {
     std::vector<std::byte> result;
@@ -349,8 +372,8 @@ void direct_and_directory_sources_are_immutable_snapshots() {
 void stored_non_first_entry_is_materialized_and_hashed() {
     TemporaryDirectory temporary;
     const std::array entries{
-        ZipFixtureEntry{.name = "ignored.txt", .payload = "ignore"},
-        ZipFixtureEntry{.name = "images/system.img", .payload = "system-payload"},
+        zip_fixture_entry("ignored.txt", "ignore"),
+        zip_fixture_entry("images/system.img", "system-payload"),
     };
     const auto archive = write_zip(temporary, entries);
     ArtifactSourceResolver resolver;
@@ -379,12 +402,10 @@ void deflate_and_zip64_entries_are_supported() {
         compressed.push_back(static_cast<std::byte>(value));
     }
     const std::array entries{
-        ZipFixtureEntry{
-            .name = "system.img",
-            .payload = payload,
-            .compressed = std::move(compressed),
-            .method = 8U,
-        },
+        zip_fixture_entry("system.img", payload, [&](ZipFixtureEntry& entry) {
+            entry.compressed = std::move(compressed);
+            entry.method = 8U;
+        }),
     };
     const auto archive = write_zip(temporary, entries, true);
     ArtifactSourceResolver resolver;
@@ -396,11 +417,8 @@ void deflate_and_zip64_entries_are_supported() {
 void per_entry_zip64_with_classic_eocd_is_supported_and_validated() {
     TemporaryDirectory valid_temporary;
     const std::array valid_entries{
-        ZipFixtureEntry{
-            .name = "system.img",
-            .payload = "hybrid-zip64-payload",
-            .entry_zip64 = true,
-        },
+        zip_fixture_entry("system.img", "hybrid-zip64-payload",
+                          [](ZipFixtureEntry& entry) { entry.entry_zip64 = true; }),
     };
     const auto valid_archive = write_zip(valid_temporary, valid_entries, false);
     ArtifactSourceResolver valid_resolver;
@@ -410,12 +428,10 @@ void per_entry_zip64_with_classic_eocd_is_supported_and_validated() {
 
     TemporaryDirectory inconsistent_temporary;
     const std::array inconsistent_entries{
-        ZipFixtureEntry{
-            .name = "system.img",
-            .payload = "payload",
-            .zip64_uncompressed_size = 8U,
-            .entry_zip64 = true,
-        },
+        zip_fixture_entry("system.img", "payload", [](ZipFixtureEntry& entry) {
+            entry.zip64_uncompressed_size = 8U;
+            entry.entry_zip64 = true;
+        }),
     };
     const auto inconsistent_archive =
         write_zip(inconsistent_temporary, inconsistent_entries, false);
@@ -430,11 +446,9 @@ void per_entry_zip64_with_classic_eocd_is_supported_and_validated() {
 void crc_corruption_and_truncation_fail_closed() {
     TemporaryDirectory temporary;
     const std::array corrupt_entries{
-        ZipFixtureEntry{
-            .name = "system.img",
-            .payload = "payload",
-            .declared_crc = 0x12345678U,
-        },
+        zip_fixture_entry("system.img", "payload", [](ZipFixtureEntry& entry) {
+            entry.declared_crc = 0x12345678U;
+        }),
     };
     const auto corrupt = write_zip(temporary, corrupt_entries);
     ArtifactSourceResolver resolver;
@@ -444,7 +458,7 @@ void crc_corruption_and_truncation_fail_closed() {
           crc_result.error().kind == ArtifactSourceErrorKind::InvalidArchive);
 
     const std::array valid_entries{
-        ZipFixtureEntry{.name = "system.img", .payload = "payload"},
+        zip_fixture_entry("system.img", "payload"),
     };
     auto bytes = make_zip(valid_entries);
     bytes.pop_back();
@@ -466,7 +480,7 @@ void unsafe_duplicate_and_conflicting_paths_fail_closed() {
     for (const auto& name : unsafe_names) {
         TemporaryDirectory temporary;
         const std::array entries{
-            ZipFixtureEntry{.name = name, .payload = "payload"},
+            zip_fixture_entry(name, "payload"),
         };
         const auto archive = write_zip(temporary, entries);
         ArtifactSourceResolver resolver;
@@ -477,8 +491,8 @@ void unsafe_duplicate_and_conflicting_paths_fail_closed() {
     }
 
     const std::array collision_entries{
-        ZipFixtureEntry{.name = "Images/system.img", .payload = "a"},
-        ZipFixtureEntry{.name = "images/system.img", .payload = "b"},
+        zip_fixture_entry("Images/system.img", "a"),
+        zip_fixture_entry("images/system.img", "b"),
     };
     TemporaryDirectory collision_temp;
     const auto collision = write_zip(collision_temp, collision_entries);
@@ -489,8 +503,8 @@ void unsafe_duplicate_and_conflicting_paths_fail_closed() {
     CHECK(collision_result.error().kind == ArtifactSourceErrorKind::UnsafePath);
 
     const std::array duplicate_entries{
-        ZipFixtureEntry{.name = "system.img", .payload = "a"},
-        ZipFixtureEntry{.name = "system.img", .payload = "b"},
+        zip_fixture_entry("system.img", "a"),
+        zip_fixture_entry("system.img", "b"),
     };
     TemporaryDirectory duplicate_temp;
     const auto duplicate = write_zip(duplicate_temp, duplicate_entries);
@@ -500,8 +514,8 @@ void unsafe_duplicate_and_conflicting_paths_fail_closed() {
     CHECK(duplicate_result.error().kind == ArtifactSourceErrorKind::UnsafePath);
 
     const std::array conflict_entries{
-        ZipFixtureEntry{.name = "images", .payload = "file"},
-        ZipFixtureEntry{.name = "images/system.img", .payload = "payload"},
+        zip_fixture_entry("images", "file"),
+        zip_fixture_entry("images/system.img", "payload"),
     };
     TemporaryDirectory conflict_temp;
     const auto conflict = write_zip(conflict_temp, conflict_entries);
@@ -565,11 +579,9 @@ void source_paths_reject_nul_and_win32_aliases_before_cache_keys() {
 void metadata_features_and_local_name_mismatch_fail_closed() {
     TemporaryDirectory special_temp;
     const std::array special_entries{
-        ZipFixtureEntry{
-            .name = "system.img",
-            .payload = "target",
-            .external_attributes = 0120000U << 16U,
-        },
+        zip_fixture_entry("system.img", "target", [](ZipFixtureEntry& entry) {
+            entry.external_attributes = 0120000U << 16U;
+        }),
     };
     const auto special = write_zip(special_temp, special_entries);
     ArtifactSourceResolver special_resolver;
@@ -579,7 +591,8 @@ void metadata_features_and_local_name_mismatch_fail_closed() {
 
     TemporaryDirectory encrypted_temp;
     const std::array encrypted_entries{
-        ZipFixtureEntry{.name = "system.img", .payload = "x", .flags = 1U},
+        zip_fixture_entry("system.img", "x",
+                          [](ZipFixtureEntry& entry) { entry.flags = 1U; }),
     };
     const auto encrypted = write_zip(encrypted_temp, encrypted_entries);
     ArtifactSourceResolver encrypted_resolver;
@@ -589,7 +602,8 @@ void metadata_features_and_local_name_mismatch_fail_closed() {
 
     TemporaryDirectory method_temp;
     const std::array method_entries{
-        ZipFixtureEntry{.name = "system.img", .payload = "x", .method = 12U},
+        zip_fixture_entry("system.img", "x",
+                          [](ZipFixtureEntry& entry) { entry.method = 12U; }),
     };
     const auto unsupported_method = write_zip(method_temp, method_entries);
     ArtifactSourceResolver method_resolver;
@@ -600,11 +614,9 @@ void metadata_features_and_local_name_mismatch_fail_closed() {
 
     TemporaryDirectory mismatch_temp;
     const std::array mismatch_entries{
-        ZipFixtureEntry{
-            .name = "system.img",
-            .payload = "payload",
-            .local_name = std::string{"vendor.img"},
-        },
+        zip_fixture_entry("system.img", "payload", [](ZipFixtureEntry& entry) {
+            entry.local_name = std::string{"vendor.img"};
+        }),
     };
     const auto mismatch = write_zip(mismatch_temp, mismatch_entries);
     ArtifactSourceResolver mismatch_resolver;
@@ -616,8 +628,8 @@ void metadata_features_and_local_name_mismatch_fail_closed() {
 void entry_ratio_aggregate_disk_and_name_limits_are_enforced() {
     TemporaryDirectory temporary;
     const std::array entries{
-        ZipFixtureEntry{.name = "one.img", .payload = "aa"},
-        ZipFixtureEntry{.name = "two.img", .payload = "bb"},
+        zip_fixture_entry("one.img", "aa"),
+        zip_fixture_entry("two.img", "bb"),
     };
     const auto archive = write_zip(temporary, entries);
 
@@ -659,12 +671,10 @@ void entry_ratio_aggregate_disk_and_name_limits_are_enforced() {
     const std::string large_payload(1'001U, 'a');
     const std::array<std::byte, 1> compressed{std::byte{0}};
     const std::array bomb_entries{
-        ZipFixtureEntry{
-            .name = "bomb.img",
-            .payload = large_payload,
-            .compressed = std::vector(compressed.begin(), compressed.end()),
-            .method = 8U,
-        },
+        zip_fixture_entry("bomb.img", large_payload, [&](ZipFixtureEntry& entry) {
+            entry.compressed = std::vector(compressed.begin(), compressed.end());
+            entry.method = 8U;
+        }),
     };
     TemporaryDirectory bomb_temp;
     const auto bomb = write_zip(bomb_temp, bomb_entries);
@@ -689,13 +699,12 @@ void entry_ratio_aggregate_disk_and_name_limits_are_enforced() {
         bounded_compressed.push_back(static_cast<std::byte>(value));
     }
     const std::array bounded_entries{
-        ZipFixtureEntry{
-            .name = "bounded.img",
-            .payload = bounded_payload,
-            .compressed = std::move(bounded_compressed),
-            .declared_uncompressed_size = 10U,
-            .method = 8U,
-        },
+        zip_fixture_entry("bounded.img", bounded_payload,
+                          [&](ZipFixtureEntry& entry) {
+                              entry.compressed = std::move(bounded_compressed);
+                              entry.declared_uncompressed_size = 10U;
+                              entry.method = 8U;
+                          }),
     };
     TemporaryDirectory bounded_temp;
     const auto bounded_zip = write_zip(bounded_temp, bounded_entries);
@@ -707,7 +716,7 @@ void entry_ratio_aggregate_disk_and_name_limits_are_enforced() {
 
     TemporaryDirectory long_temp;
     const std::array long_entries{
-        ZipFixtureEntry{.name = std::string(512U, 'a'), .payload = "x"},
+        zip_fixture_entry(std::string(512U, 'a'), "x"),
     };
     const auto long_zip = write_zip(long_temp, long_entries);
     ArtifactSourceResolver long_resolver;
@@ -932,10 +941,10 @@ void different_zip_keys_share_one_metadata_concurrency_ceiling() {
     TemporaryDirectory first_temporary;
     TemporaryDirectory second_temporary;
     const std::array first_entries{
-        ZipFixtureEntry{.name = "system.img", .payload = "first"},
+        zip_fixture_entry("system.img", "first"),
     };
     const std::array second_entries{
-        ZipFixtureEntry{.name = "vendor.img", .payload = "second"},
+        zip_fixture_entry("vendor.img", "second"),
     };
     const auto first_archive = write_zip(first_temporary, first_entries);
     const auto second_archive = write_zip(second_temporary, second_entries);
