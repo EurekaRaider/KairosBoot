@@ -509,12 +509,21 @@ jobs:
               echo "refusing to replace an already-published release"
               exit 1
             fi
+            gh release view "$TAG" --json assets --jq '.assets[].name' | \
+              while IFS= read -r asset; do
+                gh release delete-asset "$TAG" "$asset" --yes
+              done
           else
             gh release create "$TAG" --draft --verify-tag --generate-notes --title "KairosBoot $TAG"
           fi
+          find release-assets -maxdepth 1 -type f -printf '%f\n' | \
+            LC_ALL=C sort >expected-assets.txt
           gh release upload "$TAG" release-assets/* --clobber
           mkdir verified-assets
           gh release download "$TAG" --dir verified-assets
+          find verified-assets -maxdepth 1 -type f -printf '%f\n' | \
+            LC_ALL=C sort >actual-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
           cd verified-assets
           sha256sum --check SHA256SUMS
           cd ..

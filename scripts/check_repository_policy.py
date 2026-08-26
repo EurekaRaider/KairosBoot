@@ -73,6 +73,8 @@ def check_workflows() -> None:
             "macOS stripped libusb runtime": (
                 'strip -S "${RUNNER_TEMP}/install/lib/libusb-1.0.0.dylib"'
             ),
+            "clean reused draft assets": "gh release delete-asset",
+            "exact published asset set": "diff -u expected-assets.txt actual-assets.txt",
         }
         for contract, marker in release_requirements.items():
             if marker not in release:
