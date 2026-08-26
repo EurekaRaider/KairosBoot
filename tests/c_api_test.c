@@ -46,13 +46,21 @@ int main(void) {
   CHECK(error == NULL);
 
   kb_device_list_t *devices = NULL;
-  CHECK(kb_enumerate_devices(context, &devices, &error) ==
-        KB_E_NOT_SUPPORTED);
-  CHECK(devices == NULL);
-  CHECK(error != NULL);
-  CHECK(kb_error_status(error) == KB_E_NOT_SUPPORTED);
-  CHECK(strstr(kb_error_message(error), "transport") != NULL);
-  kb_error_release(error);
+  CHECK(kb_enumerate_devices(context, &devices, &error) == KB_OK);
+  CHECK(devices != NULL);
+  CHECK(error == NULL);
+  for (size_t index = 0; index < kb_device_list_count(devices); ++index) {
+    CHECK(kb_device_list_serial(devices, index) != NULL);
+    CHECK(kb_device_list_usb_path(devices, index) != NULL);
+    CHECK(kb_device_list_product(devices, index) != NULL);
+  }
+  kb_device_list_release(devices);
+
+  kb_context_t *second_context = NULL;
+  CHECK(kb_context_create(NULL, &second_context, &error) == KB_OK);
+  CHECK(second_context != NULL);
+  CHECK(error == NULL);
+  kb_context_release(second_context);
 
   kb_operation_t *operation = NULL;
   error = NULL;

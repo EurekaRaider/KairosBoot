@@ -27,8 +27,12 @@ int main() {
   CHECK(context.has_value());
 
   auto devices = context->devices();
-  CHECK(!devices.has_value());
-  CHECK(devices.error().status() == KB_E_NOT_SUPPORTED);
+  CHECK(devices.has_value());
+  for (std::size_t index = 0; index < devices->size(); ++index) {
+    static_cast<void>(devices->serial(index));
+    static_cast<void>(devices->usb_path(index));
+    static_cast<void>(devices->product(index));
+  }
 
   auto operation = context->flash_file_async(
       "system", std::filesystem::path{"system.img"});

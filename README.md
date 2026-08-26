@@ -23,9 +23,9 @@ wrapper, .NET bindings, and high-throughput multi-device flashing.
 
 The current implementation milestone includes the stable API foundation,
 Fastboot response state machine, TCP v1 framing, an asynchronous libusb bulk-OUT
-runtime, transfer-ring scheduling, sparse-image validation, and no-hardware
-test doubles. These transport cores are not yet wired to the public destructive
-device commands.
+runtime, public USB Fastboot device enumeration, transfer-ring scheduling,
+sparse-image validation, and no-hardware test doubles. The transport cores are
+not yet wired to the public destructive device commands.
 
 ## Build the foundation milestone
 
@@ -47,9 +47,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 The installed SDK/CLI contains the matching libusb runtime, LGPL license, and a
-dependency manifest. The current public C ABI still returns
-`KB_E_NOT_SUPPORTED` for enumeration and flashing; it never reports a
-successful flash. Check this explicitly with:
+dependency manifest. USB enumeration is active; flashing still returns
+`KB_E_NOT_SUPPORTED` and never reports a successful flash. Check the runtime
+and currently visible Fastboot interfaces with:
 
 ```sh
 ./build/kairosboot doctor --json
