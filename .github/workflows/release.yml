@@ -168,6 +168,17 @@ jobs:
             --platform "$PLATFORM" \
             --symbols-root build/symbols
 
+      - name: Smoke exact Linux Release archives
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PLATFORM: ${{ matrix.id }}
+        run: >-
+          python3 scripts/smoke_native_archive.py
+          --dist dist
+          --version "$VERSION"
+          --platform "$PLATFORM"
+          --generator Ninja
+
       - name: Upload native install tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -330,6 +341,32 @@ jobs:
           --symbols-root build/symbols
         if: runner.os == 'macOS'
 
+      - name: Smoke exact Windows Release archives
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PLATFORM: ${{ matrix.id }}
+        run: >-
+          python scripts/smoke_native_archive.py
+          --dist dist
+          --version "$env:VERSION"
+          --platform "$env:PLATFORM"
+          --generator "Visual Studio 17 2022"
+          --architecture "${{ matrix.architecture }}"
+
+      - name: Smoke exact macOS Release archives
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PLATFORM: ${{ matrix.id }}
+        run: >-
+          python3 scripts/smoke_native_archive.py
+          --dist dist
+          --version "$VERSION"
+          --platform "$PLATFORM"
+          --generator Ninja
+
       - name: Upload native install tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -420,24 +457,119 @@ jobs:
             /p:SymbolPackageFormat=snupkg \
             /m:1 \
             /nr:false
-
-      - name: Smoke the exact Release NuGet package
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-        run: >-
-          python3 bindings/dotnet/tests/run_package_smoke.py
-          --package "$PWD/nuget/KairosBoot.${VERSION}.nupkg"
-          --framework net10.0
-          --rid linux-x64
-          --expected-native-version "$VERSION"
+          test -f "$PWD/nuget/KairosBoot.${VERSION}.nupkg"
+          test -f "$PWD/nuget/KairosBoot.${VERSION}.snupkg"
 
       - name: Upload NuGet assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-nuget
-          path: nuget/*.*nupkg
+          path: |
+            nuget/KairosBoot.*.nupkg
+            nuget/KairosBoot.*.snupkg
           if-no-files-found: error
           retention-days: 7
+
+  dotnet-package-smoke:
+    name: release-managed-${{ matrix.rid }}
+    needs:
+      - verify
+      - dotnet-package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2022
+          - rid: win-arm64
+            runner: windows-11-arm
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          - rid: osx-x64
+            runner: macos-15-intel
+          - rid: osx-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Download exact Release NuGet assets
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-nuget
+          path: ${{ runner.temp }}/package
+
+      - name: Smoke exact .NET 10 Release package on Unix
+        if: runner.os != 'Windows'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          package=$(find "${RUNNER_TEMP}/package" -maxdepth 1 -name 'KairosBoot.*.nupkg' ! -name '*.snupkg' -print -quit)
+          test -n "$package"
+          python3 bindings/dotnet/tests/run_package_smoke.py \
+            --package "$package" \
+            --framework net10.0 \
+            --rid "${{ matrix.rid }}" \
+            --expected-native-version "$VERSION"
+
+      - name: Smoke exact .NET 10 Release package on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          $package = Get-ChildItem "$env:RUNNER_TEMP/package/KairosBoot.*.nupkg" |
+            Where-Object { $_.Extension -eq ".nupkg" } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $package) { throw "KairosBoot Release NuGet package was not downloaded" }
+          python bindings/dotnet/tests/run_package_smoke.py `
+            --package $package `
+            --framework net10.0 `
+            --rid "${{ matrix.rid }}" `
+            --expected-native-version "$env:VERSION"
+
+      - name: Locate classic .NET Framework build tools
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) { throw "full-framework MSBuild.exe was not found" }
+          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) { throw "nuget.exe was not found on PATH" }
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $msbuild)
+
+      - name: Smoke exact .NET Framework 4.8 Release package
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          $package = Get-ChildItem "$env:RUNNER_TEMP/package/KairosBoot.*.nupkg" |
+            Where-Object { $_.Extension -eq ".nupkg" } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $package) { throw "KairosBoot Release NuGet package was not downloaded" }
+          python bindings/dotnet/tests/run_package_smoke.py `
+            --package $package `
+            --framework net48 `
+            --rid win-x64 `
+            --expected-native-version "$env:VERSION"
+          python bindings/dotnet/tests/run_package_smoke.py `
+            --package $package `
+            --framework net48 `
+            --rid win-x64 `
+            --classic `
+            --expected-native-version "$env:VERSION"
 
   publish:
     name: publish-github-release
@@ -446,6 +578,7 @@ jobs:
       - native-linux
       - native-desktop
       - dotnet-package
+      - dotnet-package-smoke
     runs-on: ubuntu-24.04
     environment: github-release
     permissions:
@@ -481,6 +614,10 @@ jobs:
           printf '%s  %s\n' \
             'fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf' \
             'release-assets/libusb-1.0.30.tar.bz2' | sha256sum --check
+          tar -xOf release-assets/libusb-1.0.30.tar.bz2 \
+            libusb-1.0.30/COPYING \
+            >release-assets/libusb-1.0.30-COPYING
+          test -s release-assets/libusb-1.0.30-COPYING
           curl --fail --silent --show-error --location \
             --output release-assets/boost-1.92.0-cmake.tar.xz \
             https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz
@@ -494,6 +631,10 @@ jobs:
           cp THIRD_PARTY_NOTICES.md "release-assets/KairosBoot-v${VERSION}-THIRD_PARTY_NOTICES.md"
           cp UNSIGNED.txt "release-assets/KairosBoot-v${VERSION}-UNSIGNED.txt"
           cp signing-status.json release-assets/signing-status.json
+          python3 scripts/check_release_assets.py \
+            --assets release-assets \
+            --version "$VERSION" \
+            --write-manifest
           python3 scripts/generate_sbom.py \
             --version "$VERSION" \
             --source-archive "release-assets/KairosBoot-v${VERSION}-source.tar.gz" \
@@ -506,6 +647,10 @@ jobs:
           find release-assets -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | \
             sort -z | xargs -0 -I{} sha256sum "release-assets/{}" | \
             sed 's|  release-assets/|  |' >release-assets/SHA256SUMS
+          python3 scripts/check_release_assets.py \
+            --assets release-assets \
+            --version "$VERSION" \
+            --validate
 
       - name: Attest assembled release assets
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4

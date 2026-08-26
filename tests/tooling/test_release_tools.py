@@ -256,6 +256,58 @@ class ReleaseToolTests(unittest.TestCase):
         dependency = statement["predicate"]["buildDefinition"]["resolvedDependencies"][0]
         self.assertEqual(dependency["digest"]["gitCommit"], "b" * 40)
 
+    def test_release_asset_contract_is_explicit_and_exact(self) -> None:
+        assets = self.root / "release-assets"
+        assets.mkdir()
+        version = "1.2.3"
+        run_script(
+            "check_release_assets.py",
+            "--assets",
+            assets,
+            "--version",
+            version,
+            "--write-manifest",
+        )
+        manifest = assets / f"KairosBoot-v{version}-assets.json"
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        expected = document["assets"]
+        self.assertEqual(expected, sorted(set(expected)))
+        self.assertIn(f"KairosBoot.{version}.nupkg", expected)
+        self.assertIn(f"KairosBoot.{version}.snupkg", expected)
+        self.assertIn("libusb-1.0.30-COPYING", expected)
+        for name in expected:
+            path = assets / name
+            if not path.exists():
+                path.write_bytes(b"asset")
+        run_script(
+            "check_release_assets.py",
+            "--assets",
+            assets,
+            "--version",
+            version,
+            "--validate",
+        )
+
+        missing = assets / f"KairosBoot-v{version}-linux-x64-sdk.tar.gz"
+        missing.unlink()
+        failed = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "check_release_assets.py"),
+                "--assets",
+                str(assets),
+                "--version",
+                version,
+                "--validate",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn(missing.name, failed.stderr + failed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

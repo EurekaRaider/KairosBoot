@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "nativeKinds": [
+    "cli",
+    "sdk",
+    "symbols"
+  ],
+  "platforms": [
+    {
+      "archiveExtension": "tar.gz",
+      "id": "linux-arm64"
+    },
+    {
+      "archiveExtension": "tar.gz",
+      "id": "linux-x64"
+    },
+    {
+      "archiveExtension": "tar.gz",
+      "id": "macos-arm64"
+    },
+    {
+      "archiveExtension": "tar.gz",
+      "id": "macos-x64"
+    },
+    {
+      "archiveExtension": "zip",
+      "id": "windows-arm64"
+    },
+    {
+      "archiveExtension": "zip",
+      "id": "windows-x64"
+    }
+  ],
+  "additionalAssets": [
+    "Boost-1.92.0-LICENSE_1_0.txt",
+    "KairosBoot.{version}.nupkg",
+    "KairosBoot.{version}.snupkg",
+    "KairosBoot.spdx.json",
+    "KairosBoot-v{version}-LICENSE.txt",
+    "KairosBoot-v{version}-THIRD_PARTY_NOTICES.md",
+    "KairosBoot-v{version}-UNSIGNED.txt",
+    "KairosBoot-v{version}-assets.json",
+    "KairosBoot-v{version}-source.tar.gz",
+    "SHA256SUMS",
+    "boost-1.92.0-cmake.tar.xz",
+    "libusb-1.0.30-COPYING",
+    "libusb-1.0.30.tar.bz2",
+    "provenance.intoto.json",
+    "signing-status.json"
+  ]
+}
