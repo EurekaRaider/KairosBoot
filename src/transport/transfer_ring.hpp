@@ -71,8 +71,8 @@ struct TransferSubmission final {
     // take their own copy when this token is empty.
     std::shared_ptr<const void> payload_lifetime;
     // True only when this transfer ends one complete protocol-level message.
-    // Transfer-ring chunks deliberately leave this false: chunk boundaries
-    // are not USB message boundaries and must never trigger per-chunk ZLPs.
+    // Ordinary ring chunks leave this false; a caller may explicitly mark the
+    // final chunk of the complete source as the logical message boundary.
     bool logical_message_end{false};
 };
 
@@ -130,7 +130,8 @@ public:
                  std::shared_ptr<BufferBudget> budget,
                  TransferRingConfig config = {});
 
-    [[nodiscard]] bool start(std::shared_ptr<TransferSource> source);
+    [[nodiscard]] bool start(std::shared_ptr<TransferSource> source,
+                             bool logical_message_end = false);
     [[nodiscard]] bool pump();
     [[nodiscard]] bool handle_completion(const TransferCompletion& completion);
     void cancel() noexcept;
@@ -169,6 +170,7 @@ private:
     std::uint64_t next_offset_{0};
     std::uint64_t completed_bytes_{0};
     std::uint64_t completion_watermark_{0};
+    bool logical_message_end_{false};
 };
 
 }  // namespace kairosboot::transport

@@ -5,6 +5,7 @@
 #include <libusb.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -120,6 +121,8 @@ struct UsbDeviceInfo final {
     std::uint8_t interface_protocol{};
     std::uint8_t bulk_out_endpoint{};
     std::uint16_t bulk_out_max_packet_size{};
+    std::uint8_t bulk_in_endpoint{};
+    std::uint16_t bulk_in_max_packet_size{};
 };
 
 enum class ZeroPacketPolicy : std::uint8_t {
@@ -168,8 +171,41 @@ private:
     std::shared_ptr<State> state_;
 };
 
+// Owns one claimed Fastboot interface. It remains a TransferBackend for the
+// high-throughput OUT ring and also supplies one-at-a-time logical IN reads to
+// the protocol adapter; both directions share the same drain/quarantine owner.
 class LibusbBulkOutBackend final : public TransferBackend {
 public:
+    enum class WaitCode : std::uint8_t {
+        completion,
+        timeout,
+        stopped,
+        event_error,
+    };
+
+    struct WaitResult final {
+        WaitCode code{WaitCode::stopped};
+        TransferCompletion completion;
+    };
+
+    enum class ReadCode : std::uint8_t {
+        success,
+        timeout,
+        cancelled,
+        no_device,
+        stall,
+        overflow,
+        resource_exhausted,
+        io_error,
+        closed,
+    };
+
+    struct ReadResult final {
+        ReadCode code{ReadCode::io_error};
+        std::size_t transferred{};
+        bool truncated{false};
+    };
+
     LibusbBulkOutBackend(const LibusbBulkOutBackend&) = delete;
     LibusbBulkOutBackend& operator=(const LibusbBulkOutBackend&) = delete;
     ~LibusbBulkOutBackend() override;
@@ -178,6 +214,11 @@ public:
     void cancel(TransferId id) noexcept override;
 
     [[nodiscard]] bool try_pop_completion(TransferCompletion& completion);
+    [[nodiscard]] WaitResult wait_for_completion(
+        std::chrono::milliseconds timeout);
+    [[nodiscard]] ReadResult read_logical_response(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     [[nodiscard]] bool shutdown_quarantined() const noexcept;
     void stop() noexcept;

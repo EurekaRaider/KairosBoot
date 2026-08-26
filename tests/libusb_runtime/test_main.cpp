@@ -1,4 +1,5 @@
 #include "src/transport/libusb_runtime.hpp"
+#include "src/transport/usb_fastboot.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -44,8 +46,12 @@ using kairosboot::transport::TransferRingConfig;
 using kairosboot::transport::TransferRingState;
 using kairosboot::transport::TransferSubmission;
 using kairosboot::transport::UsbDeviceInfo;
+using kairosboot::transport::UsbFastbootTransport;
+using kairosboot::transport::UsbFastbootTransportOptions;
 using kairosboot::transport::UsbInterfaceFilter;
 using kairosboot::transport::ZeroPacketPolicy;
+using kairosboot::protocol::TransferCertainty;
+using kairosboot::protocol::TransportStatus;
 
 class TestFailure final : public std::runtime_error {
 public:
@@ -177,6 +183,7 @@ public:
                                          libusb_device_string_type,
                                          char* output,
                                          int length) -> int {
+            ++self->serial_calls;
             if (length <= static_cast<int>(self->serial_.size())) {
                 return LIBUSB_ERROR_OVERFLOW;
             }
@@ -234,7 +241,10 @@ public:
                 return LIBUSB_ERROR_NOT_FOUND;
             }
             self->cancel_queued_.insert(transfer);
-            if (self->suppress_cancel_completion) {
+            const auto inbound =
+                (transfer->endpoint & LIBUSB_ENDPOINT_IN) == LIBUSB_ENDPOINT_IN;
+            if (self->suppress_cancel_completion ||
+                (inbound && self->suppress_in_cancel_completion)) {
                 return LIBUSB_SUCCESS;
             }
             self->events_.push_back(
@@ -290,6 +300,33 @@ public:
         event_cv_.notify_all();
     }
 
+    void complete_in_submission(const std::size_t index,
+                                const libusb_transfer_status status,
+                                const std::span<const std::byte> bytes,
+                                const std::optional<int> actual_length = std::nullopt) {
+        std::lock_guard lock(mutex_);
+        if (index >= submissions_.size()) {
+            throw TestFailure("fake submission index out of range");
+        }
+        auto* transfer = submissions_[index];
+        if ((transfer->endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_IN) {
+            throw TestFailure("fake inbound completion targeted a bulk OUT transfer");
+        }
+        const auto writable = transfer->length < 0
+            ? std::size_t{0}
+            : static_cast<std::size_t>(transfer->length);
+        const auto copied = std::min(bytes.size(), writable);
+        if (copied != 0) {
+            std::memcpy(transfer->buffer, bytes.data(), copied);
+        }
+        events_.push_back(Event{
+            transfer,
+            status,
+            actual_length.value_or(static_cast<int>(bytes.size())),
+        });
+        event_cv_.notify_all();
+    }
+
     [[nodiscard]] std::size_t submission_count() const {
         std::lock_guard lock(mutex_);
         return submissions_.size();
@@ -312,6 +349,7 @@ public:
     int cancel_actual_length{};
     bool fail_allocation{false};
     bool suppress_cancel_completion{false};
+    bool suppress_in_cancel_completion{false};
     bool pin_module_result{true};
     std::atomic<bool> blocked_event_started{false};
     std::atomic<bool> blocked_event_completed{false};
@@ -320,6 +358,7 @@ public:
     std::atomic<int> handle_event_calls{0};
     std::atomic<int> free_device_list_calls{0};
     std::atomic<int> free_config_calls{0};
+    std::atomic<int> serial_calls{0};
     std::atomic<int> open_calls{0};
     std::atomic<int> close_calls{0};
     std::atomic<int> claim_calls{0};
@@ -451,6 +490,19 @@ private:
     return bytes;
 }
 
+[[nodiscard]] std::vector<std::byte> ascii_bytes(const std::string_view text) {
+    std::vector<std::byte> bytes;
+    bytes.reserve(text.size());
+    for (const auto character : text) {
+        bytes.push_back(std::byte{static_cast<unsigned char>(character)});
+    }
+    return bytes;
+}
+
+void wait_for_submissions(const FakeLibusb& fake, const std::size_t count) {
+    wait_until([&] { return fake.submission_count() >= count; });
+}
+
 void test_init_failure_version_and_singleton() {
     const auto system_functions = LibusbFunctions::system();
     KB_CHECK(system_functions.complete());
@@ -505,6 +557,13 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     KB_CHECK(runtime->running());
     KB_CHECK(runtime->event_thread_id() != std::this_thread::get_id());
 
+    UsbInterfaceFilter mismatch;
+    mismatch.interface_protocol = 0x99;
+    const auto empty = runtime->enumerate(mismatch);
+    KB_CHECK(empty.has_value());
+    KB_CHECK(empty->empty());
+    KB_CHECK(fake->serial_calls == 0);
+
     const auto device = matching_device(runtime);
     KB_CHECK(device.vendor_id == 0x18D1);
     KB_CHECK(device.product_id == 0x4EE0);
@@ -515,12 +574,9 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     KB_CHECK(device.interface_number == 2);
     KB_CHECK(device.bulk_out_endpoint == 0x01);
     KB_CHECK(device.bulk_out_max_packet_size == 4);
-
-    UsbInterfaceFilter mismatch;
-    mismatch.interface_protocol = 0x99;
-    const auto empty = runtime->enumerate(mismatch);
-    KB_CHECK(empty.has_value());
-    KB_CHECK(empty->empty());
+    KB_CHECK(device.bulk_in_endpoint == 0x81);
+    KB_CHECK(device.bulk_in_max_packet_size == 4);
+    KB_CHECK(fake->serial_calls == 1);
     runtime->stop();
 }
 
@@ -641,12 +697,12 @@ void test_open_rejects_changed_interface_snapshot() {
     libusb_endpoint_descriptor changed_endpoints[2]{};
     changed_endpoints[0].bEndpointAddress = 0x01;
     changed_endpoints[0].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
-    changed_endpoints[0].wMaxPacketSize = 8;
-    changed_endpoints[1].bEndpointAddress = 0x81;
+    changed_endpoints[0].wMaxPacketSize = 4;
+    changed_endpoints[1].bEndpointAddress = 0x82;
     changed_endpoints[1].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
     changed_endpoints[1].wMaxPacketSize = 4;
     libusb_interface_descriptor changed_alternate{};
-    changed_alternate.bInterfaceNumber = 7;
+    changed_alternate.bInterfaceNumber = 2;
     changed_alternate.bAlternateSetting = 0;
     changed_alternate.bNumEndpoints = 2;
     changed_alternate.bInterfaceClass = 0xFF;
@@ -995,6 +1051,287 @@ void test_explicit_zero_packet_contract() {
     runtime->stop();
 }
 
+void test_usb_logical_read_short_packet_zlp_and_overflow() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    options.buffer_budget = std::make_shared<BufferBudget>(8);
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    std::array<std::byte, 16> response{};
+    auto pending_read = std::async(std::launch::async, [&] {
+        return transport->read(response, std::chrono::seconds(1));
+    });
+
+    wait_for_submissions(*fake, 1);
+    const auto first_read = fake->submission(0);
+    KB_CHECK(first_read.endpoint == 0x81);
+    KB_CHECK(first_read.length == 17);
+    KB_CHECK(first_read.timeout > 0);
+    fake->complete_in_submission(0, LIBUSB_TRANSFER_COMPLETED, {});
+
+    // A transfer-level ZLP is consumed and the same logical read continues.
+    wait_for_submissions(*fake, 2);
+    const auto logical_response = ascii_bytes("OKAYdone");
+    fake->complete_in_submission(
+        1, LIBUSB_TRANSFER_COMPLETED, logical_response);
+    const auto read = pending_read.get();
+    KB_CHECK(read.status == TransportStatus::Ok);
+    KB_CHECK(read.certainty == TransferCertainty::FullyTransferred);
+    KB_CHECK(read.transferred == logical_response.size());
+    KB_CHECK(!read.truncated);
+    KB_CHECK(std::equal(logical_response.begin(),
+                        logical_response.end(),
+                        response.begin()));
+    KB_CHECK(fake->callback_thread == runtime->event_thread_id());
+    KB_CHECK(fake->callback_thread != std::this_thread::get_id());
+    transport->close();
+
+    auto overflow_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(overflow_opened.has_value());
+    auto overflow_transport = std::move(*overflow_opened);
+    std::array<std::byte, 4> limited{};
+    auto overflow_read = std::async(std::launch::async, [&] {
+        return overflow_transport->read(limited, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 3);
+    const auto too_large = ascii_bytes("OKAYx");
+    fake->complete_in_submission(
+        2, LIBUSB_TRANSFER_COMPLETED, too_large);
+    const auto truncated = overflow_read.get();
+    KB_CHECK(truncated.status == TransportStatus::IoError);
+    KB_CHECK(truncated.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(truncated.transferred == limited.size());
+    KB_CHECK(truncated.truncated);
+    KB_CHECK(!overflow_transport->is_open());
+
+    auto native_overflow_opened =
+        UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(native_overflow_opened.has_value());
+    auto native_overflow_transport = std::move(*native_overflow_opened);
+    std::array<std::byte, 8> native_limited{};
+    auto native_overflow_read = std::async(std::launch::async, [&] {
+        return native_overflow_transport->read(
+            native_limited, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 4);
+    const auto overflow_prefix = ascii_bytes("OKAYdata");
+    fake->complete_in_submission(
+        3, LIBUSB_TRANSFER_OVERFLOW, overflow_prefix, 8);
+    const auto native_overflow = native_overflow_read.get();
+    KB_CHECK(native_overflow.status == TransportStatus::IoError);
+    KB_CHECK(native_overflow.truncated);
+    KB_CHECK(native_overflow.transferred == native_limited.size());
+    KB_CHECK(!native_overflow_transport->is_open());
+
+    runtime->stop();
+}
+
+void test_usb_read_error_classification_timeout_disconnect_stall_and_cancel() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 1};
+    options.buffer_budget = std::make_shared<BufferBudget>(4);
+    std::size_t submission_index = 0;
+
+    fake->queue_submit_result(LIBUSB_ERROR_NO_DEVICE);
+    auto submit_failure_opened =
+        UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(submit_failure_opened.has_value());
+    auto submit_failure_transport = std::move(*submit_failure_opened);
+    std::array<std::byte, 16> submit_failure_response{};
+    const auto submit_failure = submit_failure_transport->read(
+        submit_failure_response, std::chrono::seconds(1));
+    KB_CHECK(submit_failure.status == TransportStatus::Disconnected);
+    KB_CHECK(submit_failure.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(fake->submission_count() == 0);
+
+    const auto scripted_read = [&](const libusb_transfer_status status) {
+        auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+        KB_CHECK(opened.has_value());
+        auto transport = std::move(*opened);
+        std::array<std::byte, 16> response{};
+        auto read = std::async(std::launch::async, [&] {
+            return transport->read(response, std::chrono::seconds(1));
+        });
+        wait_for_submissions(*fake, submission_index + 1U);
+        fake->complete_in_submission(submission_index, status, {});
+        ++submission_index;
+        return read.get();
+    };
+
+    const auto timed_out = scripted_read(LIBUSB_TRANSFER_TIMED_OUT);
+    KB_CHECK(timed_out.status == TransportStatus::Timeout);
+    KB_CHECK(timed_out.certainty == TransferCertainty::NotTransferred);
+
+    const auto disconnected = scripted_read(LIBUSB_TRANSFER_NO_DEVICE);
+    KB_CHECK(disconnected.status == TransportStatus::Disconnected);
+    KB_CHECK(disconnected.certainty == TransferCertainty::NotTransferred);
+
+    const auto stalled = scripted_read(LIBUSB_TRANSFER_STALL);
+    KB_CHECK(stalled.status == TransportStatus::IoError);
+    KB_CHECK(stalled.certainty == TransferCertainty::NotTransferred);
+
+    auto cancel_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(cancel_opened.has_value());
+    auto cancel_transport = std::move(*cancel_opened);
+    std::array<std::byte, 16> cancelled_response{};
+    auto cancelled_read = std::async(std::launch::async, [&] {
+        return cancel_transport->read(
+            cancelled_response, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, submission_index + 1U);
+    cancel_transport->cancel();
+    const auto cancelled = cancelled_read.get();
+    KB_CHECK(cancelled.status == TransportStatus::IoError);
+    KB_CHECK(cancelled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(!cancel_transport->is_open());
+
+    runtime->stop();
+}
+
+void test_usb_ring_writes_are_serial_and_report_partial_certainty() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    options.buffer_budget = std::make_shared<BufferBudget>(8);
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto first_bytes = payload(8);
+    const auto second_bytes = payload(4);
+    auto first_write = std::async(std::launch::async, [&] {
+        return transport->write(*first_bytes, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 2);
+    KB_CHECK(fake->submission(0).endpoint == 0x01);
+    KB_CHECK(fake->submission(1).endpoint == 0x01);
+
+    auto second_write = std::async(std::launch::async, [&] {
+        return transport->write(*second_bytes, std::chrono::seconds(1));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    KB_CHECK(fake->submission_count() == 2);
+
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto first = first_write.get();
+    KB_CHECK(first.status == TransportStatus::Ok);
+    KB_CHECK(first.transferred == 8);
+    KB_CHECK(first.certainty == TransferCertainty::FullyTransferred);
+
+    wait_for_submissions(*fake, 3);
+    fake->complete_submission(2, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto second = second_write.get();
+    KB_CHECK(second.status == TransportStatus::Ok);
+    KB_CHECK(second.transferred == 4);
+    KB_CHECK(second.certainty == TransferCertainty::FullyTransferred);
+    transport->close();
+
+    auto partial_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(partial_opened.has_value());
+    auto partial_transport = std::move(*partial_opened);
+    const auto partial_bytes = payload(8);
+    auto partial_write = std::async(std::launch::async, [&] {
+        return partial_transport->write(
+            *partial_bytes, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 5);
+    fake->complete_submission(3, LIBUSB_TRANSFER_COMPLETED, 4);
+    fake->complete_submission(4, LIBUSB_TRANSFER_COMPLETED, 2);
+    const auto partial = partial_write.get();
+    KB_CHECK(partial.status == TransportStatus::IoError);
+    KB_CHECK(partial.transferred == 4);
+    KB_CHECK(partial.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(!partial_transport->is_open());
+
+    auto disconnect_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(disconnect_opened.has_value());
+    auto disconnect_transport = std::move(*disconnect_opened);
+    const auto disconnect_bytes = payload(4);
+    auto disconnect_write = std::async(std::launch::async, [&] {
+        return disconnect_transport->write(
+            *disconnect_bytes, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 6);
+    fake->complete_submission(5, LIBUSB_TRANSFER_NO_DEVICE, 0);
+    const auto disconnected = disconnect_write.get();
+    KB_CHECK(disconnected.status == TransportStatus::Disconnected);
+    KB_CHECK(disconnected.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(!disconnect_transport->is_open());
+
+    runtime->stop();
+}
+
+void test_usb_backend_timeout_isolated_from_concurrent_session() {
+    auto fake = std::make_shared<FakeLibusb>();
+    fake->suppress_in_cancel_completion = true;
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 1};
+    options.buffer_budget = std::make_shared<BufferBudget>(4);
+
+    auto first_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    auto second_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(first_opened.has_value());
+    KB_CHECK(second_opened.has_value());
+    auto first = std::move(*first_opened);
+    auto second = std::move(*second_opened);
+
+    std::array<std::byte, 16> first_response{};
+    auto first_read = std::async(std::launch::async, [&] {
+        return first->read(first_response, std::chrono::milliseconds(20));
+    });
+    wait_for_submissions(*fake, 1);
+    wait_until([&] { return fake->cancel_calls.load() != 0; });
+
+    // The first backend is draining toward a local quarantine. The shared
+    // runtime remains accepting, so an already-open second device can submit
+    // and complete independently.
+    const auto second_payload = payload(4);
+    auto second_write = std::async(std::launch::async, [&] {
+        return second->write(*second_payload, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 2);
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto second_result = second_write.get();
+    KB_CHECK(second_result.status == TransportStatus::Ok);
+    KB_CHECK(second_result.certainty == TransferCertainty::FullyTransferred);
+
+    const auto first_result = first_read.get();
+    KB_CHECK(first_result.status == TransportStatus::Timeout);
+    KB_CHECK(first_result.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(!first->is_open());
+    KB_CHECK(second->is_open());
+    KB_CHECK(runtime->running());
+    KB_CHECK(!runtime->shutdown_quarantined());
+    KB_CHECK(fake->pin_module_calls == 1);
+
+    // Once the local timeout has returned, opening another session also stays
+    // available. A late callback is drained at runtime shutdown without ever
+    // freeing the accepted transfer before that callback.
+    auto third_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(third_opened.has_value());
+    auto third = std::move(*third_opened);
+    third->close();
+    second->close();
+    fake->complete_in_submission(0, LIBUSB_TRANSFER_CANCELLED, {});
+    runtime->stop();
+    KB_CHECK(!runtime->shutdown_quarantined());
+    KB_CHECK(fake->release_calls == 3);
+    KB_CHECK(fake->close_calls == 3);
+}
+
 void test_backend_local_isolation_and_two_phase_global_quarantine() {
     auto fake = std::make_shared<FakeLibusb>();
     // Production fails fast if module pinning fails. The fake handler returns
@@ -1100,6 +1437,14 @@ int main() {
         {"runtime stop cancel and drain", test_runtime_stop_cancels_and_drains_idempotently},
         {"terminal event error poisons accepting", test_terminal_event_error_poisons_accepting},
         {"explicit zero packet contract", test_explicit_zero_packet_contract},
+        {"USB logical read ZLP, short packet, overflow",
+         test_usb_logical_read_short_packet_zlp_and_overflow},
+        {"USB read error classification",
+         test_usb_read_error_classification_timeout_disconnect_stall_and_cancel},
+        {"USB ring writes serialize and report certainty",
+         test_usb_ring_writes_are_serial_and_report_partial_certainty},
+        {"USB backend timeout session isolation",
+         test_usb_backend_timeout_isolated_from_concurrent_session},
         {"backend isolation and two-phase quarantine", test_backend_local_isolation_and_two_phase_global_quarantine},
     };
 

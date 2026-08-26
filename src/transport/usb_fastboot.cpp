@@ -1,0 +1,410 @@
+// SPDX-License-Identifier: MIT
+#include "src/transport/usb_fastboot.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <limits>
+#include <new>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+
+namespace kairosboot::transport {
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+class SpanTransferSource final : public TransferSource {
+public:
+    explicit SpanTransferSource(const std::span<const std::byte> bytes) : bytes_(bytes) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return static_cast<std::uint64_t>(bytes_.size());
+    }
+
+    [[nodiscard]] bool read_exact(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) noexcept override {
+        if (offset > bytes_.size()) {
+            return false;
+        }
+        const auto start = static_cast<std::size_t>(offset);
+        if (destination.size() > bytes_.size() - start) {
+            return false;
+        }
+        std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start),
+                    destination.size(),
+                    destination.begin());
+        return true;
+    }
+
+private:
+    std::span<const std::byte> bytes_;
+};
+
+[[nodiscard]] Clock::time_point deadline_after(
+    const std::chrono::milliseconds timeout) noexcept {
+    const auto now = Clock::now();
+    if (timeout == std::chrono::milliseconds::max()) {
+        return Clock::time_point::max();
+    }
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return now;
+    }
+    const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::time_point::max() - now);
+    return timeout >= room ? Clock::time_point::max() : now + timeout;
+}
+
+[[nodiscard]] std::chrono::milliseconds remaining_until(
+    const Clock::time_point deadline) noexcept {
+    if (deadline == Clock::time_point::max()) {
+        return std::chrono::milliseconds::max();
+    }
+    const auto now = Clock::now();
+    if (now >= deadline) {
+        return std::chrono::milliseconds::zero();
+    }
+    return std::chrono::ceil<std::chrono::milliseconds>(deadline - now);
+}
+
+[[nodiscard]] protocol::TransferCertainty transfer_certainty(
+    const DeliveryCertainty certainty) noexcept {
+    switch (certainty) {
+        case DeliveryCertainty::not_sent:
+            return protocol::TransferCertainty::NotTransferred;
+        case DeliveryCertainty::fully_transferred:
+            return protocol::TransferCertainty::FullyTransferred;
+        case DeliveryCertainty::partial_or_unknown:
+            return protocol::TransferCertainty::PartialOrUnknown;
+    }
+    return protocol::TransferCertainty::PartialOrUnknown;
+}
+
+[[nodiscard]] protocol::TransportStatus transport_status(
+    const TransferErrorKind kind) noexcept {
+    switch (kind) {
+        case TransferErrorKind::submit_no_device:
+        case TransferErrorKind::completion_no_device:
+            return protocol::TransportStatus::Disconnected;
+        case TransferErrorKind::completion_timeout:
+            return protocol::TransportStatus::Timeout;
+        case TransferErrorKind::invalid_configuration:
+        case TransferErrorKind::source_read:
+        case TransferErrorKind::submit_resource_exhausted:
+        case TransferErrorKind::submit_io:
+        case TransferErrorKind::partial_transfer:
+        case TransferErrorKind::completion_stall:
+        case TransferErrorKind::completion_io:
+        case TransferErrorKind::unexpected_cancellation:
+        case TransferErrorKind::invalid_completion:
+        case TransferErrorKind::user_cancelled:
+            return protocol::TransportStatus::IoError;
+    }
+    return protocol::TransportStatus::IoError;
+}
+
+[[nodiscard]] std::string_view transfer_error_detail(
+    const TransferErrorKind kind) noexcept {
+    switch (kind) {
+        case TransferErrorKind::invalid_configuration:
+            return "invalid USB transfer-ring configuration";
+        case TransferErrorKind::source_read:
+            return "USB transfer source could not provide a complete chunk";
+        case TransferErrorKind::submit_no_device:
+            return "USB device disconnected before transfer submission";
+        case TransferErrorKind::submit_resource_exhausted:
+            return "USB transfer submission exhausted host resources";
+        case TransferErrorKind::submit_io:
+            return "USB transfer submission failed";
+        case TransferErrorKind::partial_transfer:
+            return "USB bulk OUT completed with a short transfer";
+        case TransferErrorKind::completion_no_device:
+            return "USB device disconnected during bulk OUT";
+        case TransferErrorKind::completion_timeout:
+            return "USB bulk OUT timed out";
+        case TransferErrorKind::completion_stall:
+            return "USB bulk OUT endpoint stalled";
+        case TransferErrorKind::completion_io:
+            return "USB bulk OUT failed";
+        case TransferErrorKind::unexpected_cancellation:
+            return "USB bulk OUT was cancelled unexpectedly";
+        case TransferErrorKind::invalid_completion:
+            return "USB backend returned an invalid completion length";
+        case TransferErrorKind::user_cancelled:
+            return "USB bulk OUT was cancelled";
+    }
+    return "USB bulk OUT failed";
+}
+
+[[nodiscard]] protocol::TransferResult ring_failure(
+    const TransferRing& ring,
+    const protocol::TransportStatus fallback_status,
+    const std::string_view fallback_detail) {
+    const auto error = ring.error();
+    const auto watermark = ring.completion_watermark();
+    const auto transferred = static_cast<std::size_t>(std::min<std::uint64_t>(
+        watermark, std::numeric_limits<std::size_t>::max()));
+    if (!error.has_value()) {
+        return {
+            .status = fallback_status,
+            .transferred = transferred,
+            .certainty = watermark == 0
+                ? protocol::TransferCertainty::NotTransferred
+                : protocol::TransferCertainty::PartialOrUnknown,
+            .detail = std::string(fallback_detail),
+        };
+    }
+    return {
+        .status = transport_status(error->kind),
+        .transferred = transferred,
+        .certainty = transfer_certainty(error->certainty),
+        .detail = std::string(transfer_error_detail(error->kind)),
+    };
+}
+
+[[nodiscard]] protocol::TransferResult read_result(
+    const LibusbBulkOutBackend::ReadResult& result) {
+    using ReadCode = LibusbBulkOutBackend::ReadCode;
+    protocol::TransportStatus status = protocol::TransportStatus::IoError;
+    std::string_view detail = "USB bulk IN failed";
+    switch (result.code) {
+        case ReadCode::success:
+            status = protocol::TransportStatus::Ok;
+            detail = {};
+            break;
+        case ReadCode::timeout:
+            status = protocol::TransportStatus::Timeout;
+            detail = "USB bulk IN timed out";
+            break;
+        case ReadCode::cancelled:
+            detail = "USB bulk IN was cancelled";
+            break;
+        case ReadCode::no_device:
+            status = protocol::TransportStatus::Disconnected;
+            detail = "USB device disconnected during bulk IN";
+            break;
+        case ReadCode::stall:
+            detail = "USB bulk IN endpoint stalled";
+            break;
+        case ReadCode::overflow:
+            detail = "Fastboot USB logical response exceeded the destination";
+            break;
+        case ReadCode::resource_exhausted:
+            detail = "USB bulk IN exhausted host resources";
+            break;
+        case ReadCode::io_error:
+            break;
+        case ReadCode::closed:
+            status = protocol::TransportStatus::Disconnected;
+            detail = "Fastboot USB transport is closed";
+            break;
+    }
+    return {
+        .status = status,
+        .transferred = result.transferred,
+        .certainty = result.code == ReadCode::success
+            ? protocol::TransferCertainty::FullyTransferred
+            : result.transferred == 0 && result.code != ReadCode::overflow
+                ? protocol::TransferCertainty::NotTransferred
+                : protocol::TransferCertainty::PartialOrUnknown,
+        .truncated = result.truncated,
+        .detail = std::string(detail),
+    };
+}
+
+}  // namespace
+
+std::expected<std::unique_ptr<UsbFastbootTransport>, LibusbRuntimeError>
+UsbFastbootTransport::open(
+    std::shared_ptr<LibusbRuntime> runtime,
+    const UsbDeviceInfo& device,
+    UsbFastbootTransportOptions options) {
+    if (runtime == nullptr || options.data_ring.chunk_size == 0 ||
+        options.data_ring.depth == 0 ||
+        options.data_ring.chunk_size >
+            std::numeric_limits<std::size_t>::max() / options.data_ring.depth) {
+        return std::unexpected(
+            LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
+    }
+
+    std::shared_ptr<BufferBudget> budget = options.buffer_budget;
+    try {
+        if (budget == nullptr) {
+            budget = std::make_shared<BufferBudget>(
+                options.data_ring.chunk_size * options.data_ring.depth);
+        }
+        if (options.data_ring.chunk_size > budget->limit()) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
+        }
+        auto backend = runtime->open_bulk_out(device, options.bulk_out);
+        if (!backend.has_value()) {
+            return std::unexpected(backend.error());
+        }
+        return std::unique_ptr<UsbFastbootTransport>(new UsbFastbootTransport(
+            std::move(*backend), std::move(options), std::move(budget)));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(LibusbRuntimeError{
+            LibusbRuntimeErrorKind::open_failed, LIBUSB_ERROR_NO_MEM});
+    }
+}
+
+UsbFastbootTransport::UsbFastbootTransport(
+    std::unique_ptr<LibusbBulkOutBackend> backend,
+    UsbFastbootTransportOptions options,
+    std::shared_ptr<BufferBudget> budget)
+    : backend_(std::move(backend)),
+      options_(std::move(options)),
+      budget_(std::move(budget)) {}
+
+UsbFastbootTransport::~UsbFastbootTransport() {
+    close();
+}
+
+protocol::TransferResult UsbFastbootTransport::write(
+    const std::span<const std::byte> bytes,
+    const std::chrono::milliseconds timeout) {
+    std::scoped_lock operation(operation_mutex_);
+    if (!open_.load(std::memory_order_acquire)) {
+        return {
+            .status = protocol::TransportStatus::Disconnected,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .detail = "Fastboot USB transport is closed",
+        };
+    }
+    if (bytes.empty()) {
+        return {
+            .status = protocol::TransportStatus::Ok,
+            .certainty = protocol::TransferCertainty::FullyTransferred,
+        };
+    }
+    const auto deadline = deadline_after(timeout);
+    if (Clock::now() >= deadline) {
+        auto failure = protocol::TransferResult{
+            .status = protocol::TransportStatus::Timeout,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .detail = "USB bulk OUT deadline expired before submission",
+        };
+        poison_and_stop();
+        return failure;
+    }
+
+    bool submission_could_have_been_accepted = false;
+    try {
+        TransferRing ring(*backend_, budget_, options_.data_ring);
+        const auto source = std::make_shared<SpanTransferSource>(bytes);
+        submission_could_have_been_accepted = true;
+        if (!ring.start(source, true)) {
+            auto failure = ring_failure(
+                ring,
+                protocol::TransportStatus::IoError,
+                "USB transfer ring could not start");
+            poison_and_stop();
+            return failure;
+        }
+
+        while (ring.state() == TransferRingState::running) {
+            if (ring.in_flight() == 0) {
+                static_cast<void>(ring.pump());
+                if (ring.in_flight() == 0 &&
+                    ring.state() == TransferRingState::running) {
+                    if (Clock::now() >= deadline) {
+                        ring.cancel();
+                        auto failure = ring_failure(
+                            ring,
+                            protocol::TransportStatus::Timeout,
+                            "USB bulk OUT timed out waiting for buffer budget");
+                        failure.status = protocol::TransportStatus::Timeout;
+                        poison_and_stop();
+                        return failure;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
+            }
+
+            const auto waited = backend_->wait_for_completion(
+                remaining_until(deadline));
+            if (waited.code != LibusbBulkOutBackend::WaitCode::completion) {
+                ring.cancel();
+                auto status = protocol::TransportStatus::IoError;
+                std::string_view detail = "USB bulk OUT backend stopped";
+                if (waited.code == LibusbBulkOutBackend::WaitCode::timeout) {
+                    status = protocol::TransportStatus::Timeout;
+                    detail = "USB bulk OUT deadline expired";
+                } else if (waited.code ==
+                           LibusbBulkOutBackend::WaitCode::event_error) {
+                    detail = "libusb event loop terminated during bulk OUT";
+                }
+                auto failure = ring_failure(ring, status, detail);
+                failure.status = status;
+                poison_and_stop();
+                return failure;
+            }
+            static_cast<void>(ring.handle_completion(waited.completion));
+        }
+
+        if (ring.state() != TransferRingState::completed) {
+            auto failure = ring_failure(
+                ring,
+                protocol::TransportStatus::IoError,
+                "USB bulk OUT did not complete");
+            poison_and_stop();
+            return failure;
+        }
+        return {
+            .status = protocol::TransportStatus::Ok,
+            .transferred = bytes.size(),
+            .certainty = protocol::TransferCertainty::FullyTransferred,
+        };
+    } catch (const std::bad_alloc&) {
+        poison_and_stop();
+        return {
+            .status = protocol::TransportStatus::IoError,
+            .certainty = submission_could_have_been_accepted
+                ? protocol::TransferCertainty::PartialOrUnknown
+                : protocol::TransferCertainty::NotTransferred,
+            .detail = "USB bulk OUT exhausted host resources",
+        };
+    }
+}
+
+protocol::TransferResult UsbFastbootTransport::read(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    std::scoped_lock operation(operation_mutex_);
+    if (!open_.load(std::memory_order_acquire)) {
+        return {
+            .status = protocol::TransportStatus::Disconnected,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .detail = "Fastboot USB transport is closed",
+        };
+    }
+    auto result = read_result(backend_->read_logical_response(destination, timeout));
+    if (result.status != protocol::TransportStatus::Ok || result.truncated) {
+        poison_and_stop();
+    }
+    return result;
+}
+
+void UsbFastbootTransport::cancel() noexcept {
+    poison_and_stop();
+}
+
+void UsbFastbootTransport::close() noexcept {
+    poison_and_stop();
+}
+
+bool UsbFastbootTransport::is_open() const noexcept {
+    return open_.load(std::memory_order_acquire);
+}
+
+void UsbFastbootTransport::poison_and_stop() noexcept {
+    if (open_.exchange(false, std::memory_order_acq_rel) && backend_ != nullptr) {
+        backend_->stop();
+    }
+}
+
+}  // namespace kairosboot::transport

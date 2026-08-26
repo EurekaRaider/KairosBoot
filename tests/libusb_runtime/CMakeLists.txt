@@ -79,6 +79,7 @@ add_executable(kairosboot_libusb_runtime_tests
     ../../src/transport/buffer_budget.cpp
     ../../src/transport/libusb_runtime.cpp
     ../../src/transport/transfer_ring.cpp
+    ../../src/transport/usb_fastboot.cpp
     test_main.cpp
 )
 

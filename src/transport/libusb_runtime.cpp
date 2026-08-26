@@ -36,6 +36,38 @@ inline constexpr auto kPerBackendDrainWait = std::chrono::milliseconds{250};
 inline constexpr auto kRuntimeDrainWait = std::chrono::milliseconds{250};
 inline constexpr auto kEventThreadExitWait = std::chrono::milliseconds{250};
 
+using SteadyClock = std::chrono::steady_clock;
+
+[[nodiscard]] SteadyClock::time_point deadline_after(
+    const std::chrono::milliseconds timeout) noexcept {
+    const auto now = SteadyClock::now();
+    if (timeout == std::chrono::milliseconds::max()) {
+        return SteadyClock::time_point::max();
+    }
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return now;
+    }
+    const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(
+        SteadyClock::time_point::max() - now);
+    return timeout >= room ? SteadyClock::time_point::max() : now + timeout;
+}
+
+[[nodiscard]] std::uint32_t libusb_timeout_until(
+    const SteadyClock::time_point deadline) noexcept {
+    if (deadline == SteadyClock::time_point::max()) {
+        return 0;
+    }
+    const auto now = SteadyClock::now();
+    if (now >= deadline) {
+        return 1;
+    }
+    const auto remaining =
+        std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count();
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(remaining),
+        std::numeric_limits<std::uint32_t>::max()));
+}
+
 constinit std::byte kModulePinAnchor{};
 
 #if defined(_WIN32)
@@ -221,6 +253,8 @@ struct ProcessLifetimeQuarantineRoot final {
                 (alternate.bNumEndpoints != 0 && alternate.endpoint == nullptr)) {
                 continue;
             }
+            bool matched_out = false;
+            bool matched_in = false;
             for (std::uint8_t endpoint_index = 0;
                  endpoint_index < alternate.bNumEndpoints;
                  ++endpoint_index) {
@@ -228,13 +262,22 @@ struct ProcessLifetimeQuarantineRoot final {
                 const auto type = endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK;
                 const auto maximum_packet_size =
                     static_cast<std::uint16_t>(endpoint.wMaxPacketSize & 0x07FFU);
-                if (type == LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK &&
-                    (endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN) ==
-                        LIBUSB_ENDPOINT_OUT &&
-                    endpoint.bEndpointAddress == snapshot.bulk_out_endpoint &&
-                    maximum_packet_size == snapshot.bulk_out_max_packet_size) {
-                    return true;
+                if (type != LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK) {
+                    continue;
                 }
+                const auto direction =
+                    endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN;
+                matched_out = matched_out ||
+                    (direction == LIBUSB_ENDPOINT_OUT &&
+                     endpoint.bEndpointAddress == snapshot.bulk_out_endpoint &&
+                     maximum_packet_size == snapshot.bulk_out_max_packet_size);
+                matched_in = matched_in ||
+                    (direction == LIBUSB_ENDPOINT_IN &&
+                     endpoint.bEndpointAddress == snapshot.bulk_in_endpoint &&
+                     maximum_packet_size == snapshot.bulk_in_max_packet_size);
+            }
+            if (matched_out && matched_in) {
+                return true;
             }
         }
     }
@@ -460,6 +503,27 @@ struct LibusbBulkOutBackend::State final {
         Pending* next_ready{};
     };
 
+    struct ReadPending final {
+        struct RawCompletion final {
+            libusb_transfer_status status{LIBUSB_TRANSFER_ERROR};
+            int actual_length{};
+            std::uint64_t event_epoch{};
+        };
+
+        State* owner{};
+        libusb_transfer* transfer{};
+        std::vector<std::byte> buffer;
+        std::size_t destination_capacity{};
+        SteadyClock::time_point deadline{};
+        std::atomic<bool> raw_ready{false};
+        RawCompletion raw_completion;
+    };
+
+    struct ReadyRead final {
+        LibusbBulkOutBackend::ReadResult result;
+        std::vector<std::byte> bytes;
+    };
+
     State(std::shared_ptr<LibusbRuntime::State> owning_runtime,
           libusb_device_handle* opened_handle,
           const UsbDeviceInfo& device,
@@ -468,6 +532,7 @@ struct LibusbBulkOutBackend::State final {
           handle(opened_handle),
           interface_number(device.interface_number),
           endpoint(device.bulk_out_endpoint),
+          inbound_endpoint(device.bulk_in_endpoint),
           maximum_packet_size(device.bulk_out_max_packet_size),
           options(backend_options) {}
 
@@ -477,7 +542,7 @@ struct LibusbBulkOutBackend::State final {
             ready_head = ready_head->next_ready;
             delete completed;
         }
-        if (!closed && pending.empty()) {
+        if (!closed && pending.empty() && read_pending == nullptr) {
             static_cast<void>(runtime->functions.release_interface(handle, interface_number));
             runtime->functions.close(handle);
         }
@@ -487,6 +552,7 @@ struct LibusbBulkOutBackend::State final {
     libusb_device_handle* handle{};
     int interface_number{};
     std::uint8_t endpoint{};
+    std::uint8_t inbound_endpoint{};
     std::uint16_t maximum_packet_size{};
     BulkOutOptions options;
     mutable std::mutex mutex;
@@ -498,11 +564,25 @@ struct LibusbBulkOutBackend::State final {
     Pending* completion_fifo_head{};
     Pending* ready_head{};
     Pending* ready_tail{};
+    std::unique_ptr<ReadPending> read_pending;
+    std::optional<ReadyRead> ready_read;
     std::shared_ptr<State> quarantine_next;
 
     static void LIBUSB_CALL on_transfer(libusb_transfer* transfer) noexcept {
         auto* pending_transfer = static_cast<Pending*>(transfer->user_data);
         pending_transfer->owner->enqueue(*pending_transfer, *transfer);
+    }
+
+    static void LIBUSB_CALL on_read_transfer(libusb_transfer* transfer) noexcept {
+        auto* pending_read = static_cast<ReadPending*>(transfer->user_data);
+        pending_read->raw_completion = ReadPending::RawCompletion{
+            transfer->status,
+            transfer->actual_length,
+            pending_read->owner->runtime->active_event_epoch.load(
+                std::memory_order_acquire),
+        };
+        pending_read->raw_ready.store(true, std::memory_order_release);
+        pending_read->owner->runtime->completion_cv.notify_all();
     }
 
     void enqueue(Pending& pending_transfer, const libusb_transfer& transfer) noexcept {
@@ -528,11 +608,22 @@ struct LibusbBulkOutBackend::State final {
     void service_raw(bool shutting_down);
     [[nodiscard]] bool service_shutdown();
     [[nodiscard]] bool try_pop(TransferCompletion& completion);
+    [[nodiscard]] LibusbBulkOutBackend::WaitResult wait_pop(
+        std::chrono::milliseconds timeout);
+    [[nodiscard]] LibusbBulkOutBackend::ReadResult read_logical_response(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     void close_if_drained() noexcept;
 
 private:
     [[nodiscard]] bool process_one_raw(bool shutting_down);
+    [[nodiscard]] bool process_read_raw(bool shutting_down);
+    [[nodiscard]] std::optional<ReadyRead> pop_ready_read();
+    void configure_read_transfer(ReadPending& pending_read) noexcept;
+    void finish_read_locked(LibusbBulkOutBackend::ReadCode code,
+                            std::size_t transferred,
+                            bool truncated);
     void configure_data_transfer(Pending& pending_transfer,
                                  const TransferSubmission& submission) noexcept;
     void configure_zero_packet(Pending& pending_transfer) noexcept;
@@ -901,10 +992,15 @@ void LibusbBulkOutBackend::State::request_stop() noexcept {
         static_cast<void>(ignored);
         static_cast<void>(runtime->functions.cancel_transfer(pending_transfer->transfer));
     }
+    if (read_pending != nullptr) {
+        static_cast<void>(runtime->functions.cancel_transfer(read_pending->transfer));
+    }
 }
 
 void LibusbBulkOutBackend::State::service_raw(const bool shutting_down) {
     while (process_one_raw(shutting_down)) {
+    }
+    while (process_read_raw(shutting_down)) {
     }
 }
 
@@ -992,10 +1088,132 @@ void LibusbBulkOutBackend::State::finish_pending(
     ready_tail = ready;
 }
 
+void LibusbBulkOutBackend::State::configure_read_transfer(
+    ReadPending& pending_read) noexcept {
+    auto* transfer = pending_read.transfer;
+    transfer->dev_handle = handle;
+    transfer->flags = 0;
+    transfer->endpoint = inbound_endpoint;
+    transfer->type = LIBUSB_TRANSFER_TYPE_BULK;
+    transfer->timeout = libusb_timeout_until(pending_read.deadline);
+    transfer->length = static_cast<int>(pending_read.buffer.size());
+    transfer->actual_length = 0;
+    transfer->callback = &State::on_read_transfer;
+    transfer->user_data = &pending_read;
+    transfer->buffer = reinterpret_cast<unsigned char*>(pending_read.buffer.data());
+}
+
+bool LibusbBulkOutBackend::State::process_read_raw(const bool shutting_down) {
+    std::lock_guard lock(mutex);
+    if (read_pending == nullptr ||
+        !read_pending->raw_ready.load(std::memory_order_acquire) ||
+        read_pending->raw_completion.event_epoch >
+            runtime->completed_event_epoch.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    read_pending->raw_ready.store(false, std::memory_order_release);
+    const auto raw = read_pending->raw_completion;
+    if (raw.actual_length < 0) {
+        finish_read_locked(LibusbBulkOutBackend::ReadCode::io_error, 0, false);
+        return true;
+    }
+
+    const auto actual = static_cast<std::size_t>(raw.actual_length);
+    const auto copied = std::min(actual, read_pending->destination_capacity);
+    if (raw.status == LIBUSB_TRANSFER_COMPLETED && actual == 0) {
+        // A transfer-level ZLP terminates a preceding packet-aligned USB
+        // transfer. It is not a Fastboot logical response by itself.
+        if (shutting_down || !accepting) {
+            finish_read_locked(LibusbBulkOutBackend::ReadCode::cancelled, 0, false);
+            return true;
+        }
+        if (SteadyClock::now() >= read_pending->deadline) {
+            finish_read_locked(LibusbBulkOutBackend::ReadCode::timeout, 0, false);
+            return true;
+        }
+        configure_read_transfer(*read_pending);
+        const auto result = runtime->functions.submit_transfer(read_pending->transfer);
+        if (result == LIBUSB_SUCCESS) {
+            return true;
+        }
+        finish_read_locked(
+            result == LIBUSB_ERROR_NO_DEVICE
+                ? LibusbBulkOutBackend::ReadCode::no_device
+                : result == LIBUSB_ERROR_NO_MEM
+                    ? LibusbBulkOutBackend::ReadCode::resource_exhausted
+                    : LibusbBulkOutBackend::ReadCode::io_error,
+            0,
+            false);
+        return true;
+    }
+
+    switch (raw.status) {
+        case LIBUSB_TRANSFER_COMPLETED:
+            if (actual >= read_pending->buffer.size()) {
+                finish_read_locked(
+                    LibusbBulkOutBackend::ReadCode::overflow, copied, true);
+            } else {
+                finish_read_locked(
+                    LibusbBulkOutBackend::ReadCode::success, copied, false);
+            }
+            break;
+        case LIBUSB_TRANSFER_TIMED_OUT:
+            finish_read_locked(
+                LibusbBulkOutBackend::ReadCode::timeout, copied, false);
+            break;
+        case LIBUSB_TRANSFER_CANCELLED:
+            finish_read_locked(
+                LibusbBulkOutBackend::ReadCode::cancelled, copied, false);
+            break;
+        case LIBUSB_TRANSFER_STALL:
+            finish_read_locked(
+                LibusbBulkOutBackend::ReadCode::stall, copied, false);
+            break;
+        case LIBUSB_TRANSFER_NO_DEVICE:
+            finish_read_locked(
+                LibusbBulkOutBackend::ReadCode::no_device, copied, false);
+            break;
+        case LIBUSB_TRANSFER_OVERFLOW:
+            finish_read_locked(
+                LibusbBulkOutBackend::ReadCode::overflow, copied, true);
+            break;
+        case LIBUSB_TRANSFER_ERROR:
+            finish_read_locked(
+                LibusbBulkOutBackend::ReadCode::io_error, copied, false);
+            break;
+    }
+    return true;
+}
+
+void LibusbBulkOutBackend::State::finish_read_locked(
+    const LibusbBulkOutBackend::ReadCode code,
+    const std::size_t transferred,
+    const bool truncated) {
+    auto finished = std::move(read_pending);
+    runtime->functions.free_transfer(finished->transfer);
+    finished->transfer = nullptr;
+    ready_read.emplace(ReadyRead{
+        LibusbBulkOutBackend::ReadResult{code, transferred, truncated},
+        std::move(finished->buffer),
+    });
+}
+
+std::optional<LibusbBulkOutBackend::State::ReadyRead>
+LibusbBulkOutBackend::State::pop_ready_read() {
+    std::lock_guard lock(mutex);
+    if (!ready_read.has_value()) {
+        return std::nullopt;
+    }
+    auto result = std::move(*ready_read);
+    ready_read.reset();
+    return result;
+}
+
 bool LibusbBulkOutBackend::State::service_shutdown() {
     service_raw(true);
     std::lock_guard lock(mutex);
-    if (!pending.empty()) {
+    if (!pending.empty() || read_pending != nullptr) {
         return false;
     }
     close_if_drained();
@@ -1003,7 +1221,7 @@ bool LibusbBulkOutBackend::State::service_shutdown() {
 }
 
 void LibusbBulkOutBackend::State::close_if_drained() noexcept {
-    if (!closed && pending.empty()) {
+    if (!closed && pending.empty() && read_pending == nullptr) {
         static_cast<void>(runtime->functions.release_interface(handle, interface_number));
         runtime->functions.close(handle);
         handle = nullptr;
@@ -1027,9 +1245,165 @@ bool LibusbBulkOutBackend::State::try_pop(TransferCompletion& completion) {
     return true;
 }
 
+LibusbBulkOutBackend::WaitResult LibusbBulkOutBackend::State::wait_pop(
+    const std::chrono::milliseconds timeout) {
+    const auto deadline = deadline_after(timeout);
+    for (;;) {
+        const auto observed_epoch =
+            runtime->completed_event_epoch.load(std::memory_order_acquire);
+        TransferCompletion completion;
+        if (try_pop(completion)) {
+            return {LibusbBulkOutBackend::WaitCode::completion, completion};
+        }
+        if (runtime->event_terminal.load(std::memory_order_acquire)) {
+            return {LibusbBulkOutBackend::WaitCode::event_error, {}};
+        }
+        {
+            std::lock_guard lock(mutex);
+            if (closed || quarantined.load(std::memory_order_acquire)) {
+                return {LibusbBulkOutBackend::WaitCode::stopped, {}};
+            }
+        }
+        if (SteadyClock::now() >= deadline) {
+            return {LibusbBulkOutBackend::WaitCode::timeout, {}};
+        }
+
+        std::unique_lock completion_lock(runtime->completion_mutex);
+        const auto predicate = [&] {
+            return runtime->completed_event_epoch.load(std::memory_order_acquire) !=
+                       observed_epoch ||
+                   runtime->event_terminal.load(std::memory_order_acquire);
+        };
+        if (deadline == SteadyClock::time_point::max()) {
+            runtime->completion_cv.wait(completion_lock, predicate);
+        } else {
+            static_cast<void>(runtime->completion_cv.wait_until(
+                completion_lock, deadline, predicate));
+        }
+    }
+}
+
+LibusbBulkOutBackend::ReadResult
+LibusbBulkOutBackend::State::read_logical_response(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    const auto deadline = deadline_after(timeout);
+    if (SteadyClock::now() >= deadline) {
+        return {LibusbBulkOutBackend::ReadCode::timeout, 0, false};
+    }
+    if (destination.size() >=
+        static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {LibusbBulkOutBackend::ReadCode::io_error, 0, false};
+    }
+
+    {
+        std::lock_guard lock(mutex);
+        if (!accepting || closed ||
+            !runtime->accepting.load(std::memory_order_acquire)) {
+            return {LibusbBulkOutBackend::ReadCode::closed, 0, false};
+        }
+        if (read_pending != nullptr || ready_read.has_value()) {
+            return {LibusbBulkOutBackend::ReadCode::io_error, 0, false};
+        }
+
+        libusb_transfer* transfer = nullptr;
+        try {
+            transfer = runtime->functions.alloc_transfer(0);
+            if (transfer == nullptr) {
+                return {LibusbBulkOutBackend::ReadCode::resource_exhausted, 0, false};
+            }
+            auto pending_read = std::make_unique<ReadPending>();
+            pending_read->owner = this;
+            pending_read->transfer = transfer;
+            // The destination is never handed to libusb. This owned probe
+            // buffer remains valid through a late callback or process-lifetime
+            // quarantine, and its extra byte distinguishes a full destination
+            // from a truncated logical response.
+            pending_read->buffer.resize(destination.size() + 1U);
+            pending_read->destination_capacity = destination.size();
+            pending_read->deadline = deadline;
+            configure_read_transfer(*pending_read);
+            read_pending = std::move(pending_read);
+            const auto result = runtime->functions.submit_transfer(transfer);
+            if (result != LIBUSB_SUCCESS) {
+                auto rejected = std::move(read_pending);
+                runtime->functions.free_transfer(rejected->transfer);
+                return {
+                    result == LIBUSB_ERROR_NO_DEVICE
+                        ? LibusbBulkOutBackend::ReadCode::no_device
+                        : result == LIBUSB_ERROR_NO_MEM
+                            ? LibusbBulkOutBackend::ReadCode::resource_exhausted
+                            : LibusbBulkOutBackend::ReadCode::io_error,
+                    0,
+                    false,
+                };
+            }
+        } catch (const std::bad_alloc&) {
+            if (read_pending != nullptr) {
+                runtime->functions.free_transfer(read_pending->transfer);
+                read_pending.reset();
+            } else if (transfer != nullptr) {
+                runtime->functions.free_transfer(transfer);
+            }
+            return {LibusbBulkOutBackend::ReadCode::resource_exhausted, 0, false};
+        } catch (...) {
+            if (read_pending != nullptr) {
+                runtime->functions.free_transfer(read_pending->transfer);
+                read_pending.reset();
+            } else if (transfer != nullptr) {
+                runtime->functions.free_transfer(transfer);
+            }
+            return {LibusbBulkOutBackend::ReadCode::io_error, 0, false};
+        }
+    }
+
+    for (;;) {
+        const auto observed_epoch =
+            runtime->completed_event_epoch.load(std::memory_order_acquire);
+        service_raw(false);
+        if (auto ready = pop_ready_read(); ready.has_value()) {
+            if (ready->result.transferred != 0) {
+                std::copy_n(ready->bytes.begin(),
+                            ready->result.transferred,
+                            destination.begin());
+            }
+            return ready->result;
+        }
+        if (runtime->event_terminal.load(std::memory_order_acquire)) {
+            std::lock_guard lock(mutex);
+            if (read_pending != nullptr) {
+                static_cast<void>(
+                    runtime->functions.cancel_transfer(read_pending->transfer));
+            }
+            return {LibusbBulkOutBackend::ReadCode::io_error, 0, false};
+        }
+        if (SteadyClock::now() >= deadline) {
+            std::lock_guard lock(mutex);
+            if (read_pending != nullptr) {
+                static_cast<void>(
+                    runtime->functions.cancel_transfer(read_pending->transfer));
+            }
+            return {LibusbBulkOutBackend::ReadCode::timeout, 0, false};
+        }
+
+        std::unique_lock completion_lock(runtime->completion_mutex);
+        const auto predicate = [&] {
+            return runtime->completed_event_epoch.load(std::memory_order_acquire) !=
+                       observed_epoch ||
+                   runtime->event_terminal.load(std::memory_order_acquire);
+        };
+        if (deadline == SteadyClock::time_point::max()) {
+            runtime->completion_cv.wait(completion_lock, predicate);
+        } else {
+            static_cast<void>(runtime->completion_cv.wait_until(
+                completion_lock, deadline, predicate));
+        }
+    }
+}
+
 std::size_t LibusbBulkOutBackend::State::in_flight() const noexcept {
     std::lock_guard lock(mutex);
-    return pending.size();
+    return pending.size() + (read_pending == nullptr ? 0U : 1U);
 }
 
 std::expected<std::shared_ptr<LibusbRuntime>, LibusbRuntimeError> LibusbRuntime::create(
@@ -1168,24 +1542,39 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         }
         ConfigDescriptorGuard config_guard{&state_->functions, raw_config};
 
-        std::array<std::uint8_t, 16> port_numbers{};
-        const auto port_count = state_->functions.get_port_numbers(
-            device, port_numbers.data(), static_cast<int>(port_numbers.size()));
-        std::vector<std::uint8_t> port_path;
-        if (port_count > 0 && port_count <= static_cast<int>(port_numbers.size())) {
-            port_path.assign(port_numbers.begin(), port_numbers.begin() + port_count);
-        }
+        std::optional<std::vector<std::uint8_t>> port_path;
+        std::optional<std::string> serial;
+        const auto load_identity = [&]() -> bool {
+            if (port_path.has_value()) {
+                return true;
+            }
 
-        std::array<char, LIBUSB_DEVICE_STRING_BYTES_MAX> serial_buffer{};
-        const auto serial_result = state_->functions.get_device_string(
-            device,
-            LIBUSB_DEVICE_STRING_SERIAL_NUMBER,
-            serial_buffer.data(),
-            static_cast<int>(serial_buffer.size()));
-        const auto serial_end = std::find(serial_buffer.begin(), serial_buffer.end(), '\0');
-        const std::string serial = serial_result > 0
-                                       ? std::string(serial_buffer.begin(), serial_end)
-                                       : std::string{};
+            std::array<std::uint8_t, 16> port_numbers{};
+            const auto port_count = state_->functions.get_port_numbers(
+                device, port_numbers.data(), static_cast<int>(port_numbers.size()));
+            if (port_count <= 0 ||
+                port_count > static_cast<int>(port_numbers.size())) {
+                return false;
+            }
+            port_path.emplace(port_numbers.begin(),
+                              port_numbers.begin() + port_count);
+
+            // Descriptor string access can open/control-transfer the device on
+            // some platforms. Do it only after a matching Fastboot interface
+            // with one unambiguous bulk IN/OUT pair has been identified.
+            std::array<char, LIBUSB_DEVICE_STRING_BYTES_MAX> serial_buffer{};
+            const auto serial_result = state_->functions.get_device_string(
+                device,
+                LIBUSB_DEVICE_STRING_SERIAL_NUMBER,
+                serial_buffer.data(),
+                static_cast<int>(serial_buffer.size()));
+            const auto serial_end =
+                std::find(serial_buffer.begin(), serial_buffer.end(), '\0');
+            serial.emplace(serial_result > 0
+                               ? std::string(serial_buffer.begin(), serial_end)
+                               : std::string{});
+            return true;
+        };
 
         for (std::uint8_t interface_index = 0;
              interface_index < raw_config->bNumInterfaces;
@@ -1209,6 +1598,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                 if (alternate.bNumEndpoints != 0 && alternate.endpoint == nullptr) {
                     continue;
                 }
+                const libusb_endpoint_descriptor* bulk_out = nullptr;
+                const libusb_endpoint_descriptor* bulk_in = nullptr;
+                bool ambiguous_bulk_pair = false;
                 for (std::uint8_t endpoint_index = 0;
                      endpoint_index < alternate.bNumEndpoints;
                      ++endpoint_index) {
@@ -1217,27 +1609,39 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                         endpoint_descriptor.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK;
                     const auto direction =
                         endpoint_descriptor.bEndpointAddress & LIBUSB_ENDPOINT_IN;
-                    if (transfer_type != LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK ||
-                        direction != LIBUSB_ENDPOINT_OUT) {
+                    if (transfer_type != LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK) {
                         continue;
                     }
-                    devices.push_back(UsbDeviceInfo{
-                        descriptor.idVendor,
-                        descriptor.idProduct,
-                        state_->functions.get_bus_number(device),
-                        state_->functions.get_device_address(device),
-                        port_path,
-                        serial,
-                        alternate.bInterfaceNumber,
-                        alternate.bAlternateSetting,
-                        alternate.bInterfaceClass,
-                        alternate.bInterfaceSubClass,
-                        alternate.bInterfaceProtocol,
-                        endpoint_descriptor.bEndpointAddress,
-                        static_cast<std::uint16_t>(endpoint_descriptor.wMaxPacketSize & 0x07FFU),
-                    });
-                    break;
+                    auto*& selected = direction == LIBUSB_ENDPOINT_IN
+                                          ? bulk_in
+                                          : bulk_out;
+                    if (selected != nullptr) {
+                        ambiguous_bulk_pair = true;
+                    } else {
+                        selected = &endpoint_descriptor;
+                    }
                 }
+                if (ambiguous_bulk_pair || bulk_out == nullptr || bulk_in == nullptr ||
+                    !load_identity()) {
+                    continue;
+                }
+                devices.push_back(UsbDeviceInfo{
+                    descriptor.idVendor,
+                    descriptor.idProduct,
+                    state_->functions.get_bus_number(device),
+                    state_->functions.get_device_address(device),
+                    *port_path,
+                    *serial,
+                    alternate.bInterfaceNumber,
+                    alternate.bAlternateSetting,
+                    alternate.bInterfaceClass,
+                    alternate.bInterfaceSubClass,
+                    alternate.bInterfaceProtocol,
+                    bulk_out->bEndpointAddress,
+                    static_cast<std::uint16_t>(bulk_out->wMaxPacketSize & 0x07FFU),
+                    bulk_in->bEndpointAddress,
+                    static_cast<std::uint16_t>(bulk_in->wMaxPacketSize & 0x07FFU),
+                });
             }
         }
     }
@@ -1252,7 +1656,9 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
             LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
     }
     if ((device.bulk_out_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_OUT ||
-        device.bulk_out_max_packet_size == 0 || device.port_path.empty() ||
+        (device.bulk_in_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_IN ||
+        device.bulk_out_max_packet_size == 0 ||
+        device.bulk_in_max_packet_size == 0 || device.port_path.empty() ||
         device.port_path.size() > 16) {
         return std::unexpected(
             LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
@@ -1367,6 +1773,17 @@ void LibusbBulkOutBackend::cancel(const TransferId id) noexcept { state_->cancel
 
 bool LibusbBulkOutBackend::try_pop_completion(TransferCompletion& completion) {
     return state_->try_pop(completion);
+}
+
+LibusbBulkOutBackend::WaitResult LibusbBulkOutBackend::wait_for_completion(
+    const std::chrono::milliseconds timeout) {
+    return state_->wait_pop(timeout);
+}
+
+LibusbBulkOutBackend::ReadResult LibusbBulkOutBackend::read_logical_response(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    return state_->read_logical_response(destination, timeout);
 }
 
 std::size_t LibusbBulkOutBackend::in_flight() const noexcept {

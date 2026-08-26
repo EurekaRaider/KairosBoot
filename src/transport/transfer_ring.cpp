@@ -70,7 +70,8 @@ TransferRing::TransferRing(TransferBackend& backend,
                            const TransferRingConfig config)
     : backend_(backend), budget_(std::move(budget)), config_(config) {}
 
-bool TransferRing::start(std::shared_ptr<TransferSource> source) {
+bool TransferRing::start(std::shared_ptr<TransferSource> source,
+                         const bool logical_message_end) {
     if (state_ != TransferRingState::idle || source == nullptr || budget_ == nullptr ||
         config_.chunk_size == 0 || config_.depth == 0 ||
         config_.chunk_size > budget_->limit()) {
@@ -84,6 +85,7 @@ bool TransferRing::start(std::shared_ptr<TransferSource> source) {
 
     source_ = std::move(source);
     total_bytes_ = source_->size();
+    logical_message_end_ = logical_message_end;
     state_ = TransferRingState::running;
     if (total_bytes_ == 0) {
         state_ = TransferRingState::completed;
@@ -122,10 +124,13 @@ bool TransferRing::pump() {
             break;
         }
 
-        const TransferSubmission submission{id,
-                                            offset,
-                                            entry->second.buffer.bytes(),
-                                            entry->second.buffer.lifetime_token()};
+        const TransferSubmission submission{
+            id,
+            offset,
+            entry->second.buffer.bytes(),
+            entry->second.buffer.lifetime_token(),
+            logical_message_end_ && offset + chunk == total_bytes_,
+        };
         const auto result = backend_.submit(submission);
         if (result != SubmitResult::accepted) {
             in_flight_.erase(entry);
