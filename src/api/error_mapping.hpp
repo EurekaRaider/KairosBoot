@@ -12,6 +12,7 @@ struct PrimitiveError;
 namespace kairosboot::image {
 struct FileSourceError;
 struct ImageSourceError;
+struct SparseError;
 }
 
 namespace kairosboot::transport {
@@ -32,6 +33,10 @@ struct DeviceSelectionError;
 
 [[nodiscard]] OperationErrorPayload normalize_public_error(
     const image::FileSourceError& error,
+    std::string_view device_identifier);
+
+[[nodiscard]] OperationErrorPayload normalize_public_error(
+    const image::SparseError& error,
     std::string_view device_identifier);
 
 [[nodiscard]] OperationErrorPayload normalize_public_error(
