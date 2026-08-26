@@ -75,11 +75,11 @@ void selects_usb_by_unique_serial_or_physical_path() {
     UsbDeviceInfo first{};
     first.bus_number = 1;
     first.port_path = {2, 3};
-    first.serial_utf8 = "A";
+    first.serial_utf8.push_back('A');
     UsbDeviceInfo second{};
     second.bus_number = 2;
     second.port_path = {4};
-    second.serial_utf8 = "B";
+    second.serial_utf8.push_back('B');
     const std::vector devices{first, second};
 
     const auto unique = parse_device_selector(std::nullopt);
