@@ -71,7 +71,9 @@ set_target_properties(
              VISIBILITY_INLINES_HIDDEN YES)
 target_compile_features(kairosboot_internal PUBLIC cxx_std_23)
 target_include_directories(kairosboot_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(kairosboot_internal PRIVATE kairosboot_libusb Threads::Threads)
+target_link_libraries(kairosboot_internal
+                      PRIVATE kairosboot_libusb Threads::Threads
+                              ${CMAKE_DL_LIBS})
 if(WIN32)
   target_link_libraries(kairosboot_internal PRIVATE ws2_32)
 endif()
