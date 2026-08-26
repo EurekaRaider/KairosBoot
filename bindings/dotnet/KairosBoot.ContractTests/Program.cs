@@ -13,7 +13,7 @@ internal static class Program
         try
         {
             CheckVersion();
-            CheckDevicesFailAccurately();
+            CheckDevicesEnumerate();
             await CheckFlashFailsAccurately().ConfigureAwait(false);
             await CheckPreCancellation().ConfigureAwait(false);
             CheckDisposedContext();
@@ -46,13 +46,18 @@ internal static class Program
         }
     }
 
-    private static void CheckDevicesFailAccurately()
+    private static void CheckDevicesEnumerate()
     {
         using (var context = Context.Create())
         {
-            var exception = Expect<KairosBootException>(() => { _ = context.Devices; });
-            Check(exception.Status == KairosBootStatus.NotSupported, "device status");
-            Check(exception.Message.IndexOf("transport", StringComparison.Ordinal) >= 0, "device message");
+            var devices = context.Devices;
+            Check(devices != null, "device collection");
+            foreach (var device in devices!)
+            {
+                Check(device.Serial != null, "device serial");
+                Check(device.UsbPath != null, "device USB path");
+                Check(device.Product != null, "device product");
+            }
         }
     }
 

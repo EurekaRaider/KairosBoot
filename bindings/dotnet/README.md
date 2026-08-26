@@ -119,6 +119,7 @@ DYLD_LIBRARY_PATH="$PWD/build:$PWD/build-deps/libusb/lib" \
     -c Release -f net10.0
 ```
 
-The current native foundation returns `NotSupported` for enumeration and flash.
-The contract runner verifies that this is surfaced as an exception, including
-UTF-8 device identifiers and `NotSent` transfer certainty.
+The current native foundation enumerates USB Fastboot interfaces. Flash still
+returns `NotSupported`; the contract runner verifies that this is surfaced as
+an exception, including UTF-8 device identifiers and `NotSent` transfer
+certainty.
