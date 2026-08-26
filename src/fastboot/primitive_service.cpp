@@ -317,6 +317,16 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::erase(
     return command(PrimitiveOperation::Erase, *command_text);
 }
 
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::set_active(
+    const std::string_view slot) {
+    auto command_text = parameter_command(
+        PrimitiveOperation::SetActive, "set_active:", slot);
+    if (!command_text) {
+        return std::unexpected(std::move(command_text.error()));
+    }
+    return command(PrimitiveOperation::SetActive, *command_text);
+}
+
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::reboot(
     const RebootTarget target) {
     switch (target) {
@@ -348,6 +358,16 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::oem(
         return std::unexpected(std::move(command_text.error()));
     }
     return command(PrimitiveOperation::Oem, *command_text);
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::raw_command(
+    const std::string_view command_text) {
+    auto validated = parameter_command(
+        PrimitiveOperation::RawCommand, {}, command_text);
+    if (!validated) {
+        return std::unexpected(std::move(validated.error()));
+    }
+    return command(PrimitiveOperation::RawCommand, *validated);
 }
 
 void PrimitiveService::request_cancel() noexcept {
@@ -384,7 +404,17 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::command(
     const bool retire_on_success) {
     auto result = session_.command(command_text);
     if (!result) {
-        return std::unexpected(protocol_error(operation, result.error(), false));
+        auto error = protocol_error(operation, result.error(), false);
+        // FastbootSession::command accepts only terminal OKAY/FAIL after
+        // informational responses, so a well-formed DATA response reaches this
+        // path as UnexpectedResponse and has already poisoned the session.
+        if (operation == PrimitiveOperation::RawCommand &&
+            result.error().code == protocol::ProtocolErrorCode::UnexpectedResponse) {
+            error.code = PrimitiveErrorCode::Unsupported;
+            error.message =
+                "Fastboot raw command returned DATA; raw DATA exchanges are not supported";
+        }
+        return std::unexpected(std::move(error));
     }
     if (!result->succeeded()) {
         return std::unexpected(device_fail(operation, *result, false));
