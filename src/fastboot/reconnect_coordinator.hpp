@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -14,6 +15,9 @@
 #include <vector>
 
 namespace kairosboot::fastboot {
+
+using ReconnectClock = std::chrono::steady_clock;
+using ReconnectTimePoint = ReconnectClock::time_point;
 
 struct UsbPhysicalPortPath final {
     std::uint8_t bus_number{};
@@ -27,19 +31,39 @@ enum class FastbootUsbMode : std::uint8_t {
     Fastbootd,
 };
 
-// Discovery identity for one Fastboot USB interface. The physical port is the
-// reconnect key. serial/product are only secondary identity checks and are
-// never used to select a device on a different port.
+struct ReconnectUsbFingerprint final {
+    std::uint16_t vendor_id{};
+    std::uint16_t product_id{};
+    std::uint8_t interface_number{};
+    std::uint8_t interface_class{};
+    std::uint8_t interface_subclass{};
+    std::uint8_t interface_protocol{};
+
+    [[nodiscard]] bool operator==(const ReconnectUsbFingerprint&) const = default;
+};
+
+// Passive discovery result for one Fastboot USB interface. Discovery may use
+// only USB topology/descriptors and must never emit Fastboot protocol bytes.
+struct ReconnectCandidate final {
+    UsbPhysicalPortPath physical_port;
+    std::optional<std::string> serial;
+    ReconnectUsbFingerprint usb_fingerprint;
+};
+
+// Identity verified only after exclusively opening the candidate. Product and
+// mode are protocol identities and therefore never belong to passive discovery.
 struct ReconnectDeviceIdentity final {
     UsbPhysicalPortPath physical_port;
-    std::string serial;
+    std::optional<std::string> serial;
+    ReconnectUsbFingerprint usb_fingerprint;
     std::string product;
     FastbootUsbMode mode{FastbootUsbMode::Bootloader};
 };
 
 struct ReconnectTarget final {
     UsbPhysicalPortPath physical_port;
-    std::string serial;
+    std::optional<std::string> serial;
+    ReconnectUsbFingerprint usb_fingerprint;
     std::string product;
     FastbootUsbMode previous_mode{FastbootUsbMode::Bootloader};
     FastbootUsbMode required_mode{FastbootUsbMode::Fastbootd};
@@ -62,7 +86,7 @@ struct ReconnectOpenError final {
     // Certainty for bytes emitted while opening/probing the replacement
     // session. Only NotTransferred failures may be retried.
     protocol::TransferCertainty outbound_certainty{
-        protocol::TransferCertainty::NotTransferred};
+        protocol::TransferCertainty::PartialOrUnknown};
 };
 
 struct OpenedReconnectSession final {
@@ -70,24 +94,37 @@ struct OpenedReconnectSession final {
     // candidate. The coordinator compares it again to close scan/open races.
     ReconnectDeviceIdentity verified_identity;
     std::unique_ptr<protocol::FastbootSession> session;
+    // Aggregate certainty for every protocol byte emitted while opening and
+    // verifying this session. It remains authoritative if cancellation or the
+    // absolute deadline wins immediately after open() returns.
+    protocol::TransferCertainty outbound_certainty{
+        protocol::TransferCertainty::PartialOrUnknown};
 };
 
 class IReconnectDiscovery {
 public:
     virtual ~IReconnectDiscovery() = default;
 
-    [[nodiscard]] virtual std::expected<std::vector<ReconnectDeviceIdentity>,
+    // Implementations must bound every native enumeration call by deadline.
+    // They may inspect only passive USB metadata and must never emit protocol
+    // bytes, so cancellation and timeout always remain NotTransferred.
+    [[nodiscard]] virtual std::expected<std::vector<ReconnectCandidate>,
                                         ReconnectDiscoveryError>
-    discover(std::stop_token cancellation) = 0;
+    discover(ReconnectTimePoint deadline, std::stop_token cancellation) = 0;
 };
 
 class IReconnectSessionOpener {
 public:
     virtual ~IReconnectSessionOpener() = default;
 
+    // Implementations exclusively open one passive candidate and may issue only
+    // non-destructive identity probes. Every native/protocol call is bounded by
+    // the same absolute deadline. Error and success results report aggregate
+    // outbound certainty for the complete open/probe attempt.
     [[nodiscard]] virtual std::expected<OpenedReconnectSession,
                                         ReconnectOpenError>
-    open(const ReconnectDeviceIdentity& candidate,
+    open(const ReconnectCandidate& candidate,
+         ReconnectTimePoint deadline,
          std::stop_token cancellation) = 0;
 };
 
@@ -105,8 +142,8 @@ struct ReconnectWaitResult final {
 
 class IReconnectWaiter {
 public:
-    using Clock = std::chrono::steady_clock;
-    using TimePoint = Clock::time_point;
+    using Clock = ReconnectClock;
+    using TimePoint = ReconnectTimePoint;
 
     virtual ~IReconnectWaiter() = default;
 
@@ -130,6 +167,10 @@ struct ReconnectOptions final {
     std::chrono::milliseconds initial_backoff{50};
     std::chrono::milliseconds maximum_backoff{1'000};
     std::size_t maximum_discovered_devices{4'096};
+    std::size_t maximum_discovery_attempts{
+        std::numeric_limits<std::size_t>::max()};
+    std::size_t maximum_open_attempts{
+        std::numeric_limits<std::size_t>::max()};
 };
 
 enum class ReconnectErrorCode : std::uint8_t {
@@ -141,6 +182,7 @@ enum class ReconnectErrorCode : std::uint8_t {
     DiscoveryContractViolation,
     AmbiguousPhysicalPort,
     PortOccupiedByDifferentDevice,
+    UsbFingerprintMismatch,
     ProductMismatch,
     OpenFailed,
     OpenOutcomeUncertain,
@@ -148,6 +190,7 @@ enum class ReconnectErrorCode : std::uint8_t {
     DeviceChangedDuringOpen,
     WaitFailed,
     ClockContractViolation,
+    AttemptLimitExceeded,
 };
 
 enum class ReconnectStage : std::uint8_t {
@@ -161,7 +204,9 @@ enum class ReconnectStage : std::uint8_t {
 
 enum class ReconnectObservation : std::uint8_t {
     None,
+    DiscoveryUnavailable,
     DeviceAbsent,
+    CandidatePresent,
     PreviousModePresent,
     RequiredModePresent,
 };
@@ -173,15 +218,16 @@ struct ReconnectError final {
     std::size_t discovery_attempts{};
     std::size_t open_attempts{};
     ReconnectObservation last_observation{ReconnectObservation::None};
+    std::optional<ReconnectCandidate> observed_candidate;
     std::optional<ReconnectDeviceIdentity> observed_identity;
     std::optional<ReconnectDiscoveryError> discovery_error;
     std::optional<ReconnectOpenError> open_error;
     int native_code{};
     protocol::TransferCertainty preceding_operation_certainty{
         protocol::TransferCertainty::NotTransferred};
-    // Discovery/selection never emits protocol bytes. Opening failures copy
-    // the opener's certainty so callers can map NotSent/PartialOrUnknown
-    // without inferring a safe resume point.
+    // Discovery/selection never emits protocol bytes. Errors after an open()
+    // result preserve that attempt's aggregate certainty so callers can map
+    // NotSent/PartialOrUnknown without inferring a safe resume point.
     protocol::TransferCertainty reconnect_outbound_certainty{
         protocol::TransferCertainty::NotTransferred};
 };
@@ -195,8 +241,8 @@ struct ReconnectedSession final {
 
 // Coordinates one USB re-enumeration. It does not own a public operation and
 // does not execute Fastboot commands. Selection always starts at the exact
-// physical port, then validates serial/product/mode both before and after the
-// injected opener obtains an exclusive session.
+// physical port, passive USB fingerprint, and any available serial. Product
+// and mode are validated only after the opener obtains an exclusive session.
 class ReconnectCoordinator final {
 public:
     ReconnectCoordinator(
