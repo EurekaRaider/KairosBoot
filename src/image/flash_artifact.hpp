@@ -22,7 +22,7 @@ struct FlashArtifactMetadata final {
     // encoded sparse file size, not the expanded image size.
     std::uint64_t transfer_size{0};
     std::uint64_t expanded_size{0};
-    std::optional<SparseHeader> sparse_header;
+    std::optional<SparseHeader> sparse_header{};
 };
 
 // A validated flash input. Sparse classification parses and verifies the

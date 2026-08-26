@@ -58,7 +58,7 @@ struct PrimitiveReply final {
     protocol::ProtocolPhase phase{protocol::ProtocolPhase::FinalResponse};
     protocol::TransferCertainty outbound_certainty{
         protocol::TransferCertainty::FullyTransferred};
-    std::optional<std::uint64_t> inbound_expected;
+    std::optional<std::uint64_t> inbound_expected{};
     std::uint64_t inbound_transferred{0};
     protocol::TransferCertainty inbound_certainty{
         protocol::TransferCertainty::NotTransferred};
@@ -78,7 +78,7 @@ struct PrimitiveError final {
     // describes the exact command bytes named by operation.
     protocol::TransferCertainty outbound_certainty{
         protocol::TransferCertainty::NotTransferred};
-    std::optional<std::uint64_t> inbound_expected;
+    std::optional<std::uint64_t> inbound_expected{};
     std::uint64_t inbound_transferred{0};
     protocol::TransferCertainty inbound_certainty{
         protocol::TransferCertainty::NotTransferred};

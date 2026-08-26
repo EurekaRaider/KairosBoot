@@ -33,7 +33,7 @@ struct TransferResult {
     std::size_t transferred{0};
     TransferCertainty certainty{TransferCertainty::FullyTransferred};
     bool truncated{false};
-    std::string detail;
+    std::string detail{};
     int native_code{0};
 };
 
