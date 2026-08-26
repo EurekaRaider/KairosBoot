@@ -53,6 +53,78 @@ public sealed class Device
     public string Product { get; }
 }
 
+/// <summary>Controls a single file flash operation.</summary>
+public readonly struct FlashOptions
+{
+    private readonly bool hasExplicitTimeout;
+    private readonly TimeSpan timeout;
+    private readonly uint nativeTimeoutMilliseconds;
+
+    /// <summary>
+    /// Creates flash options with a per-I/O timeout. Use
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for no timeout.
+    /// Finite sub-millisecond values are rounded up so the native deadline is
+    /// never shorter than requested.
+    /// </summary>
+    /// <param name="timeout">
+    /// A non-negative duration shorter than <see cref="uint.MaxValue"/>
+    /// milliseconds, or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="timeout"/> cannot be represented by the native ABI.
+    /// </exception>
+    public FlashOptions(TimeSpan timeout)
+    {
+        nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
+        this.timeout = timeout;
+        hasExplicitTimeout = true;
+    }
+
+    /// <summary>Gets options that use the native infinite timeout default.</summary>
+    public static FlashOptions Default => default;
+
+    /// <summary>Gets the per-I/O timeout.</summary>
+    public TimeSpan Timeout => hasExplicitTimeout
+        ? timeout
+        : System.Threading.Timeout.InfiniteTimeSpan;
+
+    internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
+        ? nativeTimeoutMilliseconds
+        : uint.MaxValue;
+
+    private static uint ToNativeMilliseconds(TimeSpan timeout)
+    {
+        if (timeout == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            return uint.MaxValue;
+        }
+
+        if (timeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                timeout,
+                "Flash timeout must be non-negative or Timeout.InfiniteTimeSpan.");
+        }
+
+        var milliseconds = timeout.Ticks / TimeSpan.TicksPerMillisecond;
+        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
+        {
+            milliseconds++;
+        }
+
+        if ((ulong)milliseconds >= uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                timeout,
+                "Finite flash timeout must be shorter than UInt32.MaxValue milliseconds.");
+        }
+
+        return (uint)milliseconds;
+    }
+}
+
 /// <summary>Progress reported while transferring or flashing an artifact.</summary>
 public sealed class FlashProgress
 {

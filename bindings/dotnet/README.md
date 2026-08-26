@@ -14,6 +14,29 @@ AnyCPU/x86 builds fail with the actionable `KB.NET48.X64` error.
 All native resources are owned by `SafeHandle` implementations. Managed error
 objects copy UTF-8 strings before releasing their native owner.
 
+Flash operations expose a type-safe per-I/O timeout, `IProgress<T>`, and
+cooperative cancellation on both target frameworks:
+
+```csharp
+using var context = Context.Create();
+var options = new FlashOptions(TimeSpan.FromSeconds(30));
+var progress = new Progress<FlashProgress>(value =>
+    Console.WriteLine($"{value.Stage}: {value.BytesCompleted}/{value.BytesTotal}"));
+
+await context.FlashFileAsync(
+    "system",
+    "images/system.img",
+    options,
+    serial: null,
+    progress: progress,
+    cancellationToken: cancellationToken);
+```
+
+Use `FlashOptions.Default` or `Timeout.InfiniteTimeSpan` for the native infinite
+deadline. Cancellation calls `kb_operation_cancel`; disposal unregisters that
+callback, releases and drains the native operation, and only then frees the
+managed progress delegate state.
+
 Build and pack:
 
 ```sh
