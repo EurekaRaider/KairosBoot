@@ -357,6 +357,24 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
   target_link_libraries(kairosboot_example_c PRIVATE KairosBoot::C)
   kairosboot_enable_strict_warnings(kairosboot_example_c)
 
+  add_executable(kairosboot_example_getvar_c examples/getvar.c)
+  set_target_properties(
+    kairosboot_example_getvar_c
+    PROPERTIES C_STANDARD 11
+               C_STANDARD_REQUIRED ON
+               C_EXTENSIONS OFF)
+  target_link_libraries(kairosboot_example_getvar_c PRIVATE KairosBoot::C)
+  kairosboot_enable_strict_warnings(kairosboot_example_getvar_c)
+
+  add_executable(kairosboot_example_flash_file_c examples/flash_file.c)
+  set_target_properties(
+    kairosboot_example_flash_file_c
+    PROPERTIES C_STANDARD 11
+               C_STANDARD_REQUIRED ON
+               C_EXTENSIONS OFF)
+  target_link_libraries(kairosboot_example_flash_file_c PRIVATE KairosBoot::C)
+  kairosboot_enable_strict_warnings(kairosboot_example_flash_file_c)
+
   add_executable(kairosboot_example_cxx examples/version.cpp)
   target_compile_features(kairosboot_example_cxx PRIVATE cxx_std_23)
   target_link_libraries(kairosboot_example_cxx PRIVATE KairosBoot::Cxx)
