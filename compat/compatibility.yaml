@@ -1,0 +1,27 @@
+schemaVersion: 1
+baselineStatus: pending-release-owner-lock
+claimCompatibility: false
+
+baseline:
+  lockFile: compat/aosp.lock.json
+  immutable: false
+  owner: release-owner
+
+implementedSlices:
+  - id: protocol.response-parser
+    status: implemented
+    responses: [INFO, TEXT, OKAY, FAIL, DATA]
+    evidence: tests/protocol/protocol_tests.cpp
+  - id: protocol.command-state-machine
+    status: implemented
+    evidence: tests/protocol/protocol_tests.cpp
+  - id: protocol.download-exact-length
+    status: implemented
+    evidence: tests/protocol/protocol_tests.cpp
+
+pendingInventories:
+  - cli-options
+  - host-commands
+  - image-types
+  - wire-golden-traces
+  - intentional-deviations

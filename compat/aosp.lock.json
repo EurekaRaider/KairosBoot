@@ -1,0 +1,22 @@
+{
+  "documentType": "kairosboot.aosp-baseline-lock",
+  "schemaVersion": 1,
+  "baselineStatus": "pending-release-owner-lock",
+  "claimCompatibility": false,
+  "aosp": {
+    "platformToolsVersion": null,
+    "sourceCommit": null,
+    "sourceTree": "platform/system/core/fastboot",
+    "officialArchiveSha256": null
+  },
+  "libusb": {
+    "requiredVersion": "1.0.30",
+    "sourceTag": null,
+    "sourceArchiveSha256": null
+  },
+  "releaseOwnerActionRequired": [
+    "select the stable Android Platform-Tools baseline",
+    "record immutable source and archive hashes",
+    "verify the libusb tag and source archive hash"
+  ]
+}
