@@ -401,7 +401,8 @@ FileTransferSink::create(const std::filesystem::path& requested_destination) {
         };
         const auto raw_directory = ::CreateFileW(
             directory_path.c_str(),
-            FILE_LIST_DIRECTORY | FILE_ADD_FILE | SYNCHRONIZE,
+            FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_TRAVERSE |
+                FILE_READ_ATTRIBUTES | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &security,
             OPEN_EXISTING,
