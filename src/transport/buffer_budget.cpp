@@ -2,8 +2,27 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#else
+#error "KairosBoot supports process memory budgets on Windows, Linux, and macOS"
+#endif
 
 namespace kairosboot::transport {
 
@@ -45,6 +64,106 @@ struct BufferLeaseStorage final {
 };
 
 }  // namespace detail
+
+namespace {
+
+#if defined(_WIN32)
+[[nodiscard]] PhysicalMemoryResult query_platform_physical_memory() noexcept {
+    MEMORYSTATUSEX status{};
+    status.dwLength = static_cast<DWORD>(sizeof(status));
+    if (GlobalMemoryStatusEx(&status) == FALSE) {
+        return {
+            .status = PhysicalMemoryStatus::query_failed,
+            .bytes = 0,
+            .native_code = static_cast<std::uint32_t>(GetLastError()),
+        };
+    }
+    if (status.ullTotalPhys == 0) {
+        return {
+            .status = PhysicalMemoryStatus::query_failed,
+            .bytes = 0,
+            .native_code = static_cast<std::uint32_t>(ERROR_INVALID_DATA),
+        };
+    }
+    return {
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = static_cast<std::uint64_t>(status.ullTotalPhys),
+        .native_code = 0,
+    };
+}
+#elif defined(__linux__)
+[[nodiscard]] constexpr bool multiply_overflows(
+    const std::uint64_t left,
+    const std::uint64_t right) noexcept {
+    return left != 0 &&
+           right > std::numeric_limits<std::uint64_t>::max() / left;
+}
+
+[[nodiscard]] PhysicalMemoryResult query_platform_physical_memory() noexcept {
+    errno = 0;
+    const auto pages = sysconf(_SC_PHYS_PAGES);
+    const auto pages_error = errno;
+    errno = 0;
+    const auto page_size = sysconf(_SC_PAGESIZE);
+    const auto page_size_error = errno;
+    if (pages <= 0 || page_size <= 0) {
+        const auto native_error = pages <= 0 ? pages_error : page_size_error;
+        return {
+            .status = PhysicalMemoryStatus::query_failed,
+            .bytes = 0,
+            .native_code = static_cast<std::uint32_t>(
+                native_error == 0 ? EINVAL : native_error),
+        };
+    }
+
+    const auto page_count = static_cast<std::uint64_t>(pages);
+    const auto bytes_per_page = static_cast<std::uint64_t>(page_size);
+    if (multiply_overflows(page_count, bytes_per_page)) {
+        return {
+            .status = PhysicalMemoryStatus::arithmetic_overflow,
+            .bytes = 0,
+            .native_code = static_cast<std::uint32_t>(EOVERFLOW),
+        };
+    }
+    return {
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = page_count * bytes_per_page,
+        .native_code = 0,
+    };
+}
+#elif defined(__APPLE__)
+[[nodiscard]] PhysicalMemoryResult query_platform_physical_memory() noexcept {
+    std::uint64_t physical_memory = 0;
+    std::size_t result_size = sizeof(physical_memory);
+    errno = 0;
+    if (sysctlbyname("hw.memsize",
+                     &physical_memory,
+                     &result_size,
+                     nullptr,
+                     0) != 0 ||
+        result_size != sizeof(physical_memory) || physical_memory == 0) {
+        const auto native_error = errno;
+        return {
+            .status = PhysicalMemoryStatus::query_failed,
+            .bytes = 0,
+            .native_code = static_cast<std::uint32_t>(
+                native_error == 0 ? EINVAL : native_error),
+        };
+    }
+    return {
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = physical_memory,
+        .native_code = 0,
+    };
+}
+#endif
+
+[[nodiscard]] ProcessUsbBufferBudgetRegistry& process_budget_registry() {
+    static ProcessUsbBufferBudgetRegistry registry;
+    return registry;
+}
+
+}  // namespace
 
 BufferLease::BufferLease(std::shared_ptr<detail::BufferLeaseStorage> storage)
     : storage_(std::move(storage)) {}
@@ -134,6 +253,62 @@ std::size_t BufferBudget::available() const noexcept {
 
 std::size_t BufferBudget::peak_used() const noexcept {
     return state_->peak.load(std::memory_order_relaxed);
+}
+
+PhysicalMemoryResult query_physical_memory(void*) noexcept {
+    return query_platform_physical_memory();
+}
+
+ProcessUsbBufferBudgetInfo resolve_process_usb_buffer_budget(
+    const PhysicalMemoryQuery query,
+    void* const user_data) noexcept {
+    const auto result = query == nullptr
+        ? PhysicalMemoryResult{
+              .status = PhysicalMemoryStatus::query_failed,
+              .bytes = 0,
+              .native_code = 0,
+          }
+        : query(user_data);
+    if (result.status == PhysicalMemoryStatus::measured && result.bytes != 0) {
+        return {
+            .limit_bytes = calculate_process_usb_buffer_budget(result.bytes),
+            .physical_memory_bytes = result.bytes,
+            .query_status = result.status,
+            .native_code = result.native_code,
+            .fallback_used = false,
+        };
+    }
+    return {
+        .limit_bytes = kProcessUsbBufferBudgetFallbackBytes,
+        .physical_memory_bytes = 0,
+        .query_status = result.status == PhysicalMemoryStatus::measured
+            ? PhysicalMemoryStatus::query_failed
+            : result.status,
+        .native_code = result.native_code,
+        .fallback_used = true,
+    };
+}
+
+ProcessUsbBufferBudgetRegistry::ProcessUsbBufferBudgetRegistry(
+    const PhysicalMemoryQuery query,
+    void* const user_data)
+    : info_(resolve_process_usb_buffer_budget(query, user_data)),
+      budget_(std::make_shared<BufferBudget>(info_.limit_bytes)) {}
+
+std::shared_ptr<BufferBudget> ProcessUsbBufferBudgetRegistry::budget() const noexcept {
+    return budget_;
+}
+
+const ProcessUsbBufferBudgetInfo& ProcessUsbBufferBudgetRegistry::info() const noexcept {
+    return info_;
+}
+
+std::shared_ptr<BufferBudget> process_usb_buffer_budget() {
+    return process_budget_registry().budget();
+}
+
+const ProcessUsbBufferBudgetInfo& process_usb_buffer_budget_info() {
+    return process_budget_registry().info();
 }
 
 }  // namespace kairosboot::transport

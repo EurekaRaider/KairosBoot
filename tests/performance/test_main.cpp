@@ -12,6 +12,7 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -33,6 +34,9 @@ using kairosboot::transport::BufferBudgetReleaseObserver;
 using kairosboot::transport::CompletionCode;
 using kairosboot::transport::DeliveryCertainty;
 using kairosboot::transport::MemoryTransferSource;
+using kairosboot::transport::PhysicalMemoryResult;
+using kairosboot::transport::PhysicalMemoryStatus;
+using kairosboot::transport::ProcessUsbBufferBudgetRegistry;
 using kairosboot::transport::SubmitResult;
 using kairosboot::transport::TransferBackend;
 using kairosboot::transport::TransferCompletion;
@@ -330,6 +334,175 @@ void test_global_memory_budget_formula() {
     KB_CHECK(calculate_global_memory_budget(4) == 0);
 }
 
+[[nodiscard]] PhysicalMemoryResult injected_physical_memory_query(
+    void* const user_data) noexcept {
+    return *static_cast<const PhysicalMemoryResult*>(user_data);
+}
+
+void test_process_usb_budget_formula_and_cap() {
+    using kairosboot::transport::calculate_process_usb_buffer_budget;
+    constexpr std::uint64_t gib = 1024ULL * 1024ULL * 1024ULL;
+    static_assert(calculate_process_usb_buffer_budget(4) == 0);
+    static_assert(calculate_process_usb_buffer_budget(5) == 1);
+    static_assert(calculate_process_usb_buffer_budget(5U * gib) == gib);
+    static_assert(calculate_process_usb_buffer_budget(10U * gib) == 2U * gib);
+
+    KB_CHECK(calculate_process_usb_buffer_budget(0) == 0);
+    KB_CHECK(calculate_process_usb_buffer_budget(5U * gib) == gib);
+    KB_CHECK(calculate_process_usb_buffer_budget(10U * gib) == 2U * gib);
+    KB_CHECK(calculate_process_usb_buffer_budget(20U * gib) == 2U * gib);
+    KB_CHECK(calculate_process_usb_buffer_budget(
+                 std::numeric_limits<std::uint64_t>::max()) ==
+             2U * gib);
+}
+
+void test_process_usb_budget_resolution_and_failure_fallback() {
+    using kairosboot::transport::kProcessUsbBufferBudgetFallbackBytes;
+    using kairosboot::transport::resolve_process_usb_buffer_budget;
+    constexpr std::uint64_t gib = 1024ULL * 1024ULL * 1024ULL;
+
+    PhysicalMemoryResult measured{
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = 5U * gib,
+        .native_code = 0,
+    };
+    const auto resolved = resolve_process_usb_buffer_budget(
+        &injected_physical_memory_query, &measured);
+    KB_CHECK(resolved.limit_bytes == gib);
+    KB_CHECK(resolved.physical_memory_bytes == 5U * gib);
+    KB_CHECK(resolved.query_status == PhysicalMemoryStatus::measured);
+    KB_CHECK(resolved.native_code == 0);
+    KB_CHECK(!resolved.fallback_used);
+
+    PhysicalMemoryResult failed{
+        .status = PhysicalMemoryStatus::query_failed,
+        .bytes = 0,
+        .native_code = 17,
+    };
+    const auto failure = resolve_process_usb_buffer_budget(
+        &injected_physical_memory_query, &failed);
+    KB_CHECK(failure.limit_bytes == kProcessUsbBufferBudgetFallbackBytes);
+    KB_CHECK(failure.physical_memory_bytes == 0);
+    KB_CHECK(failure.query_status == PhysicalMemoryStatus::query_failed);
+    KB_CHECK(failure.native_code == 17);
+    KB_CHECK(failure.fallback_used);
+
+    PhysicalMemoryResult overflow{
+        .status = PhysicalMemoryStatus::arithmetic_overflow,
+        .bytes = 0,
+        .native_code = 75,
+    };
+    const auto overflow_failure = resolve_process_usb_buffer_budget(
+        &injected_physical_memory_query, &overflow);
+    KB_CHECK(overflow_failure.limit_bytes ==
+             kProcessUsbBufferBudgetFallbackBytes);
+    KB_CHECK(overflow_failure.query_status ==
+             PhysicalMemoryStatus::arithmetic_overflow);
+    KB_CHECK(overflow_failure.native_code == 75);
+    KB_CHECK(overflow_failure.fallback_used);
+
+    PhysicalMemoryResult invalid_measurement{
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = 0,
+        .native_code = 0,
+    };
+    const auto invalid = resolve_process_usb_buffer_budget(
+        &injected_physical_memory_query, &invalid_measurement);
+    KB_CHECK(invalid.limit_bytes == kProcessUsbBufferBudgetFallbackBytes);
+    KB_CHECK(invalid.query_status == PhysicalMemoryStatus::query_failed);
+    KB_CHECK(invalid.fallback_used);
+
+    const auto missing_query = resolve_process_usb_buffer_budget(nullptr);
+    KB_CHECK(missing_query.limit_bytes == kProcessUsbBufferBudgetFallbackBytes);
+    KB_CHECK(missing_query.query_status == PhysicalMemoryStatus::query_failed);
+    KB_CHECK(missing_query.fallback_used);
+}
+
+void test_process_usb_budget_registry_identity() {
+    constexpr std::size_t expected_limit = 4096;
+    PhysicalMemoryResult measured{
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = 5U * expected_limit,
+        .native_code = 0,
+    };
+    ProcessUsbBufferBudgetRegistry registry(
+        &injected_physical_memory_query, &measured);
+    const auto first = registry.budget();
+    const auto second = registry.budget();
+    KB_CHECK(first != nullptr);
+    KB_CHECK(first.get() == second.get());
+    KB_CHECK(first->limit() == expected_limit);
+    KB_CHECK(registry.info().limit_bytes == expected_limit);
+    KB_CHECK(!registry.info().fallback_used);
+
+    const auto process_first =
+        kairosboot::transport::process_usb_buffer_budget();
+    const auto process_second =
+        kairosboot::transport::process_usb_buffer_budget();
+    KB_CHECK(process_first != nullptr);
+    KB_CHECK(process_first.get() == process_second.get());
+    KB_CHECK(process_first->limit() ==
+             kairosboot::transport::process_usb_buffer_budget_info()
+                 .limit_bytes);
+}
+
+void test_process_usb_budget_32_actor_concurrency_and_release() {
+    constexpr std::size_t actor_count = 32;
+    constexpr std::size_t iterations = 64;
+    constexpr std::size_t budget_limit = 4096;
+    constexpr std::size_t lease_size = 256;
+    PhysicalMemoryResult measured{
+        .status = PhysicalMemoryStatus::measured,
+        .bytes = 5U * budget_limit,
+        .native_code = 0,
+    };
+    ProcessUsbBufferBudgetRegistry registry(
+        &injected_physical_memory_query, &measured);
+    const auto budget = registry.budget();
+
+    std::atomic<std::size_t> ready{0};
+    std::atomic<std::size_t> completed{0};
+    std::atomic<bool> start{false};
+    std::atomic<bool> limit_violated{false};
+    std::vector<std::thread> actors;
+    actors.reserve(actor_count);
+    for (std::size_t actor = 0; actor < actor_count; ++actor) {
+        actors.emplace_back([&] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            for (std::size_t iteration = 0; iteration < iterations;
+                 ++iteration) {
+                std::optional<kairosboot::transport::BufferLease> lease;
+                while (!(lease = budget->try_acquire(lease_size)).has_value()) {
+                    std::this_thread::yield();
+                }
+                if (budget->used() > budget->limit()) {
+                    limit_violated.store(true, std::memory_order_release);
+                }
+                std::this_thread::yield();
+                lease.reset();
+            }
+            completed.fetch_add(1, std::memory_order_release);
+        });
+    }
+
+    while (ready.load(std::memory_order_acquire) != actor_count) {
+        std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& actor : actors) {
+        actor.join();
+    }
+
+    KB_CHECK(completed.load(std::memory_order_acquire) == actor_count);
+    KB_CHECK(!limit_violated.load(std::memory_order_acquire));
+    KB_CHECK(budget->peak_used() <= budget->limit());
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(budget->available() == budget->limit());
+}
+
 void test_scheduler_weighted_fairness_without_starvation() {
     const auto budget = std::make_shared<BufferBudget>(1024);
     WeightedControllerScheduler scheduler(budget, 64);
@@ -476,6 +649,10 @@ int main() {
         {"explicit cancellation drain", test_transfer_ring_cancel_waits_for_drain},
         {"adaptive tuner deterministic feedback", test_tuner_defaults_bounds_and_deterministic_feedback},
         {"global memory budget formula", test_global_memory_budget_formula},
+        {"process USB budget formula and cap", test_process_usb_budget_formula_and_cap},
+        {"process USB budget failure fallback", test_process_usb_budget_resolution_and_failure_fallback},
+        {"process USB budget registry identity", test_process_usb_budget_registry_identity},
+        {"process USB budget 32 actor concurrency", test_process_usb_budget_32_actor_concurrency_and_release},
         {"weighted device fairness", test_scheduler_weighted_fairness_without_starvation},
         {"large request work conservation", test_scheduler_large_request_is_work_conserving_and_weighted},
         {"controller fairness and memory limit", test_scheduler_controller_fairness_and_memory_limit},

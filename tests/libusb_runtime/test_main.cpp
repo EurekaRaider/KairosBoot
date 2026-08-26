@@ -1254,6 +1254,38 @@ void test_explicit_zero_packet_contract() {
     runtime->stop();
 }
 
+void test_usb_transport_uses_process_budget_by_default() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    const auto process_budget =
+        kairosboot::transport::process_usb_buffer_budget();
+    KB_CHECK(process_budget->used() == 0);
+
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    KB_CHECK(options.buffer_budget == nullptr);
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto bytes = payload(8);
+    auto pending = std::async(std::launch::async, [&] {
+        return transport->write(*bytes, std::chrono::seconds(1));
+    });
+
+    wait_for_submissions(*fake, 2);
+    KB_CHECK(process_budget->used() == 8);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto result = pending.get();
+    KB_CHECK(result.status == TransportStatus::Ok);
+    KB_CHECK(result.transferred == bytes->size());
+    KB_CHECK(process_budget->used() == 0);
+
+    transport->close();
+    runtime->stop();
+}
+
 void test_usb_logical_read_short_packet_zlp_and_overflow() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -1500,6 +1532,9 @@ void test_usb_source_streams_beyond_ring_budget_with_ordered_progress() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
     const auto snapshot = matching_device(runtime);
+    const auto process_budget =
+        kairosboot::transport::process_usb_buffer_budget();
+    KB_CHECK(process_budget->used() == 0);
     UsbFastbootTransportOptions options;
     options.data_ring = TransferRingConfig{4, 2};
     const auto budget = std::make_shared<BufferBudget>(8);
@@ -1530,6 +1565,8 @@ void test_usb_source_streams_beyond_ring_budget_with_ordered_progress() {
     wait_for_submissions(*fake, 2);
     KB_CHECK(fake->submission(0).length == 4);
     KB_CHECK(fake->submission(1).length == 4);
+    KB_CHECK(budget->used() == 8);
+    KB_CHECK(process_budget->used() == 0);
 
     // Offset 4 completes first. The ring refills, but contiguous progress
     // remains at zero until the offset-0 gap closes.
@@ -1573,6 +1610,7 @@ void test_usb_source_streams_beyond_ring_budget_with_ordered_progress() {
     KB_CHECK(std::ranges::equal(source->reads(), expected_reads));
     KB_CHECK(budget->peak_used() == 8);
     KB_CHECK(budget->used() == 0);
+    KB_CHECK(process_budget->used() == 0);
     KB_CHECK(observer_thread == worker_thread);
     KB_CHECK(observer_thread != runtime->event_thread_id());
     KB_CHECK(fake->callback_thread == runtime->event_thread_id());
@@ -1914,6 +1952,8 @@ int main() {
         {"runtime stop cancel and drain", test_runtime_stop_cancels_and_drains_idempotently},
         {"terminal event error poisons accepting", test_terminal_event_error_poisons_accepting},
         {"explicit zero packet contract", test_explicit_zero_packet_contract},
+        {"USB default process budget",
+         test_usb_transport_uses_process_budget_by_default},
         {"USB logical read ZLP, short packet, overflow",
          test_usb_logical_read_short_packet_zlp_and_overflow},
         {"USB read error classification",
