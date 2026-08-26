@@ -1,7 +1,13 @@
 #include <kairosboot/kairosboot.hpp>
 
+#include <chrono>
+#include <cstdint>
 #include <iostream>
+#include <memory>
+#include <new>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 
 #define CHECK(condition)                                                       \
@@ -17,8 +23,142 @@ static_assert(__cplusplus >= 202100L);
 static_assert(!std::is_copy_constructible_v<kairosboot::Context>);
 static_assert(std::is_move_constructible_v<kairosboot::Context>);
 static_assert(!std::is_copy_constructible_v<kairosboot::Operation>);
+static_assert(std::is_nothrow_move_constructible_v<kairosboot::Operation>);
+static_assert(std::is_nothrow_move_assignable_v<kairosboot::Operation>);
+static_assert(!std::is_copy_constructible_v<
+              kairosboot::detail::OperationResources>);
+static_assert(std::is_nothrow_move_constructible_v<
+              kairosboot::detail::OperationResources>);
+static_assert(std::is_nothrow_move_assignable_v<
+              kairosboot::detail::OperationResources>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
+                             std::chrono::milliseconds>);
+static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
+static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
+                                                               nullptr)));
+
+namespace {
+
+using namespace std::chrono_literals;
+
+struct LifetimeProbe final {
+  explicit LifetimeProbe(bool &destroyed_value) : destroyed(destroyed_value) {}
+  ~LifetimeProbe() { destroyed = true; }
+  bool &destroyed;
+};
+
+struct AllocationFailureOnCopy final {
+  explicit AllocationFailureOnCopy(bool &copy_attempted_value)
+      : copy_attempted(copy_attempted_value) {}
+
+  AllocationFailureOnCopy(const AllocationFailureOnCopy &other)
+      : copy_attempted(other.copy_attempted) {
+    copy_attempted = true;
+    throw std::bad_alloc{};
+  }
+  AllocationFailureOnCopy(AllocationFailureOnCopy &&) noexcept = default;
+
+  kairosboot::ProgressAction
+  operator()(const kairosboot::FlashProgress &) const {
+    return kairosboot::ProgressAction::Continue;
+  }
+
+  bool &copy_attempted;
+};
+
+} // namespace
 
 int main() {
+  {
+    const auto defaults =
+        kairosboot::detail::prepare_flash_options(kairosboot::FlashOptions{});
+    CHECK(defaults.has_value());
+    CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
+    CHECK(defaults->native.progress_callback == nullptr);
+
+    kairosboot::FlashOptions finite;
+    finite.timeout = 250ms;
+    const auto prepared = kairosboot::detail::prepare_flash_options(finite);
+    CHECK(prepared.has_value());
+    CHECK(prepared->native.timeout_ms == 250U);
+
+    finite.timeout = -1ms;
+    const auto negative = kairosboot::detail::prepare_flash_options(finite);
+    CHECK(!negative.has_value());
+    CHECK(negative.error().status() == KB_E_INVALID_ARGUMENT);
+    CHECK(!negative.error().message().empty());
+
+    finite.timeout =
+        std::chrono::milliseconds{static_cast<std::int64_t>(UINT32_MAX)};
+    const auto sentinel = kairosboot::detail::prepare_flash_options(finite);
+    CHECK(!sentinel.has_value());
+    CHECK(sentinel.error().status() == KB_E_INVALID_ARGUMENT);
+  }
+
+  {
+    bool callback_called = false;
+    kairosboot::FlashProgress observed;
+    kairosboot::FlashOptions options;
+    options.progress = [&](const kairosboot::FlashProgress &progress) {
+      callback_called = true;
+      observed = progress;
+      return kairosboot::ProgressAction::Continue;
+    };
+    auto prepared = kairosboot::detail::prepare_flash_options(options);
+    CHECK(prepared.has_value());
+    CHECK(prepared->native.progress_callback != nullptr);
+    kb_progress_t native_progress{
+        sizeof(kb_progress_t), KB_API_VERSION, 7, 11, "download", "SERIAL-CXX"};
+    CHECK(prepared->native.progress_callback(
+              &native_progress, prepared->native.progress_user_data) ==
+          KB_PROGRESS_CONTINUE);
+    CHECK(callback_called);
+    CHECK(observed.bytes_completed == 7);
+    CHECK(observed.bytes_total == 11);
+    CHECK(observed.stage == "download");
+    CHECK(observed.device_identifier == "SERIAL-CXX");
+
+    prepared->callback_state->callback =
+        [](const kairosboot::FlashProgress &) -> kairosboot::ProgressAction {
+      throw std::runtime_error{"callback failure"};
+    };
+    CHECK(prepared->native.progress_callback(
+              &native_progress, prepared->native.progress_user_data) ==
+          KB_PROGRESS_CANCEL);
+    CHECK(kairosboot::detail::progress_trampoline(nullptr, nullptr) ==
+          KB_PROGRESS_CANCEL);
+  }
+
+  {
+    bool destroyed = false;
+    {
+      auto probe = std::make_shared<LifetimeProbe>(destroyed);
+      kairosboot::FlashOptions options;
+      options.progress = [probe](const kairosboot::FlashProgress &) {
+        return kairosboot::ProgressAction::Continue;
+      };
+      auto prepared = kairosboot::detail::prepare_flash_options(options);
+      CHECK(prepared.has_value());
+      options.progress = {};
+      probe.reset();
+      CHECK(!destroyed);
+    }
+    CHECK(destroyed);
+  }
+
+  {
+    bool copy_attempted = false;
+    kairosboot::FlashOptions options;
+    options.progress = AllocationFailureOnCopy{copy_attempted};
+    copy_attempted = false;
+    try {
+      static_cast<void>(kairosboot::detail::prepare_flash_options(options));
+      CHECK(false);
+    } catch (const std::bad_alloc &) {
+      CHECK(copy_attempted);
+    }
+  }
+
   const auto version = kairosboot::version();
   CHECK(version.api_version == KB_API_VERSION);
   CHECK(!version.string.empty());
