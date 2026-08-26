@@ -115,6 +115,25 @@ void write_file(
     return std::filesystem::path(std::move(native));
 }
 
+void require_seal(
+    FileTransferSink& sink,
+    const std::uint64_t expected_size,
+    const int source_line) {
+    const auto sealed = sink.seal(expected_size);
+    if (sealed) {
+        return;
+    }
+    throw CheckFailure(
+        "seal failed: kind=" +
+        std::to_string(static_cast<unsigned int>(sealed.error().kind)) +
+        ", native_code=" + std::to_string(sealed.error().native_code) +
+        ", message=" + sealed.error().message + " at line " +
+        std::to_string(source_line));
+}
+
+#define REQUIRE_SEAL(sink, expected_size) \
+    require_seal((sink), (expected_size), __LINE__)
+
 void exact_chunks_replace_only_after_seal() {
     TemporaryDirectory temporary;
     const auto destination = temporary.path() / "upload.bin";
@@ -134,9 +153,9 @@ void exact_chunks_replace_only_after_seal() {
     CHECK(read_file(destination) == bytes("previous-complete-output"));
     CHECK(temporary_count(temporary.path()) == 1);
 
-    CHECK((*sink)->seal(7));
+    REQUIRE_SEAL(**sink, 7);
     CHECK((*sink)->is_sealed());
-    CHECK((*sink)->seal(7));
+    REQUIRE_SEAL(**sink, 7);
     CHECK(read_file(destination) == bytes("abcdefg"));
     CHECK(temporary_count(temporary.path()) == 0);
 
@@ -257,7 +276,7 @@ void large_receive_uses_reusable_bounded_chunks() {
         CHECK(result.transferred == count);
         offset += count;
     }
-    CHECK((*sink)->seal(total_size));
+    REQUIRE_SEAL(**sink, total_size);
     CHECK(std::filesystem::file_size(destination) == total_size);
 
     std::ifstream input(destination, std::ios::binary);
