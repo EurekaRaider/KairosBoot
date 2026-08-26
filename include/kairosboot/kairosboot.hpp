@@ -59,6 +59,25 @@ enum class RebootTarget : kb_reboot_target_t {
   Fastboot = KB_REBOOT_FASTBOOT,
 };
 
+enum class FlashingCommand : kb_flashing_command_t {
+  Lock = KB_FLASHING_LOCK,
+  Unlock = KB_FLASHING_UNLOCK,
+  LockCritical = KB_FLASHING_LOCK_CRITICAL,
+  UnlockCritical = KB_FLASHING_UNLOCK_CRITICAL,
+  GetUnlockAbility = KB_FLASHING_GET_UNLOCK_ABILITY,
+};
+
+enum class GsiCommand : kb_gsi_command_t {
+  Wipe = KB_GSI_WIPE,
+  Disable = KB_GSI_DISABLE,
+  Status = KB_GSI_STATUS,
+};
+
+enum class SnapshotUpdateCommand : kb_snapshot_update_command_t {
+  Cancel = KB_SNAPSHOT_UPDATE_CANCEL,
+  Merge = KB_SNAPSHOT_UPDATE_MERGE,
+};
+
 struct FetchRange {
   std::optional<std::uint64_t> offset;
   std::optional<std::uint64_t> size;
@@ -317,6 +336,21 @@ prepare_command_options(const CommandOptions &options) {
 [[nodiscard]] inline kb_reboot_target_t
 native_reboot_target(const RebootTarget target) noexcept {
   return static_cast<kb_reboot_target_t>(target);
+}
+
+[[nodiscard]] inline kb_flashing_command_t
+native_flashing_command(const FlashingCommand command) noexcept {
+  return static_cast<kb_flashing_command_t>(command);
+}
+
+[[nodiscard]] inline kb_gsi_command_t
+native_gsi_command(const GsiCommand command) noexcept {
+  return static_cast<kb_gsi_command_t>(command);
+}
+
+[[nodiscard]] inline kb_snapshot_update_command_t
+native_snapshot_update_command(const SnapshotUpdateCommand command) noexcept {
+  return static_cast<kb_snapshot_update_command_t>(command);
 }
 
 [[nodiscard]] inline std::uint64_t
@@ -735,6 +769,241 @@ public:
   set_active(const std::string_view slot,
              const CommandOptions &options = {}) const {
     return set_active(std::nullopt, slot, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  flashing_async(const DeviceSelector selector, const FlashingCommand command,
+                 const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_flashing_async(handle_, selector_value,
+                                     detail::native_flashing_command(command),
+                                     native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  flashing_async(const FlashingCommand command,
+                 const CommandOptions &options = {}) const {
+    return flashing_async(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  flashing(const DeviceSelector selector, const FlashingCommand command,
+           const CommandOptions &options = {}) const {
+    auto operation = flashing_async(selector, command, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  flashing(const FlashingCommand command,
+           const CommandOptions &options = {}) const {
+    return flashing(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  gsi_async(const DeviceSelector selector, const GsiCommand command,
+            const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_gsi_async(handle_, selector_value,
+                                detail::native_gsi_command(command), native,
+                                operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  gsi_async(const GsiCommand command,
+            const CommandOptions &options = {}) const {
+    return gsi_async(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  gsi(const DeviceSelector selector, const GsiCommand command,
+      const CommandOptions &options = {}) const {
+    auto operation = gsi_async(selector, command, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  gsi(const GsiCommand command, const CommandOptions &options = {}) const {
+    return gsi(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  snapshot_update_async(const DeviceSelector selector,
+                        const SnapshotUpdateCommand command,
+                        const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_snapshot_update_async(
+              handle_, selector_value,
+              detail::native_snapshot_update_command(command), native,
+              operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  snapshot_update_async(const SnapshotUpdateCommand command,
+                        const CommandOptions &options = {}) const {
+    return snapshot_update_async(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  snapshot_update(const DeviceSelector selector,
+                  const SnapshotUpdateCommand command,
+                  const CommandOptions &options = {}) const {
+    auto operation = snapshot_update_async(selector, command, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  snapshot_update(const SnapshotUpdateCommand command,
+                  const CommandOptions &options = {}) const {
+    return snapshot_update(std::nullopt, command, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> create_logical_partition_async(
+      const DeviceSelector selector, const std::string_view partition_name,
+      const std::uint64_t size, const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_name_storage{partition_name};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_create_logical_partition_async(
+              handle_, selector_value, partition_name_storage.c_str(), size,
+              native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  create_logical_partition_async(const std::string_view partition_name,
+                                 const std::uint64_t size,
+                                 const CommandOptions &options = {}) const {
+    return create_logical_partition_async(std::nullopt, partition_name, size,
+                                          options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> create_logical_partition(
+      const DeviceSelector selector, const std::string_view partition_name,
+      const std::uint64_t size, const CommandOptions &options = {}) const {
+    auto operation =
+        create_logical_partition_async(selector, partition_name, size, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  create_logical_partition(const std::string_view partition_name,
+                           const std::uint64_t size,
+                           const CommandOptions &options = {}) const {
+    return create_logical_partition(std::nullopt, partition_name, size,
+                                    options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  delete_logical_partition_async(const DeviceSelector selector,
+                                 const std::string_view partition_name,
+                                 const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_name_storage{partition_name};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_delete_logical_partition_async(
+              handle_, selector_value, partition_name_storage.c_str(), native,
+              operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  delete_logical_partition_async(const std::string_view partition_name,
+                                 const CommandOptions &options = {}) const {
+    return delete_logical_partition_async(std::nullopt, partition_name,
+                                          options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  delete_logical_partition(const DeviceSelector selector,
+                           const std::string_view partition_name,
+                           const CommandOptions &options = {}) const {
+    auto operation =
+        delete_logical_partition_async(selector, partition_name, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  delete_logical_partition(const std::string_view partition_name,
+                           const CommandOptions &options = {}) const {
+    return delete_logical_partition(std::nullopt, partition_name, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> resize_logical_partition_async(
+      const DeviceSelector selector, const std::string_view partition_name,
+      const std::uint64_t size, const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_name_storage{partition_name};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_resize_logical_partition_async(
+              handle_, selector_value, partition_name_storage.c_str(), size,
+              native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  resize_logical_partition_async(const std::string_view partition_name,
+                                 const std::uint64_t size,
+                                 const CommandOptions &options = {}) const {
+    return resize_logical_partition_async(std::nullopt, partition_name, size,
+                                          options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> resize_logical_partition(
+      const DeviceSelector selector, const std::string_view partition_name,
+      const std::uint64_t size, const CommandOptions &options = {}) const {
+    auto operation =
+        resize_logical_partition_async(selector, partition_name, size, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error>
+  resize_logical_partition(const std::string_view partition_name,
+                           const std::uint64_t size,
+                           const CommandOptions &options = {}) const {
+    return resize_logical_partition(std::nullopt, partition_name, size,
+                                    options);
   }
 
   [[nodiscard]] std::expected<Operation, Error> reboot_async(
