@@ -211,6 +211,9 @@ add_library(kairosboot_cxx INTERFACE)
 add_library(KairosBoot::Cxx ALIAS kairosboot_cxx)
 set_target_properties(kairosboot_cxx PROPERTIES EXPORT_NAME Cxx)
 target_compile_features(kairosboot_cxx INTERFACE cxx_std_23)
+target_compile_options(
+  kairosboot_cxx
+  INTERFACE "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:__cplusplus>")
 target_include_directories(
   kairosboot_cxx
   INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
