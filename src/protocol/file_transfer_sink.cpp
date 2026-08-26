@@ -128,6 +128,19 @@ private:
     return ::SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0U) != FALSE;
 }
 
+[[nodiscard]] bool rename_info_ex_is_unsupported(
+    const DWORD error) noexcept {
+    switch (error) {
+    case ERROR_INVALID_FUNCTION:
+    case ERROR_INVALID_PARAMETER:
+    case ERROR_NOT_SUPPORTED:
+    case ERROR_CALL_NOT_IMPLEMENTED:
+        return true;
+    default:
+        return false;
+    }
+}
+
 [[nodiscard]] std::expected<std::filesystem::path, FileTransferSinkError>
 final_directory_path(const HANDLE directory) {
     constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
@@ -358,7 +371,7 @@ FileTransferSink::create(const std::filesystem::path& requested_destination) {
             const auto raw_file = ::CreateFileW(
                 temporary_path.c_str(),
                 GENERIC_READ | GENERIC_WRITE | DELETE,
-                0U,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 &security,
                 CREATE_NEW,
                 FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY,
@@ -742,16 +755,32 @@ std::expected<void, FileTransferSinkError> FileTransferSink::seal(
             rename_base + name_bytes);
         auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(
             rename_buffer.data());
-        rename->ReplaceIfExists = TRUE;
-        rename->RootDirectory = static_cast<HANDLE>(directory_);
+        constexpr DWORD rename_replace_if_exists = 0x00000001U;
+        constexpr DWORD rename_posix_semantics = 0x00000002U;
+        rename->Flags = rename_replace_if_exists | rename_posix_semantics;
+        // A simple name with no RootDirectory renames the already-open file
+        // within its current parent. This retains handle-relative semantics
+        // without relying on the Win32 wrapper's inconsistent forwarding of a
+        // non-null RootDirectory.
+        rename->RootDirectory = nullptr;
         rename->FileNameLength = static_cast<DWORD>(name_bytes);
         std::memcpy(rename->FileName, destination_name.data(), name_bytes);
-        if (::SetFileInformationByHandle(
-                static_cast<HANDLE>(file_), FileRenameInfo, rename,
-                static_cast<DWORD>(rename_buffer.size())) == FALSE) {
+        const auto rename_size = static_cast<DWORD>(rename_buffer.size());
+        BOOL renamed = ::SetFileInformationByHandle(
+            static_cast<HANDLE>(file_), FileRenameInfoEx, rename, rename_size);
+        DWORD rename_error = renamed == FALSE ? ::GetLastError() : ERROR_SUCCESS;
+        if (renamed == FALSE && rename_info_ex_is_unsupported(rename_error)) {
+            rename->ReplaceIfExists = TRUE;
+            renamed = ::SetFileInformationByHandle(
+                static_cast<HANDLE>(file_), FileRenameInfo, rename, rename_size);
+            if (renamed == FALSE) {
+                rename_error = ::GetLastError();
+            }
+        }
+        if (renamed == FALSE) {
             return fail_seal_locked(
                 FileTransferSinkErrorKind::PublishFailed,
-                static_cast<int>(::GetLastError()),
+                static_cast<int>(rename_error),
                 "unable to atomically publish the received file");
         }
 #else
