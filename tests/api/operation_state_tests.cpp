@@ -273,6 +273,39 @@ void destructor_cancels_joins_and_leaves_no_callback() {
     CHECK(hook_calls.load(std::memory_order_relaxed) == 1);
 }
 
+void external_release_waits_for_running_callback() {
+    std::promise<void> callback_entered;
+    auto callback_entered_future = callback_entered.get_future();
+    std::promise<void> release_callback;
+    auto release_callback_future = release_callback.get_future().share();
+    std::atomic<unsigned int> callback_calls{0};
+    std::atomic<bool> task_finished{false};
+
+    auto operation = std::make_unique<OperationState>(
+        [&](OperationState::TaskContext& context) {
+            callback_calls.fetch_add(1, std::memory_order_relaxed);
+            callback_entered.set_value();
+            release_callback_future.wait();
+            task_finished.store(true, std::memory_order_release);
+            return context.cancel_requested()
+                ? OperationOutcome::cancelled()
+                : OperationOutcome::succeeded();
+        });
+    CHECK(operation->start());
+    callback_entered_future.wait();
+
+    auto release = std::async(std::launch::async, [&] {
+        operation.reset();
+    });
+    CHECK(release.wait_for(20ms) == std::future_status::timeout);
+    CHECK(!task_finished.load(std::memory_order_acquire));
+
+    release_callback.set_value();
+    release.get();
+    CHECK(task_finished.load(std::memory_order_acquire));
+    CHECK(callback_calls.load(std::memory_order_relaxed) == 1);
+}
+
 void thrown_task_becomes_internal_failure() {
     OperationState operation([](OperationState::TaskContext&) -> OperationOutcome {
         throw std::runtime_error("task failure");
@@ -300,6 +333,8 @@ int main() {
          successful_task_is_cancelled_when_cancel_wins_publication},
         {"task payload lifetime", task_payload_outlives_initiating_reference},
         {"destructor cancellation and join", destructor_cancels_joins_and_leaves_no_callback},
+        {"external release waits for callback",
+         external_release_waits_for_running_callback},
         {"task exception normalization", thrown_task_becomes_internal_failure},
     };
 
