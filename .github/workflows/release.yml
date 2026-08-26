@@ -408,6 +408,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           dotnet msbuild bindings/dotnet/KairosBoot/KairosBoot.csproj \
+            /restore \
             /t:Pack \
             /p:Configuration=Release \
             /p:PackageOutputPath="$PWD/nuget" \

@@ -76,7 +76,7 @@
 
   <Target Name="BuildManaged" DependsOnTargets="Prepare">
     <MSBuild Projects="$(PackageProject)"
-             Targets="Build"
+             Targets="Restore;Build"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)" />
   </Target>

@@ -337,6 +337,7 @@ jobs:
           package_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"])')
           mkdir -p "${RUNNER_TEMP}/nuget"
           dotnet msbuild bindings/dotnet/KairosBoot/KairosBoot.csproj \
+            /restore \
             /t:Pack \
             /p:Configuration=Release \
             "/p:PackageOutputPath=${RUNNER_TEMP}/nuget" \
