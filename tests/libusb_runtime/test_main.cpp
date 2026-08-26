@@ -246,6 +246,11 @@ public:
             ++self->free_transfer_calls;
             std::free(transfer);
         };
+        table.pin_current_module = [self] {
+            ++self->pin_module_calls;
+            return self->pin_module_result;
+        };
+        table.module_pin_failure = [self] { ++self->pin_module_failure_calls; };
         return table;
     }
 
@@ -258,6 +263,20 @@ public:
         std::lock_guard lock(mutex_);
         event_results_.push_back(result);
         event_cv_.notify_all();
+    }
+
+    void request_event_block(const std::chrono::milliseconds duration) {
+        std::lock_guard lock(mutex_);
+        requested_event_block_ = duration;
+        blocked_event_started.store(false, std::memory_order_release);
+        blocked_event_completed.store(false, std::memory_order_release);
+        event_cv_.notify_all();
+    }
+
+    void wait_for_event_block_start() {
+        wait_until([this] {
+            return blocked_event_started.load(std::memory_order_acquire);
+        });
     }
 
     void complete_submission(const std::size_t index,
@@ -293,7 +312,8 @@ public:
     int cancel_actual_length{};
     bool fail_allocation{false};
     bool suppress_cancel_completion{false};
-    std::chrono::milliseconds block_handle_events_for{};
+    bool pin_module_result{true};
+    std::atomic<bool> blocked_event_started{false};
     std::atomic<bool> blocked_event_completed{false};
     std::atomic<int> init_calls{0};
     std::atomic<int> exit_calls{0};
@@ -307,6 +327,8 @@ public:
     std::atomic<int> alternate_calls{0};
     std::atomic<int> cancel_calls{0};
     std::atomic<int> free_transfer_calls{0};
+    std::atomic<int> pin_module_calls{0};
+    std::atomic<int> pin_module_failure_calls{0};
     std::thread::id callback_thread;
 
 private:
@@ -322,20 +344,24 @@ private:
 
     int handle_one_event(timeval* timeout) {
         ++handle_event_calls;
-        if (block_handle_events_for.count() > 0 &&
-            !block_started_.exchange(true, std::memory_order_acq_rel)) {
-            std::this_thread::sleep_for(block_handle_events_for);
-            blocked_event_completed.store(true, std::memory_order_release);
-            return LIBUSB_SUCCESS;
-        }
         std::unique_lock lock(mutex_);
         const auto wait_duration = timeout == nullptr
                                        ? std::chrono::milliseconds(100)
                                        : std::chrono::seconds(timeout->tv_sec) +
                                              std::chrono::microseconds(timeout->tv_usec);
         event_cv_.wait_for(lock, wait_duration, [this] {
-            return interrupted_ || !events_.empty() || !event_results_.empty();
+            return interrupted_ || !events_.empty() || !event_results_.empty() ||
+                   requested_event_block_.count() > 0;
         });
+        if (requested_event_block_.count() > 0) {
+            const auto duration = requested_event_block_;
+            requested_event_block_ = std::chrono::milliseconds{0};
+            blocked_event_started.store(true, std::memory_order_release);
+            lock.unlock();
+            std::this_thread::sleep_for(duration);
+            blocked_event_completed.store(true, std::memory_order_release);
+            return LIBUSB_SUCCESS;
+        }
         if (interrupted_) {
             interrupted_ = false;
             return LIBUSB_ERROR_INTERRUPTED;
@@ -375,7 +401,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable event_cv_;
     bool interrupted_{false};
-    std::atomic<bool> block_started_{false};
+    std::chrono::milliseconds requested_event_block_{};
     std::deque<Event> events_;
     std::deque<int> event_results_;
     std::deque<int> submit_results_;
@@ -428,6 +454,7 @@ private:
 void test_init_failure_version_and_singleton() {
     const auto system_functions = LibusbFunctions::system();
     KB_CHECK(system_functions.complete());
+    KB_CHECK(system_functions.pin_current_module());
     const auto* linked_version = system_functions.get_version();
     KB_CHECK(linked_version != nullptr);
     KB_CHECK(linked_version->major == 1);
@@ -859,6 +886,7 @@ void test_runtime_stop_cancels_and_drains_idempotently() {
     KB_CHECK(fake->close_calls == 1);
     KB_CHECK(fake->free_transfer_calls == 2);
     KB_CHECK(fake->exit_calls == 1);
+    KB_CHECK(fake->pin_module_calls == 0);
     backend->stop();
 }
 
@@ -967,41 +995,83 @@ void test_explicit_zero_packet_contract() {
     runtime->stop();
 }
 
-void test_bounded_stop_quarantines_undrainable_transfer_and_event_thread() {
+void test_backend_local_isolation_and_two_phase_global_quarantine() {
     auto fake = std::make_shared<FakeLibusb>();
+    // Production fails fast if module pinning fails. The fake handler returns
+    // so the failure state and ownership strategy can be inspected safely from
+    // this main-executable test image.
+    fake->pin_module_result = false;
     fake->suppress_cancel_completion = true;
-    fake->block_handle_events_for = std::chrono::seconds(1);
     auto runtime = create_runtime(fake);
-    auto backend_result = runtime->open_bulk_out(matching_device(runtime));
-    KB_CHECK(backend_result.has_value());
-    auto backend = std::move(*backend_result);
+    const auto snapshot = matching_device(runtime);
+    auto first_backend_result = runtime->open_bulk_out(snapshot);
+    KB_CHECK(first_backend_result.has_value());
+    auto first_backend = std::move(*first_backend_result);
     auto bytes = payload(4);
-    KB_CHECK(backend->submit(TransferSubmission{30, 0, *bytes, bytes}) ==
+    KB_CHECK(first_backend->submit(TransferSubmission{30, 0, *bytes, bytes}) ==
              SubmitResult::accepted);
 
-    const auto started = std::chrono::steady_clock::now();
+    const auto backend_stop_started = std::chrono::steady_clock::now();
+    first_backend->stop();
+    const auto backend_stop_elapsed =
+        std::chrono::steady_clock::now() - backend_stop_started;
+    // This is a deterministic fake envelope around the backend wait only; it
+    // is not a bound on a real native cancel call.
+    KB_CHECK(backend_stop_elapsed < std::chrono::milliseconds(600));
+    KB_CHECK(runtime->running());
+    KB_CHECK(!runtime->shutdown_quarantined());
+    KB_CHECK(runtime->quarantine_module_pin_failed());
+    KB_CHECK(first_backend->shutdown_quarantined());
+    KB_CHECK(first_backend->in_flight() == 1);
+    KB_CHECK(fake->pin_module_calls == 1);
+    KB_CHECK(fake->pin_module_failure_calls == 1);
+
+    // A backend-local timeout must not poison the shared runtime. A second
+    // device backend can still be opened and complete new work.
+    fake->suppress_cancel_completion = false;
+    auto second_backend_result = runtime->open_bulk_out(snapshot);
+    KB_CHECK(second_backend_result.has_value());
+    auto second_backend = std::move(*second_backend_result);
+    auto second_bytes = payload(4);
+    KB_CHECK(second_backend->submit(
+                 TransferSubmission{31, 0, *second_bytes, second_bytes}) ==
+             SubmitResult::accepted);
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto second_completion = wait_for_completion(*second_backend);
+    KB_CHECK(second_completion.id == 31);
+    KB_CHECK(second_completion.code == CompletionCode::success);
+    KB_CHECK(fake->free_transfer_calls == 1);
+
+    fake->request_event_block(std::chrono::seconds(1));
+    fake->wait_for_event_block_start();
+    const auto runtime_stop_started = std::chrono::steady_clock::now();
     runtime->stop();
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    KB_CHECK(elapsed < std::chrono::milliseconds(800));
+    const auto runtime_stop_elapsed =
+        std::chrono::steady_clock::now() - runtime_stop_started;
+    // With instant fake native calls, the independent 250 ms drain wait and
+    // 250 ms event-exit wait fit this envelope. This is not a native-call SLA.
+    KB_CHECK(runtime_stop_elapsed < std::chrono::milliseconds(800));
     KB_CHECK(!runtime->running());
     KB_CHECK(runtime->shutdown_quarantined());
-    KB_CHECK(backend->shutdown_quarantined());
-    KB_CHECK(backend->in_flight() == 1);
+    KB_CHECK(first_backend->in_flight() == 1);
+    KB_CHECK(!second_backend->shutdown_quarantined());
     KB_CHECK(fake->cancel_calls >= 1);
-    KB_CHECK(fake->free_transfer_calls == 0);
-    KB_CHECK(fake->release_calls == 0);
-    KB_CHECK(fake->close_calls == 0);
+    KB_CHECK(fake->free_transfer_calls == 1);
+    KB_CHECK(fake->release_calls == 1);
+    KB_CHECK(fake->close_calls == 1);
     KB_CHECK(fake->exit_calls == 0);
+    KB_CHECK(fake->pin_module_calls == 1);
 
     wait_until([&] {
         return fake->blocked_event_completed.load(std::memory_order_acquire);
     });
     const auto second_stop_started = std::chrono::steady_clock::now();
     runtime->stop();
-    backend->stop();
+    first_backend->stop();
+    second_backend->stop();
     KB_CHECK(std::chrono::steady_clock::now() - second_stop_started <
              std::chrono::milliseconds(100));
-    KB_CHECK(fake->free_transfer_calls == 0);
+    KB_CHECK(fake->free_transfer_calls == 1);
 
     auto replacement_fake = std::make_shared<FakeLibusb>();
     const auto replacement = LibusbRuntime::create(replacement_fake->functions());
@@ -1030,7 +1100,7 @@ int main() {
         {"runtime stop cancel and drain", test_runtime_stop_cancels_and_drains_idempotently},
         {"terminal event error poisons accepting", test_terminal_event_error_poisons_accepting},
         {"explicit zero packet contract", test_explicit_zero_packet_contract},
-        {"bounded quarantine shutdown", test_bounded_stop_quarantines_undrainable_transfer_and_event_thread},
+        {"backend isolation and two-phase quarantine", test_backend_local_isolation_and_two_phase_global_quarantine},
     };
 
     std::size_t failures = 0;

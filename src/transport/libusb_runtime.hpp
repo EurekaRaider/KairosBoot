@@ -60,6 +60,12 @@ struct LibusbFunctions final {
     std::function<int(libusb_transfer*)> cancel_transfer;
     std::function<void(libusb_transfer*)> free_transfer;
 
+    // Quarantine may outlive the caller's reference to the SDK shared library.
+    // Production pins the module containing this runtime; tests may inject a
+    // deterministic result. The production failure handler never returns.
+    std::function<bool()> pin_current_module;
+    std::function<void()> module_pin_failure;
+
     // Optional deterministic allocation-fault seam for transport tests. The
     // production function table leaves it empty.
     std::function<void(LibusbSubmitFaultPoint)> submit_allocation_fault;
@@ -152,6 +158,7 @@ public:
     [[nodiscard]] std::optional<int> last_event_error() const noexcept;
     [[nodiscard]] std::thread::id event_thread_id() const noexcept;
     [[nodiscard]] bool shutdown_quarantined() const noexcept;
+    [[nodiscard]] bool quarantine_module_pin_failed() const noexcept;
 
 private:
     friend class LibusbBulkOutBackend;

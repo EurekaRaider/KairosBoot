@@ -1,9 +1,22 @@
 #include "src/transport/libusb_runtime.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -16,8 +29,84 @@ namespace kairosboot::transport {
 
 namespace {
 
-inline constexpr auto kShutdownDrainGrace = std::chrono::milliseconds{250};
-inline constexpr auto kEventThreadExitGrace = std::chrono::milliseconds{250};
+// These bounds apply only to KairosBoot's waits after native libusb calls
+// return. libusb_cancel_transfer(), libusb_interrupt_event_handler(), and other
+// native calls are not preempted by these timers; this is not an end-to-end SLA.
+inline constexpr auto kPerBackendDrainWait = std::chrono::milliseconds{250};
+inline constexpr auto kRuntimeDrainWait = std::chrono::milliseconds{250};
+inline constexpr auto kEventThreadExitWait = std::chrono::milliseconds{250};
+
+constinit std::byte kModulePinAnchor{};
+
+#if defined(_WIN32)
+[[nodiscard]] bool pin_runtime_module() noexcept {
+    HMODULE module = nullptr;
+    const auto flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_PIN;
+    if (GetModuleHandleExW(flags,
+                           reinterpret_cast<LPCWSTR>(&kModulePinAnchor),
+                           &module) != FALSE) {
+        return true;
+    }
+
+    // The main executable is intrinsically mapped for process lifetime.
+    MEMORY_BASIC_INFORMATION information{};
+    return VirtualQuery(&kModulePinAnchor, &information, sizeof(information)) != 0 &&
+           information.AllocationBase ==
+               reinterpret_cast<void*>(GetModuleHandleW(nullptr));
+}
+#else
+[[nodiscard]] bool same_file(const char* const left, const char* const right) noexcept {
+    if (left == nullptr || right == nullptr) {
+        return false;
+    }
+    struct stat left_status {};
+    struct stat right_status {};
+    return stat(left, &left_status) == 0 && stat(right, &right_status) == 0 &&
+           left_status.st_dev == right_status.st_dev &&
+           left_status.st_ino == right_status.st_ino;
+}
+
+[[nodiscard]] bool module_is_main_executable(const char* const module_path) noexcept {
+    std::array<char, PATH_MAX + 1> executable_path{};
+#if defined(__APPLE__)
+    auto size = static_cast<std::uint32_t>(executable_path.size());
+    if (_NSGetExecutablePath(executable_path.data(), &size) != 0) {
+        return false;
+    }
+#elif defined(__linux__)
+    const auto length = readlink("/proc/self/exe",
+                                 executable_path.data(),
+                                 executable_path.size() - 1U);
+    if (length <= 0 || static_cast<std::size_t>(length) >= executable_path.size()) {
+        return false;
+    }
+    executable_path[static_cast<std::size_t>(length)] = '\0';
+#else
+    return false;
+#endif
+    return same_file(module_path, executable_path.data());
+}
+
+[[nodiscard]] bool pin_runtime_module() noexcept {
+    Dl_info information{};
+    if (dladdr(&kModulePinAnchor, &information) == 0 ||
+        information.dli_fname == nullptr || information.dli_fname[0] == '\0') {
+        return false;
+    }
+    if (module_is_main_executable(information.dli_fname)) {
+        return true;
+    }
+
+    auto flags = RTLD_NOW | RTLD_LOCAL;
+#if defined(RTLD_NODELETE)
+    flags |= RTLD_NODELETE;
+#endif
+    // Deliberately do not dlclose: the extra reference keeps KairosBoot and its
+    // linked libusb dependency resident until process termination.
+    return dlopen(information.dli_fname, flags) != nullptr;
+}
+#endif
 
 [[nodiscard]] bool version_is_exact(const libusb_version* version) noexcept {
     return version != nullptr && version->major == kRequiredLibusbMajor &&
@@ -277,6 +366,8 @@ LibusbFunctions LibusbFunctions::system() {
     functions.free_transfer = [](libusb_transfer* transfer) {
         libusb_free_transfer(transfer);
     };
+    functions.pin_current_module = [] { return pin_runtime_module(); };
+    functions.module_pin_failure = [] { std::terminate(); };
     return functions;
 }
 
@@ -287,7 +378,8 @@ bool LibusbFunctions::complete() const noexcept {
            get_bus_number && get_device_address && get_port_numbers && get_device_string &&
            open && close && claim_interface && release_interface &&
            set_interface_alt_setting && alloc_transfer && submit_transfer &&
-           cancel_transfer && free_transfer;
+           cancel_transfer && free_transfer && pin_current_module &&
+           module_pin_failure;
 }
 
 struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::State> {
@@ -310,6 +402,8 @@ struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::
     std::atomic<bool> event_terminal{false};
     std::atomic<bool> event_exited{false};
     std::atomic<bool> quarantined{false};
+    std::atomic<bool> module_pin_attempted{false};
+    std::atomic<bool> module_pin_failed{false};
     std::atomic<int> event_error{0};
     std::atomic<std::uint64_t> next_event_epoch{1};
     std::atomic<std::uint64_t> active_event_epoch{0};
@@ -330,9 +424,9 @@ struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::
     void register_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend);
     void stop_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept;
     void stop_all() noexcept;
-    void quarantine_backend(
-        const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept;
-    void activate_process_lifetime_quarantine() noexcept;
+    void quarantine_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend,
+                            bool global_runtime_quarantine) noexcept;
+    void root_process_lifetime_quarantine(bool global_runtime_quarantine) noexcept;
     [[nodiscard]] bool wait_for_event_exit(
         std::chrono::steady_clock::time_point deadline) noexcept;
 };
@@ -503,7 +597,7 @@ void LibusbRuntime::State::stop_backend(
         return;
     }
     backend->request_stop();
-    const auto deadline = std::chrono::steady_clock::now() + kShutdownDrainGrace;
+    const auto deadline = std::chrono::steady_clock::now() + kPerBackendDrainWait;
     while (!backend->service_shutdown() &&
            !event_terminal.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) {
@@ -511,8 +605,8 @@ void LibusbRuntime::State::stop_backend(
         completion_cv.wait_until(completion, deadline);
     }
     if (!backend->service_shutdown()) {
-        accepting.store(false, std::memory_order_release);
-        quarantine_backend(backend);
+        quarantine_backend(backend,
+                           event_terminal.load(std::memory_order_acquire));
     }
 }
 
@@ -533,7 +627,7 @@ void LibusbRuntime::State::stop_all() noexcept {
     }
 
     const auto drain_deadline =
-        std::chrono::steady_clock::now() + kShutdownDrainGrace;
+        std::chrono::steady_clock::now() + kRuntimeDrainWait;
     bool drained = false;
     for (;;) {
         drained = true;
@@ -576,14 +670,14 @@ void LibusbRuntime::State::stop_all() noexcept {
             }
         }
         if (requires_quarantine) {
-            activate_process_lifetime_quarantine();
+            root_process_lifetime_quarantine(true);
         }
     }
 
     stop_events.store(true, std::memory_order_release);
     functions.interrupt_events(context);
     const auto event_exit_deadline =
-        std::chrono::steady_clock::now() + kEventThreadExitGrace;
+        std::chrono::steady_clock::now() + kEventThreadExitWait;
     const auto event_stopped = wait_for_event_exit(event_exit_deadline);
     bool event_thread_reaped = !event_thread.joinable();
     if (event_thread.joinable() && event_stopped) {
@@ -591,10 +685,10 @@ void LibusbRuntime::State::stop_all() noexcept {
             event_thread.join();
             event_thread_reaped = true;
         } catch (const std::system_error&) {
-            activate_process_lifetime_quarantine();
+            root_process_lifetime_quarantine(true);
         }
     } else if (event_thread.joinable()) {
-        activate_process_lifetime_quarantine();
+        root_process_lifetime_quarantine(true);
         try {
             event_thread.detach();
             event_thread_reaped = true;
@@ -608,14 +702,15 @@ void LibusbRuntime::State::stop_all() noexcept {
         functions.exit(context);
         context = nullptr;
     } else {
-        activate_process_lifetime_quarantine();
+        root_process_lifetime_quarantine(true);
     }
     running.store(false, std::memory_order_release);
     completion_cv.notify_all();
 }
 
 void LibusbRuntime::State::quarantine_backend(
-    const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept {
+    const std::shared_ptr<LibusbBulkOutBackend::State>& backend,
+    const bool global_runtime_quarantine) noexcept {
     const auto was_quarantined =
         backend->quarantined.exchange(true, std::memory_order_acq_rel);
     if (!was_quarantined) {
@@ -627,11 +722,29 @@ void LibusbRuntime::State::quarantine_backend(
         backend->quarantine_next = std::move(quarantined_backend_head);
         quarantined_backend_head = backend;
     }
-    activate_process_lifetime_quarantine();
+    root_process_lifetime_quarantine(global_runtime_quarantine);
 }
 
-void LibusbRuntime::State::activate_process_lifetime_quarantine() noexcept {
-    quarantined.store(true, std::memory_order_release);
+void LibusbRuntime::State::root_process_lifetime_quarantine(
+    const bool global_runtime_quarantine) noexcept {
+    if (global_runtime_quarantine) {
+        quarantined.store(true, std::memory_order_release);
+    }
+    if (!module_pin_attempted.exchange(true, std::memory_order_acq_rel)) {
+        bool pinned = false;
+        try {
+            pinned = functions.pin_current_module();
+        } catch (...) {
+            pinned = false;
+        }
+        if (!pinned) {
+            module_pin_failed.store(true, std::memory_order_release);
+            // Production terminates here: returning with callback-capable code
+            // that can be unloaded is not a safe degraded mode. Deterministic
+            // tests inject a returning handler while running in the main image.
+            functions.module_pin_failure();
+        }
+    }
     if (quarantine_slot == nullptr) {
         return;
     }
@@ -1233,6 +1346,11 @@ std::thread::id LibusbRuntime::event_thread_id() const noexcept {
 
 bool LibusbRuntime::shutdown_quarantined() const noexcept {
     return state_ != nullptr && state_->quarantined.load(std::memory_order_acquire);
+}
+
+bool LibusbRuntime::quarantine_module_pin_failed() const noexcept {
+    return state_ != nullptr &&
+           state_->module_pin_failed.load(std::memory_order_acquire);
 }
 
 LibusbBulkOutBackend::LibusbBulkOutBackend(std::shared_ptr<State> state)

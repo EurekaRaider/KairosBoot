@@ -86,6 +86,7 @@ target_include_directories(kairosboot_libusb_runtime_tests PRIVATE ../..)
 target_compile_features(kairosboot_libusb_runtime_tests PRIVATE cxx_std_23)
 target_link_libraries(kairosboot_libusb_runtime_tests PRIVATE
     kairosboot_libusb_dependency
+    ${CMAKE_DL_LIBS}
     Threads::Threads
 )
 set_target_properties(kairosboot_libusb_runtime_tests PROPERTIES
