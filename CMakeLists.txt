@@ -127,6 +127,7 @@ endfunction()
 
 add_library(
   kairosboot_internal STATIC
+  src/api/device_selection.cpp
   src/api/operation_state.cpp
   src/fleet/controller_scheduler.cpp
   src/image/file_source.cpp
@@ -264,6 +265,17 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_device_selection_tests
+                 tests/api/device_selection_tests.cpp)
+  target_compile_features(kairosboot_device_selection_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_device_selection_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_device_selection_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_device_selection_tests)
+  add_test(NAME device_selection COMMAND kairosboot_device_selection_tests)
+  set_tests_properties(device_selection PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_operation_state_tests
                  tests/api/operation_state_tests.cpp)
   target_compile_features(kairosboot_operation_state_tests PRIVATE cxx_std_23)

@@ -34,6 +34,7 @@ using kairosboot::transport::UsbDeviceInfo;
     result.product_id = static_cast<std::uint16_t>(0x4E00U + identity);
     result.bus_number = identity;
     result.device_address = static_cast<std::uint8_t>(identity + 10U);
+    result.configuration_value = 1;
     result.port_path = {identity, static_cast<std::uint8_t>(identity + 1U)};
     result.serial_utf8 = std::move(serial);
     result.interface_number = static_cast<std::uint8_t>(identity + 2U);
@@ -55,6 +56,7 @@ using kairosboot::transport::UsbDeviceInfo;
            left.product_id == right.product_id &&
            left.bus_number == right.bus_number &&
            left.device_address == right.device_address &&
+           left.configuration_value == right.configuration_value &&
            left.port_path == right.port_path &&
            left.serial_utf8 == right.serial_utf8 &&
            left.interface_number == right.interface_number &&
