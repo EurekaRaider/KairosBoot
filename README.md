@@ -1,45 +1,216 @@
+<div align="center">
+
 # KairosBoot
 
-KairosBoot is an early-stage, cross-platform host SDK and CLI for the standard
-Android Fastboot protocol. The project targets a stable C11 API, a C++23 RAII
-wrapper, .NET bindings, and high-throughput multi-device flashing.
+**A cross-platform Fastboot SDK and CLI engineered for direct integration.**
+
+![Version](https://img.shields.io/badge/version-0.1.0--dev-111827)
+[![CI](https://github.com/EurekaRaider/KairosBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/EurekaRaider/KairosBoot/actions/workflows/ci.yml)
+[![Release](https://github.com/EurekaRaider/KairosBoot/actions/workflows/release.yml/badge.svg)](https://github.com/EurekaRaider/KairosBoot/actions/workflows/release.yml)
+[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
+[![CMake](https://img.shields.io/badge/CMake-3.22%2B-064F8C?logo=cmake&logoColor=white)](https://cmake.org/)
+[![.NET](https://img.shields.io/badge/.NET-4.8%20%7C%2010.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![License](https://img.shields.io/badge/license-MIT-00A86B)](LICENSE)
+
+KairosBoot is a host-side library and command-line tool for the standard
+Android Fastboot protocol. Its long-term direction is a single in-process
+runtime for C, C++, .NET, and CLI consumers, with measured high-throughput and
+multi-device operation across Windows, Linux, and macOS.
+
+**KairosBoot is in early development.** The current milestone provides the SDK
+foundation, diagnostics, USB enumeration, transport internals, and test
+infrastructure—not a production-ready replacement for AOSP Fastboot.
+
+[Why](#why-kairosboot) | [Status](#current-status) |
+[Quick Start](#quick-start) | [API](#api-surface) |
+[Architecture](#architecture) | [Build](#build) | [Roadmap](#roadmap)
+
+</div>
+
+---
 
 > [!IMPORTANT]
-> KairosBoot is under active development and is not yet ready for production
-> flashing. Do not use it on devices containing irreplaceable data.
+> Public flashing is intentionally unavailable in this build. The C, C++, and
+> .NET flash entry points return `KB_E_NOT_SUPPORTED` (or the matching managed
+> exception) and never report false success. Do not use KairosBoot for
+> production flashing or on devices containing irreplaceable data.
 
-## Planned platforms
+## Why KairosBoot?
 
-- Windows 10/11 on x64 and ARM64
-- Linux on x64 and ARM64
-- macOS 14 or newer on Intel and Apple silicon
+AOSP Fastboot is a mature command-line tool. KairosBoot is being designed for
+applications that need Fastboot as an embeddable, observable component instead
+of a collection of child processes.
 
-## Planned interfaces
+| | AOSP Fastboot | KairosBoot direction |
+|---|---|---|
+| Integration | Invoke an external executable | Use a C11 ABI, C++23 RAII API, .NET API, or CLI |
+| Concurrency | Coordinate independent processes | Share one runtime and schedule devices by USB topology |
+| Progress and cancellation | Parse process output and signals | Use typed operations, callbacks, tasks, and cancellation |
+| Performance | Production baseline | Measure against raw USB ceilings and optimize only where headroom exists |
+| Maturity | Production tool | Early development; destructive commands are not integrated |
 
-- A first-class C11 SDK with blocking and asynchronous operations
-- A header-only C++23 RAII wrapper
-- C# bindings for .NET Framework 4.8 and .NET 10
-- The `kairosboot` command-line tool
+The right-hand column is the project direction, not a claim that those outcomes
+have already been delivered or benchmarked.
 
-The current implementation milestone includes the stable API foundation,
-Fastboot response state machine, TCP v1 and reliable UDP v1 transports, a
-bidirectional asynchronous libusb Fastboot session, public USB device
-enumeration, transfer-ring scheduling, sparse-image validation, and no-hardware
-test doubles. The transport cores are not yet wired to the public destructive
-device commands.
+## Current Status
 
-## Build the foundation milestone
+The `0.1.0-dev` milestone establishes contracts and isolates the risky transport
+work before destructive commands are exposed.
 
-KairosBoot requires CMake 3.22 or newer, Python 3, `make`, and a compiler with
-C++23 support. Release builds use exactly libusb 1.0.30 as a dynamically linked
-dependency. Prepare it from the locked, hash-verified archives before
-configuring (choose `linux`, `macos`, or `windows` and `x64` or `arm64`):
+| Area | Status today |
+|---|---|
+| C11 SDK | Versioned opaque-handle API for version, context, errors, USB device lists, and operation-shaped flash entry points |
+| C++23 SDK | Header-only, move-only RAII wrapper over the C ABI using `std::expected` |
+| .NET SDK | Thin `net48;net10.0` binding with `SafeHandle`, UTF-8 marshalling, tasks, cancellation, and native error propagation |
+| CLI | `--version`, `doctor --json`, and `devices` in text or JSON form |
+| USB discovery | Public enumeration of Fastboot USB interfaces through the locked libusb runtime |
+| Transport core | Fastboot response state machine plus asynchronous USB, TCP v1, and reliable UDP v1 internals tested independently |
+| Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
+| Flash operations | Public signatures exist, but return `KB_E_NOT_SUPPORTED`; no destructive transport integration yet |
+| Fleet jobs | Versioned schema and scheduler primitives exist; manifest planning and execution are not public features yet |
+| Performance and HIL | Acceptance goals are defined; 32-device, throughput, fairness, and soak claims have not been demonstrated yet |
+
+### Target platforms
+
+| Platform | Architecture | Intended public surfaces |
+|---|---|---|
+| Windows 10/11 | x64, ARM64 | Native SDK/CLI and .NET 10; .NET Framework 4.8 on x64 only |
+| Ubuntu 22.04+ / Debian 12+ | x64, ARM64 | Native SDK/CLI and .NET 10 |
+| macOS 14+ | x64, ARM64 | Native SDK/CLI and .NET 10 |
+
+These are build and release targets. They do not imply that real-device USB
+hardware-in-the-loop acceptance is complete on every target.
+
+## Quick Start
+
+### Inspect the current runtime
+
+After building, the CLI exposes only non-destructive foundation commands:
+
+```sh
+./build/kairosboot --version
+./build/kairosboot --version --json
+./build/kairosboot doctor --json
+./build/kairosboot devices
+./build/kairosboot devices --json
+```
+
+`doctor --json` checks whether the native runtime and libusb dependency are
+usable. `devices` returns the currently visible Fastboot USB interfaces.
+
+### Use the C11 API
+
+The entire C API is declared by one header and owns every returned handle:
+
+```c
+#include <kairosboot/kairosboot.h>
+
+#include <stdio.h>
+
+int main(void) {
+  kb_context_t *context = NULL;
+  kb_device_list_t *devices = NULL;
+  kb_error_t *error = NULL;
+
+  if (kb_context_create(NULL, &context, &error) != KB_OK ||
+      kb_enumerate_devices(context, &devices, &error) != KB_OK) {
+    fprintf(stderr, "%s\n", kb_error_message(error));
+    kb_error_release(error);
+    kb_context_release(context);
+    return 1;
+  }
+
+  printf("%zu Fastboot device(s)\n", kb_device_list_count(devices));
+  kb_device_list_release(devices);
+  kb_context_release(context);
+  return 0;
+}
+```
+
+### Use the C++23 API
+
+The C++ wrapper is header-only and delegates every operation to the stable C
+ABI:
+
+```cpp
+#include <kairosboot/kairosboot.hpp>
+
+#include <iostream>
+
+int main() {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    std::cerr << context.error().message() << '\n';
+    return 1;
+  }
+
+  auto devices = context->devices();
+  if (!devices) {
+    std::cerr << devices.error().message() << '\n';
+    return 1;
+  }
+
+  std::cout << devices->size() << " Fastboot device(s)\n";
+}
+```
+
+Installed CMake packages export `KairosBoot::C` and `KairosBoot::Cxx`.
+
+## API Surface
+
+| Surface | Contract |
+|---|---|
+| C11 | Single public header, UTF-8 strings, fixed-width integers, opaque handles, explicit ownership, and blocking/asynchronous operation shapes |
+| C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and move-only resources; no separate C++ binary ABI |
+| .NET Framework 4.8 | Windows x64 binding using `DllImport`, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
+| .NET 10 | `LibraryImport` binding for `win`, `linux`, and `osx` on x64 and ARM64 |
+| CLI | C++23 consumer of the public wrapper; currently limited to version, diagnostics, and enumeration |
+
+The managed package uses `kairosboot_native` as its internal P/Invoke library
+name to avoid colliding with the managed `KairosBoot.dll` on case-insensitive
+filesystems. The installed native SDK remains named `kairosboot`, and the C ABI
+is unchanged. See the [.NET binding guide](bindings/dotnet/README.md) for package
+and runtime details.
+
+## Architecture
+
+```text
+C11 API ───────────────┐
+C++23 RAII wrapper ────┼──> versioned C ABI ──> Fastboot / image core
+.NET wrapper ──────────┤                              │
+CLI (via C++ wrapper) ─┘                    USB / TCP / UDP internals
+                                                       │
+                                      transfer runtime / fleet primitives
+```
+
+One C ABI is the compatibility boundary for every language surface. The CLI is
+also a public SDK consumer, which keeps its behavior from drifting into a
+private implementation path.
+
+Today, public calls reach versioning, context management, diagnostics, and USB
+enumeration. The protocol, transport, and scheduling layers below them are
+still being integrated with destructive Fastboot operations.
+
+## Build
+
+KairosBoot requires:
+
+- CMake 3.22 or newer
+- Python 3 and `make` for the locked dependency preparation step
+- A C11 compiler and a compiler with C++23 support
+- Ninja or another supported CMake generator
+
+Release builds use exactly libusb 1.0.30 as a dynamically linked dependency.
+Prepare it from the repository's locked, hash-verified source archives before
+configuring. Select `windows`, `linux`, or `macos` and `x64` or `arm64` for the
+target being built:
 
 ```sh
 python3 scripts/prepare_libusb.py \
   --prefix "$PWD/build-deps/libusb" \
   --platform macos \
   --architecture arm64
+
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DKAIROSBOOT_LIBUSB_ROOT="$PWD/build-deps/libusb"
@@ -47,57 +218,82 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Official release assets are always compiled with the CMake `Release`
-configuration. `KAIROSBOOT_RELEASE_SYMBOLS=ON` adds symbol information without
-removing Release optimization; CI then publishes separate PDB, dSYM, or GNU
-debug files and packages stripped SDK, CLI, and NuGet runtimes.
+For a multi-configuration generator such as Visual Studio, build and test the
+explicit Release configuration:
 
-The installed SDK/CLI contains the matching libusb runtime, LGPL license, and a
-dependency manifest. USB enumeration is active; flashing still returns
-`KB_E_NOT_SUPPORTED` and never reports a successful flash. Check the runtime
-and currently visible Fastboot interfaces with:
+```powershell
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Install the native SDK and CLI with:
 
 ```sh
-./build/kairosboot doctor --json
+cmake --install build --prefix "$PWD/install"
 ```
 
-## API quick start
+The install contains the matching libusb runtime, LGPL license, and dependency
+manifest. Release automation builds with the CMake `Release` configuration;
+when `KAIROSBOOT_RELEASE_SYMBOLS=ON`, debug symbols are published separately
+without disabling optimization.
 
-The C11 API is declared in one header and owns all returned handles:
+## Testing
 
-```c
-#include <kairosboot/kairosboot.h>
+The repository uses no third-party C++ test framework. Its current automated
+coverage includes:
 
-kb_context_t *context = NULL;
-kb_error_t *error = NULL;
-if (kb_context_create(NULL, &context, &error) != KB_OK) {
-  /* kb_error_message(error) describes the failure. */
-  kb_error_release(error);
-  return 1;
-}
-kb_context_release(context);
+- strict pure-C11 and C++23 public API consumers
+- CLI JSON and output contracts
+- scripted Fastboot response and transport tests without hardware
+- asynchronous libusb runtime and transfer-lifecycle tests
+- TCP v1 and reliable UDP v1 protocol tests
+- sparse-image validation and malformed-input corpus tests
+- .NET contract and NuGet native-layout tests
+- install-tree and release-packaging smoke tests
+
+Passing these tests does not establish production flash safety, USB ceiling
+performance, or real-device behavior. Those require the later HIL and soak
+gates in the roadmap.
+
+## Roadmap
+
+The planned work is deliberately separated from the status table above:
+
+1. Connect public operations to USB, TCP, and UDP sessions with deterministic
+   cancellation, timeout, poison, drain, and reconnect behavior.
+2. Complete Fastboot primitives including download/upload, flash, erase, boot,
+   continue, reboot, getvar, fetch/stage, format, and OEM passthrough.
+3. Add update/flashall, ZIP and sparse pipelines, A/B slots, dynamic/super,
+   fastbootd, AVB, boot/vendor_boot, logical partitions, snapshots, and GSI.
+4. Expose deterministic fleet manifest validation, planning, execution,
+   cancellation, and reports across at least 32 devices.
+5. Tune against measured raw USB ceilings, compare with the pinned AOSP
+   Fastboot baseline, then pass fault-injection, fairness, and 24-hour soak
+   gates on the six target combinations.
+
+## Project Layout
+
+```text
+include/kairosboot/  C11 API and C++23 wrapper
+src/                 ABI implementation, protocol, image, fleet, and transport cores
+cli/                 kairosboot command-line consumer
+bindings/dotnet/     .NET Framework 4.8 and .NET 10 binding/package
+schemas/             versioned job and report schemas
+compat/              pinned AOSP compatibility inventory
+tests/               native, managed, transport, packaging, and tooling tests
+scripts/             dependency preparation and release packaging tools
 ```
-
-The header-only C++23 wrapper provides move-only RAII handles and
-`std::expected` results:
-
-```cpp
-#include <kairosboot/kairosboot.hpp>
-
-auto context = kairosboot::Context::create();
-if (!context) {
-  return 1;
-}
-```
-
-Installed CMake packages export `KairosBoot::C` and `KairosBoot::Cxx`.
 
 ## Contributing
 
-External contributions are accepted through pull requests. All changes to
-`main` require review by the repository owner. See [CONTRIBUTING.md](CONTRIBUTING.md).
+External contributions are welcome through pull requests. All changes to
+`main` require owner review; contributors do not receive direct push access.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change, and report
+security issues through [SECURITY.md](SECURITY.md).
 
 ## License
 
 KairosBoot original source code is licensed under the [MIT License](LICENSE).
-Third-party components retain their respective licenses.
+libusb is dynamically linked and retains its LGPL license. Other third-party
+components retain their own terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
