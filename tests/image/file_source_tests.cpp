@@ -240,6 +240,73 @@ void concurrent_leaf_swaps_never_escape_the_directory_handle() {
 }
 #endif
 
+void concurrent_parent_swaps_never_escape_the_directory_handle() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "package";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directory(package);
+    std::filesystem::create_directory(outside);
+    write_bytes(outside / "system.img", "outside");
+
+    const auto probe = package / "link-probe";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, probe, link_error);
+    if (link_error) {
+        return;
+    }
+    std::filesystem::remove(probe);
+
+    const auto parent = package / "images";
+    std::filesystem::create_directory(parent);
+    write_bytes(parent / "system.img", "inside");
+
+    std::atomic<bool> finished{};
+    std::exception_ptr attacker_error;
+    std::thread attacker([&] {
+        try {
+            for (std::size_t iteration = 0; iteration < 2'000U; ++iteration) {
+                std::error_code ignored;
+                std::filesystem::remove_all(parent, ignored);
+                std::filesystem::create_directory_symlink(outside, parent, ignored);
+                std::this_thread::yield();
+                std::filesystem::remove(parent, ignored);
+
+                const auto candidate =
+                    package / ("candidate-" + std::to_string(iteration));
+                std::filesystem::create_directory(candidate, ignored);
+                if (!ignored) {
+                    write_bytes(candidate / "system.img", "inside");
+                    std::filesystem::rename(candidate, parent, ignored);
+                }
+                std::filesystem::remove_all(candidate, ignored);
+            }
+        } catch (...) {
+            attacker_error = std::current_exception();
+        }
+        finished.store(true, std::memory_order_release);
+    });
+
+    std::size_t successful_opens = 0;
+    while (!finished.load(std::memory_order_acquire)) {
+        auto opened = kairosboot::image::FileImageSource::open_beneath(
+            package, std::filesystem::path("images") / "system.img");
+        if (!opened) {
+            continue;
+        }
+        ++successful_opens;
+        CHECK((*opened)->size() == 6U);
+        std::array<std::byte, 6> contents{};
+        const auto read = (*opened)->read_at(0, contents);
+        CHECK(read && *read == contents.size());
+        CHECK(as_string(contents) == "inside");
+    }
+    attacker.join();
+    if (attacker_error) {
+        std::rethrow_exception(attacker_error);
+    }
+    CHECK(successful_opens != 0U);
+}
+
 void transfer_adapter_completes_short_source_reads() {
     TemporaryDirectory temporary;
     const auto path = temporary.path() / "boot.img";
@@ -384,6 +451,8 @@ int main() {
         Test{"handle-based race confinement",
              concurrent_leaf_swaps_never_escape_the_directory_handle},
 #endif
+        Test{"handle-based parent race confinement",
+             concurrent_parent_swaps_never_escape_the_directory_handle},
         Test{"transfer adapter exact reads", transfer_adapter_completes_short_source_reads},
         Test{"truncation fails exact reads", truncation_after_open_fails_exact_transfer_reads},
         Test{"concurrent positioned reads", concurrent_positioned_reads_do_not_share_a_cursor},
