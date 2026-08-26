@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "flash_artifact.hpp"
+#include "sparse_flash_plan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,6 +27,8 @@ using kairosboot::image::FlashArtifact;
 using kairosboot::image::FlashArtifactKind;
 using kairosboot::image::SparseChunkKind;
 using kairosboot::image::SparseErrorKind;
+using kairosboot::image::SparseFlashPlan;
+using kairosboot::image::SparseFlashPlanErrorKind;
 using kairosboot::image::SparseImage;
 using kairosboot::image::kAndroidSparseMagic;
 using kairosboot::image::kMaxSparseChunks;
@@ -243,6 +246,144 @@ struct MixedImage {
     std::vector<std::byte> bytes,
     const std::size_t max_read = std::numeric_limits<std::size_t>::max()) {
     return SparseImage::open(std::make_shared<MemorySource>(std::move(bytes), max_read));
+}
+
+[[nodiscard]] std::vector<std::byte> read_all(
+    const std::shared_ptr<const IImageSource>& source,
+    const std::size_t maximum_read = std::numeric_limits<std::size_t>::max()) {
+    CHECK(source->size() <= std::numeric_limits<std::size_t>::max());
+    std::vector<std::byte> result(static_cast<std::size_t>(source->size()));
+    std::size_t completed = 0;
+    while (completed < result.size()) {
+        const auto amount = std::min(maximum_read, result.size() - completed);
+        auto read = source->read_at(completed,
+                                    std::span(result).subspan(completed, amount));
+        CHECK(read.has_value());
+        CHECK(*read != 0);
+        CHECK(*read <= amount);
+        completed += *read;
+    }
+    return result;
+}
+
+void sparse_flash_plan_preserves_payloads_that_fit() {
+    auto source = std::make_shared<MemorySource>(
+        std::vector<std::byte>(4096, std::byte{0x4B}));
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+
+    auto plan = SparseFlashPlan::create(*artifact, 4096);
+    CHECK(plan.has_value());
+    CHECK(!plan->reparsed());
+    CHECK(plan->parts().size() == 1);
+    CHECK(plan->parts().front().source.get() == source.get());
+    CHECK(plan->transfer_size() == 4096);
+    CHECK(plan->expanded_size() == 4096);
+}
+
+void raw_images_are_split_without_materializing_their_expansion() {
+    std::vector<std::byte> raw(3 * 4096);
+    for (std::size_t index = 0; index < raw.size(); ++index) {
+        raw[index] = std::byte{static_cast<unsigned char>(index / 4096 + 1)};
+    }
+    auto source = std::make_shared<MemorySource>(raw, 73);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+
+    auto plan = SparseFlashPlan::create(*artifact, 4200);
+    CHECK(plan.has_value());
+    CHECK(plan->reparsed());
+    CHECK(plan->parts().size() == 3);
+    CHECK(plan->expanded_size() == raw.size());
+
+    for (std::size_t index = 0; index < plan->parts().size(); ++index) {
+        const auto& part = plan->parts()[index];
+        CHECK(part.source->size() <= 4200);
+        CHECK(part.first_data_offset == index * 4096);
+        CHECK(part.data_end_offset == (index + 1) * 4096);
+
+        auto encoded = read_all(part.source, 97);
+        auto parsed = open_bytes(std::move(encoded), 41);
+        CHECK(parsed.has_value());
+        CHECK(parsed->output_size() == raw.size());
+        std::array<std::byte, 4096> expanded_block{};
+        auto read = parsed->read_at(index * 4096, expanded_block);
+        CHECK(read.has_value());
+        CHECK(*read == expanded_block.size());
+        CHECK(std::ranges::all_of(expanded_block, [index](const std::byte byte) {
+            return byte == std::byte{static_cast<unsigned char>(index + 1)};
+        }));
+        const auto chunks = parsed->chunks();
+        CHECK(std::ranges::count_if(chunks, [](const auto& chunk) {
+                  return chunk.kind == SparseChunkKind::Raw;
+              }) == 1);
+    }
+}
+
+void sparse_chunks_are_repacked_with_partition_offsets_preserved() {
+    auto mixed = make_mixed_image();
+    auto source = std::make_shared<MemorySource>(mixed.sparse, 5);
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+    CHECK(artifact->metadata().kind == FlashArtifactKind::AndroidSparse);
+
+    auto plan = SparseFlashPlan::create(*artifact, 68);
+    CHECK(plan.has_value());
+    CHECK(plan->reparsed());
+    CHECK(plan->parts().size() >= 2);
+
+    std::vector<std::byte> reconstructed(mixed.expanded.size());
+    std::vector<std::uint8_t> written(mixed.expanded.size());
+    for (const auto& part : plan->parts()) {
+        CHECK(part.source->size() <= 68);
+        auto parsed = SparseImage::open(part.source);
+        CHECK(parsed.has_value());
+        CHECK(parsed->output_size() == mixed.expanded.size());
+        for (const auto& chunk : parsed->chunks()) {
+            if (chunk.kind != SparseChunkKind::Raw &&
+                chunk.kind != SparseChunkKind::Fill) {
+                continue;
+            }
+            auto destination = std::span(reconstructed).subspan(
+                static_cast<std::size_t>(chunk.output_offset),
+                static_cast<std::size_t>(chunk.output_size));
+            auto read = parsed->read_at(chunk.output_offset, destination);
+            CHECK(read.has_value());
+            CHECK(*read == destination.size());
+            std::ranges::fill(
+                std::span(written).subspan(
+                    static_cast<std::size_t>(chunk.output_offset),
+                    static_cast<std::size_t>(chunk.output_size)),
+                std::uint8_t{1});
+        }
+    }
+    for (std::size_t index = 0; index < written.size(); ++index) {
+        if (written[index]) {
+            CHECK(reconstructed[index] == mixed.expanded[index]);
+        }
+    }
+    CHECK(std::ranges::count(written, std::uint8_t{1}) == 16);
+}
+
+void sparse_flash_plan_rejects_unsafe_split_inputs() {
+    {
+        auto source = std::make_shared<MemorySource>(
+            std::vector<std::byte>(4097, std::byte{0x2A}));
+        auto artifact = FlashArtifact::inspect(source);
+        CHECK(artifact.has_value());
+        auto plan = SparseFlashPlan::create(*artifact, 4096);
+        CHECK(!plan);
+        CHECK(plan.error().kind == SparseFlashPlanErrorKind::Unsupported);
+    }
+    {
+        auto source = std::make_shared<MemorySource>(
+            std::vector<std::byte>(4096, std::byte{0x2A}));
+        auto artifact = FlashArtifact::inspect(source);
+        CHECK(artifact.has_value());
+        auto plan = SparseFlashPlan::create(*artifact, 40);
+        CHECK(!plan);
+        CHECK(plan.error().kind == SparseFlashPlanErrorKind::Unsupported);
+    }
 }
 
 void flash_artifact_classifies_raw_without_materializing_it() {
@@ -645,6 +786,11 @@ void malformed_sizes_and_magic_are_rejected() {
 
 int main() {
     const std::vector<std::pair<std::string_view, void (*)()>> tests{
+        {"sparse flash plan preserves fitting payloads",
+         sparse_flash_plan_preserves_payloads_that_fit},
+        {"raw sparse split", raw_images_are_split_without_materializing_their_expansion},
+        {"sparse repacking", sparse_chunks_are_repacked_with_partition_offsets_preserved},
+        {"sparse split rejection", sparse_flash_plan_rejects_unsafe_split_inputs},
         {"flash artifact raw classification",
          flash_artifact_classifies_raw_without_materializing_it},
         {"flash artifact sparse classification",

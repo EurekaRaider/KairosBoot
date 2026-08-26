@@ -133,6 +133,7 @@ add_library(
   src/fastboot/primitive_service.cpp
   src/fleet/controller_scheduler.cpp
   src/image/file_source.cpp
+  src/image/sparse_flash_plan.cpp
   src/image/sparse_image.cpp
   src/protocol/fastboot_protocol.cpp
   src/transport/adaptive_tuner.cpp
