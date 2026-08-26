@@ -301,8 +301,7 @@ UsbFastbootTransport::open(
     std::shared_ptr<BufferBudget> budget = options.buffer_budget;
     try {
         if (budget == nullptr) {
-            budget = std::make_shared<BufferBudget>(
-                options.data_ring.chunk_size * options.data_ring.depth);
+            budget = process_usb_buffer_budget();
         }
         if (options.data_ring.chunk_size > budget->limit()) {
             return std::unexpected(

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -60,5 +62,73 @@ public:
 private:
     std::shared_ptr<detail::BufferBudgetState> state_;
 };
+
+inline constexpr std::uint64_t kProcessUsbBufferBudgetCapBytes =
+    2ULL * 1024ULL * 1024ULL * 1024ULL;
+inline constexpr std::size_t kProcessUsbBufferBudgetFallbackBytes =
+    64ULL * 1024ULL * 1024ULL;
+
+enum class PhysicalMemoryStatus : std::uint8_t {
+    measured,
+    query_failed,
+    arithmetic_overflow,
+};
+
+struct PhysicalMemoryResult final {
+    PhysicalMemoryStatus status{PhysicalMemoryStatus::query_failed};
+    std::uint64_t bytes{};
+    std::uint32_t native_code{};
+};
+
+using PhysicalMemoryQuery =
+    PhysicalMemoryResult (*)(void* user_data) noexcept;
+
+struct ProcessUsbBufferBudgetInfo final {
+    std::size_t limit_bytes{};
+    std::uint64_t physical_memory_bytes{};
+    PhysicalMemoryStatus query_status{PhysicalMemoryStatus::query_failed};
+    std::uint32_t native_code{};
+    bool fallback_used{true};
+};
+
+[[nodiscard]] constexpr std::size_t calculate_process_usb_buffer_budget(
+    const std::uint64_t physical_memory_bytes) noexcept {
+    // Division expresses 20% without overflowing for UINT64_MAX inputs.
+    const auto twenty_percent = physical_memory_bytes / 5U;
+    const auto capped = twenty_percent < kProcessUsbBufferBudgetCapBytes
+        ? twenty_percent
+        : kProcessUsbBufferBudgetCapBytes;
+    const auto representable = static_cast<std::uint64_t>(
+        std::numeric_limits<std::size_t>::max());
+    return static_cast<std::size_t>(capped < representable ? capped
+                                                           : representable);
+}
+
+[[nodiscard]] PhysicalMemoryResult query_physical_memory(
+    void* user_data) noexcept;
+
+[[nodiscard]] ProcessUsbBufferBudgetInfo resolve_process_usb_buffer_budget(
+    PhysicalMemoryQuery query,
+    void* user_data = nullptr) noexcept;
+
+// Owns one shared accounting budget. The process registry invokes the platform
+// query exactly once; tests may inject a deterministic query into a local
+// registry.
+class ProcessUsbBufferBudgetRegistry final {
+public:
+    explicit ProcessUsbBufferBudgetRegistry(
+        PhysicalMemoryQuery query = &query_physical_memory,
+        void* user_data = nullptr);
+
+    [[nodiscard]] std::shared_ptr<BufferBudget> budget() const noexcept;
+    [[nodiscard]] const ProcessUsbBufferBudgetInfo& info() const noexcept;
+
+private:
+    ProcessUsbBufferBudgetInfo info_;
+    std::shared_ptr<BufferBudget> budget_;
+};
+
+[[nodiscard]] std::shared_ptr<BufferBudget> process_usb_buffer_budget();
+[[nodiscard]] const ProcessUsbBufferBudgetInfo& process_usb_buffer_budget_info();
 
 }  // namespace kairosboot::transport
