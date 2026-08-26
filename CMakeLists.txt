@@ -37,6 +37,7 @@ endfunction()
 add_library(
   kairosboot_internal STATIC
   src/fleet/controller_scheduler.cpp
+  src/image/sparse_image.cpp
   src/protocol/fastboot_protocol.cpp
   src/transport/adaptive_tuner.cpp
   src/transport/buffer_budget.cpp
@@ -154,6 +155,15 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_performance_tests PRIVATE kairosboot_internal)
   kairosboot_enable_strict_warnings(kairosboot_performance_tests)
   add_test(NAME performance COMMAND kairosboot_performance_tests)
+
+  add_executable(kairosboot_sparse_tests tests/sparse/sparse_image_tests.cpp)
+  target_compile_features(kairosboot_sparse_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_sparse_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+  target_link_libraries(kairosboot_sparse_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_sparse_tests)
+  add_test(NAME sparse_image COMMAND kairosboot_sparse_tests)
+  set_tests_properties(sparse_image PROPERTIES TIMEOUT 10)
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   if(WIN32)
