@@ -147,6 +147,130 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_flashing_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FlashingAsync(
+        ContextSafeHandle context,
+        string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_flashing", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Flashing(
+        ContextSafeHandle context,
+        string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_gsi_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int GsiAsync(
+        ContextSafeHandle context,
+        string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_gsi", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Gsi(
+        ContextSafeHandle context,
+        string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_snapshot_update_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int SnapshotUpdateAsync(
+        ContextSafeHandle context,
+        string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_snapshot_update", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int SnapshotUpdate(
+        ContextSafeHandle context,
+        string? selector,
+        int command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_create_logical_partition_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int CreateLogicalPartitionAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_create_logical_partition", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int CreateLogicalPartition(
+        ContextSafeHandle context,
+        string? selector,
+        string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_delete_logical_partition_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DeleteLogicalPartitionAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partitionName,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_delete_logical_partition", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DeleteLogicalPartition(
+        ContextSafeHandle context,
+        string? selector,
+        string partitionName,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_resize_logical_partition_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ResizeLogicalPartitionAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_resize_logical_partition", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ResizeLogicalPartition(
+        ContextSafeHandle context,
+        string? selector,
+        string partitionName,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_reboot_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int RebootAsync(
