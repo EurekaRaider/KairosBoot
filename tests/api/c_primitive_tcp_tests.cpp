@@ -665,8 +665,8 @@ void run_cxx_contract() {
   server.wait_for_cancel_command();
   std::stop_source cancellation;
   CHECK(cancellation.request_stop());
-  auto cancelled =
-      cancelled_operation->wait_result(cancellation.get_token());
+  auto cancelled = cancelled_operation->wait_result(
+      cancellation.get_token(), std::chrono::milliseconds::zero());
   CHECK(!cancelled.has_value());
   CHECK(cancelled.error().status() == KB_E_CANCELLED);
   CHECK(cancelled_operation->state() == KB_OPERATION_CANCELLED);
