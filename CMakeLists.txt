@@ -487,11 +487,21 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_check_abi.py")
   if(WIN32)
+    set(KAIROSBOOT_WINDOWS_EXPORT_TOOL "${CMAKE_DUMPBIN}")
+    if(NOT KAIROSBOOT_WINDOWS_EXPORT_TOOL)
+      # Visual Studio generators do not always populate CMAKE_DUMPBIN. link.exe
+      # exposes the same PE export table through `/dump /exports`.
+      set(KAIROSBOOT_WINDOWS_EXPORT_TOOL "${CMAKE_LINKER}")
+    endif()
+    if(NOT KAIROSBOOT_WINDOWS_EXPORT_TOOL)
+      message(FATAL_ERROR "dumpbin.exe or link.exe is required for ABI tests")
+    endif()
     add_test(
       NAME abi_symbols
       COMMAND "${Python3_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py" --library
-              "$<TARGET_FILE:kairosboot>" --dumpbin "${CMAKE_DUMPBIN}")
+              "$<TARGET_FILE:kairosboot>" --dumpbin
+              "${KAIROSBOOT_WINDOWS_EXPORT_TOOL}")
   else()
     add_test(
       NAME abi_symbols

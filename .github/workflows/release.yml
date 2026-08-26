@@ -351,7 +351,10 @@ jobs:
           $cache = Get-Content build/CMakeCache.txt -Raw
           $match = [regex]::Match($cache, '(?m)^CMAKE_DUMPBIN:FILEPATH=(.+)$')
           if (-not $match.Success) {
-            throw 'CMAKE_DUMPBIN is missing from build/CMakeCache.txt'
+            $match = [regex]::Match($cache, '(?m)^CMAKE_LINKER:FILEPATH=(.+)$')
+          }
+          if (-not $match.Success) {
+            throw 'Neither CMAKE_DUMPBIN nor CMAKE_LINKER is available'
           }
           $dumpbin = $match.Groups[1].Value.Trim()
           python scripts/smoke_native_archive.py `

@@ -74,8 +74,12 @@ def run_symbols(
             else shutil.which("dumpbin")
         )
         if dumpbin is None:
-            fail("dumpbin is required to inspect Windows exports")
-        command = [dumpbin, "/nologo", "/exports", str(library)]
+            fail("dumpbin.exe or link.exe is required to inspect Windows exports")
+        tool_name = Path(dumpbin).name.lower()
+        if tool_name in {"link", "link.exe", "lld-link", "lld-link.exe"}:
+            command = [dumpbin, "/dump", "/nologo", "/exports", str(library)]
+        else:
+            command = [dumpbin, "/nologo", "/exports", str(library)]
     else:
         command = ["nm", "-D", "--defined-only", "-j", str(library)]
     completed = subprocess.run(command, check=False, text=True, capture_output=True)
