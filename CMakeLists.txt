@@ -129,6 +129,7 @@ add_library(
   kairosboot_internal STATIC
   src/api/device_selection.cpp
   src/api/operation_state.cpp
+  src/fastboot/primitive_service.cpp
   src/fleet/controller_scheduler.cpp
   src/image/file_source.cpp
   src/image/sparse_image.cpp
@@ -265,6 +266,19 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_primitive_service_tests
+                 tests/fastboot/primitive_service_tests.cpp
+                 tests/protocol/scripted_transport.cpp)
+  target_compile_features(kairosboot_primitive_service_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_primitive_service_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                     "${CMAKE_CURRENT_SOURCE_DIR}/src/protocol")
+  target_link_libraries(kairosboot_primitive_service_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_primitive_service_tests)
+  add_test(NAME primitive_service COMMAND kairosboot_primitive_service_tests)
+  set_tests_properties(primitive_service PROPERTIES TIMEOUT 15)
+
   add_executable(kairosboot_device_selection_tests
                  tests/api/device_selection_tests.cpp)
   target_compile_features(kairosboot_device_selection_tests PRIVATE cxx_std_23)
