@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "sparse_image.hpp"
+#include "flash_artifact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -688,6 +689,81 @@ std::expected<std::size_t, SparseError> SparseImage::read_at(
         }
     }
     return completed;
+}
+
+std::expected<FlashArtifact, SparseError> FlashArtifact::inspect(
+    std::shared_ptr<const IImageSource> source) {
+    if (!source) {
+        return std::unexpected(error(
+            SparseErrorKind::InvalidArgument, 0, "flash artifact source is null"));
+    }
+
+    const auto source_size = source->size();
+    std::array<std::byte, sizeof(std::uint32_t)> magic_bytes{};
+    if (source_size < magic_bytes.size()) {
+        return FlashArtifact(
+            std::move(source),
+            FlashArtifactMetadata{
+                .kind = FlashArtifactKind::Raw,
+                .transfer_size = source_size,
+                .expanded_size = source_size,
+            },
+            std::nullopt);
+    }
+
+    if (const auto read = read_exact(
+            *source, source_size, 0, magic_bytes);
+        !read) {
+        return std::unexpected(read.error());
+    }
+    if (read_u32(std::span<const std::byte>(magic_bytes), 0) !=
+        kAndroidSparseMagic) {
+        return FlashArtifact(
+            std::move(source),
+            FlashArtifactMetadata{
+                .kind = FlashArtifactKind::Raw,
+                .transfer_size = source_size,
+                .expanded_size = source_size,
+            },
+            std::nullopt);
+    }
+
+    auto sparse = SparseImage::open(source);
+    if (!sparse) {
+        return std::unexpected(std::move(sparse.error()));
+    }
+    const auto expanded_size = sparse->output_size();
+    const auto header = sparse->header();
+    return FlashArtifact(
+        std::move(source),
+        FlashArtifactMetadata{
+            .kind = FlashArtifactKind::AndroidSparse,
+            .transfer_size = source_size,
+            .expanded_size = expanded_size,
+            .sparse_header = header,
+        },
+        std::move(*sparse));
+}
+
+FlashArtifact::FlashArtifact(
+    std::shared_ptr<const IImageSource> transfer_source,
+    FlashArtifactMetadata metadata,
+    std::optional<SparseImage> sparse_image)
+    : transfer_source_(std::move(transfer_source)),
+      metadata_(std::move(metadata)),
+      sparse_image_(std::move(sparse_image)) {}
+
+const FlashArtifactMetadata& FlashArtifact::metadata() const noexcept {
+    return metadata_;
+}
+
+const std::shared_ptr<const IImageSource>& FlashArtifact::transfer_source()
+    const noexcept {
+    return transfer_source_;
+}
+
+const SparseImage* FlashArtifact::sparse_image() const noexcept {
+    return sparse_image_ ? &*sparse_image_ : nullptr;
 }
 
 }  // namespace kairosboot::image

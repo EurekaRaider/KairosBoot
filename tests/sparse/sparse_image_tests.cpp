@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include "sparse_image.hpp"
+#include "flash_artifact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +22,8 @@ namespace {
 
 using kairosboot::image::IImageSource;
 using kairosboot::image::ImageSourceError;
+using kairosboot::image::FlashArtifact;
+using kairosboot::image::FlashArtifactKind;
 using kairosboot::image::SparseChunkKind;
 using kairosboot::image::SparseErrorKind;
 using kairosboot::image::SparseImage;
@@ -74,6 +76,56 @@ public:
 private:
     std::vector<std::byte> bytes_;
     std::size_t max_read_;
+};
+
+class ObservingSource final : public IImageSource {
+public:
+    struct Read final {
+        std::uint64_t offset{0};
+        std::size_t requested{0};
+    };
+
+    explicit ObservingSource(
+        std::vector<std::byte> bytes,
+        const std::size_t max_read = std::numeric_limits<std::size_t>::max(),
+        const std::optional<std::size_t> failing_call = std::nullopt)
+        : bytes_(std::move(bytes)),
+          max_read_(max_read),
+          failing_call_(failing_call) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return bytes_.size();
+    }
+
+    [[nodiscard]] std::expected<std::size_t, ImageSourceError> read_at(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) const override {
+        reads_.push_back(Read{offset, destination.size()});
+        const auto call = reads_.size() - 1;
+        if (failing_call_ == call) {
+            return std::unexpected(ImageSourceError{"scripted source failure"});
+        }
+        if (offset >= bytes_.size() || destination.empty()) {
+            return 0;
+        }
+        const auto available = bytes_.size() - static_cast<std::size_t>(offset);
+        const auto amount = std::min({available, destination.size(), max_read_});
+        std::ranges::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+            amount,
+            destination.begin());
+        return amount;
+    }
+
+    [[nodiscard]] std::span<const Read> reads() const noexcept {
+        return reads_;
+    }
+
+private:
+    std::vector<std::byte> bytes_;
+    std::size_t max_read_;
+    std::optional<std::size_t> failing_call_;
+    mutable std::vector<Read> reads_;
 };
 
 void append_u16(std::vector<std::byte>& bytes, const std::uint16_t value) {
@@ -191,6 +243,82 @@ struct MixedImage {
     std::vector<std::byte> bytes,
     const std::size_t max_read = std::numeric_limits<std::size_t>::max()) {
     return SparseImage::open(std::make_shared<MemorySource>(std::move(bytes), max_read));
+}
+
+void flash_artifact_classifies_raw_without_materializing_it() {
+    auto short_source = std::make_shared<ObservingSource>(
+        std::vector<std::byte>{std::byte{0x01}, std::byte{0x02}});
+    auto short_artifact = FlashArtifact::inspect(short_source);
+    CHECK(short_artifact.has_value());
+    CHECK(short_artifact->metadata().kind == FlashArtifactKind::Raw);
+    CHECK(short_artifact->metadata().transfer_size == 2);
+    CHECK(short_artifact->metadata().expanded_size == 2);
+    CHECK(!short_artifact->metadata().sparse_header.has_value());
+    CHECK(short_artifact->transfer_source().get() == short_source.get());
+    CHECK(short_artifact->sparse_image() == nullptr);
+    CHECK(short_source->reads().empty());
+
+    auto near_magic = little_u32(kAndroidSparseMagic ^ 0x01000000U);
+    near_magic.resize(1024U * 1024U, std::byte{0xA5});
+    auto raw_source = std::make_shared<ObservingSource>(std::move(near_magic));
+    auto raw_artifact = FlashArtifact::inspect(raw_source);
+    CHECK(raw_artifact.has_value());
+    CHECK(raw_artifact->metadata().kind == FlashArtifactKind::Raw);
+    CHECK(raw_artifact->metadata().transfer_size == 1024U * 1024U);
+    CHECK(raw_artifact->transfer_source().get() == raw_source.get());
+    CHECK(raw_source->reads().size() == 1);
+    CHECK(raw_source->reads().front().offset == 0);
+    CHECK(raw_source->reads().front().requested == sizeof(std::uint32_t));
+}
+
+void flash_artifact_validates_sparse_but_preserves_encoded_source() {
+    auto fixture = make_mixed_image();
+    const auto encoded_size = fixture.sparse.size();
+    const auto expanded_size = fixture.expanded.size();
+    auto source = std::make_shared<ObservingSource>(
+        std::move(fixture.sparse), 3);
+
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+    CHECK(artifact->metadata().kind == FlashArtifactKind::AndroidSparse);
+    CHECK(artifact->metadata().transfer_size == encoded_size);
+    CHECK(artifact->metadata().expanded_size == expanded_size);
+    CHECK(artifact->metadata().sparse_header.has_value());
+    CHECK(artifact->metadata().sparse_header->total_chunks == 4);
+    CHECK(artifact->transfer_source().get() == source.get());
+    CHECK(artifact->transfer_source()->size() == encoded_size);
+    CHECK(artifact->sparse_image() != nullptr);
+    CHECK(artifact->sparse_image()->output_size() == expanded_size);
+    CHECK(!source->reads().empty());
+    for (const auto& read : source->reads()) {
+        CHECK(read.requested <= 64U * 1024U);
+    }
+}
+
+void flash_artifact_surfaces_sparse_and_source_failures() {
+    std::vector<std::byte> truncated;
+    append_u32(truncated, kAndroidSparseMagic);
+    truncated.resize(10, std::byte{0});
+    const auto truncated_result = FlashArtifact::inspect(
+        std::make_shared<MemorySource>(std::move(truncated)));
+    CHECK(!truncated_result);
+    CHECK(truncated_result.error().kind == SparseErrorKind::Truncated);
+
+    auto corrupted = make_mixed_image().sparse;
+    CHECK(corrupted.size() > 40);
+    corrupted[40] ^= std::byte{0x01};
+    const auto checksum_result = FlashArtifact::inspect(
+        std::make_shared<MemorySource>(std::move(corrupted)));
+    CHECK(!checksum_result);
+    CHECK(checksum_result.error().kind == SparseErrorKind::Malformed);
+
+    auto source_failure_bytes = little_u32(kAndroidSparseMagic);
+    auto failing_source = std::make_shared<ObservingSource>(
+        std::move(source_failure_bytes),
+        std::numeric_limits<std::size_t>::max(), 0);
+    const auto source_result = FlashArtifact::inspect(failing_source);
+    CHECK(!source_result);
+    CHECK(source_result.error().kind == SparseErrorKind::Source);
 }
 
 void mixed_chunks_expand_with_bounded_reads() {
@@ -517,6 +645,12 @@ void malformed_sizes_and_magic_are_rejected() {
 
 int main() {
     const std::vector<std::pair<std::string_view, void (*)()>> tests{
+        {"flash artifact raw classification",
+         flash_artifact_classifies_raw_without_materializing_it},
+        {"flash artifact sparse classification",
+         flash_artifact_validates_sparse_but_preserves_encoded_source},
+        {"flash artifact failures",
+         flash_artifact_surfaces_sparse_and_source_failures},
         {"mixed chunks", mixed_chunks_expand_with_bounded_reads},
         {"cross-window reads", output_windows_cross_chunk_boundaries},
         {"zero blocks", zero_block_image_is_valid_but_zero_block_data_chunk_is_not},
