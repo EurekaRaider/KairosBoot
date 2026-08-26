@@ -1142,7 +1142,7 @@ size_t archive_read_callback(void* opaque, const mz_uint64 offset, void* destina
 class ZipReader final {
     public:
     ZipReader(const IImageSource& source, const Budget& budget)
-        : context_{.source = &source, .budget = &budget} {
+        : context_{.source = &source, .budget = &budget, .error = {}} {
         mz_zip_zero_struct(&archive_);
         archive_.m_pRead = archive_read_callback;
         archive_.m_pIO_opaque = &context_;
@@ -1533,7 +1533,10 @@ materialize_zip_entry(ZipReader& reader, const ZipEntry& entry,
     ExtractContext extraction{
         .spool = spool->get(),
         .budget = &budget,
+        .hash = {},
         .declared_size = entry.uncompressed_size,
+        .written = 0U,
+        .error = {},
     };
     auto& archive = reader.get();
     if (mz_zip_reader_extract_to_callback(&archive, entry.index, extract_callback,
