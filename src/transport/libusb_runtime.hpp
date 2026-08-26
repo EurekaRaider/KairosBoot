@@ -227,6 +227,9 @@ public:
     [[nodiscard]] ReadResult read_logical_response(
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout);
+    [[nodiscard]] ReadResult read_data(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     [[nodiscard]] bool shutdown_quarantined() const noexcept;
     // Signals native transfers without waiting for their completion callbacks.

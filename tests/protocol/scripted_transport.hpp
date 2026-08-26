@@ -98,6 +98,10 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    [[nodiscard]] TransferResult read_data(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout) override;
+
     [[nodiscard]] TransferResult write_source(
         std::shared_ptr<ITransferSource> source,
         std::chrono::milliseconds timeout,

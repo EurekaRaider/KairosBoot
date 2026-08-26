@@ -136,6 +136,12 @@ TransferResult ScriptedTransport::read(
     };
 }
 
+TransferResult ScriptedTransport::read_data(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    return read(destination, timeout);
+}
+
 TransferResult ScriptedTransport::write_source(
     const std::shared_ptr<ITransferSource> source,
     std::chrono::milliseconds /*timeout*/,

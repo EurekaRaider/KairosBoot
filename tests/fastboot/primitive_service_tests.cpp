@@ -29,6 +29,7 @@ namespace {
 using kairosboot::fastboot::PrimitiveErrorCode;
 using kairosboot::fastboot::PrimitiveOperation;
 using kairosboot::fastboot::PrimitiveService;
+using kairosboot::fastboot::FetchRange;
 using kairosboot::fastboot::RebootTarget;
 using kairosboot::fastboot::SlotErrorCode;
 using kairosboot::fastboot::SlotPlanner;
@@ -42,6 +43,7 @@ using kairosboot::image::ImageSourceError;
 using kairosboot::image::SparseFlashPlan;
 using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::ITransferSource;
+using kairosboot::protocol::ITransferSink;
 using kairosboot::protocol::ITransportSession;
 using kairosboot::protocol::ProtocolPhase;
 using kairosboot::protocol::ResponseKind;
@@ -168,6 +170,42 @@ private:
     std::vector<std::byte> bytes_;
 };
 
+class CollectingSink final : public ITransferSink {
+public:
+    [[nodiscard]] TransferResult write(
+        const std::uint64_t offset,
+        const std::span<const std::byte> source) noexcept override {
+        if (offset != bytes_.size()) {
+            return {
+                .status = TransportStatus::IoError,
+                .certainty = TransferCertainty::NotTransferred,
+                .detail = "non-sequential sink offset",
+            };
+        }
+        try {
+            bytes_.insert(bytes_.end(), source.begin(), source.end());
+        } catch (...) {
+            return {
+                .status = TransportStatus::IoError,
+                .certainty = TransferCertainty::NotTransferred,
+                .detail = "collecting sink allocation failed",
+            };
+        }
+        return {
+            .status = TransportStatus::Ok,
+            .transferred = source.size(),
+            .certainty = TransferCertainty::FullyTransferred,
+        };
+    }
+
+    [[nodiscard]] const std::vector<std::byte>& bytes() const noexcept {
+        return bytes_;
+    }
+
+private:
+    std::vector<std::byte> bytes_;
+};
+
 [[nodiscard]] std::vector<std::byte> read_image(
     const std::shared_ptr<const IImageSource>& source) {
     CHECK(source->size() <= std::numeric_limits<std::size_t>::max());
@@ -205,6 +243,12 @@ public:
             .certainty = TransferCertainty::NotTransferred,
             .detail = "unexpected non-streaming read",
         };
+    }
+
+    [[nodiscard]] TransferResult read_data(
+        std::span<std::byte> destination,
+        const std::chrono::milliseconds timeout) override {
+        return read(destination, timeout);
     }
 
     void request_cancel() noexcept override {}
@@ -479,6 +523,182 @@ void reboot_variants_and_continue_are_terminal() {
     CHECK(failed_session.state() == SessionState::Ready);
     CHECK(failed_service.getvar("product").has_value());
     CHECK(failed_script->complete());
+}
+
+void stage_is_exactly_a_download_exchange() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto memory_payload = to_bytes("abc");
+    script->expect_write("download:00000003");
+    script->respond("DATA00000003");
+    script->expect_write(memory_payload);
+    script->respond("INFOstaging");
+    script->respond("TEXTstored");
+    script->respond("OKAYready");
+
+    const auto source_payload = to_bytes("de");
+    script->expect_write("download:00000002");
+    script->respond("DATA00000002");
+    script->expect_source_write(
+        source_payload,
+        {{.offset = 0, .size = 2, .progress_watermark = 2}});
+    script->respond("OKAYready");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    const auto memory = service.stage(memory_payload);
+    CHECK(memory.has_value());
+    CHECK(memory->terminal.payload == "ready");
+    CHECK(memory->informational.size() == 2);
+
+    auto source = std::make_shared<RecordingSource>(source_payload, 2);
+    const auto streamed = service.stage_source(source);
+    CHECK(streamed.has_value());
+    CHECK(streamed->terminal.payload == "ready");
+    CHECK(accepted_text(*script) ==
+          "download:00000003abcdownload:00000002de");
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(script->complete());
+}
+
+void upload_get_staged_and_fetch_use_aosp_wire_names() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("upload");
+    script->respond("DATA00000003");
+    script->respond("abc");
+    script->respond("OKAYstaged");
+
+    script->expect_write("upload");
+    script->respond("DATA00000002");
+    script->respond("de");
+    script->respond("OKAYuploaded");
+
+    script->expect_write("fetch:vendor_boot");
+    script->respond("DATA00000001");
+    script->respond("x");
+    script->respond("OKAYfetched");
+    script->expect_write("fetch:vendor_boot_a:0x00000001");
+    script->respond("DATA00000001");
+    script->respond("y");
+    script->respond("OKAYfetched");
+    script->expect_write("fetch:vendor_boot_b:0x123456789:0x00000020");
+    script->respond("DATA00000001");
+    script->respond("z");
+    script->respond("OKAYfetched");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+
+    auto staged_sink = std::make_shared<CollectingSink>();
+    const auto staged = service.get_staged_to_sink(staged_sink, 8);
+    CHECK(staged.has_value());
+    CHECK(staged->inbound_expected == 3);
+    CHECK(staged->inbound_transferred == 3);
+    CHECK(staged->inbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(staged_sink->bytes() == to_bytes("abc"));
+
+    auto upload_sink = std::make_shared<CollectingSink>();
+    const auto uploaded = service.upload_to_sink(upload_sink, 8);
+    CHECK(uploaded.has_value());
+    CHECK(upload_sink->bytes() == to_bytes("de"));
+
+    auto whole_sink = std::make_shared<CollectingSink>();
+    CHECK(service.fetch_to_sink(
+        "vendor_boot", {}, whole_sink, 8).has_value());
+    CHECK(whole_sink->bytes() == to_bytes("x"));
+
+    auto offset_sink = std::make_shared<CollectingSink>();
+    CHECK(service.fetch_to_sink(
+        "vendor_boot_a",
+        FetchRange{.offset = 1},
+        offset_sink,
+        8).has_value());
+    CHECK(offset_sink->bytes() == to_bytes("y"));
+
+    auto range_sink = std::make_shared<CollectingSink>();
+    CHECK(service.fetch_to_sink(
+        "vendor_boot_b",
+        FetchRange{.offset = 0x123456789ULL, .size = 0x20},
+        range_sink,
+        8).has_value());
+    CHECK(range_sink->bytes() == to_bytes("z"));
+
+    CHECK(accepted_text(*script) ==
+          "uploaduploadfetch:vendor_boot"
+          "fetch:vendor_boot_a:0x00000001"
+          "fetch:vendor_boot_b:0x123456789:0x00000020");
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(!script->closed());
+    CHECK(script->complete());
+}
+
+void receive_primitive_errors_preserve_operation_and_state() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("upload");
+        script->respond("INFOchecking");
+        script->respond("TEXTempty");
+        script->respond("FAILno staged data");
+        script->expect_write("getvar:product");
+        script->respond("OKAYkairos");
+
+        auto sink = std::make_shared<CollectingSink>();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.upload_to_sink(sink, 16);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::DeviceFail);
+        CHECK(result.error().operation == PrimitiveOperation::Upload);
+        CHECK(result.error().phase == ProtocolPhase::InitialResponse);
+        CHECK(result.error().device_message == "no staged data");
+        CHECK(result.error().informational.size() == 2);
+        CHECK(!result.error().inbound_expected.has_value());
+        CHECK(result.error().inbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(!result.error().session_poisoned);
+        CHECK(session.state() == SessionState::Ready);
+        CHECK(service.getvar("product").has_value());
+        CHECK(script->complete());
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("fetch:vendor_boot:0x00000000:0x00000004");
+        script->respond("DATA00000004");
+        script->respond(
+            "ab",
+            TransportStatus::Timeout,
+            TransferCertainty::PartialOrUnknown,
+            false,
+            2,
+            60,
+            "fetch deadline");
+
+        auto sink = std::make_shared<CollectingSink>();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.fetch_to_sink(
+            "vendor_boot",
+            FetchRange{.offset = 0, .size = 4},
+            sink,
+            4);
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::Timeout);
+        CHECK(result.error().operation == PrimitiveOperation::Fetch);
+        CHECK(result.error().phase == ProtocolPhase::DataRead);
+        CHECK(result.error().inbound_expected == 4);
+        CHECK(result.error().inbound_transferred == 0);
+        CHECK(result.error().inbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().native_code == 60);
+        CHECK(result.error().session_poisoned);
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->cancellation_requested());
+        CHECK(script->complete());
+    }
 }
 
 void boot_downloaded_emits_exact_command_and_retires() {
@@ -820,6 +1040,25 @@ void invalid_inputs_never_touch_the_wire() {
     CHECK(zero_boot.error().operation == PrimitiveOperation::Download);
     CHECK(zero_boot.error().outbound_certainty ==
           TransferCertainty::NotTransferred);
+    const auto zero_stage = service.stage(empty);
+    CHECK(!zero_stage);
+    CHECK(zero_stage.error().operation == PrimitiveOperation::Stage);
+
+    auto sink = std::make_shared<CollectingSink>();
+    const auto missing_upload_sink = service.upload_to_sink(nullptr, 16);
+    CHECK(!missing_upload_sink);
+    CHECK(missing_upload_sink.error().operation == PrimitiveOperation::Upload);
+    const auto zero_upload_limit = service.upload_to_sink(sink, 0);
+    CHECK(!zero_upload_limit);
+    CHECK(zero_upload_limit.error().operation == PrimitiveOperation::Upload);
+    CHECK(!service.fetch_to_sink("bad:partition", {}, sink, 16));
+    CHECK(!service.fetch_to_sink(
+        "vendor_boot", FetchRange{.size = 1}, sink, 16));
+    CHECK(!service.fetch_to_sink(
+        "vendor_boot",
+        FetchRange{.offset = std::numeric_limits<std::uint64_t>::max()},
+        sink,
+        16));
 
     const auto too_large = validate_download_size(
         static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1U);
@@ -1732,6 +1971,11 @@ int main() {
         {"protocol error informational history",
          protocol_errors_preserve_bounded_informational_history},
         {"terminal reboot and continue", reboot_variants_and_continue_are_terminal},
+        {"stage is download", stage_is_exactly_a_download_exchange},
+        {"upload get-staged and fetch wire names",
+         upload_get_staged_and_fetch_use_aosp_wire_names},
+        {"receive primitive error state",
+         receive_primitive_errors_preserve_operation_and_state},
         {"boot exact command and retirement",
          boot_downloaded_emits_exact_command_and_retires},
         {"boot FAIL history and retry", boot_fail_preserves_history_and_session},

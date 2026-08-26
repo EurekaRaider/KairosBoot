@@ -254,7 +254,7 @@ private:
             native_error = LIBUSB_ERROR_PIPE;
             break;
         case ReadCode::overflow:
-            detail = "Fastboot USB logical response exceeded the destination";
+            detail = "Fastboot USB inbound transfer exceeded the destination";
             native_error = LIBUSB_ERROR_OVERFLOW;
             break;
         case ReadCode::resource_exhausted:
@@ -545,6 +545,30 @@ protocol::TransferResult UsbFastbootTransport::read(
         };
     }
     auto result = read_result(backend_->read_logical_response(destination, timeout));
+    if (result.status != protocol::TransportStatus::Ok || result.truncated) {
+        poison_and_stop();
+    }
+    return result;
+}
+
+protocol::TransferResult UsbFastbootTransport::read_data(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    std::scoped_lock operation(operation_mutex_);
+    if (!open_.load(std::memory_order_acquire)) {
+        const auto cancelled =
+            cancellation_requested_.load(std::memory_order_acquire);
+        return {
+            .status = cancelled ? protocol::TransportStatus::Cancelled
+                                : protocol::TransportStatus::Disconnected,
+            .transferred = 0,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
+            .detail = cancelled ? "Fastboot USB transport was cancelled"
+                                : "Fastboot USB transport is closed",
+        };
+    }
+    auto result = read_result(backend_->read_data(destination, timeout));
     if (result.status != protocol::TransportStatus::Ok || result.truncated) {
         poison_and_stop();
     }

@@ -558,7 +558,7 @@ void test_read_overflow_and_empty_response_are_rejected() {
         const auto response = packet(UdpPacketId::Fastboot, 1, udp_bytes("four"));
         script->provide_receive(response, peer);
         std::array<std::byte, 3> destination{};
-        const auto result = transport->read(destination, 5s);
+        const auto result = transport->read_data(destination, 5s);
         require(result.truncated, "logical read overflow was not marked truncated");
         require(transport->is_poisoned(), "logical read overflow did not poison the session");
     }
@@ -848,6 +848,39 @@ void test_exact_host_maximum_packet_is_accepted() {
     require(script->complete(), "8192-byte datagram was fragmented");
 }
 
+void test_data_read_accepts_exact_udp_payload_limit() {
+    const auto peer = peer4(1);
+    auto script = std::make_shared<DatagramScriptState>();
+    auto transport = ready_transport(script, peer, 0, 8192);
+    const auto request = packet(UdpPacketId::Fastboot, 1);
+    script->expect_send(request, peer);
+
+    std::vector<std::byte> payload(
+        kFastbootUdpHostMaximumPacketBytes - kFastbootUdpHeaderBytes);
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+        payload[index] = static_cast<std::byte>(index & 0xFFU);
+    }
+    const auto response = packet(UdpPacketId::Fastboot, 1, payload);
+    require_equal(response.size(), std::size_t{8192},
+                  "test response is not exactly the UDP packet limit");
+    script->provide_receive(response, peer);
+
+    std::vector<std::byte> destination(payload.size());
+    const auto result = transport->read_data(destination, 5s);
+    require_equal(result.status, TransportStatus::Ok,
+                  "maximum UDP DATA payload was rejected");
+    require_equal(result.transferred, payload.size(),
+                  "maximum UDP DATA payload size changed");
+    require(!result.truncated,
+            "exact-fit UDP DATA payload was mistaken for a truncated status frame");
+    require_equal(result.certainty, TransferCertainty::FullyTransferred,
+                  "maximum UDP DATA payload certainty changed");
+    require(std::ranges::equal(destination, payload),
+            "maximum UDP DATA payload changed");
+    require(transport->is_open(), "exact-fit UDP DATA payload poisoned the transport");
+    require(script->complete(), "maximum UDP DATA script was not consumed");
+}
+
 void test_option_limits_prevent_retry_amplification() {
     const auto peer = peer4(1);
     {
@@ -939,6 +972,8 @@ int main() {
         {"target error certainty", test_target_error_maps_delivery_and_poison},
         {"target error continuation", test_target_error_continuation_uses_error_id},
         {"exact host maximum packet", test_exact_host_maximum_packet_is_accepted},
+        {"exact maximum DATA payload",
+         test_data_read_accepts_exact_udp_payload_limit},
         {"option amplification limits", test_option_limits_prevent_retry_amplification},
         {"close idempotence", test_close_is_idempotent_and_blocks_io},
     };

@@ -49,6 +49,20 @@ public:
         std::span<std::byte> destination) noexcept = 0;
 };
 
+// Sequential destination for one device-to-host transfer. write() is called
+// with monotonically increasing offsets and bounded chunks. A successful call
+// must commit the complete source span; partial or uncertain failures are
+// reported through TransferResult so the protocol layer can poison the session
+// instead of guessing a resume offset.
+class ITransferSink {
+public:
+    virtual ~ITransferSink() = default;
+
+    [[nodiscard]] virtual TransferResult write(
+        std::uint64_t offset,
+        std::span<const std::byte> source) noexcept = 0;
+};
+
 enum class TransferProgressAction : std::uint8_t {
     continue_transfer,
     cancel,
@@ -74,10 +88,14 @@ public:
 // Internal transport seam shared by USB, TCP and UDP adapters.
 //
 // write() has stream semantics: a successful short write may be continued with
-// the remaining bytes. read() returns exactly one logical framed Fastboot
-// response and must set truncated when that response did not fit in the supplied
-// buffer. USB adapters consume/ignore transfer-level ZLPs instead of surfacing
-// them here; a successful zero-byte logical response is therefore malformed.
+// the remaining bytes. read() returns exactly one Fastboot status frame and
+// must set truncated when that frame did not fit in the supplied buffer.
+// read_data() consumes at most the supplied size from a device-to-host DATA
+// stream. Transports with message framing either retain unconsumed frame bytes
+// for the next read_data() call or report truncation and become unusable; they
+// never silently consume a following status frame. USB adapters consume/ignore
+// transfer-level ZLPs instead of surfacing them here; a successful zero-byte
+// logical read is therefore malformed or zero progress.
 class ITransportSession {
 public:
     virtual ~ITransportSession() = default;
@@ -87,6 +105,10 @@ public:
         std::chrono::milliseconds timeout) = 0;
 
     [[nodiscard]] virtual TransferResult read(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout) = 0;
+
+    [[nodiscard]] virtual TransferResult read_data(
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) = 0;
 

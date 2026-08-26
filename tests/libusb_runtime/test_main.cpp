@@ -1366,6 +1366,55 @@ void test_usb_logical_read_short_packet_zlp_and_overflow() {
     runtime->stop();
 }
 
+void test_usb_data_read_does_not_probe_past_destination() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    options.buffer_budget = std::make_shared<BufferBudget>(8);
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    std::array<std::byte, 4> payload{};
+    auto pending_data = std::async(std::launch::async, [&] {
+        return transport->read_data(payload, std::chrono::seconds(1));
+    });
+
+    wait_for_submissions(*fake, 1);
+    const auto data_submission = fake->submission(0);
+    KB_CHECK(data_submission.endpoint == 0x81);
+    KB_CHECK(data_submission.length == 4);
+    const auto raw = ascii_bytes("data");
+    fake->complete_in_submission(0, LIBUSB_TRANSFER_COMPLETED, raw);
+    const auto data = pending_data.get();
+    KB_CHECK(data.status == TransportStatus::Ok);
+    KB_CHECK(data.certainty == TransferCertainty::FullyTransferred);
+    KB_CHECK(data.transferred == raw.size());
+    KB_CHECK(!data.truncated);
+    KB_CHECK(std::equal(raw.begin(), raw.end(), payload.begin()));
+    KB_CHECK(transport->is_open());
+
+    std::array<std::byte, 8> response{};
+    auto pending_status = std::async(std::launch::async, [&] {
+        return transport->read(response, std::chrono::seconds(1));
+    });
+    wait_for_submissions(*fake, 2);
+    const auto status_submission = fake->submission(1);
+    KB_CHECK(status_submission.length == 9);
+    const auto okay = ascii_bytes("OKAYdone");
+    fake->complete_in_submission(1, LIBUSB_TRANSFER_COMPLETED, okay);
+    const auto status = pending_status.get();
+    KB_CHECK(status.status == TransportStatus::Ok);
+    KB_CHECK(status.transferred == okay.size());
+    KB_CHECK(!status.truncated);
+    KB_CHECK(std::equal(okay.begin(), okay.end(), response.begin()));
+
+    transport->close();
+    runtime->stop();
+}
+
 void test_usb_read_error_classification_timeout_disconnect_stall_and_cancel() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -1956,6 +2005,8 @@ int main() {
          test_usb_transport_uses_process_budget_by_default},
         {"USB logical read ZLP, short packet, overflow",
          test_usb_logical_read_short_packet_zlp_and_overflow},
+        {"USB DATA read does not over-read",
+         test_usb_data_read_does_not_probe_past_destination},
         {"USB read error classification",
          test_usb_read_error_classification_timeout_disconnect_stall_and_cancel},
         {"USB ring writes serialize and report certainty",

@@ -744,6 +744,15 @@ protocol::TransferResult TcpFastbootTransport::read(
             .detail = "Fastboot TCP transport is closed",
         };
     }
+    if (inbound_data_frame_bytes_left_ != 0) {
+        close_locked();
+        return {
+            .status = protocol::TransportStatus::IoError,
+            .certainty = protocol::TransferCertainty::PartialOrUnknown,
+            .truncated = true,
+            .detail = "Fastboot TCP DATA frame exceeded the announced payload size",
+        };
+    }
 
     Deadline deadline(timeout);
     const auto cancellation = cancellation_signal();
@@ -792,6 +801,87 @@ protocol::TransferResult TcpFastbootTransport::read(
     };
 }
 
+protocol::TransferResult TcpFastbootTransport::read_data(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    std::scoped_lock lock(mutex_);
+    if (!open_ || !socket_) {
+        return {
+            .status = protocol::TransportStatus::Disconnected,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .detail = "Fastboot TCP transport is closed",
+        };
+    }
+    if (destination.empty()) {
+        return {
+            .status = protocol::TransportStatus::IoError,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .detail = "Fastboot TCP DATA destination is empty",
+        };
+    }
+
+    Deadline deadline(timeout);
+    const auto cancellation = cancellation_signal();
+    bool consumed_frame_header = false;
+    if (inbound_data_frame_bytes_left_ == 0) {
+        std::array<std::byte, 8> header{};
+        const auto header_result = receive_exact(
+            *socket_, header, deadline, cancellation);
+        if (header_result.status != SocketIoStatus::Ok) {
+            auto failure = transfer_failure(
+                header_result,
+                0,
+                header_result.any_wire_bytes,
+                "receiving Fastboot TCP DATA frame header");
+            close_locked();
+            return failure;
+        }
+
+        inbound_data_frame_bytes_left_ = decode_tcp_frame_length(header);
+        consumed_frame_header = true;
+        if (inbound_data_frame_bytes_left_ > options_.max_frame_bytes ||
+            inbound_data_frame_bytes_left_ >
+                std::numeric_limits<std::size_t>::max()) {
+            close_locked();
+            return {
+                .status = protocol::TransportStatus::IoError,
+                .certainty = protocol::TransferCertainty::PartialOrUnknown,
+                .truncated = true,
+                .detail = "inbound Fastboot TCP DATA frame exceeds its configured limit",
+            };
+        }
+        if (inbound_data_frame_bytes_left_ == 0) {
+            return {
+                .status = protocol::TransportStatus::Ok,
+                .transferred = 0,
+                .certainty = protocol::TransferCertainty::FullyTransferred,
+            };
+        }
+    }
+
+    const auto payload_size = std::min(
+        destination.size(),
+        static_cast<std::size_t>(inbound_data_frame_bytes_left_));
+    const auto payload_result = receive_exact(
+        *socket_, destination.first(payload_size), deadline, cancellation);
+    if (payload_result.status != SocketIoStatus::Ok) {
+        auto failure = transfer_failure(
+            payload_result,
+            payload_result.transferred,
+            consumed_frame_header || payload_result.any_wire_bytes,
+            "receiving Fastboot TCP DATA frame payload");
+        close_locked();
+        return failure;
+    }
+
+    inbound_data_frame_bytes_left_ -= payload_size;
+    return {
+        .status = protocol::TransportStatus::Ok,
+        .transferred = payload_size,
+        .certainty = protocol::TransferCertainty::FullyTransferred,
+    };
+}
+
 void TcpFastbootTransport::request_cancel() noexcept {
     local_cancel_.request_stop();
 }
@@ -813,6 +903,7 @@ void TcpFastbootTransport::close_locked() noexcept {
         return;
     }
     open_ = false;
+    inbound_data_frame_bytes_left_ = 0;
     if (socket_) {
         socket_->close();
     }
