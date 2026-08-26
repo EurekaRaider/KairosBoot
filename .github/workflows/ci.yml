@@ -23,8 +23,10 @@ jobs:
         include:
           - id: linux-x64
             runner: ubuntu-24.04
+            architecture: x64
           - id: linux-arm64
             runner: ubuntu-24.04-arm
+            architecture: arm64
     runs-on: ${{ matrix.runner }}
     container: ubuntu:22.04
     steps:
@@ -32,10 +34,17 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-            ca-certificates cmake g++-12 git ninja-build python3
+            binutils ca-certificates cmake g++-12 git make ninja-build python3
 
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Prepare locked dynamic libusb
+        run: >-
+          python3 scripts/prepare_libusb.py
+          --prefix "${RUNNER_TEMP}/libusb"
+          --platform linux
+          --architecture "${{ matrix.architecture }}"
 
       - name: Configure
         env:
@@ -45,6 +54,7 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=ON
+          "-DKAIROSBOOT_LIBUSB_ROOT=${RUNNER_TEMP}/libusb"
 
       - name: Build
         run: cmake --build build --parallel
@@ -54,6 +64,17 @@ jobs:
 
       - name: Install
         run: cmake --install build --prefix "${RUNNER_TEMP}/kairosboot-install"
+
+      - name: Verify installed C11, C++23, CLI, and loader contract
+        run: |
+          cmake -S tests/package_consumer -B consumer-build -G Ninja \
+            "-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/kairosboot-install"
+          cmake --build consumer-build --parallel
+          ./consumer-build/c_consumer
+          ./consumer-build/cxx_consumer
+          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+          readelf -d "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.0.1.0" | grep -F 'libusb-1.0.so.0'
+          readelf -d "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.0.1.0" | grep -F "\$ORIGIN"
 
       - name: Upload install tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -70,20 +91,24 @@ jobs:
       matrix:
         include:
           - id: windows-x64
-            runner: windows-2025
+            runner: windows-2022
             architecture: x64
+            dependency-architecture: x64
             deployment-target: ""
           - id: windows-arm64
             runner: windows-11-arm
             architecture: ARM64
+            dependency-architecture: arm64
             deployment-target: ""
           - id: macos-x64
             runner: macos-15-intel
             architecture: ""
+            dependency-architecture: x64
             deployment-target: "14.0"
           - id: macos-arm64
             runner: macos-15
             architecture: ""
+            dependency-architecture: arm64
             deployment-target: "14.0"
     runs-on: ${{ matrix.runner }}
     env:
@@ -92,12 +117,29 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Prepare locked dynamic libusb on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          python scripts/prepare_libusb.py
+          --prefix "$env:RUNNER_TEMP/libusb"
+          --platform windows
+          --architecture "${{ matrix.dependency-architecture }}"
+
+      - name: Prepare locked dynamic libusb on macOS
+        if: runner.os == 'macOS'
+        run: >-
+          python3 scripts/prepare_libusb.py
+          --prefix "${RUNNER_TEMP}/libusb"
+          --platform macos
+          --architecture "${{ matrix.dependency-architecture }}"
+
       - name: Configure Windows with MSVC
         if: runner.os == 'Windows'
         run: >-
           cmake -S . -B build -G "Visual Studio 17 2022"
           -A ${{ matrix.architecture }}
           -DBUILD_TESTING=ON
+          "-DKAIROSBOOT_LIBUSB_ROOT=$env:RUNNER_TEMP/libusb"
 
       - name: Configure macOS
         if: runner.os == 'macOS'
@@ -105,6 +147,7 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=ON
+          "-DKAIROSBOOT_LIBUSB_ROOT=${RUNNER_TEMP}/libusb"
 
       - name: Build Windows
         if: runner.os == 'Windows'
@@ -118,6 +161,28 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake --install build --config Release --prefix "${{ runner.temp }}/kairosboot-install"
 
+      - name: Verify installed C11, C++23, and CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S tests/package_consumer -B consumer-build -G "Visual Studio 17 2022" `
+            -A ${{ matrix.architecture }} `
+            "-DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/kairosboot-install"
+          cmake --build consumer-build --config Release --parallel
+          $env:PATH = "$env:RUNNER_TEMP/kairosboot-install/bin;$env:PATH"
+          & ./consumer-build/Release/c_consumer.exe
+          & ./consumer-build/Release/cxx_consumer.exe
+          & "$env:RUNNER_TEMP/kairosboot-install/bin/kairosboot.exe" --version --json
+          if (-not (Test-Path "$env:RUNNER_TEMP/kairosboot-install/bin/libusb-1.0.dll")) {
+            throw "installed Windows runtime is missing libusb-1.0.dll"
+          }
+          if (-not (Get-ChildItem "$env:RUNNER_TEMP/kairosboot-install/bin/vcruntime*.dll")) {
+            throw "installed Windows runtime is missing app-local vcruntime DLLs"
+          }
+          if (-not (Get-ChildItem "$env:RUNNER_TEMP/kairosboot-install/bin/msvcp*.dll")) {
+            throw "installed Windows runtime is missing app-local MSVC C++ runtime DLLs"
+          }
+
       - name: Build macOS
         if: runner.os == 'macOS'
         run: cmake --build build --parallel
@@ -129,6 +194,19 @@ jobs:
       - name: Install macOS
         if: runner.os == 'macOS'
         run: cmake --install build --prefix "${{ runner.temp }}/kairosboot-install"
+
+      - name: Verify installed C11, C++23, CLI, and loader contract on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S tests/package_consumer -B consumer-build -G Ninja \
+            "-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/kairosboot-install"
+          cmake --build consumer-build --parallel
+          ./consumer-build/c_consumer
+          ./consumer-build/cxx_consumer
+          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+          otool -L "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.0.1.0.dylib" | grep -F '@rpath/libusb-1.0.0.dylib'
+          otool -l "${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.0.1.0.dylib" | grep -A2 LC_RPATH | grep -F '@loader_path'
+          otool -l "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib'
 
       - name: Upload install tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -177,7 +255,184 @@ jobs:
           cmake --build consumer-build --parallel
           ./consumer-build/c_consumer
           ./consumer-build/cxx_consumer
+          chmod +x "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot"
           "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+
+  managed-package:
+    name: managed-package-contract
+    needs:
+      - linux-native
+      - desktop-native
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up fixed .NET 10 SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Validate managed-only and synthetic six-RID package contracts
+        run: >-
+          dotnet msbuild bindings/dotnet/tests/NativePackContract.proj
+          /t:Verify /m:1 /nr:false
+
+      - name: Download all six native install trees
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: kairosboot-*
+          path: ${{ runner.temp }}/native
+
+      - name: Stage real six-RID NuGet runtimes
+        run: |
+          set -eu
+          runtime_root="$PWD/bindings/dotnet/KairosBoot/runtimes"
+          project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
+          mkdir -p "$runtime_root"/{win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64}/native
+
+          cp "${RUNNER_TEMP}/native/kairosboot-windows-x64/bin/"*.dll "$runtime_root/win-x64/native/"
+          mv "$runtime_root/win-x64/native/kairosboot.dll" "$runtime_root/win-x64/native/kairosboot_native.dll"
+          cp "${RUNNER_TEMP}/native/kairosboot-windows-arm64/bin/"*.dll "$runtime_root/win-arm64/native/"
+          mv "$runtime_root/win-arm64/native/kairosboot.dll" "$runtime_root/win-arm64/native/kairosboot_native.dll"
+
+          cp "${RUNNER_TEMP}/native/kairosboot-linux-x64/lib/libkairosboot.so.${project_version}" "$runtime_root/linux-x64/native/libkairosboot_native.so"
+          cp "${RUNNER_TEMP}/native/kairosboot-linux-x64/lib/libusb-1.0.so.0" "$runtime_root/linux-x64/native/"
+          cp "${RUNNER_TEMP}/native/kairosboot-linux-arm64/lib/libkairosboot.so.${project_version}" "$runtime_root/linux-arm64/native/libkairosboot_native.so"
+          cp "${RUNNER_TEMP}/native/kairosboot-linux-arm64/lib/libusb-1.0.so.0" "$runtime_root/linux-arm64/native/"
+
+          cp "${RUNNER_TEMP}/native/kairosboot-macos-x64/lib/libkairosboot.${project_version}.dylib" "$runtime_root/osx-x64/native/libkairosboot_native.dylib"
+          cp "${RUNNER_TEMP}/native/kairosboot-macos-x64/lib/libusb-1.0.0.dylib" "$runtime_root/osx-x64/native/"
+          cp "${RUNNER_TEMP}/native/kairosboot-macos-arm64/lib/libkairosboot.${project_version}.dylib" "$runtime_root/osx-arm64/native/libkairosboot_native.dylib"
+          cp "${RUNNER_TEMP}/native/kairosboot-macos-arm64/lib/libusb-1.0.0.dylib" "$runtime_root/osx-arm64/native/"
+
+          for mapping in \
+            win-x64:kairosboot-windows-x64 win-arm64:kairosboot-windows-arm64 \
+            linux-x64:kairosboot-linux-x64 linux-arm64:kairosboot-linux-arm64 \
+            osx-x64:kairosboot-macos-x64 osx-arm64:kairosboot-macos-arm64; do
+            rid=${mapping%%:*}
+            artifact=${mapping#*:}
+            destination="$runtime_root/$rid/native/licenses/libusb"
+            mkdir -p "$destination"
+            cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/libusb/COPYING" "$destination/"
+            cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/libusb/kairosboot-libusb.json" "$destination/"
+          done
+
+      - name: Pack the real native NuGet package
+        id: pack
+        run: |
+          set -eu
+          package_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"])')
+          mkdir -p "${RUNNER_TEMP}/nuget"
+          dotnet msbuild bindings/dotnet/KairosBoot/KairosBoot.csproj \
+            /t:Pack \
+            /p:Configuration=Release \
+            "/p:PackageOutputPath=${RUNNER_TEMP}/nuget" \
+            "/p:PackageVersion=${package_version}" \
+            /p:IncludeNativeRuntimes=true \
+            "/p:NativeRuntimeRoot=$PWD/bindings/dotnet/KairosBoot/runtimes" \
+            /m:1 \
+            /nr:false
+          package="${RUNNER_TEMP}/nuget/KairosBoot.${package_version}.nupkg"
+          test -f "$package"
+          echo "package_name=$(basename "$package")" >>"$GITHUB_OUTPUT"
+
+      - name: Smoke actual package on Linux x64
+        run: >-
+          python3 bindings/dotnet/tests/run_package_smoke.py
+          --package "${RUNNER_TEMP}/nuget/${{ steps.pack.outputs.package_name }}"
+          --framework net10.0
+          --rid linux-x64
+
+      - name: Upload actual NuGet package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kairosboot-managed-package
+          path: ${{ runner.temp }}/nuget/*.nupkg
+          if-no-files-found: error
+          retention-days: 7
+
+  managed-runtime:
+    name: managed-${{ matrix.rid }}
+    needs: managed-package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2022
+          - rid: win-arm64
+            runner: windows-11-arm
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          - rid: osx-x64
+            runner: macos-15-intel
+          - rid: osx-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up fixed .NET 10 SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Download actual NuGet package
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: kairosboot-managed-package
+          path: ${{ runner.temp }}/package
+
+      - name: Restore, build, and run actual .NET 10 package on Unix
+        if: runner.os != 'Windows'
+        run: |
+          package=$(find "${RUNNER_TEMP}/package" -maxdepth 1 -name 'KairosBoot.*.nupkg' -print -quit)
+          test -n "$package"
+          python3 bindings/dotnet/tests/run_package_smoke.py \
+            --package "$package" \
+            --framework net10.0 \
+            --rid "${{ matrix.rid }}"
+
+      - name: Restore, build, and run actual .NET 10 package on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = (Get-ChildItem "$env:RUNNER_TEMP/package/KairosBoot.*.nupkg" | Select-Object -First 1).FullName
+          if (-not $package) { throw "KairosBoot NuGet package was not downloaded" }
+          python bindings/dotnet/tests/run_package_smoke.py `
+            --package $package `
+            --framework net10.0 `
+            --rid "${{ matrix.rid }}"
+
+      - name: Locate classic .NET Framework build tools
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) { throw "full-framework MSBuild.exe was not found" }
+          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) { throw "nuget.exe was not found on PATH" }
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $msbuild)
+
+      - name: Restore, build, and run actual .NET Framework 4.8 package
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $package = (Get-ChildItem "$env:RUNNER_TEMP/package/KairosBoot.*.nupkg" | Select-Object -First 1).FullName
+          if (-not $package) { throw "KairosBoot NuGet package was not downloaded" }
+          python bindings/dotnet/tests/run_package_smoke.py `
+            --package $package `
+            --framework net48 `
+            --rid win-x64
+          python bindings/dotnet/tests/run_package_smoke.py `
+            --package $package `
+            --framework net48 `
+            --rid win-x64 `
+            --classic
 
   ci-required:
     name: ci-required
@@ -186,6 +441,8 @@ jobs:
       - linux-native
       - desktop-native
       - debian-smoke
+      - managed-runtime
+      - managed-package
     runs-on: ubuntu-24.04
     steps:
       - name: Require every native and consumer job
@@ -193,12 +450,18 @@ jobs:
           LINUX_RESULT: ${{ needs.linux-native.result }}
           DESKTOP_RESULT: ${{ needs.desktop-native.result }}
           DEBIAN_RESULT: ${{ needs.debian-smoke.result }}
+          MANAGED_RUNTIME_RESULT: ${{ needs.managed-runtime.result }}
+          MANAGED_PACKAGE_RESULT: ${{ needs.managed-package.result }}
         run: |
           if [ "$LINUX_RESULT" != "success" ] || \
              [ "$DESKTOP_RESULT" != "success" ] || \
-             [ "$DEBIAN_RESULT" != "success" ]; then
+             [ "$DEBIAN_RESULT" != "success" ] || \
+             [ "$MANAGED_RUNTIME_RESULT" != "success" ] || \
+             [ "$MANAGED_PACKAGE_RESULT" != "success" ]; then
             echo "linux native result: $LINUX_RESULT"
             echo "desktop native result: $DESKTOP_RESULT"
             echo "Debian consumer result: $DEBIAN_RESULT"
+            echo "managed runtime result: $MANAGED_RUNTIME_RESULT"
+            echo "managed package result: $MANAGED_PACKAGE_RESULT"
             exit 1
           fi
