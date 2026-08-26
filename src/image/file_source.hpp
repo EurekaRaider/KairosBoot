@@ -6,9 +6,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
-#include <fstream>
 #include <memory>
-#include <mutex>
 #include <string>
 
 namespace kairosboot::image {
@@ -37,6 +35,7 @@ public:
 
     FileImageSource(const FileImageSource&) = delete;
     FileImageSource& operator=(const FileImageSource&) = delete;
+    ~FileImageSource() override;
 
     [[nodiscard]] std::uint64_t size() const noexcept override;
     [[nodiscard]] std::expected<std::size_t, ImageSourceError> read_at(
@@ -44,10 +43,15 @@ public:
         std::span<std::byte> destination) const override;
 
 private:
-    FileImageSource(std::ifstream stream, std::uint64_t size);
+#if defined(_WIN32)
+    using NativeHandle = void*;
+#else
+    using NativeHandle = int;
+#endif
 
-    mutable std::mutex mutex_;
-    mutable std::ifstream stream_;
+    FileImageSource(NativeHandle handle, std::uint64_t size);
+
+    NativeHandle handle_;
     std::uint64_t size_{};
 };
 
