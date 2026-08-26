@@ -514,6 +514,15 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_cxx_api_test)
   add_test(NAME cxx_api COMMAND kairosboot_cxx_api_test)
 
+  add_executable(kairosboot_cxx_primitive_tcp_tests
+                 tests/api/cxx_primitive_tcp_tests.cpp)
+  target_compile_features(kairosboot_cxx_primitive_tcp_tests PRIVATE cxx_std_23)
+  target_link_libraries(kairosboot_cxx_primitive_tcp_tests
+                        PRIVATE KairosBoot::Cxx Boost::asio_core Threads::Threads)
+  kairosboot_enable_strict_warnings(kairosboot_cxx_primitive_tcp_tests)
+  add_test(NAME cxx_primitive_tcp COMMAND kairosboot_cxx_primitive_tcp_tests)
+  set_tests_properties(cxx_primitive_tcp PROPERTIES TIMEOUT 15)
+
   add_executable(kairosboot_protocol_tests tests/protocol/protocol_tests.cpp
                                             tests/protocol/scripted_transport.cpp)
   target_compile_features(kairosboot_protocol_tests PRIVATE cxx_std_23)
