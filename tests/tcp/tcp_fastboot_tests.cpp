@@ -98,7 +98,9 @@ public:
         const kairosboot::transport::CancellationSignal cancellation) override {
         if (!handshake_sent_) {
             handshake_sent_ = true;
-            CHECK(as_vector(bytes) == to_bytes("FB01"));
+            const auto& expected = kairosboot::transport::kFastbootTcpV1Handshake;
+            CHECK(bytes.size() == expected.size());
+            CHECK(std::equal(bytes.begin(), bytes.end(), expected.begin(), expected.end()));
             return {.transferred = bytes.size()};
         }
 
