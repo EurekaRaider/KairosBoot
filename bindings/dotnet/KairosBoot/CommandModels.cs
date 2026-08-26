@@ -131,7 +131,7 @@ public sealed class CommandMessage
     public byte[] Payload { get; }
 }
 
-/// <summary>Immutable-lifetime snapshot of a successful Fastboot command.</summary>
+/// <summary>Owned snapshot of a successful Fastboot command.</summary>
 public sealed class CommandResult
 {
     private CommandResult(
