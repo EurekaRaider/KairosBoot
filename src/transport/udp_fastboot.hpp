@@ -132,7 +132,7 @@ struct DatagramSendResult {
 struct DatagramReceiveResult {
     DatagramIoStatus status{DatagramIoStatus::Ok};
     std::size_t transferred{0};
-    UdpPeer peer;
+    UdpPeer peer{};
     int native_error{0};
     std::string detail;
 };

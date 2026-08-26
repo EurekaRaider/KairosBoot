@@ -92,13 +92,13 @@ struct SocketIoResult {
     SocketIoStatus status{SocketIoStatus::Ok};
     std::size_t transferred{0};
     int native_error{0};
-    std::string detail;
+    std::string detail{};
 };
 
 // Combines a caller-owned cancellation source with TcpFastbootTransport::cancel().
 struct CancellationSignal {
     std::stop_token external;
-    std::stop_token local;
+    std::stop_token local{};
 
     [[nodiscard]] bool stop_requested() const noexcept {
         return external.stop_requested() || local.stop_requested();

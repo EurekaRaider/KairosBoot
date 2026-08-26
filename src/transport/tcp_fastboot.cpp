@@ -82,7 +82,7 @@ struct ExactIoResult {
     std::size_t transferred{0};
     bool any_wire_bytes{false};
     int native_error{0};
-    std::string detail;
+    std::string detail{};
 };
 
 [[nodiscard]] ExactIoResult send_exact(
@@ -861,6 +861,7 @@ protocol::TransferResult TcpFastbootTransport::write(
         .status = protocol::TransportStatus::Ok,
         .transferred = bytes.size(),
         .certainty = protocol::TransferCertainty::FullyTransferred,
+        .detail = {},
     };
 }
 
@@ -919,6 +920,7 @@ protocol::TransferResult TcpFastbootTransport::read(
         .status = protocol::TransportStatus::Ok,
         .transferred = payload_size,
         .certainty = protocol::TransferCertainty::FullyTransferred,
+        .detail = {},
     };
 }
 
