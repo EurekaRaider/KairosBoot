@@ -16,6 +16,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -27,9 +28,11 @@
 #include <optional>
 #include <random>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -209,6 +212,7 @@ struct GlobalOptions {
 
 enum class CommandKind : std::uint8_t {
   Version,
+  Help,
   Doctor,
   Devices,
   Flash,
@@ -223,6 +227,12 @@ enum class CommandKind : std::uint8_t {
   Stage,
   Upload,
   Fetch,
+  Flashing,
+  Gsi,
+  SnapshotUpdate,
+  CreateLogicalPartition,
+  DeleteLogicalPartition,
+  ResizeLogicalPartition,
 };
 
 struct Invocation {
@@ -232,7 +242,13 @@ struct Invocation {
   std::string_view second;
   std::string joined;
   kairosboot::RebootTarget reboot_target{kairosboot::RebootTarget::System};
+  kairosboot::FlashingCommand flashing_command{
+      kairosboot::FlashingCommand::Lock};
+  kairosboot::GsiCommand gsi_command{kairosboot::GsiCommand::Wipe};
+  kairosboot::SnapshotUpdateCommand snapshot_update_command{
+      kairosboot::SnapshotUpdateCommand::Cancel};
   kairosboot::FetchRange fetch_range;
+  std::uint64_t logical_partition_size{};
 };
 
 struct ParseError {
@@ -396,7 +412,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     return error("unknown command");
   }
   const std::string_view command{argv[index]};
-  if (command.starts_with("--") && command != "--version") {
+  if (command.starts_with("--") && command != "--version" &&
+      command != "--help") {
     return error("unknown option " + std::string{command});
   }
   const int command_index = index++;
@@ -427,6 +444,16 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     result.kind = CommandKind::Version;
     if (argc - command_index != 1) {
       return error("--version does not accept operands");
+    }
+    if (const auto rejected = reject_non_json_globals()) {
+      return std::move(*rejected);
+    }
+    return result;
+  }
+  if (command == "--help" || command == "help") {
+    result.kind = CommandKind::Help;
+    if (argc - command_index != 1) {
+      return error(std::string{command} + " does not accept operands");
     }
     if (const auto rejected = reject_non_json_globals()) {
       return std::move(*rejected);
@@ -502,6 +529,90 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   }
   if (command == "upload") {
     return parse_single_operand(CommandKind::Upload, "output");
+  }
+  if (command == "flashing") {
+    result.kind = CommandKind::Flashing;
+    if (argc - command_index != 2) {
+      return error(
+          "flashing requires exactly "
+          "<lock|unlock|lock-critical|unlock-critical|get-unlock-ability>");
+    }
+    const std::string_view action{argv[index]};
+    if (action == "lock") {
+      result.flashing_command = kairosboot::FlashingCommand::Lock;
+    } else if (action == "unlock") {
+      result.flashing_command = kairosboot::FlashingCommand::Unlock;
+    } else if (action == "lock-critical") {
+      result.flashing_command = kairosboot::FlashingCommand::LockCritical;
+    } else if (action == "unlock-critical") {
+      result.flashing_command = kairosboot::FlashingCommand::UnlockCritical;
+    } else if (action == "get-unlock-ability") {
+      result.flashing_command = kairosboot::FlashingCommand::GetUnlockAbility;
+    } else {
+      return error(
+          "flashing command must be lock, unlock, lock-critical, "
+          "unlock-critical, or get-unlock-ability");
+    }
+    return result;
+  }
+  if (command == "gsi") {
+    result.kind = CommandKind::Gsi;
+    if (argc - command_index != 2) {
+      return error("gsi requires exactly <wipe|disable|status>");
+    }
+    const std::string_view action{argv[index]};
+    if (action == "wipe") {
+      result.gsi_command = kairosboot::GsiCommand::Wipe;
+    } else if (action == "disable") {
+      result.gsi_command = kairosboot::GsiCommand::Disable;
+    } else if (action == "status") {
+      result.gsi_command = kairosboot::GsiCommand::Status;
+    } else {
+      return error("gsi command must be wipe, disable, or status");
+    }
+    return result;
+  }
+  if (command == "snapshot-update") {
+    result.kind = CommandKind::SnapshotUpdate;
+    if (argc - command_index != 2) {
+      return error("snapshot-update requires exactly <cancel|merge>");
+    }
+    const std::string_view action{argv[index]};
+    if (action == "cancel") {
+      result.snapshot_update_command =
+          kairosboot::SnapshotUpdateCommand::Cancel;
+    } else if (action == "merge") {
+      result.snapshot_update_command =
+          kairosboot::SnapshotUpdateCommand::Merge;
+    } else {
+      return error("snapshot-update command must be cancel or merge");
+    }
+    return result;
+  }
+  if (command == "create-logical-partition" ||
+      command == "resize-logical-partition") {
+    const bool create = command == "create-logical-partition";
+    result.kind = create ? CommandKind::CreateLogicalPartition
+                         : CommandKind::ResizeLogicalPartition;
+    if (argc - command_index != 3) {
+      return error(std::string{command} +
+                   " requires exactly <partition> and <size-bytes>");
+    }
+    result.first = argv[index];
+    if (result.first.empty()) {
+      return error(std::string{command} + " partition must not be empty");
+    }
+    const std::string_view size{argv[index + 1]};
+    if (!parse_unsigned_decimal(size, result.logical_partition_size)) {
+      return error(std::string{command} +
+                   " size-bytes requires an integer in "
+                   "[0, 18446744073709551615]");
+    }
+    return result;
+  }
+  if (command == "delete-logical-partition") {
+    return parse_single_operand(CommandKind::DeleteLogicalPartition,
+                                "partition");
   }
   if (command == "reboot") {
     result.kind = CommandKind::Reboot;
@@ -614,6 +725,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
   switch (kind) {
   case CommandKind::Version:
     return "version";
+  case CommandKind::Help:
+    return "help";
   case CommandKind::Doctor:
     return "doctor";
   case CommandKind::Devices:
@@ -642,6 +755,18 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "upload";
   case CommandKind::Fetch:
     return "fetch";
+  case CommandKind::Flashing:
+    return "flashing";
+  case CommandKind::Gsi:
+    return "gsi";
+  case CommandKind::SnapshotUpdate:
+    return "snapshot-update";
+  case CommandKind::CreateLogicalPartition:
+    return "create-logical-partition";
+  case CommandKind::DeleteLogicalPartition:
+    return "delete-logical-partition";
+  case CommandKind::ResizeLogicalPartition:
+    return "resize-logical-partition";
   }
   return "unknown";
 }
@@ -832,6 +957,97 @@ kairosboot::DeviceSelector selector_view(const GlobalOptions &options) {
   }
   return std::string_view{*options.selector};
 }
+
+#if defined(_WIN32)
+volatile LONG interrupt_requested_flag = 0;
+
+BOOL WINAPI interrupt_handler(const DWORD control_type) noexcept {
+  if (control_type != CTRL_C_EVENT && control_type != CTRL_BREAK_EVENT) {
+    return FALSE;
+  }
+  InterlockedExchange(&interrupt_requested_flag, 1);
+  return TRUE;
+}
+
+void reset_interrupt_request() noexcept {
+  InterlockedExchange(&interrupt_requested_flag, 0);
+}
+
+bool interrupt_requested() noexcept {
+  return InterlockedCompareExchange(&interrupt_requested_flag, 0, 0) != 0;
+}
+#else
+volatile std::sig_atomic_t interrupt_requested_flag = 0;
+
+void interrupt_handler(int /*signal*/) noexcept { interrupt_requested_flag = 1; }
+
+void reset_interrupt_request() noexcept { interrupt_requested_flag = 0; }
+
+bool interrupt_requested() noexcept { return interrupt_requested_flag != 0; }
+#endif
+
+class InterruptCancellation final {
+public:
+  InterruptCancellation() {
+    reset_interrupt_request();
+#if defined(_WIN32)
+    installed_ = SetConsoleCtrlHandler(interrupt_handler, TRUE) != 0;
+#else
+    previous_handler_ = std::signal(SIGINT, interrupt_handler);
+    installed_ = previous_handler_ != SIG_ERR;
+#endif
+    try {
+      watcher_ = std::jthread([this](const std::stop_token watcher_stop) {
+        while (!watcher_stop.stop_requested()) {
+          if (interrupt_requested()) {
+            static_cast<void>(cancellation_.request_stop());
+            return;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        }
+      });
+    } catch (...) {
+      restore_handler();
+      throw;
+    }
+  }
+
+  ~InterruptCancellation() {
+    watcher_.request_stop();
+    if (watcher_.joinable()) {
+      watcher_.join();
+    }
+    restore_handler();
+  }
+
+  InterruptCancellation(const InterruptCancellation &) = delete;
+  InterruptCancellation &operator=(const InterruptCancellation &) = delete;
+
+  [[nodiscard]] std::stop_token token() const noexcept {
+    return cancellation_.get_token();
+  }
+
+private:
+  void restore_handler() noexcept {
+    if (!installed_) {
+      return;
+    }
+#if defined(_WIN32)
+    static_cast<void>(SetConsoleCtrlHandler(interrupt_handler, FALSE));
+#else
+    static_cast<void>(std::signal(SIGINT, previous_handler_));
+#endif
+    installed_ = false;
+  }
+
+  std::stop_source cancellation_;
+  std::jthread watcher_;
+#if !defined(_WIN32)
+  using SignalHandler = void (*)(int);
+  SignalHandler previous_handler_{SIG_DFL};
+#endif
+  bool installed_{false};
+};
 
 std::expected<std::vector<std::byte>, LocalRuntimeError>
 read_stage_file(const std::string_view file_name) {
@@ -1040,9 +1256,62 @@ execute_typed_command(kairosboot::Context &context,
     return context.fetch(selector, invocation.first, invocation.fetch_range,
                          options);
   case CommandKind::Version:
+  case CommandKind::Help:
   case CommandKind::Doctor:
   case CommandKind::Devices:
   case CommandKind::Flash:
+  case CommandKind::Flashing:
+  case CommandKind::Gsi:
+  case CommandKind::SnapshotUpdate:
+  case CommandKind::CreateLogicalPartition:
+  case CommandKind::DeleteLogicalPartition:
+  case CommandKind::ResizeLogicalPartition:
+    break;
+  }
+  std::terminate();
+}
+
+std::expected<kairosboot::Operation, kairosboot::Error>
+start_management_command(kairosboot::Context &context,
+                         const Invocation &invocation) {
+  const auto selector = selector_view(invocation.global);
+  const auto options = command_options(invocation.global);
+  switch (invocation.kind) {
+  case CommandKind::Flashing:
+    return context.flashing_async(selector, invocation.flashing_command,
+                                  options);
+  case CommandKind::Gsi:
+    return context.gsi_async(selector, invocation.gsi_command, options);
+  case CommandKind::SnapshotUpdate:
+    return context.snapshot_update_async(
+        selector, invocation.snapshot_update_command, options);
+  case CommandKind::CreateLogicalPartition:
+    return context.create_logical_partition_async(
+        selector, invocation.first, invocation.logical_partition_size,
+        options);
+  case CommandKind::DeleteLogicalPartition:
+    return context.delete_logical_partition_async(selector, invocation.first,
+                                                  options);
+  case CommandKind::ResizeLogicalPartition:
+    return context.resize_logical_partition_async(
+        selector, invocation.first, invocation.logical_partition_size,
+        options);
+  case CommandKind::Version:
+  case CommandKind::Help:
+  case CommandKind::Doctor:
+  case CommandKind::Devices:
+  case CommandKind::Flash:
+  case CommandKind::Getvar:
+  case CommandKind::Erase:
+  case CommandKind::SetActive:
+  case CommandKind::Reboot:
+  case CommandKind::Continue:
+  case CommandKind::Oem:
+  case CommandKind::Raw:
+  case CommandKind::BootStaged:
+  case CommandKind::Stage:
+  case CommandKind::Upload:
+  case CommandKind::Fetch:
     break;
   }
   std::terminate();
@@ -1170,9 +1439,28 @@ int run_typed_command(const Invocation &invocation) {
   return print_command_success(invocation, *result, output);
 }
 
-void print_usage() {
-  std::cerr << "Usage:\n"
+int run_management_command(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+
+  InterruptCancellation cancellation;
+  auto operation = start_management_command(*context, invocation);
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait_result(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  return print_command_success(invocation, *result, std::nullopt);
+}
+
+constexpr std::string_view usage_text() noexcept {
+  return "Usage:\n"
                "  kairosboot --version [--json]\n"
+               "  kairosboot --help [--json]\n"
                "  kairosboot doctor [--json]\n"
                "  kairosboot devices [--json]\n"
                "  kairosboot [global options] flash <partition> <file>\n"
@@ -1189,10 +1477,32 @@ void print_usage() {
                "  kairosboot [global options] upload <output>\n"
                "  kairosboot [global options] fetch <partition> <output> "
                "[--offset <bytes>] [--size <bytes>]\n"
+               "  kairosboot [global options] flashing "
+               "<lock|unlock|lock-critical|unlock-critical|get-unlock-ability>\n"
+               "  kairosboot [global options] gsi <wipe|disable|status>\n"
+               "  kairosboot [global options] snapshot-update <cancel|merge>\n"
+               "  kairosboot [global options] create-logical-partition "
+               "<partition> <size-bytes>\n"
+               "  kairosboot [global options] delete-logical-partition "
+               "<partition>\n"
+               "  kairosboot [global options] resize-logical-partition "
+               "<partition> <size-bytes>\n"
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n";
+}
+
+void print_usage(std::ostream &output) { output << usage_text(); }
+
+int print_help(const bool json) {
+  if (json) {
+    std::cout << "{\"ok\":true,\"command\":\"help\",\"usage\":\""
+              << json_escape(usage_text()) << "\"}\n";
+  } else {
+    print_usage(std::cout);
+  }
+  return 0;
 }
 
 bool json_requested(const int argc, char **argv) noexcept {
@@ -1225,6 +1535,12 @@ int run_cli(const int argc, char **argv) {
       std::string_view{argv[2]} == "--json") {
     return print_version(true);
   }
+  if (argc == 3 &&
+      (std::string_view{argv[1]} == "--help" ||
+       std::string_view{argv[1]} == "help") &&
+      std::string_view{argv[2]} == "--json") {
+    return print_help(true);
+  }
   if (argc == 3 && std::string_view{argv[1]} == "doctor" &&
       std::string_view{argv[2]} == "--json") {
     return doctor(true);
@@ -1238,7 +1554,7 @@ int run_cli(const int argc, char **argv) {
   if (!invocation) {
     const int result = print_parse_error(invocation.error());
     if (!invocation.error().json) {
-      print_usage();
+      print_usage(std::cerr);
     }
     return result;
   }
@@ -1246,6 +1562,8 @@ int run_cli(const int argc, char **argv) {
   switch (invocation->kind) {
   case CommandKind::Version:
     return print_version(invocation->global.json);
+  case CommandKind::Help:
+    return print_help(invocation->global.json);
   case CommandKind::Doctor:
     return doctor(invocation->global.json);
   case CommandKind::Devices:
@@ -1264,6 +1582,13 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::Upload:
   case CommandKind::Fetch:
     return run_typed_command(*invocation);
+  case CommandKind::Flashing:
+  case CommandKind::Gsi:
+  case CommandKind::SnapshotUpdate:
+  case CommandKind::CreateLogicalPartition:
+  case CommandKind::DeleteLogicalPartition:
+  case CommandKind::ResizeLogicalPartition:
+    return run_management_command(*invocation);
   }
   return 4;
 }
