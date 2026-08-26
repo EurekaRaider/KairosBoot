@@ -633,14 +633,14 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
 
     state_ = SessionState::Downloading;
     if (source != nullptr) {
-        if (const auto write = write_source_locked(
+        if (auto write = write_source_locked(
                 *streaming, std::move(source), size, observer);
             !write) {
             return poison_locked(with_informational(
                 std::move(write.error()), informational));
         }
     } else {
-        if (const auto write = write_exact_locked(bytes, ProtocolPhase::DataWrite);
+        if (auto write = write_exact_locked(bytes, ProtocolPhase::DataWrite);
             !write) {
             return poison_locked(with_informational(
                 std::move(write.error()), informational));
