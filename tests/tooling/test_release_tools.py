@@ -182,6 +182,35 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("duplicate symbol basename: kairosboot.pdb", completed.stderr)
 
+    def test_windows_archive_smoke_requires_explicit_dumpbin(self) -> None:
+        dist = self.root / "windows-dist"
+        dist.mkdir()
+        completed = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "smoke_native_archive.py"),
+                "--dist",
+                str(dist),
+                "--version",
+                "1.2.3",
+                "--platform",
+                "windows-x64",
+                "--generator",
+                "Visual Studio 17 2022",
+                "--architecture",
+                "x64",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "--dumpbin is required for Windows Release archive smoke",
+            completed.stderr + completed.stdout,
+        )
+
     def test_sbom_hashes_all_source_inputs(self) -> None:
         source = self.root / "source.tar.gz"
         libusb = self.root / "libusb.tar.bz2"
