@@ -23,6 +23,8 @@ the application; AnyCPU and x86 builds fail before compilation. Libusb license
 and dependency manifests are stored under package-root `licenses/`, not as
 runtime assets.
 
-The current native foundation intentionally has no device transport. `Devices`
-and `FlashFileAsync` therefore throw `KairosBootException` with
-`Status == KairosBootStatus.NotSupported`; they never report a successful flash.
+The native runtime enumerates USB Fastboot interfaces and performs bounded,
+source-streamed `download` plus `flash` operations. `FlashFileAsync` reports
+preflight, selection, transport, device `FAIL`, cancellation, and transfer
+certainty through `KairosBootException`; successful completion requires a
+compatible physical Fastboot device.
