@@ -98,14 +98,16 @@ typedef struct kb_progress {
 
 /* Progress callbacks are serialized for each operation and never run on the
  * libusb event thread. Return KB_PROGRESS_CANCEL to request cancellation.
- * Do not release the same operation from its callback; a different thread may
- * release it and will wait until the callback and transport drain complete. */
+ * progress_user_data must remain valid until the operation is released. Do not
+ * release the same operation from its callback; a different thread may release
+ * it and will wait until the callback and transport drain complete. */
 typedef kb_progress_action_t(KB_CALL *kb_progress_callback_t)(
     const kb_progress_t *progress, void *user_data);
 
 typedef struct kb_flash_options {
   uint32_t struct_size;
   uint32_t api_version;
+  /* Per-I/O deadline in milliseconds. The initialized default is infinite. */
   uint32_t timeout_ms;
   kb_progress_callback_t progress_callback;
   void *progress_user_data;

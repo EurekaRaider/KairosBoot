@@ -155,6 +155,7 @@ void primitive_kinds_have_stable_public_status() {
     };
     constexpr std::array cases{
         Case{PrimitiveErrorCode::InvalidArgument, KB_E_INVALID_ARGUMENT},
+        Case{PrimitiveErrorCode::Unsupported, KB_E_NOT_SUPPORTED},
         Case{PrimitiveErrorCode::Busy, KB_E_BUSY},
         Case{PrimitiveErrorCode::Closed, KB_E_IO},
         Case{PrimitiveErrorCode::Poisoned, KB_E_IO},

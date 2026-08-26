@@ -100,6 +100,8 @@ namespace {
     switch (code) {
         case PrimitiveErrorCode::InvalidArgument:
             return KB_E_INVALID_ARGUMENT;
+        case PrimitiveErrorCode::Unsupported:
+            return KB_E_NOT_SUPPORTED;
         case PrimitiveErrorCode::Busy:
             return KB_E_BUSY;
         case PrimitiveErrorCode::Cancelled:

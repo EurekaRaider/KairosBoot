@@ -31,7 +31,7 @@ int main(void) {
   kb_flash_options_init(&flash_options);
   CHECK(flash_options.struct_size == sizeof(flash_options));
   CHECK(flash_options.api_version == KB_API_VERSION);
-  CHECK(flash_options.timeout_ms > 0U);
+  CHECK(flash_options.timeout_ms == KB_WAIT_INFINITE);
 
   kb_error_t *error = NULL;
   CHECK(kb_context_create(NULL, NULL, &error) == KB_E_INVALID_ARGUMENT);
@@ -71,8 +71,9 @@ int main(void) {
   kb_error_release(error);
 
   error = NULL;
-  CHECK(kb_flash_file_async(context, "ABC", "system", "system.img", NULL,
-                            &operation, &error) == KB_E_NOT_SUPPORTED);
+  CHECK(kb_flash_file_async(context, "ABC", "system",
+                            "kairosboot-test-does-not-exist.img", NULL,
+                            &operation, &error) == KB_E_IO);
   CHECK(operation == NULL);
   CHECK(error != NULL);
   CHECK(strcmp(kb_error_device_identifier(error), "ABC") == 0);
@@ -80,8 +81,9 @@ int main(void) {
   kb_error_release(error);
 
   error = NULL;
-  CHECK(kb_flash_file(context, NULL, "system", "system.img", NULL, &error) ==
-        KB_E_NOT_SUPPORTED);
+  CHECK(kb_flash_file(context, NULL, "system",
+                      "kairosboot-test-does-not-exist.img", NULL, &error) ==
+        KB_E_IO);
   CHECK(error != NULL);
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   kb_error_release(error);
