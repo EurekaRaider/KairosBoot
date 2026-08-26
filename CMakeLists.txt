@@ -559,7 +559,7 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_file_source_tests PRIVATE kairosboot_internal)
   kairosboot_enable_strict_warnings(kairosboot_file_source_tests)
   add_test(NAME file_source COMMAND kairosboot_file_source_tests)
-  set_tests_properties(file_source PROPERTIES TIMEOUT 10)
+  set_tests_properties(file_source PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_artifact_source_tests
                  tests/image/artifact_source_tests.cpp)

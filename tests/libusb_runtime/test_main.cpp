@@ -340,9 +340,10 @@ public:
         event_cv_.notify_all();
     }
 
-    void request_event_block(const std::chrono::milliseconds duration) {
+    void request_event_block() {
         std::lock_guard lock(mutex_);
-        requested_event_block_ = duration;
+        event_block_requested_ = true;
+        event_block_released_ = false;
         blocked_event_started.store(false, std::memory_order_release);
         blocked_event_completed.store(false, std::memory_order_release);
         event_cv_.notify_all();
@@ -352,6 +353,14 @@ public:
         wait_until([this] {
             return blocked_event_started.load(std::memory_order_acquire);
         });
+    }
+
+    void release_event_block() {
+        {
+            std::lock_guard lock(mutex_);
+            event_block_released_ = true;
+        }
+        event_cv_.notify_all();
     }
 
     void complete_submission(const std::size_t index,
@@ -474,15 +483,15 @@ private:
                                              std::chrono::microseconds(timeout->tv_usec);
         event_cv_.wait_for(lock, wait_duration, [this] {
             return interrupted_ || !events_.empty() || !event_results_.empty() ||
-                   requested_event_block_.count() > 0;
+                   event_block_requested_;
         });
-        if (requested_event_block_.count() > 0) {
-            const auto duration = requested_event_block_;
-            requested_event_block_ = std::chrono::milliseconds{0};
+        if (event_block_requested_) {
+            event_block_requested_ = false;
             blocked_event_started.store(true, std::memory_order_release);
-            lock.unlock();
-            std::this_thread::sleep_for(duration);
+            event_cv_.notify_all();
+            event_cv_.wait(lock, [this] { return event_block_released_; });
             blocked_event_completed.store(true, std::memory_order_release);
+            event_cv_.notify_all();
             return LIBUSB_SUCCESS;
         }
         if (interrupted_) {
@@ -524,7 +533,8 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable event_cv_;
     bool interrupted_{false};
-    std::chrono::milliseconds requested_event_block_{};
+    bool event_block_requested_{false};
+    bool event_block_released_{false};
     std::deque<Event> events_;
     std::deque<int> event_results_;
     std::deque<int> submit_results_;
@@ -2078,15 +2088,13 @@ void test_backend_local_isolation_and_two_phase_global_quarantine() {
     KB_CHECK(second_completion.code == CompletionCode::success);
     KB_CHECK(fake->free_transfer_calls == 1);
 
-    fake->request_event_block(std::chrono::seconds(1));
+    fake->request_event_block();
     fake->wait_for_event_block_start();
-    const auto runtime_stop_started = std::chrono::steady_clock::now();
     runtime->stop();
-    const auto runtime_stop_elapsed =
-        std::chrono::steady_clock::now() - runtime_stop_started;
-    // With instant fake native calls, the independent 250 ms drain wait and
-    // 250 ms event-exit wait fit this envelope. This is not a native-call SLA.
-    KB_CHECK(runtime_stop_elapsed < std::chrono::milliseconds(800));
+    // The fake native event call is still latched. Returning from stop before
+    // explicitly releasing it proves that the bounded drain and event-exit
+    // phases quarantined the runtime instead of waiting on the native call.
+    KB_CHECK(!fake->blocked_event_completed.load(std::memory_order_acquire));
     KB_CHECK(!runtime->running());
     KB_CHECK(runtime->shutdown_quarantined());
     KB_CHECK(first_backend->in_flight() == 1);
@@ -2098,6 +2106,7 @@ void test_backend_local_isolation_and_two_phase_global_quarantine() {
     KB_CHECK(fake->exit_calls == 0);
     KB_CHECK(fake->pin_module_calls == 1);
 
+    fake->release_event_block();
     wait_until([&] {
         return fake->blocked_event_completed.load(std::memory_order_acquire);
     });
