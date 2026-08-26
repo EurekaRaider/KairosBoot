@@ -11,10 +11,12 @@
     <CompleteOutput>$(TestRoot)/complete</CompleteOutput>
     <CompleteExtract>$(TestRoot)/complete-extract</CompleteExtract>
     <ManagedVersion>9.8.7-managedtest</ManagedVersion>
+    <MissingVersion>9.8.7-missingtest</MissingVersion>
     <CompleteVersion>9.8.7-nativepacktest</CompleteVersion>
     <ManagedPackage>$(ManagedOutput)/KairosBoot.$(ManagedVersion).nupkg</ManagedPackage>
-    <MissingPackage>$(MissingOutput)/KairosBoot.9.8.7-missingtest.nupkg</MissingPackage>
+    <MissingPackage>$(MissingOutput)/KairosBoot.$(MissingVersion).nupkg</MissingPackage>
     <CompletePackage>$(CompleteOutput)/KairosBoot.$(CompleteVersion).nupkg</CompletePackage>
+    <DotNetHostPath Condition="'$(DotNetHostPath)' == ''">dotnet</DotNetHostPath>
   </PropertyGroup>
 
   <Target Name="Prepare">
@@ -60,15 +62,23 @@
   </Target>
 
   <Target Name="VerifyMissingRuntimeFailure" DependsOnTargets="VerifyManagedOnly">
-    <MSBuild Projects="$(PackageProject)"
-             Targets="Pack"
-             BuildInParallel="false"
-             ContinueOnError="WarnAndContinue"
-             Properties="Configuration=$(Configuration);NoBuild=true;IncludeNativeRuntimes=true;NativeRuntimeRoot=$(TestRoot)/absent;PackageVersion=9.8.7-missingtest;PackageOutputPath=$(MissingOutput)" />
-    <Error Condition="'$(MSBuildLastTaskResult)' == 'true'"
+    <!-- A failed MSBuild task marks the outer build unsuccessful even when its
+         error is expected. Run this negative case as a child process instead. -->
+    <Exec Command="&quot;$(DotNetHostPath)&quot; msbuild &quot;$(PackageProject)&quot; /nologo /m:1 /t:Pack /p:Configuration=&quot;$(Configuration)&quot; /p:NoBuild=true /p:IncludeNativeRuntimes=true /p:NativeRuntimeRoot=&quot;$(TestRoot)/absent&quot; /p:PackageVersion=$(MissingVersion) /p:PackageOutputPath=&quot;$(MissingOutput)&quot;"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="Low"
+          StandardErrorImportance="Low">
+      <Output TaskParameter="ExitCode" PropertyName="MissingPackExitCode" />
+    </Exec>
+    <Error Condition="'$(MissingPackExitCode)' == ''"
+           Text="Missing-runtime pack child process did not report an exit code." />
+    <Error Condition="'$(MissingPackExitCode)' == '0'"
            Text="Native runtime pack unexpectedly succeeded with all RID files missing." />
     <Error Condition="Exists('$(MissingPackage)')"
            Text="Native runtime validation ran too late; an invalid package was created." />
+    <Message Importance="High"
+             Text="Missing-runtime pack failed as expected with exit code $(MissingPackExitCode); no invalid package was created." />
   </Target>
 
   <Target Name="VerifyCompleteRuntimeLayout" DependsOnTargets="VerifyMissingRuntimeFailure">
