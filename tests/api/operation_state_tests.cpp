@@ -208,6 +208,7 @@ void successful_task_is_cancelled_when_cancel_wins_publication() {
     operation.wait();
     CHECK(operation.phase() == OperationPhase::Cancelled);
     CHECK(operation.error()->status == KB_E_CANCELLED);
+    CHECK(operation.error()->transfer_state == KB_TRANSFER_FULLY_TRANSFERRED);
 }
 
 void task_payload_outlives_initiating_reference() {

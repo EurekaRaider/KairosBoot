@@ -300,7 +300,13 @@ void OperationState::publish_terminal(OperationOutcome outcome) noexcept {
                 internal_error("operation task returned a non-terminal state"));
         }
         if (cancel_requested_ && outcome.phase == OperationPhase::Succeeded) {
-            outcome = OperationOutcome::cancelled();
+            outcome = OperationOutcome::cancelled({
+                KB_E_CANCELLED,
+                "operation cancelled after completing its work",
+                0,
+                KB_TRANSFER_FULLY_TRANSFERRED,
+                {},
+            });
         }
         if (outcome.phase == OperationPhase::Succeeded) {
             outcome.error.reset();
