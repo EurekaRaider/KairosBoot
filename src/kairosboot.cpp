@@ -521,7 +521,7 @@ public:
           .certainty =
               kairosboot::protocol::TransferCertainty::FullyTransferred,
       };
-    } catch (const std::bad_alloc &) {
+    } catch (...) {
       return {
           .status = kairosboot::protocol::TransportStatus::IoError,
           .transferred = 0,
