@@ -77,6 +77,17 @@ def check_workflows() -> None:
             if marker not in release:
                 fail(f"release workflow is missing {contract}: {marker}")
 
+        xcode = "/Applications/Xcode_26.3.app/Contents/Developer"
+        if xcode not in release:
+            fail(f"release workflow must pin the validated macOS Xcode: {xcode}")
+
+    ci_workflow = workflow_dir / "ci.yml"
+    if ci_workflow.is_file():
+        ci = ci_workflow.read_text(encoding="utf-8")
+        xcode = "/Applications/Xcode_26.3.app/Contents/Developer"
+        if xcode not in ci:
+            fail(f"CI workflow must pin the validated macOS Xcode: {xcode}")
+
 
 def check_required_files() -> None:
     for name in ("LICENSE", "README.md", "SECURITY.md", "CONTRIBUTING.md"):

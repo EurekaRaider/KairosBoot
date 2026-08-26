@@ -196,23 +196,28 @@ jobs:
             architecture: x64
             dependency-architecture: x64
             deployment-target: ""
+            developer-dir: ""
           - id: windows-arm64
             runner: windows-11-arm
             architecture: ARM64
             dependency-architecture: arm64
             deployment-target: ""
+            developer-dir: ""
           - id: macos-x64
             runner: macos-15-intel
             architecture: ""
             dependency-architecture: x64
             deployment-target: "14.0"
+            developer-dir: /Applications/Xcode_26.3.app/Contents/Developer
           - id: macos-arm64
             runner: macos-15
             architecture: ""
             dependency-architecture: arm64
             deployment-target: "14.0"
+            developer-dir: /Applications/Xcode_26.3.app/Contents/Developer
     runs-on: ${{ matrix.runner }}
     env:
+      DEVELOPER_DIR: ${{ matrix.developer-dir }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment-target }}
     steps:
       - name: Check out release commit
