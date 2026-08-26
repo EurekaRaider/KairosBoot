@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "src/protocol/file_transfer_sink.hpp"
+#include "src/protocol/windows_native_rename.hpp"
 
 #include <algorithm>
 #include <array>
@@ -27,6 +28,14 @@ using kairosboot::protocol::FileTransferSink;
 using kairosboot::protocol::FileTransferSinkErrorKind;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::protocol::TransportStatus;
+using kairosboot::protocol::detail::classify_windows_native_rename_status;
+using kairosboot::protocol::detail::kStatusInvalidDeviceRequest;
+using kairosboot::protocol::detail::kStatusInvalidInfoClass;
+using kairosboot::protocol::detail::kStatusInvalidParameter;
+using kairosboot::protocol::detail::kStatusNotImplemented;
+using kairosboot::protocol::detail::kStatusNotSupported;
+using kairosboot::protocol::detail::WindowsNativeRenameAction;
+using kairosboot::protocol::detail::windows_nt_status;
 
 class CheckFailure final : public std::runtime_error {
 public:
@@ -374,6 +383,38 @@ void invalid_paths_are_rejected_without_side_effects() {
     CHECK(temporary_count(temporary.path()) == 0);
 }
 
+void windows_native_rename_fallback_policy_is_fail_closed() {
+    constexpr std::array fallback_statuses{
+        kStatusInvalidInfoClass,
+        kStatusInvalidParameter,
+        kStatusNotSupported,
+        kStatusNotImplemented,
+        kStatusInvalidDeviceRequest,
+    };
+    for (const auto status : fallback_statuses) {
+        CHECK(classify_windows_native_rename_status(status) ==
+              WindowsNativeRenameAction::RetryLegacy);
+    }
+
+    CHECK(classify_windows_native_rename_status(0) ==
+          WindowsNativeRenameAction::Succeeded);
+    CHECK(classify_windows_native_rename_status(1) ==
+          WindowsNativeRenameAction::Succeeded);
+
+    constexpr std::array rejected_statuses{
+        windows_nt_status(0xC0000004U),  // STATUS_INFO_LENGTH_MISMATCH
+        windows_nt_status(0xC0000022U),  // STATUS_ACCESS_DENIED
+        windows_nt_status(0xC0000035U),  // STATUS_OBJECT_NAME_COLLISION
+        windows_nt_status(0xC0000043U),  // STATUS_SHARING_VIOLATION
+        windows_nt_status(0xC00000D4U),  // STATUS_NOT_SAME_DEVICE
+        windows_nt_status(0x80000005U),  // STATUS_BUFFER_OVERFLOW
+    };
+    for (const auto status : rejected_statuses) {
+        CHECK(classify_windows_native_rename_status(status) ==
+              WindowsNativeRenameAction::FailClosed);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -396,6 +437,8 @@ int main() {
              concurrent_publish_never_exposes_a_mixed_file},
         Test{"invalid paths have no side effects",
              invalid_paths_are_rejected_without_side_effects},
+        Test{"Windows native rename fallback is fail closed",
+             windows_native_rename_fallback_policy_is_fail_closed},
     };
 
     std::size_t failures = 0;

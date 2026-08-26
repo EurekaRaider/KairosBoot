@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include "file_transfer_sink.hpp"
+#include "windows_native_rename.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -128,17 +131,85 @@ private:
     return ::SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0U) != FALSE;
 }
 
-[[nodiscard]] bool rename_info_ex_is_unsupported(
-    const DWORD error) noexcept {
-    switch (error) {
-    case ERROR_INVALID_FUNCTION:
-    case ERROR_INVALID_PARAMETER:
-    case ERROR_NOT_SUPPORTED:
-    case ERROR_CALL_NOT_IMPLEMENTED:
-        return true;
-    default:
-        return false;
+// Go's handle-relative Renameat implementation uses this same NT information
+// contract (classes 65 then 10, retained RootDirectory and one leaf name):
+// https://github.com/golang/go/blob/2ffda87f2dce71024f72ccff32cbfe29ee676bf8/src/internal/syscall/windows/at_windows.go
+// Microsoft documents the shared FILE_RENAME_INFORMATION layout here:
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
+struct NativeFileRenameInformation final {
+    union {
+        BYTE replace_if_exists;
+        ULONG flags;
+    };
+    HANDLE root_directory;
+    ULONG file_name_length;
+    WCHAR file_name[1];
+};
+
+static_assert(sizeof(detail::WindowsNtStatus) == sizeof(LONG));
+static_assert(sizeof(ULONG) == sizeof(std::uint32_t));
+static_assert(sizeof(WCHAR) == sizeof(std::uint16_t));
+static_assert(offsetof(NativeFileRenameInformation, root_directory) %
+                      alignof(HANDLE) ==
+                  0U);
+static_assert(offsetof(NativeFileRenameInformation, file_name_length) ==
+              offsetof(NativeFileRenameInformation, root_directory) +
+                  sizeof(HANDLE));
+static_assert(offsetof(NativeFileRenameInformation, file_name) ==
+              offsetof(NativeFileRenameInformation, file_name_length) +
+                  sizeof(ULONG));
+
+struct NativeIoStatusBlock final {
+    union {
+        detail::WindowsNtStatus status;
+        void* pointer;
+    };
+    ULONG_PTR information;
+};
+
+static_assert(offsetof(NativeIoStatusBlock, information) == sizeof(void*));
+static_assert(sizeof(NativeIoStatusBlock) ==
+              sizeof(void*) + sizeof(ULONG_PTR));
+
+using NtSetInformationFileFunction = detail::WindowsNtStatus(NTAPI*)(
+    HANDLE, NativeIoStatusBlock*, void*, ULONG, ULONG);
+using RtlNtStatusToDosErrorFunction = ULONG(NTAPI*)(
+    detail::WindowsNtStatus);
+
+template <typename Function>
+[[nodiscard]] Function resolve_ntdll_function(
+    const HMODULE module, const char* const name) noexcept {
+    const auto procedure = ::GetProcAddress(module, name);
+    static_assert(sizeof(Function) == sizeof(procedure));
+    Function result{};
+    std::memcpy(&result, &procedure, sizeof(result));
+    return result;
+}
+
+struct NativeRenameApi final {
+    NtSetInformationFileFunction set_information{};
+    RtlNtStatusToDosErrorFunction status_to_dos_error{};
+
+    [[nodiscard]] bool available() const noexcept {
+        return set_information != nullptr && status_to_dos_error != nullptr;
     }
+};
+
+[[nodiscard]] const NativeRenameApi& native_rename_api() noexcept {
+    static const NativeRenameApi api = [] {
+        const auto module = ::GetModuleHandleW(L"ntdll.dll");
+        if (module == nullptr) {
+            return NativeRenameApi{};
+        }
+        return NativeRenameApi{
+            .set_information = resolve_ntdll_function<
+                NtSetInformationFileFunction>(module, "NtSetInformationFile"),
+            .status_to_dos_error = resolve_ntdll_function<
+                RtlNtStatusToDosErrorFunction>(module,
+                                               "RtlNtStatusToDosError"),
+        };
+    }();
+    return api;
 }
 
 [[nodiscard]] std::expected<std::filesystem::path, FileTransferSinkError>
@@ -331,7 +402,7 @@ FileTransferSink::create(const std::filesystem::path& requested_destination) {
         const auto raw_directory = ::CreateFileW(
             directory_path.c_str(),
             FILE_LIST_DIRECTORY | FILE_ADD_FILE | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
             &security,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS,
@@ -740,7 +811,8 @@ std::expected<void, FileTransferSinkError> FileTransferSink::seal(
         }
         const std::size_t name_bytes =
             destination_name.size() * sizeof(wchar_t);
-        constexpr std::size_t rename_base = sizeof(FILE_RENAME_INFO);
+        constexpr std::size_t rename_base =
+            sizeof(NativeFileRenameInformation);
         if (name_bytes >
                 std::numeric_limits<std::size_t>::max() - rename_base ||
             name_bytes + rename_base >
@@ -753,34 +825,45 @@ std::expected<void, FileTransferSinkError> FileTransferSink::seal(
         }
         std::vector<std::byte> rename_buffer(
             rename_base + name_bytes);
-        auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(
+        auto* rename = reinterpret_cast<NativeFileRenameInformation*>(
             rename_buffer.data());
-        constexpr DWORD rename_replace_if_exists = 0x00000001U;
-        constexpr DWORD rename_posix_semantics = 0x00000002U;
-        rename->Flags = rename_replace_if_exists | rename_posix_semantics;
-        // A simple name with no RootDirectory renames the already-open file
-        // within its current parent. This retains handle-relative semantics
-        // without relying on the Win32 wrapper's inconsistent forwarding of a
-        // non-null RootDirectory.
-        rename->RootDirectory = nullptr;
-        rename->FileNameLength = static_cast<DWORD>(name_bytes);
-        std::memcpy(rename->FileName, destination_name.data(), name_bytes);
-        const auto rename_size = static_cast<DWORD>(rename_buffer.size());
-        BOOL renamed = ::SetFileInformationByHandle(
-            static_cast<HANDLE>(file_), FileRenameInfoEx, rename, rename_size);
-        DWORD rename_error = renamed == FALSE ? ::GetLastError() : ERROR_SUCCESS;
-        if (renamed == FALSE && rename_info_ex_is_unsupported(rename_error)) {
-            rename->ReplaceIfExists = TRUE;
-            renamed = ::SetFileInformationByHandle(
-                static_cast<HANDLE>(file_), FileRenameInfo, rename, rename_size);
-            if (renamed == FALSE) {
-                rename_error = ::GetLastError();
-            }
-        }
-        if (renamed == FALSE) {
+        constexpr ULONG rename_replace_if_exists = 0x00000001U;
+        constexpr ULONG rename_posix_semantics = 0x00000002U;
+        rename->flags = rename_replace_if_exists | rename_posix_semantics;
+        rename->root_directory = static_cast<HANDLE>(directory_);
+        rename->file_name_length = static_cast<ULONG>(name_bytes);
+        std::memcpy(rename->file_name, destination_name.data(), name_bytes);
+
+        const auto& api = native_rename_api();
+        if (!api.available()) {
             return fail_seal_locked(
                 FileTransferSinkErrorKind::PublishFailed,
-                static_cast<int>(rename_error),
+                ERROR_PROC_NOT_FOUND,
+                "unable to atomically publish the received file");
+        }
+        constexpr ULONG file_rename_information = 10U;
+        constexpr ULONG file_rename_information_ex = 65U;
+        const auto rename_size = static_cast<ULONG>(rename_buffer.size());
+        NativeIoStatusBlock io_status{};
+        auto rename_status = api.set_information(
+            static_cast<HANDLE>(file_), &io_status, rename, rename_size,
+            file_rename_information_ex);
+        auto action =
+            detail::classify_windows_native_rename_status(rename_status);
+        if (action == detail::WindowsNativeRenameAction::RetryLegacy) {
+            rename->flags = 0U;
+            rename->replace_if_exists = TRUE;
+            io_status = {};
+            rename_status = api.set_information(
+                static_cast<HANDLE>(file_), &io_status, rename, rename_size,
+                file_rename_information);
+            action = detail::classify_windows_native_rename_status(
+                rename_status);
+        }
+        if (action != detail::WindowsNativeRenameAction::Succeeded) {
+            return fail_seal_locked(
+                FileTransferSinkErrorKind::PublishFailed,
+                static_cast<int>(api.status_to_dos_error(rename_status)),
                 "unable to atomically publish the received file");
         }
 #else
