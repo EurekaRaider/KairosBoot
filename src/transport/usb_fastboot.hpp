@@ -5,7 +5,9 @@
 #include "src/transport/libusb_runtime.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -16,6 +18,15 @@ struct UsbFastbootTransportOptions final {
     TransferRingConfig data_ring{};
     std::shared_ptr<BufferBudget> buffer_budget;
 };
+
+enum class TransferProgressAction : std::uint8_t {
+    continue_transfer,
+    cancel,
+};
+
+using TransferProgressObserver = std::function<TransferProgressAction(
+    std::uint64_t completion_watermark,
+    std::uint64_t total_bytes)>;
 
 // Internal protocol adapter. One instance exclusively owns one claimed USB
 // interface. write()/read() are serialized; request_cancel()/close() may run
@@ -38,6 +49,14 @@ public:
     [[nodiscard]] protocol::TransferResult write(
         std::span<const std::byte> bytes,
         std::chrono::milliseconds timeout) override;
+
+    // Streams source chunks through the bounded transfer ring. Progress is
+    // observed synchronously by this call's owning thread after contiguous
+    // completions advance; libusb event callbacks never invoke the observer.
+    [[nodiscard]] protocol::TransferResult write_source(
+        std::shared_ptr<TransferSource> source,
+        std::chrono::milliseconds timeout,
+        const TransferProgressObserver& observer = {});
 
     [[nodiscard]] protocol::TransferResult read(
         std::span<std::byte> destination,

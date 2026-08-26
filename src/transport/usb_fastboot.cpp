@@ -194,6 +194,34 @@ private:
     };
 }
 
+[[nodiscard]] std::size_t transferred_size(
+    const std::uint64_t bytes) noexcept {
+    return static_cast<std::size_t>(std::min<std::uint64_t>(
+        bytes, std::numeric_limits<std::size_t>::max()));
+}
+
+[[nodiscard]] protocol::TransferCertainty observer_cancel_certainty(
+    const TransferRing& ring) noexcept {
+    if (ring.total_bytes() != 0 &&
+        ring.completion_watermark() == ring.total_bytes()) {
+        return protocol::TransferCertainty::FullyTransferred;
+    }
+    return ring.completion_watermark() == 0
+        ? protocol::TransferCertainty::NotTransferred
+        : protocol::TransferCertainty::PartialOrUnknown;
+}
+
+[[nodiscard]] protocol::TransferResult classify_requested_cancellation(
+    protocol::TransferResult failure,
+    const bool cancellation_requested) {
+    if (cancellation_requested) {
+        failure.status = protocol::TransportStatus::Cancelled;
+        failure.detail = "Fastboot USB transfer was cancelled";
+        failure.native_code = 0;
+    }
+    return failure;
+}
+
 [[nodiscard]] protocol::TransferResult read_result(
     const LibusbBulkOutBackend::ReadResult& result) {
     using ReadCode = LibusbBulkOutBackend::ReadCode;
@@ -307,6 +335,24 @@ UsbFastbootTransport::~UsbFastbootTransport() {
 protocol::TransferResult UsbFastbootTransport::write(
     const std::span<const std::byte> bytes,
     const std::chrono::milliseconds timeout) {
+    try {
+        return write_source(
+            std::make_shared<SpanTransferSource>(bytes), timeout);
+    } catch (const std::bad_alloc&) {
+        return {
+            .status = protocol::TransportStatus::IoError,
+            .transferred = 0,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
+            .detail = "USB bulk OUT exhausted host resources before submission",
+        };
+    }
+}
+
+protocol::TransferResult UsbFastbootTransport::write_source(
+    std::shared_ptr<TransferSource> source,
+    const std::chrono::milliseconds timeout,
+    const TransferProgressObserver& observer) {
     std::scoped_lock operation(operation_mutex_);
     if (!open_.load(std::memory_order_acquire)) {
         const auto cancelled =
@@ -321,7 +367,18 @@ protocol::TransferResult UsbFastbootTransport::write(
                                 : "Fastboot USB transport is closed",
         };
     }
-    if (bytes.empty()) {
+    if (source == nullptr) {
+        return {
+            .status = protocol::TransportStatus::IoError,
+            .transferred = 0,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
+            .detail = "USB transfer source is null",
+        };
+    }
+
+    const auto total_bytes = source->size();
+    if (total_bytes == 0) {
         return {
             .status = protocol::TransportStatus::Ok,
             .transferred = 0,
@@ -343,16 +400,16 @@ protocol::TransferResult UsbFastbootTransport::write(
         return failure;
     }
 
-    bool submission_could_have_been_accepted = false;
+    TransferRing ring(*backend_, budget_, options_.data_ring);
     try {
-        TransferRing ring(*backend_, budget_, options_.data_ring);
-        const auto source = std::make_shared<SpanTransferSource>(bytes);
-        submission_could_have_been_accepted = true;
-        if (!ring.start(source, true)) {
+        if (!ring.start(std::move(source), true)) {
             auto failure = ring_failure(
                 ring,
                 protocol::TransportStatus::IoError,
                 "USB transfer ring could not start");
+            failure = classify_requested_cancellation(
+                std::move(failure),
+                cancellation_requested_.load(std::memory_order_acquire));
             poison_and_stop();
             return failure;
         }
@@ -369,6 +426,10 @@ protocol::TransferResult UsbFastbootTransport::write(
                             protocol::TransportStatus::Timeout,
                             "USB bulk OUT timed out waiting for buffer budget");
                         failure.status = protocol::TransportStatus::Timeout;
+                        failure = classify_requested_cancellation(
+                            std::move(failure),
+                            cancellation_requested_.load(
+                                std::memory_order_acquire));
                         poison_and_stop();
                         return failure;
                     }
@@ -392,10 +453,44 @@ protocol::TransferResult UsbFastbootTransport::write(
                 }
                 auto failure = ring_failure(ring, status, detail);
                 failure.status = status;
+                failure = classify_requested_cancellation(
+                    std::move(failure),
+                    cancellation_requested_.load(std::memory_order_acquire));
                 poison_and_stop();
                 return failure;
             }
+            const auto previous_watermark = ring.completion_watermark();
             static_cast<void>(ring.handle_completion(waited.completion));
+            const auto completion_watermark = ring.completion_watermark();
+            if (observer && completion_watermark > previous_watermark) {
+                TransferProgressAction action;
+                try {
+                    action = observer(completion_watermark, total_bytes);
+                } catch (...) {
+                    ring.cancel();
+                    auto failure = ring_failure(
+                        ring,
+                        protocol::TransportStatus::IoError,
+                        "USB transfer progress observer failed");
+                    failure.status = protocol::TransportStatus::IoError;
+                    failure.detail = "USB transfer progress observer failed";
+                    poison_and_stop();
+                    return failure;
+                }
+                if (action == TransferProgressAction::cancel) {
+                    ring.cancel();
+                    auto failure = protocol::TransferResult{
+                        .status = protocol::TransportStatus::Cancelled,
+                        .transferred = transferred_size(completion_watermark),
+                        .certainty = observer_cancel_certainty(ring),
+                        .truncated = false,
+                        .detail = "USB bulk OUT was cancelled by progress observer",
+                        .native_code = 0,
+                    };
+                    poison_and_stop();
+                    return failure;
+                }
+            }
         }
 
         if (ring.state() != TransferRingState::completed) {
@@ -403,27 +498,33 @@ protocol::TransferResult UsbFastbootTransport::write(
                 ring,
                 protocol::TransportStatus::IoError,
                 "USB bulk OUT did not complete");
+            failure = classify_requested_cancellation(
+                std::move(failure),
+                cancellation_requested_.load(std::memory_order_acquire));
             poison_and_stop();
             return failure;
         }
         return {
             .status = protocol::TransportStatus::Ok,
-            .transferred = bytes.size(),
+            .transferred = transferred_size(total_bytes),
             .certainty = protocol::TransferCertainty::FullyTransferred,
             .truncated = false,
             .detail = {},
         };
     } catch (const std::bad_alloc&) {
         poison_and_stop();
-        return {
+        auto failure = protocol::TransferResult{
             .status = protocol::TransportStatus::IoError,
-            .transferred = 0,
-            .certainty = submission_could_have_been_accepted
+            .transferred = transferred_size(ring.completion_watermark()),
+            .certainty = ring.submitted_bytes() != 0
                 ? protocol::TransferCertainty::PartialOrUnknown
                 : protocol::TransferCertainty::NotTransferred,
             .truncated = false,
             .detail = "USB bulk OUT exhausted host resources",
         };
+        return classify_requested_cancellation(
+            std::move(failure),
+            cancellation_requested_.load(std::memory_order_acquire));
     }
 }
 
