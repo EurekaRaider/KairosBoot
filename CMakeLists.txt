@@ -190,6 +190,30 @@ elseif(APPLE)
   target_link_options(
     kairosboot PRIVATE
     "LINKER:-exported_symbols_list,${KAIROSBOOT_MACHO_EXPORTS_FILE}")
+elseif(UNIX)
+  # GCC can emit weak libstdc++ template and RTTI definitions from otherwise
+  # hidden object files. Keep the ELF dynamic symbol table identical to the
+  # stable C ABI manifest with an anonymous linker version script.
+  set_property(
+    DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                              "${CMAKE_CURRENT_SOURCE_DIR}/abi/kairosboot.exports")
+  file(
+    STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/abi/kairosboot.exports"
+    KAIROSBOOT_ELF_EXPORTS
+    REGEX "^kb_[a-z0-9_]+$")
+  set(KAIROSBOOT_ELF_EXPORTS_CONTENT "{\n  global:\n")
+  foreach(KAIROSBOOT_ELF_EXPORT IN LISTS KAIROSBOOT_ELF_EXPORTS)
+    string(APPEND KAIROSBOOT_ELF_EXPORTS_CONTENT
+           "    ${KAIROSBOOT_ELF_EXPORT};\n")
+  endforeach()
+  string(APPEND KAIROSBOOT_ELF_EXPORTS_CONTENT "  local:\n    *;\n};\n")
+  set(KAIROSBOOT_ELF_EXPORTS_FILE
+      "${CMAKE_CURRENT_BINARY_DIR}/kairosboot.linux.exports")
+  file(WRITE "${KAIROSBOOT_ELF_EXPORTS_FILE}"
+       "${KAIROSBOOT_ELF_EXPORTS_CONTENT}")
+  target_link_options(
+    kairosboot PRIVATE
+    "LINKER:--version-script=${KAIROSBOOT_ELF_EXPORTS_FILE}")
 endif()
 add_library(KairosBoot::C ALIAS kairosboot)
 set_target_properties(

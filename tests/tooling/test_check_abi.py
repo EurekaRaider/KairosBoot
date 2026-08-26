@@ -73,7 +73,7 @@ Summary
         self.assertEqual(
             invoked.call_args.args[0],
             [
-                "C:/toolchain/link.exe",
+                str(Path("C:/toolchain/link.exe")),
                 "/dump",
                 "/nologo",
                 "/exports",
