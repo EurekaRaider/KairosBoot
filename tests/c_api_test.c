@@ -231,7 +231,13 @@ int main(void) {
                                            NULL, &operation, &error) ==
         KB_E_INVALID_ARGUMENT);
   CHECK(operation == NULL);
-  CHECK(strstr(kb_error_message(error), "must not contain ':'") != NULL);
+  CHECK(strstr(kb_error_message(error), "ASCII letters") != NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_delete_logical_partition_async(context, NULL, "system other",
+                                           NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
   kb_error_release(error);
   error = NULL;
   CHECK(kb_resize_logical_partition_async(context, NULL, "bad\nname", 1,

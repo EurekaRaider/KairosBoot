@@ -211,6 +211,17 @@ bool valid_fastboot_parameter(const std::string_view value,
   return true;
 }
 
+bool valid_partition_name_characters(const std::string_view value) noexcept {
+  return std::ranges::all_of(value, [](const unsigned char character) {
+    const auto ascii_alphanumeric =
+        (character >= 'a' && character <= 'z') ||
+        (character >= 'A' && character <= 'Z') ||
+        (character >= '0' && character <= '9');
+    return ascii_alphanumeric || character == '_' || character == '-' ||
+           character == '.';
+  });
+}
+
 size_t decimal_digit_count(std::uint64_t value) noexcept {
   size_t result = 1;
   while (value >= 10) {
@@ -228,10 +239,11 @@ kb_status_t validate_logical_partition_name(
                 "logical partition name must not be empty", device_selector);
   }
   const std::string_view value{name};
-  if (value.find(':') != std::string_view::npos) {
-    return fail(error, KB_E_INVALID_ARGUMENT,
-                "logical partition name must not contain ':'",
-                device_selector);
+  if (!valid_partition_name_characters(value)) {
+    return fail(
+        error, KB_E_INVALID_ARGUMENT,
+        "logical partition name must use ASCII letters, digits, '.', '-' or '_'",
+        device_selector);
   }
   if (!valid_fastboot_parameter(value, command_overhead)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
@@ -242,17 +254,7 @@ kb_status_t validate_logical_partition_name(
 }
 
 bool valid_fetch_partition(const std::string_view value) noexcept {
-  if (value.empty()) {
-    return false;
-  }
-  return std::ranges::all_of(value, [](const unsigned char character) {
-    const auto ascii_alphanumeric =
-        (character >= 'a' && character <= 'z') ||
-        (character >= 'A' && character <= 'Z') ||
-        (character >= '0' && character <= '9');
-    return ascii_alphanumeric || character == '_' || character == '-' ||
-           character == '.';
-  });
+  return !value.empty() && valid_partition_name_characters(value);
 }
 
 size_t fetch_range_component_size(const uint64_t value) noexcept {
