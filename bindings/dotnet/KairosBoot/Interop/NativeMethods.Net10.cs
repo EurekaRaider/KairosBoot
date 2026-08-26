@@ -7,6 +7,18 @@ namespace KairosBoot.Interop;
 
 internal static partial class NativeMethods
 {
+    [LibraryImport(LibraryName, EntryPoint = "kb_context_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void ContextOptionsInit(ref NativeContextOptions options);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void FlashOptionsInit(ref NativeFlashOptions options);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void CommandOptionsInit(ref NativeCommandOptions options);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_version_init")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void VersionInit(ref NativeVersion version);
@@ -21,18 +33,11 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName, EntryPoint = "kb_context_create")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial int ContextCreate(
-        IntPtr options,
-        out IntPtr context,
-        out IntPtr error);
+    internal static partial int ContextCreate(IntPtr options, out IntPtr context, out IntPtr error);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_context_release")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void ContextRelease(IntPtr context);
-
-    [LibraryImport(LibraryName, EntryPoint = "kb_flash_options_init")]
-    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void FlashOptionsInit(ref NativeFlashOptions options);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_enumerate_devices")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -61,10 +66,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void DeviceListRelease(IntPtr devices);
 
-    [LibraryImport(
-        LibraryName,
-        EntryPoint = "kb_flash_file_async",
-        StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashFileAsync(
         ContextSafeHandle context,
@@ -73,6 +75,236 @@ internal static partial class NativeMethods
         string filePath,
         ref NativeFlashOptions options,
         out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_file", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FlashFile(
+        ContextSafeHandle context,
+        string? serial,
+        string partition,
+        string filePath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_getvar_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int GetVarAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string variable,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_getvar", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int GetVar(
+        ContextSafeHandle context,
+        string? selector,
+        string variable,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_erase_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int EraseAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partition,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_erase", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Erase(
+        ContextSafeHandle context,
+        string? selector,
+        string partition,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_set_active_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int SetActiveAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string slot,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_set_active", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int SetActive(
+        ContextSafeHandle context,
+        string? selector,
+        string slot,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_reboot_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int RebootAsync(
+        ContextSafeHandle context,
+        string? selector,
+        int target,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_reboot", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Reboot(
+        ContextSafeHandle context,
+        string? selector,
+        int target,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_continue_boot_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ContinueBootAsync(
+        ContextSafeHandle context,
+        string? selector,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_continue_boot", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ContinueBoot(
+        ContextSafeHandle context,
+        string? selector,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_oem_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int OemAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string commandSuffix,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_oem", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Oem(
+        ContextSafeHandle context,
+        string? selector,
+        string commandSuffix,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_raw_command_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int RawCommandAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string command,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_raw_command", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int RawCommand(
+        ContextSafeHandle context,
+        string? selector,
+        string command,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_boot_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int BootAsync(
+        ContextSafeHandle context,
+        string? selector,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_boot", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Boot(
+        ContextSafeHandle context,
+        string? selector,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_stage_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int StageAsync(
+        ContextSafeHandle context,
+        string? selector,
+        IntPtr data,
+        UIntPtr dataSize,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_stage", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Stage(
+        ContextSafeHandle context,
+        string? selector,
+        IntPtr data,
+        UIntPtr dataSize,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_upload_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int UploadAsync(
+        ContextSafeHandle context,
+        string? selector,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_upload", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Upload(
+        ContextSafeHandle context,
+        string? selector,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_fetch_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FetchAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partition,
+        ulong offset,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_fetch", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int Fetch(
+        ContextSafeHandle context,
+        string? selector,
+        string partition,
+        ulong offset,
+        ulong size,
+        ref NativeCommandOptions options,
+        out IntPtr result,
         out IntPtr error);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_operation_wait")]
@@ -91,9 +323,51 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial IntPtr OperationError(OperationSafeHandle operation);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_operation_command_result")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int OperationCommandResult(
+        OperationSafeHandle operation,
+        out IntPtr result,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_operation_release")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void OperationRelease(IntPtr operation);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_terminal_payload")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr CommandResultTerminalPayload(
+        CommandResultSafeHandle result,
+        out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_message_count")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial UIntPtr CommandResultMessageCount(CommandResultSafeHandle result);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_message_kind")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int CommandResultMessageKind(
+        CommandResultSafeHandle result,
+        UIntPtr index);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_message_payload")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr CommandResultMessagePayload(
+        CommandResultSafeHandle result,
+        UIntPtr index,
+        out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_data")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr CommandResultData(CommandResultSafeHandle result, out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_device_identifier")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr CommandResultDeviceIdentifier(CommandResultSafeHandle result);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_release")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void CommandResultRelease(IntPtr result);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_error_status")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -114,6 +388,41 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_error_transfer_state")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ErrorTransferState(IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_device_message")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr ErrorDeviceMessage(IntPtr error, out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_command_message_count")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial UIntPtr ErrorCommandMessageCount(IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_command_message_kind")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ErrorCommandMessageKind(IntPtr error, UIntPtr index);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_command_message_payload")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr ErrorCommandMessagePayload(
+        IntPtr error,
+        UIntPtr index,
+        out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_inbound_expected_bytes")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial ulong ErrorInboundExpectedBytes(IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_inbound_transferred_bytes")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial ulong ErrorInboundTransferredBytes(IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_inbound_transfer_state")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ErrorInboundTransferState(IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_error_session_poisoned")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ErrorSessionPoisoned(IntPtr error);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_error_release")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]

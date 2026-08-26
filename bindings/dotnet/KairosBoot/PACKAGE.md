@@ -36,3 +36,18 @@ Use `FlashOptions` for a strongly typed per-I/O deadline and pass
 `FlashOptions.Default` and `Timeout.InfiniteTimeSpan` preserve the native
 infinite timeout. The binding retains the managed progress callback until
 native operation release has drained every callback.
+
+Typed `GetVarAsync`, `EraseAsync`, `SetActiveAsync`, `RebootAsync`,
+`ContinueBootAsync`, `OemAsync`, `RawCommandAsync`, `BootAsync`, `StageAsync`,
+`UploadAsync`, and `FetchAsync` methods return `Task<CommandResult>`. They use
+the same stable C ABI on both target frameworks and accept USB, TCP, or UDP
+device selectors. Binary terminal payloads, ordered INFO/TEXT messages, and
+upload/fetch data are copied into owned `byte[]` values before the native
+result is released.
+
+`CommandOptions.Default` applies an infinite per-I/O timeout and a 64 MiB hard
+receive bound. Cancellation requests the native operation to stop and then
+drains it asynchronously; pending operations do not reserve one ThreadPool
+thread per device. `KairosBootException` includes the binary device message,
+ordered command messages, inbound expected/transferred counts and certainty,
+and whether the native session was poisoned.

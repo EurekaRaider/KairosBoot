@@ -25,6 +25,10 @@ public enum KairosBootStatus
     Io = 9,
     /// <summary>An unexpected internal invariant failed.</summary>
     Internal = 10,
+    /// <summary>The device returned an invalid or unexpected Fastboot response.</summary>
+    Protocol = 11,
+    /// <summary>The device returned a terminal FAIL response.</summary>
+    DeviceFail = 12,
 }
 
 /// <summary>How much of a failed transfer is known to have reached the device.</summary>

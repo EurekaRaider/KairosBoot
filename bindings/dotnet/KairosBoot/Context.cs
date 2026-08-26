@@ -18,6 +18,11 @@ public sealed class Context : IDisposable
         this.handle = handle;
     }
 
+    private delegate int StartCommandOperation(
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
     /// <summary>Gets the runtime and ABI version of the loaded native library.</summary>
     public static KairosBootVersion Version
     {
@@ -61,13 +66,7 @@ public sealed class Context : IDisposable
             throw NativeError.TakeException((int)KairosBootStatus.Internal, rawError);
         }
 
-        if (rawError != IntPtr.Zero)
-        {
-            using (var unexpectedError = new ErrorSafeHandle(rawError))
-            {
-            }
-        }
-
+        ReleaseUnexpectedError(rawError);
         return new Context(new ContextSafeHandle(rawContext));
     }
 
@@ -95,19 +94,14 @@ public sealed class Context : IDisposable
                 throw NativeError.TakeException((int)KairosBootStatus.Internal, rawError);
             }
 
-            if (rawError != IntPtr.Zero)
-            {
-                using (var unexpectedError = new ErrorSafeHandle(rawError))
-                {
-                }
-            }
-
+            ReleaseUnexpectedError(rawError);
             using (var devices = new DeviceListSafeHandle(rawDevices))
             {
                 var nativeCount = NativeMethods.DeviceListCount(devices).ToUInt64();
                 if (nativeCount > int.MaxValue)
                 {
-                    throw new InvalidOperationException("Native device count exceeds managed collection limits.");
+                    throw new InvalidOperationException(
+                        "Native device count exceeds managed collection limits.");
                 }
 
                 var result = new List<Device>((int)nativeCount);
@@ -125,10 +119,7 @@ public sealed class Context : IDisposable
         }
     }
 
-    /// <summary>
-    /// Starts a flash operation. Native failures are surfaced as
-    /// <see cref="KairosBootException"/> and cancellation cancels the native operation.
-    /// </summary>
+    /// <summary>Starts a flash operation with native default options.</summary>
     public Task FlashFileAsync(
         string partition,
         string filePath,
@@ -145,11 +136,7 @@ public sealed class Context : IDisposable
             cancellationToken);
     }
 
-    /// <summary>
-    /// Starts a flash operation with a typed per-I/O timeout. Native failures
-    /// are surfaced as <see cref="KairosBootException"/> and cancellation
-    /// cancels the native operation.
-    /// </summary>
+    /// <summary>Starts a flash operation with a typed per-I/O timeout.</summary>
     public Task FlashFileAsync(
         string partition,
         string filePath,
@@ -167,6 +154,300 @@ public sealed class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>Reads a Fastboot variable.</summary>
+    public Task<CommandResult> GetVarAsync(
+        string variable,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(variable, nameof(variable));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.GetVarAsync(
+                    handle,
+                    deviceSelector,
+                    variable,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Erases a partition.</summary>
+    public Task<CommandResult> EraseAsync(
+        string partition,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.EraseAsync(
+                    handle,
+                    deviceSelector,
+                    partition,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Selects the active A/B slot.</summary>
+    public Task<CommandResult> SetActiveAsync(
+        string slot,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(slot, nameof(slot));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.SetActiveAsync(
+                    handle,
+                    deviceSelector,
+                    slot,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Reboots the selected device.</summary>
+    public Task<CommandResult> RebootAsync(
+        RebootTarget target = RebootTarget.System,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (target < RebootTarget.System || target > RebootTarget.Fastboot)
+        {
+            throw new ArgumentOutOfRangeException(nameof(target));
+        }
+
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.RebootAsync(
+                    handle,
+                    deviceSelector,
+                    (int)target,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Continues booting the selected device.</summary>
+    public Task<CommandResult> ContinueBootAsync(
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.ContinueBootAsync(
+                    handle,
+                    deviceSelector,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Runs an OEM command suffix.</summary>
+    public Task<CommandResult> OemAsync(
+        string commandSuffix,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(commandSuffix, nameof(commandSuffix));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.OemAsync(
+                    handle,
+                    deviceSelector,
+                    commandSuffix,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Runs a raw Fastboot command.</summary>
+    public Task<CommandResult> RawCommandAsync(
+        string command,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(command, nameof(command));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.RawCommandAsync(
+                    handle,
+                    deviceSelector,
+                    command,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Boots previously downloaded or staged data.</summary>
+    public Task<CommandResult> BootAsync(
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.BootAsync(
+                    handle,
+                    deviceSelector,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Stages an owned managed byte-array snapshot on the device.</summary>
+    public Task<CommandResult> StageAsync(
+        byte[] data,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (data == null)
+        {
+            throw new ArgumentNullException(nameof(data));
+        }
+
+        if (data.Length == 0)
+        {
+            throw new ArgumentException("Stage data must not be empty.", nameof(data));
+        }
+
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            delegate(
+                ref NativeCommandOptions nativeOptions,
+                out IntPtr operation,
+                out IntPtr error)
+            {
+                var pinned = GCHandle.Alloc(data, GCHandleType.Pinned);
+                try
+                {
+                    return NativeMethods.StageAsync(
+                        handle,
+                        deviceSelector,
+                        pinned.AddrOfPinnedObject(),
+                        new UIntPtr((ulong)data.LongLength),
+                        ref nativeOptions,
+                        out operation,
+                        out error);
+                }
+                finally
+                {
+                    // Native stage start snapshots the input before returning.
+                    // The array is never pinned during asynchronous transport.
+                    pinned.Free();
+                }
+            });
+    }
+
+    /// <summary>Receives bounded data from the Fastboot upload command.</summary>
+    public Task<CommandResult> UploadAsync(
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.UploadAsync(
+                    handle,
+                    deviceSelector,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Fetches a bounded partition range from the device.</summary>
+    public Task<CommandResult> FetchAsync(
+        string partition,
+        ulong? offset = null,
+        ulong? size = null,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.FetchAsync(
+                    handle,
+                    deviceSelector,
+                    partition,
+                    offset ?? NativeMethods.FetchUnspecified,
+                    size ?? NativeMethods.FetchUnspecified,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Releases the native context.</summary>
+    public void Dispose()
+    {
+        handle.Dispose();
+    }
+
     private async Task FlashFileCoreAsync(
         string partition,
         string filePath,
@@ -175,33 +456,23 @@ public sealed class Context : IDisposable
         IProgress<FlashProgress>? progress,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(partition))
-        {
-            throw new ArgumentException("Partition must not be empty.", nameof(partition));
-        }
-
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            throw new ArgumentException("File path must not be empty.", nameof(filePath));
-        }
-
-        if (serial != null && serial.Length == 0)
-        {
-            throw new ArgumentException("Serial must be null or non-empty.", nameof(serial));
-        }
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(filePath, nameof(filePath));
+        ValidateSelector(serial, nameof(serial));
 
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        ProgressCallbackRegistration? progressRegistration = null;
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
         var contextReferenceAdded = false;
         try
         {
             handle.DangerousAddRef(ref contextReferenceAdded);
-
             if (progress != null)
             {
-                progressRegistration = new ProgressCallbackRegistration(progress);
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
             }
 
             var nativeOptions = new NativeFlashOptions();
@@ -219,46 +490,16 @@ public sealed class Context : IDisposable
                 out var rawOperation,
                 out var rawError);
 
-            if (status != (int)KairosBootStatus.Ok)
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
             {
-                if (rawOperation != IntPtr.Zero)
-                {
-                    using (var unexpectedOperation = new OperationSafeHandle(rawOperation))
-                    {
-                    }
-                }
-
-                throw NativeError.TakeException(status, rawError);
-            }
-
-            if (rawOperation == IntPtr.Zero)
-            {
-                throw NativeError.TakeException((int)KairosBootStatus.Internal, rawError);
-            }
-
-            if (rawError != IntPtr.Zero)
-            {
-                using (var unexpectedError = new ErrorSafeHandle(rawError))
-                {
-                }
-            }
-
-            // The inner cancellation registration is disposed before the
-            // operation, so it cannot race SafeHandle release.
-            using (var operation = new OperationSafeHandle(rawOperation))
-            using (cancellationToken.Register(() => NativeMethods.OperationCancel(operation)))
-            {
-                await Task.Run(
-                    () => WaitForOperation(operation, cancellationToken),
-                    CancellationToken.None).ConfigureAwait(false);
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
         finally
         {
-            // OperationSafeHandle.ReleaseHandle drains native callbacks before
-            // this registration frees its delegate and GCHandle.
             progressRegistration?.Dispose();
-
             if (contextReferenceAdded)
             {
                 handle.DangerousRelease();
@@ -266,87 +507,197 @@ public sealed class Context : IDisposable
         }
     }
 
-    /// <summary>Releases the native context.</summary>
-    public void Dispose()
+    private async Task<CommandResult> RunCommandAsync(
+        CommandOptions options,
+        IProgress<CommandProgress>? progress,
+        CancellationToken cancellationToken,
+        StartCommandOperation start)
     {
-        handle.Dispose();
-    }
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
 
-    private static void WaitForOperation(
-        OperationSafeHandle operation,
-        CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            var status = NativeMethods.OperationWait(
-                operation,
-                NativeMethods.WaitSliceMilliseconds);
-            if (status == (int)KairosBootStatus.Timeout)
-            {
-                continue;
-            }
-
-            if (status == (int)KairosBootStatus.Ok)
-            {
-                return;
-            }
-
-            if (status == (int)KairosBootStatus.Cancelled && cancellationToken.IsCancellationRequested)
-            {
-                throw new OperationCanceledException(cancellationToken);
-            }
-
-            throw NativeError.FromBorrowed(status, NativeMethods.OperationError(operation));
-        }
-    }
-
-    private static int ReportProgress(ref NativeProgress native, IntPtr userData)
-    {
+        ProgressCallbackRegistration<CommandProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
         try
         {
-            if (native.StructSize < NativeMethods.ProgressStructSize ||
-                native.ApiVersion != NativeMethods.ApiVersion ||
-                userData == IntPtr.Zero)
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
             {
-                return 1;
+                progressRegistration = new ProgressCallbackRegistration<CommandProgress>(
+                    progress,
+                    CreateCommandProgress);
             }
 
-            var target = GCHandle.FromIntPtr(userData).Target as IProgress<FlashProgress>;
-            if (target == null)
-            {
-                return 1;
-            }
+            var nativeOptions = new NativeCommandOptions();
+            NativeMethods.CommandOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.MaximumReceiveBytes = options.NativeMaximumReceiveBytes;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
-            target.Report(new FlashProgress(
-                native.BytesCompleted,
-                native.BytesTotal,
-                Utf8String.FromNative(native.Stage),
-                Utf8String.FromNative(native.DeviceIdentifier)));
-            return 0;
+            var status = start(ref nativeOptions, out var rawOperation, out var rawError);
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+                return ExtractCommandResult(operation);
+            }
         }
-        catch
+        finally
         {
-            return 1;
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
         }
     }
 
-    private sealed class ProgressCallbackRegistration : IDisposable
+    private static OperationSafeHandle TakeStartedOperation(
+        int status,
+        IntPtr rawOperation,
+        IntPtr rawError)
+    {
+        if (status != (int)KairosBootStatus.Ok)
+        {
+            if (rawOperation != IntPtr.Zero)
+            {
+                using (var unexpectedOperation = new OperationSafeHandle(rawOperation))
+                {
+                }
+            }
+
+            throw NativeError.TakeException(status, rawError);
+        }
+
+        if (rawOperation == IntPtr.Zero)
+        {
+            throw NativeError.TakeException((int)KairosBootStatus.Internal, rawError);
+        }
+
+        ReleaseUnexpectedError(rawError);
+        return new OperationSafeHandle(rawOperation);
+    }
+
+    private static CommandResult ExtractCommandResult(OperationSafeHandle operation)
+    {
+        var status = NativeMethods.OperationCommandResult(
+            operation,
+            out var rawResult,
+            out var rawError);
+        if (status != (int)KairosBootStatus.Ok)
+        {
+            if (rawResult != IntPtr.Zero)
+            {
+                using (var unexpectedResult = new CommandResultSafeHandle(rawResult))
+                {
+                }
+            }
+
+            throw NativeError.TakeException(status, rawError);
+        }
+
+        if (rawResult == IntPtr.Zero)
+        {
+            throw NativeError.TakeException((int)KairosBootStatus.Internal, rawError);
+        }
+
+        ReleaseUnexpectedError(rawError);
+        using (var result = new CommandResultSafeHandle(rawResult))
+        {
+            return CommandResult.CopyFrom(new NativeCommandResultSource(result));
+        }
+    }
+
+    private static void ReleaseUnexpectedError(IntPtr rawError)
+    {
+        if (rawError != IntPtr.Zero)
+        {
+            using (var unexpectedError = new ErrorSafeHandle(rawError))
+            {
+            }
+        }
+    }
+
+    private static FlashProgress CreateFlashProgress(NativeProgress native)
+    {
+        return new FlashProgress(
+            native.BytesCompleted,
+            native.BytesTotal,
+            Utf8String.FromNative(native.Stage),
+            Utf8String.FromNative(native.DeviceIdentifier));
+    }
+
+    private static CommandProgress CreateCommandProgress(NativeProgress native)
+    {
+        return new CommandProgress(
+            native.BytesCompleted,
+            native.BytesTotal,
+            Utf8String.FromNative(native.Stage),
+            Utf8String.FromNative(native.DeviceIdentifier));
+    }
+
+    private static void ValidateRequiredText(string value, string parameterName)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new ArgumentException("Value must not be empty.", parameterName);
+        }
+
+        if (value.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException("Value must not contain a NUL character.", parameterName);
+        }
+    }
+
+    private static void ValidateSelector(string? selector, string parameterName = "deviceSelector")
+    {
+        if (selector == null)
+        {
+            return;
+        }
+
+        if (selector.Length == 0)
+        {
+            throw new ArgumentException("Selector must be null or non-empty.", parameterName);
+        }
+
+        if (selector.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException(
+                "Selector must not contain a NUL character.",
+                parameterName);
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (handle.IsClosed || handle.IsInvalid)
+        {
+            throw new ObjectDisposedException(nameof(Context));
+        }
+    }
+
+    private sealed class ProgressCallbackRegistration<T> : IDisposable
     {
         private readonly NativeProgressCallback callback;
-        private GCHandle progressHandle;
+        private GCHandle targetHandle;
 
-        internal ProgressCallbackRegistration(IProgress<FlashProgress> progress)
+        internal ProgressCallbackRegistration(
+            IProgress<T> progress,
+            Func<NativeProgress, T> factory)
         {
             callback = ReportProgress;
-            progressHandle = GCHandle.Alloc(progress);
+            targetHandle = GCHandle.Alloc(new ProgressTarget<T>(progress, factory));
             try
             {
                 CallbackPointer = Marshal.GetFunctionPointerForDelegate(callback);
-                UserData = GCHandle.ToIntPtr(progressHandle);
+                UserData = GCHandle.ToIntPtr(targetHandle);
             }
             catch
             {
-                progressHandle.Free();
+                targetHandle.Free();
                 throw;
             }
         }
@@ -357,20 +708,55 @@ public sealed class Context : IDisposable
 
         public void Dispose()
         {
-            if (progressHandle.IsAllocated)
+            if (targetHandle.IsAllocated)
             {
-                progressHandle.Free();
+                targetHandle.Free();
             }
 
             GC.KeepAlive(callback);
         }
+
+        private static int ReportProgress(ref NativeProgress native, IntPtr userData)
+        {
+            try
+            {
+                if (native.StructSize < NativeMethods.ProgressStructSize ||
+                    native.ApiVersion != NativeMethods.ApiVersion ||
+                    userData == IntPtr.Zero)
+                {
+                    return 1;
+                }
+
+                var target = GCHandle.FromIntPtr(userData).Target as ProgressTarget<T>;
+                if (target == null)
+                {
+                    return 1;
+                }
+
+                target.Report(native);
+                return 0;
+            }
+            catch
+            {
+                return 1;
+            }
+        }
     }
 
-    private void ThrowIfDisposed()
+    private sealed class ProgressTarget<T>
     {
-        if (handle.IsClosed || handle.IsInvalid)
+        private readonly IProgress<T> progress;
+        private readonly Func<NativeProgress, T> factory;
+
+        internal ProgressTarget(IProgress<T> progress, Func<NativeProgress, T> factory)
         {
-            throw new ObjectDisposedException(nameof(Context));
+            this.progress = progress;
+            this.factory = factory;
+        }
+
+        internal void Report(NativeProgress native)
+        {
+            progress.Report(factory(native));
         }
     }
 }
