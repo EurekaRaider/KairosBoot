@@ -98,7 +98,7 @@ struct ProtocolError {
     std::string message;
     // Informational responses successfully received before the terminal error.
     // The session's configured informational-response limit bounds this list.
-    std::vector<Response> informational;
+    std::vector<Response> informational{};
     TransportStatus transport_status{TransportStatus::Ok};
     // Certainty reported by the individual transport call that failed.
     TransferCertainty transfer_certainty{TransferCertainty::FullyTransferred};
@@ -109,7 +109,7 @@ struct ProtocolError {
     // Device-to-host payload state. inbound_expected is unset for ordinary
     // command/download operations and set after accepting a DATA response;
     // inbound_transferred counts bytes committed to the caller's sink.
-    std::optional<std::uint64_t> inbound_expected;
+    std::optional<std::uint64_t> inbound_expected{};
     std::uint64_t inbound_transferred{0};
     TransferCertainty inbound_certainty{TransferCertainty::NotTransferred};
     int native_code{0};
@@ -120,7 +120,7 @@ struct CommandResult {
     std::vector<Response> informational;
     ProtocolPhase phase{ProtocolPhase::FinalResponse};
     TransferCertainty outbound_certainty{TransferCertainty::FullyTransferred};
-    std::optional<std::uint64_t> inbound_expected;
+    std::optional<std::uint64_t> inbound_expected{};
     std::uint64_t inbound_transferred{0};
     TransferCertainty inbound_certainty{TransferCertainty::NotTransferred};
 
