@@ -188,8 +188,8 @@ enum class AsioOperationStatus : std::uint8_t {
 struct AsioOperationResult {
     AsioOperationStatus status{AsioOperationStatus::Error};
     std::size_t transferred{0};
-    boost::system::error_code error;
-    std::string detail;
+    boost::system::error_code error{};
+    std::string detail{};
 };
 
 template <typename Initiate>
@@ -1325,8 +1325,8 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
         AsioUdp::resolver* resolver;
         const std::string* host;
         const std::string* service;
-        AsioUdp::resolver::results_type results;
-        boost::system::error_code error;
+        AsioUdp::resolver::results_type results{};
+        boost::system::error_code error{};
         bool allocation_failed{false};
         bool unexpected_failure{false};
     } resolve_context{

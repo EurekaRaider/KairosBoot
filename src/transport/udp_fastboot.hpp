@@ -138,8 +138,8 @@ struct DatagramReceiveResult {
 };
 
 struct UdpCancellationSignal {
-    std::stop_token external;
-    std::stop_token local;
+    std::stop_token external{};
+    std::stop_token local{};
 
     [[nodiscard]] bool stop_requested() const noexcept {
         return external.stop_requested() || local.stop_requested();
