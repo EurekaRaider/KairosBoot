@@ -170,6 +170,26 @@ kairosboot_enable_strict_warnings(kairosboot_internal)
 add_library(kairosboot SHARED src/kairosboot.cpp)
 if(WIN32)
   target_sources(kairosboot PRIVATE abi/kairosboot.def)
+elseif(APPLE)
+  # Hidden visibility does not suppress every weak libc++ RTTI definition on
+  # all macOS architectures. Generate the linker allowlist from the stable ABI
+  # manifest so the Mach-O export table contains only the C API.
+  set_property(
+    DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                              "${CMAKE_CURRENT_SOURCE_DIR}/abi/kairosboot.exports")
+  file(
+    STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/abi/kairosboot.exports"
+    KAIROSBOOT_MACHO_EXPORTS
+    REGEX "^kb_[a-z0-9_]+$")
+  list(TRANSFORM KAIROSBOOT_MACHO_EXPORTS PREPEND "_")
+  list(JOIN KAIROSBOOT_MACHO_EXPORTS "\n" KAIROSBOOT_MACHO_EXPORTS_CONTENT)
+  set(KAIROSBOOT_MACHO_EXPORTS_FILE
+      "${CMAKE_CURRENT_BINARY_DIR}/kairosboot.macos.exports")
+  file(WRITE "${KAIROSBOOT_MACHO_EXPORTS_FILE}"
+       "${KAIROSBOOT_MACHO_EXPORTS_CONTENT}\n")
+  target_link_options(
+    kairosboot PRIVATE
+    "LINKER:-exported_symbols_list,${KAIROSBOOT_MACHO_EXPORTS_FILE}")
 endif()
 add_library(KairosBoot::C ALIAS kairosboot)
 set_target_properties(
