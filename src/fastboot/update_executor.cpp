@@ -2,7 +2,9 @@
 #include "update_executor.hpp"
 
 #include <exception>
+#include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -22,6 +24,7 @@ struct PendingFailure final {
     std::string name;
     std::string message;
     std::optional<UpdateDeviceError> device_error;
+    std::optional<std::string> secondary_observer_error;
 };
 
 class ExecutionState final {
@@ -100,6 +103,8 @@ event(const UpdateExecutionEventKind kind,
         .name = std::move(failure.name),
         .message = std::move(failure.message),
         .device_error = std::move(failure.device_error),
+        .secondary_observer_error =
+            std::move(failure.secondary_observer_error),
         .validated_requirements = state.report.validated_requirements,
         .completed_tasks = state.report.completed_tasks,
         .trace = std::move(state.report.trace),
@@ -107,17 +112,88 @@ event(const UpdateExecutionEventKind kind,
 }
 
 [[nodiscard]] PendingFailure
-cancelled(std::string message,
+timed_out(std::string message,
           const std::optional<std::size_t> requirement_index = std::nullopt,
           const std::optional<std::size_t> task_index = std::nullopt,
           const std::optional<UpdateSourceLocation> location = std::nullopt) {
     return {
-        .kind = UpdateExecutionErrorKind::Cancelled,
+        .kind = UpdateExecutionErrorKind::TimedOut,
         .requirement_index = requirement_index,
         .task_index = task_index,
         .location = location,
         .message = std::move(message),
     };
+}
+
+[[nodiscard]] std::optional<PendingFailure> interruption(
+    const UpdateOperationContext& context, std::string_view phase,
+    const std::optional<std::size_t> requirement_index = std::nullopt,
+    const std::optional<std::size_t> task_index = std::nullopt,
+    const std::optional<UpdateSourceLocation> location = std::nullopt) {
+    if (context.cancellation.stop_requested()) {
+        return PendingFailure{
+            .kind = UpdateExecutionErrorKind::Cancelled,
+            .requirement_index = requirement_index,
+            .task_index = task_index,
+            .location = location,
+            .message = "update execution was cancelled " + std::string(phase),
+        };
+    }
+    if (context.deadline &&
+        std::chrono::steady_clock::now() >= *context.deadline) {
+        return timed_out("update execution deadline expired " + std::string(phase),
+                         requirement_index, task_index, location);
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] UpdateExecutionErrorKind
+device_failure_kind(const UpdateDeviceErrorKind kind,
+                    const UpdateExecutionErrorKind fallback) noexcept {
+    switch (kind) {
+    case UpdateDeviceErrorKind::Cancelled:
+        return UpdateExecutionErrorKind::Cancelled;
+    case UpdateDeviceErrorKind::TimedOut:
+        return UpdateExecutionErrorKind::TimedOut;
+    case UpdateDeviceErrorKind::Failed:
+        return fallback;
+    default:
+        return fallback;
+    }
+}
+
+[[nodiscard]] std::expected<std::size_t, PendingFailure>
+maximum_trace_events(const std::size_t requirements, const std::size_t tasks,
+                     const std::size_t maximum) {
+    constexpr std::size_t kFixedEvents = 4U;
+    // A requirement may add one product query, its own query, and its terminal
+    // satisfied/skipped/failed event. Cache hits only reduce this bound.
+    constexpr std::size_t kEventsPerRequirement = 5U;
+    constexpr std::size_t kEventsPerTask = 2U;
+    if (requirements >
+        (std::numeric_limits<std::size_t>::max() - kFixedEvents) /
+            kEventsPerRequirement) {
+        return std::unexpected(PendingFailure{
+            .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+            .message = "prepared update trace size overflows size_t",
+        });
+    }
+    auto total = kFixedEvents + requirements * kEventsPerRequirement;
+    if (tasks > (std::numeric_limits<std::size_t>::max() - total) /
+                    kEventsPerTask) {
+        return std::unexpected(PendingFailure{
+            .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+            .message = "prepared update trace size overflows size_t",
+        });
+    }
+    total += tasks * kEventsPerTask;
+    if (total > maximum) {
+        return std::unexpected(PendingFailure{
+            .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+            .message = "prepared update trace exceeds vector capacity",
+        });
+    }
+    return total;
 }
 
 [[nodiscard]] bool option_matches(const std::string_view option,
@@ -148,7 +224,7 @@ using ArtifactMap = std::map<std::string, const PreparedUpdateArtifact*, std::le
 
 [[nodiscard]] std::expected<ArtifactMap, PendingFailure>
 validate_prepared_mapping(const PreparedUpdatePackage& prepared,
-                          const std::stop_token cancellation) {
+                          const UpdateOperationContext& context) {
     if (prepared.requires_device_validation != !prepared.plan.requirements.empty()) {
         return std::unexpected(PendingFailure{
             .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
@@ -157,9 +233,9 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
     }
     ArtifactMap artifacts;
     for (const auto& artifact : prepared.artifacts) {
-        if (cancellation.stop_requested()) {
-            return std::unexpected(
-                cancelled("update execution was cancelled while validating artifacts"));
+        if (auto stopped = interruption(
+                context, "while validating prepared artifacts")) {
+            return std::unexpected(std::move(*stopped));
         }
         if (artifact.name.empty() || !artifact.resolved || !artifact.resolved->source ||
             artifact.resolved->logical_name != artifact.name ||
@@ -181,12 +257,11 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
 
     std::set<std::string, std::less<>> referenced;
     for (std::size_t index = 0; index < prepared.plan.tasks.size(); ++index) {
-        if (cancellation.stop_requested()) {
-            return std::unexpected(
-                cancelled("update execution was cancelled while validating tasks",
-                          std::nullopt, index, prepared.plan.tasks[index].location));
-        }
         const auto& task = prepared.plan.tasks[index];
+        if (auto stopped = interruption(context, "while validating prepared tasks",
+                                        std::nullopt, index, task.location)) {
+            return std::unexpected(std::move(*stopped));
+        }
         switch (task.kind) {
         case UpdateTaskKind::Flash:
             if (task.partition.empty() || task.artifact.empty() ||
@@ -197,6 +272,19 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
                     .location = task.location,
                     .name = task.artifact,
                     .message = "flash task does not map to one prepared artifact",
+                });
+            }
+            switch (task.slot) {
+            case PlannedSlot::Default:
+            case PlannedSlot::Other:
+                break;
+            default:
+                return std::unexpected(PendingFailure{
+                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                    .task_index = index,
+                    .location = task.location,
+                    .name = task.partition,
+                    .message = "flash task contains an unknown slot mode",
                 });
             }
             referenced.insert(task.artifact);
@@ -212,6 +300,21 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
             }
             break;
         case UpdateTaskKind::Reboot:
+            switch (task.reboot_target) {
+            case PlannedRebootTarget::System:
+            case PlannedRebootTarget::Bootloader:
+            case PlannedRebootTarget::Recovery:
+            case PlannedRebootTarget::Fastboot:
+                break;
+            default:
+                return std::unexpected(PendingFailure{
+                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                    .task_index = index,
+                    .location = task.location,
+                    .message = "reboot task contains an unknown target",
+                });
+            }
+            break;
         case UpdateTaskKind::UpdateSuper:
             break;
         default:
@@ -226,6 +329,10 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
 
     for (const auto& [name, unused] : artifacts) {
         (void)unused;
+        if (auto stopped = interruption(
+                context, "while validating artifact references")) {
+            return std::unexpected(std::move(*stopped));
+        }
         if (!referenced.contains(name)) {
             return std::unexpected(PendingFailure{
                 .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
@@ -243,10 +350,10 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
               const std::string_view name,
               const std::optional<std::size_t> requirement_index,
               const std::optional<UpdateSourceLocation> location,
-              const std::stop_token cancellation) {
-    if (cancellation.stop_requested()) {
-        return std::unexpected(cancelled("update execution was cancelled before getvar",
-                                         requirement_index, std::nullopt, location));
+              const UpdateOperationContext& context) {
+    if (auto stopped = interruption(context, "before getvar", requirement_index,
+                                    std::nullopt, location)) {
+        return std::unexpected(std::move(*stopped));
     }
     if (const auto found = cache.find(name); found != cache.end()) {
         if (auto failure =
@@ -265,11 +372,15 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
         failure) {
         return std::unexpected(std::move(*failure));
     }
+    if (auto stopped = interruption(context, "after GetVarQuery",
+                                    requirement_index, std::nullopt, location)) {
+        return std::unexpected(std::move(*stopped));
+    }
 
     std::expected<std::string, UpdateDeviceError> queried =
         std::unexpected(UpdateDeviceError{});
     try {
-        queried = device.getvar(name, cancellation);
+        queried = device.getvar(name, context);
     } catch (const std::exception& error) {
         return std::unexpected(PendingFailure{
             .kind = UpdateExecutionErrorKind::ActorException,
@@ -289,9 +400,8 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
         });
     }
     if (!queried) {
-        const auto kind = queried.error().kind == UpdateDeviceErrorKind::Cancelled
-                              ? UpdateExecutionErrorKind::Cancelled
-                              : UpdateExecutionErrorKind::GetVarFailed;
+        const auto kind = device_failure_kind(queried.error().kind,
+                                              UpdateExecutionErrorKind::GetVarFailed);
         return std::unexpected(PendingFailure{
             .kind = kind,
             .requirement_index = requirement_index,
@@ -302,9 +412,9 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
             .device_error = std::move(queried.error()),
         });
     }
-    if (cancellation.stop_requested()) {
-        return std::unexpected(cancelled("update execution was cancelled during getvar",
-                                         requirement_index, std::nullopt, location));
+    if (auto stopped = interruption(context, "during getvar", requirement_index,
+                                    std::nullopt, location)) {
+        return std::unexpected(std::move(*stopped));
     }
 
     auto [stored, inserted] = cache.emplace(std::string(name), std::move(*queried));
@@ -341,13 +451,14 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
 [[nodiscard]] std::expected<void, PendingFailure>
 validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& device,
                       const std::set<std::string, std::less<>>& known_partitions,
-                      ExecutionState& state, const std::stop_token cancellation) {
+                      ExecutionState& state,
+                      const UpdateOperationContext& context) {
     std::map<std::string, std::string, std::less<>> cache;
     std::string current_product;
     if (!prepared.plan.requirements.empty()) {
         const auto& first = prepared.plan.requirements.front();
         auto product = getvar_cached(device, state, cache, "product", std::size_t{0},
-                                     first.location, cancellation);
+                                     first.location, context);
         if (!product) {
             return std::unexpected(std::move(product.error()));
         }
@@ -355,10 +466,10 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
     }
 
     for (std::size_t index = 0; index < prepared.plan.requirements.size(); ++index) {
-        if (cancellation.stop_requested()) {
-            return std::unexpected(cancelled(
-                "update execution was cancelled during requirement validation", index,
-                std::nullopt, prepared.plan.requirements[index].location));
+        if (auto stopped = interruption(
+                context, "during requirement validation", index, std::nullopt,
+                prepared.plan.requirements[index].location)) {
+            return std::unexpected(std::move(*stopped));
         }
         const auto& requirement = prepared.plan.requirements[index];
         if (requirement.variable.empty() || requirement.options.empty() ||
@@ -383,7 +494,7 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
             }
             const auto variable = "has-slot:" + partition;
             auto value = getvar_cached(device, state, cache, variable, index,
-                                       requirement.location, cancellation);
+                                       requirement.location, context);
             if (!value) {
                 return std::unexpected(std::move(value.error()));
             }
@@ -425,7 +536,7 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
         }
 
         auto value = getvar_cached(device, state, cache, requirement.variable, index,
-                                   requirement.location, cancellation);
+                                   requirement.location, context);
         if (!value) {
             return std::unexpected(std::move(value.error()));
         }
@@ -474,24 +585,93 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
     return {};
 }
 
-[[nodiscard]] std::expected<void, UpdateDeviceError>
-invoke_task(IUpdateDevice& device, const PlannedUpdateTask& task,
-            const PreparedUpdateArtifact* artifact,
-            const std::stop_token cancellation) {
-    switch (task.kind) {
-    case UpdateTaskKind::Flash:
-        return device.flash(task, *artifact, cancellation);
-    case UpdateTaskKind::Erase:
-        return device.erase(task, cancellation);
-    case UpdateTaskKind::Reboot:
-        return device.reboot(task, cancellation);
-    case UpdateTaskKind::UpdateSuper:
-        return device.update_super(task, cancellation);
-    default:
-        return std::unexpected(UpdateDeviceError{
-            .message = "unknown prepared update task kind",
-        });
+[[nodiscard]] UpdateDeviceTaskInput task_input(
+    const PlannedUpdateTask& task, const ArtifactMap& artifacts,
+    const std::optional<UpdateSuperArtifactInput>& super_artifact) {
+    UpdateDeviceTaskInput input{
+        .task = task,
+    };
+    if (task.kind == UpdateTaskKind::Flash) {
+        const auto* artifact = artifacts.at(task.artifact);
+        input.flash_artifact = UpdateFlashArtifactInput{
+            .logical_name = artifact->name,
+            .source = artifact->artifact.transfer_source(),
+            .metadata = artifact->artifact.metadata(),
+            .sha256 = artifact->resolved->sha256,
+        };
+    } else if (task.kind == UpdateTaskKind::UpdateSuper && super_artifact) {
+        input.super_artifact = *super_artifact;
     }
+    return input;
+}
+
+using PreparedDeviceTasks = std::vector<std::unique_ptr<IPreparedDeviceTask>>;
+
+[[nodiscard]] std::expected<PreparedDeviceTasks, PendingFailure>
+prepare_all_tasks(const PreparedUpdatePackage& prepared, IUpdateDevice& device,
+                  const ArtifactMap& artifacts,
+                  const std::optional<UpdateSuperArtifactInput>& super_artifact,
+                  const UpdateOperationContext& context) {
+    PreparedDeviceTasks result;
+    result.reserve(prepared.plan.tasks.size());
+    for (std::size_t index = 0; index < prepared.plan.tasks.size(); ++index) {
+        const auto& task = prepared.plan.tasks[index];
+        if (auto stopped = interruption(context, "before task preparation",
+                                        std::nullopt, index, task.location)) {
+            return std::unexpected(std::move(*stopped));
+        }
+
+        std::expected<std::unique_ptr<IPreparedDeviceTask>, UpdateDeviceError>
+            prepared_task = std::unexpected(UpdateDeviceError{});
+        try {
+            prepared_task = device.prepare_task(
+                task_input(task, artifacts, super_artifact), context);
+        } catch (const std::exception& error) {
+            return std::unexpected(PendingFailure{
+                .kind = UpdateExecutionErrorKind::ActorException,
+                .task_index = index,
+                .location = task.location,
+                .message = "update device task preparation threw an exception: " +
+                           std::string(error.what()),
+            });
+        } catch (...) {
+            return std::unexpected(PendingFailure{
+                .kind = UpdateExecutionErrorKind::ActorException,
+                .task_index = index,
+                .location = task.location,
+                .message =
+                    "update device task preparation threw a non-standard exception",
+            });
+        }
+        if (!prepared_task) {
+            const auto kind = device_failure_kind(
+                prepared_task.error().kind,
+                UpdateExecutionErrorKind::DeviceTaskFailed);
+            auto message = "unable to prepare update device task: " +
+                           prepared_task.error().message;
+            return std::unexpected(PendingFailure{
+                .kind = kind,
+                .task_index = index,
+                .location = task.location,
+                .message = std::move(message),
+                .device_error = std::move(prepared_task.error()),
+            });
+        }
+        if (!*prepared_task) {
+            return std::unexpected(PendingFailure{
+                .kind = UpdateExecutionErrorKind::ActorException,
+                .task_index = index,
+                .location = task.location,
+                .message = "update device returned an empty prepared task token",
+            });
+        }
+        if (auto stopped = interruption(context, "during task preparation",
+                                        std::nullopt, index, task.location)) {
+            return std::unexpected(std::move(*stopped));
+        }
+        result.push_back(std::move(*prepared_task));
+    }
+    return result;
 }
 
 }  // namespace
@@ -501,13 +681,21 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
                         const UpdateExecutorOptions& options,
                         const std::stop_token cancellation) {
     ExecutionState state(options.observer);
+    const UpdateOperationContext context{
+        .cancellation = cancellation,
+        .deadline = options.deadline,
+    };
     try {
-        const auto maximum_events = 4U + (prepared.plan.requirements.size() * 4U) +
-                                    (prepared.plan.tasks.size() * 2U);
-        state.report.trace.reserve(maximum_events);
-        if (cancellation.stop_requested()) {
-            return std::unexpected(finish_error(
-                state, cancelled("update execution was cancelled before validation")));
+        auto maximum_events = maximum_trace_events(
+            prepared.plan.requirements.size(), prepared.plan.tasks.size(),
+            state.report.trace.max_size());
+        if (!maximum_events) {
+            return std::unexpected(
+                finish_error(state, std::move(maximum_events.error())));
+        }
+        state.report.trace.reserve(*maximum_events);
+        if (auto stopped = interruption(context, "before validation")) {
+            return std::unexpected(finish_error(state, std::move(*stopped)));
         }
         if (auto failure =
                 emit_checked(state, event(UpdateExecutionEventKind::ValidationStarted));
@@ -515,9 +703,20 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
             return std::unexpected(finish_error(state, std::move(*failure)));
         }
 
-        auto artifacts = validate_prepared_mapping(prepared, cancellation);
+        auto artifacts = validate_prepared_mapping(prepared, context);
         if (!artifacts) {
             return std::unexpected(finish_error(state, std::move(artifacts.error())));
+        }
+        if (options.super_artifact &&
+            (options.super_artifact->logical_name.empty() ||
+             !options.super_artifact->source)) {
+            return std::unexpected(finish_error(
+                state,
+                PendingFailure{
+                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                    .name = options.super_artifact->logical_name,
+                    .message = "executor super artifact binding is invalid",
+                }));
         }
         if (auto failure = emit_checked(
                 state, event(UpdateExecutionEventKind::PreparedPackageValidated));
@@ -527,6 +726,10 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
 
         std::set<std::string, std::less<>> known_partitions;
         for (const auto& partition : options.known_partitions) {
+            if (auto stopped = interruption(
+                    context, "while validating the host partition table")) {
+                return std::unexpected(finish_error(state, std::move(*stopped)));
+            }
             if (partition.empty() || !known_partitions.insert(partition).second) {
                 return std::unexpected(finish_error(
                     state,
@@ -540,10 +743,19 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
         }
 
         auto requirements = validate_requirements(prepared, device, known_partitions,
-                                                  state, cancellation);
+                                                  state, context);
         if (!requirements) {
             return std::unexpected(
                 finish_error(state, std::move(requirements.error())));
+        }
+
+        // Phase one: bind and validate every exact device task. No token may
+        // execute until every later task has also prepared successfully.
+        auto prepared_tasks = prepare_all_tasks(prepared, device, *artifacts,
+                                                options.super_artifact, context);
+        if (!prepared_tasks) {
+            return std::unexpected(
+                finish_error(state, std::move(prepared_tasks.error())));
         }
         if (auto failure = emit_checked(
                 state, event(UpdateExecutionEventKind::ValidationCompleted));
@@ -553,10 +765,9 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
 
         for (std::size_t index = 0; index < prepared.plan.tasks.size(); ++index) {
             const auto& task = prepared.plan.tasks[index];
-            if (cancellation.stop_requested()) {
-                return std::unexpected(finish_error(
-                    state, cancelled("update execution was cancelled before a task",
-                                     std::nullopt, index, task.location)));
+            if (auto stopped = interruption(context, "before a task",
+                                            std::nullopt, index, task.location)) {
+                return std::unexpected(finish_error(state, std::move(*stopped)));
             }
             if (auto failure = emit_checked(
                     state, event(UpdateExecutionEventKind::TaskStarted, std::nullopt,
@@ -564,15 +775,18 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
                 failure) {
                 return std::unexpected(finish_error(state, std::move(*failure)));
             }
-
-            const PreparedUpdateArtifact* artifact = nullptr;
-            if (task.kind == UpdateTaskKind::Flash) {
-                artifact = artifacts->at(task.artifact);
+            // Observers run arbitrary user code. Cancellation or expiry raised
+            // while TaskStarted was observed must stop before the token can
+            // issue a destructive command.
+            if (auto stopped = interruption(context, "after TaskStarted",
+                                            std::nullopt, index, task.location)) {
+                return std::unexpected(finish_error(state, std::move(*stopped)));
             }
+
             std::expected<void, UpdateDeviceError> invoked =
                 std::unexpected(UpdateDeviceError{});
             try {
-                invoked = invoke_task(device, task, artifact, cancellation);
+                invoked = (*prepared_tasks)[index]->execute(context);
             } catch (const std::exception& error) {
                 return std::unexpected(finish_error(
                     state, PendingFailure{
@@ -593,30 +807,33 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
                     }));
             }
             if (!invoked) {
-                const auto kind =
-                    invoked.error().kind == UpdateDeviceErrorKind::Cancelled
-                        ? UpdateExecutionErrorKind::Cancelled
-                        : UpdateExecutionErrorKind::DeviceTaskFailed;
+                auto device_error = std::move(invoked.error());
+                const auto kind = device_failure_kind(
+                    device_error.kind, UpdateExecutionErrorKind::DeviceTaskFailed);
                 const auto message =
-                    "update device task failed: " + invoked.error().message;
+                    "update device task failed: " + device_error.message;
+                PendingFailure primary{
+                    .kind = kind,
+                    .task_index = index,
+                    .location = task.location,
+                    .message = message,
+                    .device_error = std::move(device_error),
+                };
                 if (auto observer =
                         emit_checked(state, event(UpdateExecutionEventKind::TaskFailed,
                                                   std::nullopt, index, task.location,
                                                   task_event_name(task), {}, message));
                     observer) {
-                    return std::unexpected(finish_error(state, std::move(*observer)));
+                    primary.secondary_observer_error = std::move(observer->message);
                 }
-                return std::unexpected(
-                    finish_error(state, PendingFailure{
-                                            .kind = kind,
-                                            .task_index = index,
-                                            .location = task.location,
-                                            .message = message,
-                                            .device_error = std::move(invoked.error()),
-                                        }));
+                return std::unexpected(finish_error(state, std::move(primary)));
             }
 
             ++state.report.completed_tasks;
+            if (auto stopped = interruption(context, "during a task", std::nullopt,
+                                            index, task.location)) {
+                return std::unexpected(finish_error(state, std::move(*stopped)));
+            }
             if (auto failure = emit_checked(
                     state, event(UpdateExecutionEventKind::TaskCompleted, std::nullopt,
                                  index, task.location, task_event_name(task)));
@@ -625,6 +842,9 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
             }
         }
 
+        if (auto stopped = interruption(context, "before completion")) {
+            return std::unexpected(finish_error(state, std::move(*stopped)));
+        }
         if (auto failure = emit_checked(
                 state, event(UpdateExecutionEventKind::ExecutionCompleted));
             failure) {
