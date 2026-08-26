@@ -7,6 +7,7 @@
 #include <expected>
 #include <memory>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@ enum class SparseFlashPlanErrorKind : std::uint8_t {
     Unsupported,
     Source,
     ArithmeticOverflow,
+    Cancelled,
 };
 
 struct SparseFlashPlanError final {
@@ -46,7 +48,8 @@ public:
     [[nodiscard]] static std::expected<SparseFlashPlan, SparseFlashPlanError>
     create(const FlashArtifact& artifact,
            std::uint64_t target_max_download_size,
-           std::uint64_t host_resparse_limit = kDefaultResparseLimitBytes);
+           std::uint64_t host_resparse_limit = kDefaultResparseLimitBytes,
+           std::stop_token stop_token = {});
 
     [[nodiscard]] std::span<const SparseFlashPart> parts() const noexcept;
     [[nodiscard]] bool reparsed() const noexcept;

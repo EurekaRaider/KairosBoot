@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/slot_planner.hpp"
+#include "src/image/flash_artifact.hpp"
+#include "src/image/sparse_flash_plan.hpp"
+#include "src/transport/image_transfer_source.hpp"
 #include "tests/protocol/scripted_transport.hpp"
 
 #include <algorithm>
@@ -33,6 +36,10 @@ using kairosboot::fastboot::SlotSelectionKind;
 using kairosboot::fastboot::SlotTopologySource;
 using kairosboot::fastboot::parse_slot_selection;
 using kairosboot::fastboot::validate_download_size;
+using kairosboot::image::FlashArtifact;
+using kairosboot::image::IImageSource;
+using kairosboot::image::ImageSourceError;
+using kairosboot::image::SparseFlashPlan;
 using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::ITransferSource;
 using kairosboot::protocol::ITransportSession;
@@ -46,6 +53,7 @@ using kairosboot::protocol::TransferResult;
 using kairosboot::protocol::TransportStatus;
 using kairosboot::protocol::test::ScriptedTransport;
 using kairosboot::protocol::test::to_bytes;
+using kairosboot::transport::ImageTransferSource;
 
 class CheckFailure final : public std::runtime_error {
 public:
@@ -131,6 +139,49 @@ public:
 private:
     std::uint64_t size_{0};
 };
+
+class MemoryImageSource final : public IImageSource {
+public:
+    explicit MemoryImageSource(std::vector<std::byte> bytes)
+        : bytes_(std::move(bytes)) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return bytes_.size();
+    }
+
+    [[nodiscard]] std::expected<std::size_t, ImageSourceError> read_at(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) const override {
+        if (offset >= bytes_.size() || destination.empty()) {
+            return 0;
+        }
+        const auto available = bytes_.size() - static_cast<std::size_t>(offset);
+        const auto amount = std::min(available, destination.size());
+        std::ranges::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+            amount,
+            destination.begin());
+        return amount;
+    }
+
+private:
+    std::vector<std::byte> bytes_;
+};
+
+[[nodiscard]] std::vector<std::byte> read_image(
+    const std::shared_ptr<const IImageSource>& source) {
+    CHECK(source->size() <= std::numeric_limits<std::size_t>::max());
+    std::vector<std::byte> result(static_cast<std::size_t>(source->size()));
+    std::size_t completed = 0;
+    while (completed < result.size()) {
+        auto read = source->read_at(
+            completed, std::span(result).subspan(completed));
+        CHECK(read.has_value());
+        CHECK(*read != 0);
+        completed += *read;
+    }
+    return result;
+}
 
 class NonStreamingTransport final : public ITransportSession {
 public:
@@ -1373,6 +1424,49 @@ void current_slot_must_belong_to_discovered_topology() {
     CHECK(session.state() == SessionState::Ready);
 }
 
+void sparse_flash_parts_use_independent_canonical_downloads() {
+    std::vector<std::byte> raw(2 * 4096);
+    for (std::size_t index = 0; index < raw.size(); ++index) {
+        raw[index] = std::byte{static_cast<unsigned char>(index / 4096 + 1)};
+    }
+    auto artifact = FlashArtifact::inspect(
+        std::make_shared<MemoryImageSource>(std::move(raw)));
+    CHECK(artifact.has_value());
+    auto plan = SparseFlashPlan::create(*artifact, 4200);
+    CHECK(plan.has_value());
+    CHECK(plan->parts().size() == 2);
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    std::vector<std::vector<std::byte>> encoded_parts;
+    encoded_parts.reserve(plan->parts().size());
+    for (const auto& part : plan->parts()) {
+        CHECK(part.source->size() == 4148);
+        encoded_parts.push_back(read_image(part.source));
+        script->expect_write("download:00001034");
+        script->respond("DATA00001034");
+        script->expect_source_write(
+            encoded_parts.back(),
+            {{.offset = 0,
+              .size = encoded_parts.back().size(),
+              .progress_watermark = encoded_parts.back().size()}});
+        script->respond("OKAYstaged");
+        script->expect_write("flash:system");
+        script->respond("OKAYflashed");
+    }
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    for (const auto& part : plan->parts()) {
+        auto source = ImageTransferSource::create(part.source);
+        CHECK(source.has_value());
+        auto flashed = service.download_and_flash_source("system", *source);
+        CHECK(flashed.has_value());
+    }
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
 }  // namespace
 
 int main() {
@@ -1408,6 +1502,8 @@ int main() {
         {"malformed slot metadata", malformed_slot_metadata_is_never_guessed},
         {"ambiguous other slot", other_slot_rejects_ambiguous_topologies},
         {"current slot topology membership", current_slot_must_belong_to_discovered_topology},
+        {"sparse multi-part flash trace",
+         sparse_flash_parts_use_independent_canonical_downloads},
     };
 
     std::size_t failures = 0;

@@ -4,6 +4,7 @@
 #include "src/api/device_selection.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/image/file_source.hpp"
+#include "src/image/sparse_flash_plan.hpp"
 #include "src/transport/libusb_runtime.hpp"
 
 #include <cstdint>
@@ -195,6 +196,9 @@ OperationErrorPayload normalize_public_error(
         case image::SparseErrorKind::Unsupported:
             status = KB_E_NOT_SUPPORTED;
             break;
+        case image::SparseErrorKind::Cancelled:
+            status = KB_E_CANCELLED;
+            break;
         case image::SparseErrorKind::Malformed:
         case image::SparseErrorKind::Truncated:
         case image::SparseErrorKind::Source:
@@ -205,6 +209,34 @@ OperationErrorPayload normalize_public_error(
         status,
         error.message + " (input offset " +
             std::to_string(error.input_offset) + ")",
+        0,
+        KB_TRANSFER_NOT_SENT,
+        device_identifier);
+}
+
+OperationErrorPayload normalize_public_error(
+    const image::SparseFlashPlanError& error,
+    const std::string_view device_identifier) {
+    kb_status_t status = KB_E_IO;
+    switch (error.kind) {
+        case image::SparseFlashPlanErrorKind::InvalidArgument:
+            status = KB_E_INVALID_ARGUMENT;
+            break;
+        case image::SparseFlashPlanErrorKind::Unsupported:
+            status = KB_E_NOT_SUPPORTED;
+            break;
+        case image::SparseFlashPlanErrorKind::Source:
+        case image::SparseFlashPlanErrorKind::ArithmeticOverflow:
+            status = KB_E_IO;
+            break;
+        case image::SparseFlashPlanErrorKind::Cancelled:
+            status = KB_E_CANCELLED;
+            break;
+    }
+    return make_error(
+        status,
+        error.message + " (output offset " +
+            std::to_string(error.output_offset) + ")",
         0,
         KB_TRANSFER_NOT_SENT,
         device_identifier);
@@ -230,6 +262,33 @@ OperationErrorPayload normalize_public_error(
         static_cast<std::int32_t>(error.native_code),
         transfer_state(error.outbound_certainty),
         device_identifier);
+}
+
+void accumulate_flash_transfer_state(
+    OperationErrorPayload& payload,
+    const fastboot::PrimitiveOperation failed_operation,
+    const std::uint64_t completed_before_part,
+    const std::uint64_t current_part_size,
+    const std::uint64_t total_size) noexcept {
+    if (payload.transfer_state == KB_TRANSFER_PARTIAL_OR_UNKNOWN ||
+        completed_before_part > total_size ||
+        current_part_size > total_size - completed_before_part) {
+        payload.transfer_state = KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+        return;
+    }
+
+    std::uint64_t known_completed = completed_before_part;
+    if (failed_operation == fastboot::PrimitiveOperation::Flash ||
+        payload.transfer_state == KB_TRANSFER_FULLY_TRANSFERRED) {
+        known_completed += current_part_size;
+    }
+    if (known_completed == 0) {
+        payload.transfer_state = KB_TRANSFER_NOT_SENT;
+    } else if (known_completed == total_size) {
+        payload.transfer_state = KB_TRANSFER_FULLY_TRANSFERRED;
+    } else {
+        payload.transfer_state = KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+    }
 }
 
 }  // namespace kairosboot::api

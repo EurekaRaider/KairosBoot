@@ -3,6 +3,7 @@
 #include "src/api/error_mapping.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/image/file_source.hpp"
+#include "src/image/sparse_flash_plan.hpp"
 #include "src/transport/libusb_runtime.hpp"
 
 #include <array>
@@ -19,14 +20,18 @@ namespace {
 
 using kairosboot::api::DeviceSelectionError;
 using kairosboot::api::OperationErrorPayload;
+using kairosboot::api::accumulate_flash_transfer_state;
 using kairosboot::api::normalize_public_error;
 using kairosboot::fastboot::PrimitiveError;
 using kairosboot::fastboot::PrimitiveErrorCode;
+using kairosboot::fastboot::PrimitiveOperation;
 using kairosboot::image::FileSourceError;
 using kairosboot::image::FileSourceErrorKind;
 using kairosboot::image::ImageSourceError;
 using kairosboot::image::SparseError;
 using kairosboot::image::SparseErrorKind;
+using kairosboot::image::SparseFlashPlanError;
+using kairosboot::image::SparseFlashPlanErrorKind;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::transport::LibusbRuntimeError;
 using kairosboot::transport::LibusbRuntimeErrorKind;
@@ -113,6 +118,7 @@ void sparse_kinds_map_before_transfer_and_retain_offset() {
         Case{SparseErrorKind::Unsupported, KB_E_NOT_SUPPORTED},
         Case{SparseErrorKind::Source, KB_E_IO},
         Case{SparseErrorKind::InvalidArgument, KB_E_INVALID_ARGUMENT},
+        Case{SparseErrorKind::Cancelled, KB_E_CANCELLED},
     };
 
     for (const auto& test : cases) {
@@ -125,6 +131,35 @@ void sparse_kinds_map_before_transfer_and_retain_offset() {
             KB_TRANSFER_NOT_SENT,
             "SERIAL-S");
         CHECK(result.message == "invalid sparse image (input offset 37)");
+    }
+}
+
+void sparse_plan_kinds_map_before_transfer_and_retain_offset() {
+    struct Case final {
+        SparseFlashPlanErrorKind kind;
+        kb_status_t status;
+    };
+    constexpr std::array cases{
+        Case{SparseFlashPlanErrorKind::InvalidArgument,
+             KB_E_INVALID_ARGUMENT},
+        Case{SparseFlashPlanErrorKind::Unsupported, KB_E_NOT_SUPPORTED},
+        Case{SparseFlashPlanErrorKind::Source, KB_E_IO},
+        Case{SparseFlashPlanErrorKind::ArithmeticOverflow, KB_E_IO},
+        Case{SparseFlashPlanErrorKind::Cancelled, KB_E_CANCELLED},
+    };
+
+    for (const auto& test : cases) {
+        const auto result = normalize_public_error(
+            SparseFlashPlanError{test.kind, 8192, "unable to split image"},
+            "SERIAL-SP");
+        check_common(
+            result,
+            test.status,
+            0,
+            KB_TRANSFER_NOT_SENT,
+            "SERIAL-SP");
+        CHECK(result.message ==
+              "unable to split image (output offset 8192)");
     }
 }
 
@@ -235,6 +270,40 @@ void primitive_outbound_certainty_maps_to_public_three_state() {
     }
 }
 
+void multipart_flash_certainty_includes_downloaded_current_part() {
+    const auto accumulated = [](
+                                 const kb_transfer_state_t initial,
+                                 const PrimitiveOperation failed_operation,
+                                 const std::uint64_t completed,
+                                 const std::uint64_t current,
+                                 const std::uint64_t total) {
+        OperationErrorPayload payload{
+            KB_E_IO, "failed", 0, initial, "SERIAL-M"};
+        accumulate_flash_transfer_state(
+            payload, failed_operation, completed, current, total);
+        return payload.transfer_state;
+    };
+
+    CHECK(accumulated(KB_TRANSFER_NOT_SENT, PrimitiveOperation::Download,
+                      0, 40, 100) == KB_TRANSFER_NOT_SENT);
+    CHECK(accumulated(KB_TRANSFER_NOT_SENT, PrimitiveOperation::Download,
+                      40, 30, 100) == KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+    CHECK(accumulated(KB_TRANSFER_NOT_SENT, PrimitiveOperation::Flash,
+                      0, 100, 100) == KB_TRANSFER_FULLY_TRANSFERRED);
+    CHECK(accumulated(KB_TRANSFER_NOT_SENT, PrimitiveOperation::Flash,
+                      40, 60, 100) == KB_TRANSFER_FULLY_TRANSFERRED);
+    CHECK(accumulated(KB_TRANSFER_NOT_SENT, PrimitiveOperation::Flash,
+                      40, 30, 100) == KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+    CHECK(accumulated(KB_TRANSFER_FULLY_TRANSFERRED,
+                      PrimitiveOperation::Download, 0, 100, 100) ==
+          KB_TRANSFER_FULLY_TRANSFERRED);
+    CHECK(accumulated(KB_TRANSFER_PARTIAL_OR_UNKNOWN,
+                      PrimitiveOperation::Download, 0, 100, 100) ==
+          KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+    CHECK(accumulated(KB_TRANSFER_NOT_SENT, PrimitiveOperation::Flash,
+                      90, 20, 100) == KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+}
+
 void device_fail_message_retains_target_payload() {
     PrimitiveError error{};
     error.code = PrimitiveErrorCode::DeviceFail;
@@ -264,6 +333,8 @@ int main() {
          file_source_kinds_map_before_transfer_and_retain_native_code},
         {"sparse source normalization",
          sparse_kinds_map_before_transfer_and_retain_offset},
+        {"sparse plan normalization",
+         sparse_plan_kinds_map_before_transfer_and_retain_offset},
         {"libusb status normalization",
          libusb_kinds_have_stable_status_and_retain_native_code},
         {"libusb message normalization",
@@ -272,6 +343,8 @@ int main() {
          primitive_kinds_have_stable_public_status},
         {"primitive certainty normalization",
          primitive_outbound_certainty_maps_to_public_three_state},
+        {"multipart flash certainty",
+         multipart_flash_certainty_includes_downloaded_current_part},
         {"primitive device FAIL message",
          device_fail_message_retains_target_payload},
     };
