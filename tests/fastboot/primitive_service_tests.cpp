@@ -1252,6 +1252,7 @@ void invalid_inputs_never_touch_the_wire() {
         static_cast<SnapshotUpdateCommand>(0xFF)));
     CHECK(!service.create_logical_partition("", 0));
     CHECK(!service.delete_logical_partition("system:other"));
+    CHECK(!service.delete_logical_partition("system other"));
     CHECK(!service.resize_logical_partition(
         std::string_view{"bad\nname", 8}, 1));
     CHECK(!service.create_logical_partition(std::string(4096, 'c'), 0));

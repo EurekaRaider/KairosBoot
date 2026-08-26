@@ -36,6 +36,16 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool is_partition_name_character(
+    const unsigned char character) noexcept {
+    const auto ascii_alphanumeric =
+        (character >= 'a' && character <= 'z') ||
+        (character >= 'A' && character <= 'Z') ||
+        (character >= '0' && character <= '9');
+    return ascii_alphanumeric || character == '_' || character == '-' ||
+        character == '.';
+}
+
 [[nodiscard]] std::expected<void, PrimitiveError> validate_download_source(
     const std::shared_ptr<protocol::ITransferSource>& source) {
     if (source == nullptr) {
@@ -129,14 +139,7 @@ namespace {
         partition.size() > protocol::kDefaultMaxCommandBytes - 16U) {
         return false;
     }
-    return std::ranges::all_of(partition, [](const unsigned char character) {
-        const auto ascii_alphanumeric =
-            (character >= 'a' && character <= 'z') ||
-            (character >= 'A' && character <= 'Z') ||
-            (character >= '0' && character <= '9');
-        return ascii_alphanumeric || character == '_' || character == '-' ||
-            character == '.';
-    });
+    return std::ranges::all_of(partition, is_partition_name_character);
 }
 
 [[nodiscard]] bool append_fetch_hex(
@@ -205,15 +208,10 @@ logical_partition_command(
         return std::unexpected(invalid_argument(
             operation, "Fastboot logical partition name must not be empty"));
     }
-    if (!is_printable_ascii(name)) {
+    if (!std::ranges::all_of(name, is_partition_name_character)) {
         return std::unexpected(invalid_argument(
             operation,
-            "Fastboot logical partition name must contain printable ASCII only"));
-    }
-    if (name.contains(':')) {
-        return std::unexpected(invalid_argument(
-            operation,
-            "Fastboot logical partition name must not contain ':'"));
+            "Fastboot logical partition name must use ASCII letters, digits, '.', '-' or '_'"));
     }
 
     std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 1> digits{};
