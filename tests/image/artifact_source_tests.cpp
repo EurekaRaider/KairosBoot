@@ -851,9 +851,11 @@ void cancelled_and_timed_out_owners_do_not_poison_waiters() {
     CHECK(waiter_result && *waiter_result);
     CHECK(provider_calls.load(std::memory_order_relaxed) == 2U);
 
+    const auto timeout_image = temporary.path() / "timeout.img";
+    write_text(timeout_image, std::string(4U * 1024U, 't'));
     std::atomic<std::uint32_t> timeout_provider_calls{};
     ArtifactSourceLimits timeout_limits;
-    timeout_limits.max_elapsed = std::chrono::milliseconds(50);
+    timeout_limits.max_elapsed = std::chrono::milliseconds(500);
     timeout_limits.max_spool_bytes = 256U * 1024U;
     timeout_limits.available_space_provider =
         [&](const std::filesystem::path&)
@@ -861,15 +863,15 @@ void cancelled_and_timed_out_owners_do_not_poison_waiters() {
         const auto call =
             timeout_provider_calls.fetch_add(1U, std::memory_order_relaxed);
         if (call == 0U) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
         }
         return 256U * 1024U;
     };
     ArtifactSourceResolver timeout_resolver(timeout_limits);
-    const auto timed_out = timeout_resolver.resolve(image);
+    const auto timed_out = timeout_resolver.resolve(timeout_image);
     CHECK(!timed_out);
     CHECK(timed_out.error().kind == ArtifactSourceErrorKind::TimedOut);
-    const auto retried = timeout_resolver.resolve(image);
+    const auto retried = timeout_resolver.resolve(timeout_image);
     CHECK(retried);
     CHECK(timeout_provider_calls.load(std::memory_order_relaxed) == 2U);
 }
