@@ -29,10 +29,10 @@ infrastructure—not a production-ready replacement for AOSP Fastboot.
 ---
 
 > [!IMPORTANT]
-> Public flashing is intentionally unavailable in this build. The C, C++, and
-> .NET flash entry points return `KB_E_NOT_SUPPORTED` (or the matching managed
-> exception) and never report false success. Do not use KairosBoot for
-> production flashing or on devices containing irreplaceable data.
+> Public single-device USB flashing is now integrated, but KairosBoot has not
+> completed real-device HIL, fault-injection, soak, or throughput acceptance.
+> Treat this development build as destructive and experimental; do not use it
+> on devices containing irreplaceable data.
 
 ## Why KairosBoot?
 
@@ -46,26 +46,27 @@ of a collection of child processes.
 | Concurrency | Coordinate independent processes | Share one runtime and schedule devices by USB topology |
 | Progress and cancellation | Parse process output and signals | Use typed operations, callbacks, tasks, and cancellation |
 | Performance | Production baseline | Measure against raw USB ceilings and optimize only where headroom exists |
-| Maturity | Production tool | Early development; destructive commands are not integrated |
+| Maturity | Production tool | Early development; the initial flash path is integrated but not production-qualified |
 
 The right-hand column is the project direction, not a claim that those outcomes
 have already been delivered or benchmarked.
 
 ## Current Status
 
-The `0.1.0-dev` milestone establishes contracts and isolates the risky transport
-work before destructive commands are exposed.
+The `0.1.0-dev` milestone establishes the public contracts and an experimental
+single-file USB flash path while the broader command set and hardware gates are
+still under development.
 
 | Area | Status today |
 |---|---|
 | C11 SDK | Versioned opaque-handle API for version, context, errors, USB device lists, and operation-shaped flash entry points |
 | C++23 SDK | Header-only, move-only RAII wrapper over the C ABI using `std::expected` |
 | .NET SDK | Thin `net48;net10.0` binding with `SafeHandle`, UTF-8 marshalling, tasks, cancellation, and native error propagation |
-| CLI | `--version`, `doctor --json`, and `devices` in text or JSON form |
+| CLI | `--version`, `doctor --json`, `devices`, and single-file `flash`, with text or JSON output where applicable |
 | USB discovery | Public enumeration of Fastboot USB interfaces through the locked libusb runtime |
 | Transport core | Fastboot response state machine plus asynchronous USB and Boost.Asio-based TCP v1 / reliable UDP v1 internals tested independently |
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
-| Flash operations | Public signatures exist, but return `KB_E_NOT_SUPPORTED`; no destructive transport integration yet |
+| Flash operations | C, C++23, .NET, and CLI execute cancellable single-device USB download/flash with validated raw or Android sparse inputs |
 | Fleet jobs | Versioned schema and scheduler primitives exist; manifest planning and execution are not public features yet |
 | Performance and HIL | Acceptance goals are defined; 32-device, throughput, fairness, and soak claims have not been demonstrated yet |
 
@@ -84,7 +85,7 @@ hardware-in-the-loop acceptance is complete on every target.
 
 ### Inspect the current runtime
 
-After building, the CLI exposes only non-destructive foundation commands:
+After building, the CLI exposes diagnostics plus the experimental flash path:
 
 ```sh
 ./build/kairosboot --version
@@ -92,6 +93,7 @@ After building, the CLI exposes only non-destructive foundation commands:
 ./build/kairosboot doctor --json
 ./build/kairosboot devices
 ./build/kairosboot devices --json
+./build/kairosboot --serial SERIAL flash system images/system.img
 ```
 
 `doctor --json` checks whether the native runtime and libusb dependency are
@@ -163,7 +165,7 @@ Installed CMake packages export `KairosBoot::C` and `KairosBoot::Cxx`.
 | C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and move-only resources; no separate C++ binary ABI |
 | .NET Framework 4.8 | Windows x64 binding using `DllImport`, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
 | .NET 10 | `LibraryImport` binding for `win`, `linux`, and `osx` on x64 and ARM64 |
-| CLI | C++23 consumer of the public wrapper; currently limited to version, diagnostics, and enumeration |
+| CLI | C++23 consumer of the public wrapper with version, diagnostics, enumeration, and experimental single-file flash commands |
 
 The managed package uses `kairosboot_native` as its internal P/Invoke library
 name to avoid colliding with the managed `KairosBoot.dll` on case-insensitive
@@ -186,9 +188,10 @@ One C ABI is the compatibility boundary for every language surface. The CLI is
 also a public SDK consumer, which keeps its behavior from drifting into a
 private implementation path.
 
-Today, public calls reach versioning, context management, diagnostics, and USB
-enumeration. The protocol, transport, and scheduling layers below them are
-still being integrated with destructive Fastboot operations.
+Today, public calls reach versioning, context management, diagnostics, USB
+enumeration, and cancellable single-file USB download/flash. The remaining
+Fastboot command families, network session selection, and fleet orchestration
+are still being connected to the public surfaces.
 
 ## Build
 
@@ -265,9 +268,10 @@ gates in the roadmap.
 
 The planned work is deliberately separated from the status table above:
 
-1. Connect public operations to USB, TCP, and UDP sessions with deterministic
-   cancellation, timeout, poison, drain, and reconnect behavior.
-2. Complete Fastboot primitives including download/upload, flash, erase, boot,
+1. Extend the integrated USB flash operation to public TCP and UDP session
+   selection, with deterministic cancellation, timeout, poison, drain, and
+   reconnect behavior.
+2. Complete the remaining Fastboot primitives including upload, erase, boot,
    continue, reboot, getvar, fetch/stage, format, and OEM passthrough.
 3. Add update/flashall, ZIP and sparse pipelines, A/B slots, dynamic/super,
    fastbootd, AVB, boot/vendor_boot, logical partitions, snapshots, and GSI.
