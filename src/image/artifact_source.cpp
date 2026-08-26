@@ -70,6 +70,17 @@ class ScopedWindowsHandle final {
     return {.kind = kind, .native_code = native_code, .message = std::move(message)};
 }
 
+[[nodiscard]] ArtifactSourceError from_file_error(const FileSourceError& error) {
+    auto kind = ArtifactSourceErrorKind::Io;
+    if (error.kind == FileSourceErrorKind::NotFound) {
+        kind = ArtifactSourceErrorKind::NotFound;
+    } else if (error.kind == FileSourceErrorKind::UnsafePath ||
+               error.kind == FileSourceErrorKind::NotRegularFile) {
+        kind = ArtifactSourceErrorKind::UnsafePath;
+    }
+    return make_error(kind, error.message, error.native_code);
+}
+
 class Budget final {
     public:
     Budget(const std::stop_token cancellation, const Clock::time_point deadline)
@@ -1298,11 +1309,7 @@ resolve_zip(const std::filesystem::path& archive_path,
     }
     auto opened = FileImageSource::open(archive_path);
     if (!opened) {
-        return std::unexpected(
-            make_error(opened.error().kind == FileSourceErrorKind::NotFound
-                           ? ArtifactSourceErrorKind::NotFound
-                           : ArtifactSourceErrorKind::Io,
-                       opened.error().message, opened.error().native_code));
+        return std::unexpected(from_file_error(opened.error()));
     }
     const auto& source = **opened;
     auto eocd = inspect_eocd(source, limits, budget);
@@ -1337,45 +1344,9 @@ resolve_directory(const std::filesystem::path& directory,
     if (!selected) {
         return std::unexpected(std::move(selected.error()));
     }
-    auto candidate = directory;
-    std::size_t start = 0;
-    while (start < selected->path.size()) {
-        const auto separator = selected->path.find('/', start);
-        const auto end =
-            separator == std::string::npos ? selected->path.size() : separator;
-        candidate /= selected->path.substr(start, end - start);
-        std::error_code filesystem_error;
-        const auto status =
-            std::filesystem::symlink_status(candidate, filesystem_error);
-        if (filesystem_error || !std::filesystem::exists(status)) {
-            return std::unexpected(make_error(ArtifactSourceErrorKind::NotFound,
-                                              "directory artifact entry does not exist",
-                                              filesystem_error.value()));
-        }
-        if (std::filesystem::is_symlink(status)) {
-            return std::unexpected(
-                make_error(ArtifactSourceErrorKind::UnsafePath,
-                           "directory artifact path traverses a symlink"));
-        }
-        const bool leaf = separator == std::string::npos;
-        if ((!leaf && !std::filesystem::is_directory(status)) ||
-            (leaf && !std::filesystem::is_regular_file(status))) {
-            return std::unexpected(make_error(
-                ArtifactSourceErrorKind::UnsafePath,
-                "directory artifact path contains a special file or type conflict"));
-        }
-        if (leaf) {
-            break;
-        }
-        start = separator + 1U;
-    }
-    auto source = FileImageSource::open(candidate);
+    auto source = FileImageSource::open_beneath(directory, selected->path);
     if (!source) {
-        return std::unexpected(
-            make_error(source.error().kind == FileSourceErrorKind::NotFound
-                           ? ArtifactSourceErrorKind::NotFound
-                           : ArtifactSourceErrorKind::Io,
-                       source.error().message, source.error().native_code));
+        return std::unexpected(from_file_error(source.error()));
     }
     return materialize_source(**source, (*source)->size(), limits, budget,
                               ArtifactSourceOrigin::DirectoryEntry, selected->path);
@@ -1422,11 +1393,7 @@ resolve_uncached(const std::filesystem::path& container, const std::string_view 
 
     auto source = FileImageSource::open(container);
     if (!source) {
-        return std::unexpected(
-            make_error(source.error().kind == FileSourceErrorKind::NotFound
-                           ? ArtifactSourceErrorKind::NotFound
-                           : ArtifactSourceErrorKind::Io,
-                       source.error().message, source.error().native_code));
+        return std::unexpected(from_file_error(source.error()));
     }
     return materialize_source(**source, (*source)->size(), limits, budget,
                               ArtifactSourceOrigin::DirectFile,

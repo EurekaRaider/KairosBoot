@@ -14,6 +14,7 @@ namespace kairosboot::image {
 enum class FileSourceErrorKind : std::uint8_t {
     InvalidArgument,
     NotFound,
+    UnsafePath,
     NotRegularFile,
     SizeUnavailable,
     OpenFailed,
@@ -32,6 +33,13 @@ class FileImageSource final : public IImageSource {
 public:
     [[nodiscard]] static std::expected<std::shared_ptr<FileImageSource>, FileSourceError>
     open(const std::filesystem::path& path);
+
+    // Opens a regular file below one directory without following symlinks or
+    // reparse points. The relative path must contain only normal components.
+    [[nodiscard]] static std::expected<std::shared_ptr<FileImageSource>, FileSourceError>
+    open_beneath(
+        const std::filesystem::path& directory,
+        const std::filesystem::path& relative_path);
 
     FileImageSource(const FileImageSource&) = delete;
     FileImageSource& operator=(const FileImageSource&) = delete;
