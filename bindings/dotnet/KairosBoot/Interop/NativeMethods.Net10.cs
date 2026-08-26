@@ -30,6 +30,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void ContextRelease(IntPtr context);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void FlashOptionsInit(ref NativeFlashOptions options);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_enumerate_devices")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int EnumerateDevices(

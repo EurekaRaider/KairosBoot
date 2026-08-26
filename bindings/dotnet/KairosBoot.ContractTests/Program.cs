@@ -14,6 +14,7 @@ internal static class Program
         {
             CheckVersion();
             CheckDevicesEnumerate();
+            CheckFlashOptions();
             await CheckFlashFailsAccurately().ConfigureAwait(false);
             await CheckPreCancellation().ConfigureAwait(false);
             CheckDisposedContext();
@@ -25,6 +26,32 @@ internal static class Program
             Console.Error.WriteLine(exception);
             return 1;
         }
+    }
+
+    private static void CheckFlashOptions()
+    {
+        Check(
+            FlashOptions.Default.Timeout == Timeout.InfiniteTimeSpan,
+            "default flash timeout");
+        Check(
+            default(FlashOptions).Timeout == Timeout.InfiniteTimeSpan,
+            "default struct flash timeout");
+        Check(
+            new FlashOptions(Timeout.InfiniteTimeSpan).Timeout == Timeout.InfiniteTimeSpan,
+            "explicit infinite flash timeout");
+
+        var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+        Check(new FlashOptions(fractional).Timeout == fractional, "finite flash timeout");
+
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new FlashOptions(TimeSpan.FromTicks(-1)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new FlashOptions(
+                TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
+
+        var maximum = TimeSpan.FromTicks(
+            ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
+        Check(new FlashOptions(maximum).Timeout == maximum, "maximum finite flash timeout");
     }
 
     private static void CheckVersion()
@@ -71,6 +98,7 @@ internal static class Program
                 () => context.FlashFileAsync(
                     "系统",
                     "镜像.img",
+                    new FlashOptions(TimeSpan.FromSeconds(30)),
                     "设备-一",
                     progress,
                     CancellationToken.None)).ConfigureAwait(false);

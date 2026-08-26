@@ -21,6 +21,9 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, EntryPoint = "kb_context_release", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void ContextRelease(IntPtr context);
 
+    [DllImport(LibraryName, EntryPoint = "kb_flash_options_init", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FlashOptionsInit(ref NativeFlashOptions options);
+
     [DllImport(LibraryName, EntryPoint = "kb_enumerate_devices", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int EnumerateDevices(
         ContextSafeHandle context,

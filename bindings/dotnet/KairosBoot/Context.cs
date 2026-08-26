@@ -129,12 +129,51 @@ public sealed class Context : IDisposable
     /// Starts a flash operation. Native failures are surfaced as
     /// <see cref="KairosBootException"/> and cancellation cancels the native operation.
     /// </summary>
-    public async Task FlashFileAsync(
+    public Task FlashFileAsync(
         string partition,
         string filePath,
         string? serial = null,
         IProgress<FlashProgress>? progress = null,
         CancellationToken cancellationToken = default)
+    {
+        return FlashFileCoreAsync(
+            partition,
+            filePath,
+            FlashOptions.Default,
+            serial,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Starts a flash operation with a typed per-I/O timeout. Native failures
+    /// are surfaced as <see cref="KairosBootException"/> and cancellation
+    /// cancels the native operation.
+    /// </summary>
+    public Task FlashFileAsync(
+        string partition,
+        string filePath,
+        FlashOptions options,
+        string? serial = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashFileCoreAsync(
+            partition,
+            filePath,
+            options,
+            serial,
+            progress,
+            cancellationToken);
+    }
+
+    private async Task FlashFileCoreAsync(
+        string partition,
+        string filePath,
+        FlashOptions options,
+        string? serial,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(partition))
         {
@@ -154,37 +193,29 @@ public sealed class Context : IDisposable
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var callback = progress == null ? null : new NativeProgressCallback(ReportProgress);
-        var progressHandle = default(GCHandle);
+        ProgressCallbackRegistration? progressRegistration = null;
         var contextReferenceAdded = false;
         try
         {
             handle.DangerousAddRef(ref contextReferenceAdded);
 
-            IntPtr userData = IntPtr.Zero;
             if (progress != null)
             {
-                progressHandle = GCHandle.Alloc(progress);
-                userData = GCHandle.ToIntPtr(progressHandle);
+                progressRegistration = new ProgressCallbackRegistration(progress);
             }
 
-            var options = new NativeFlashOptions
-            {
-                StructSize = checked((uint)Marshal.SizeOf<NativeFlashOptions>()),
-                ApiVersion = NativeMethods.ApiVersion,
-                TimeoutMilliseconds = NativeMethods.DefaultTimeoutMilliseconds,
-                ProgressCallback = callback == null
-                    ? IntPtr.Zero
-                    : Marshal.GetFunctionPointerForDelegate(callback),
-                ProgressUserData = userData,
-            };
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
             var status = NativeMethods.FlashFileAsync(
                 handle,
                 serial,
                 partition,
                 filePath,
-                ref options,
+                ref nativeOptions,
                 out var rawOperation,
                 out var rawError);
 
@@ -212,6 +243,8 @@ public sealed class Context : IDisposable
                 }
             }
 
+            // The inner cancellation registration is disposed before the
+            // operation, so it cannot race SafeHandle release.
             using (var operation = new OperationSafeHandle(rawOperation))
             using (cancellationToken.Register(() => NativeMethods.OperationCancel(operation)))
             {
@@ -222,12 +255,9 @@ public sealed class Context : IDisposable
         }
         finally
         {
-            GC.KeepAlive(callback);
-
-            if (progressHandle.IsAllocated)
-            {
-                progressHandle.Free();
-            }
+            // OperationSafeHandle.ReleaseHandle drains native callbacks before
+            // this registration frees its delegate and GCHandle.
+            progressRegistration?.Dispose();
 
             if (contextReferenceAdded)
             {
@@ -274,6 +304,13 @@ public sealed class Context : IDisposable
     {
         try
         {
+            if (native.StructSize < NativeMethods.ProgressStructSize ||
+                native.ApiVersion != NativeMethods.ApiVersion ||
+                userData == IntPtr.Zero)
+            {
+                return 1;
+            }
+
             var target = GCHandle.FromIntPtr(userData).Target as IProgress<FlashProgress>;
             if (target == null)
             {
@@ -290,6 +327,42 @@ public sealed class Context : IDisposable
         catch
         {
             return 1;
+        }
+    }
+
+    private sealed class ProgressCallbackRegistration : IDisposable
+    {
+        private readonly NativeProgressCallback callback;
+        private GCHandle progressHandle;
+
+        internal ProgressCallbackRegistration(IProgress<FlashProgress> progress)
+        {
+            callback = ReportProgress;
+            progressHandle = GCHandle.Alloc(progress);
+            try
+            {
+                CallbackPointer = Marshal.GetFunctionPointerForDelegate(callback);
+                UserData = GCHandle.ToIntPtr(progressHandle);
+            }
+            catch
+            {
+                progressHandle.Free();
+                throw;
+            }
+        }
+
+        internal IntPtr CallbackPointer { get; }
+
+        internal IntPtr UserData { get; }
+
+        public void Dispose()
+        {
+            if (progressHandle.IsAllocated)
+            {
+                progressHandle.Free();
+            }
+
+            GC.KeepAlive(callback);
         }
     }
 

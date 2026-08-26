@@ -28,3 +28,9 @@ source-streamed `download` plus `flash` operations. `FlashFileAsync` reports
 preflight, selection, transport, device `FAIL`, cancellation, and transfer
 certainty through `KairosBootException`; successful completion requires a
 compatible physical Fastboot device.
+
+Use `FlashOptions` for a strongly typed per-I/O deadline and pass
+`IProgress<FlashProgress>` plus a `CancellationToken` to `FlashFileAsync`.
+`FlashOptions.Default` and `Timeout.InfiniteTimeSpan` preserve the native
+infinite timeout. The binding retains the managed progress callback until
+native operation release has drained every callback.
