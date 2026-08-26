@@ -77,6 +77,10 @@ jobs:
           library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.${project_version}"
           readelf -d "$library" | grep -F 'libusb-1.0.so.0'
           readelf -d "$library" | grep -F "\$ORIGIN"
+          if readelf -d "$library" | grep -Eqi 'Shared library: \[(libminiz|libz\.so)'; then
+            echo "miniz must not add a compression shared-library dependency"
+            exit 1
+          fi
 
       - name: Upload install tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -189,6 +193,22 @@ jobs:
           if (-not (Get-ChildItem "$env:RUNNER_TEMP/kairosboot-install/bin/msvcp*.dll")) {
             throw "installed Windows runtime is missing app-local MSVC C++ runtime DLLs"
           }
+          $library = "$env:RUNNER_TEMP/kairosboot-install/bin/kairosboot.dll"
+          $cache = Get-Content build/CMakeCache.txt -Raw
+          $match = [regex]::Match($cache, '(?m)^CMAKE_DUMPBIN:FILEPATH=(.+)$')
+          if (-not $match.Success) {
+            $match = [regex]::Match($cache, '(?m)^CMAKE_LINKER:FILEPATH=(.+)$')
+          }
+          if (-not $match.Success) { throw 'Neither CMAKE_DUMPBIN nor CMAKE_LINKER is available' }
+          $dependencyTool = $match.Groups[1].Value.Trim()
+          $dependencyArguments = if ([IO.Path]::GetFileName($dependencyTool) -match '^(link|lld-link)\.exe$') {
+            @('/dump', '/nologo', '/dependents', $library)
+          } else {
+            @('/nologo', '/dependents', $library)
+          }
+          if (& $dependencyTool @dependencyArguments | Select-String -Pattern '(?i)(miniz|zlib|libz\.dll)') {
+            throw "miniz must not add a compression DLL dependency"
+          }
 
       - name: Build macOS
         if: runner.os == 'macOS'
@@ -214,6 +234,10 @@ jobs:
           project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
           library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.${project_version}.dylib"
           otool -L "$library" | grep -F '@rpath/libusb-1.0.0.dylib'
+          if otool -L "$library" | grep -Eqi '/(libminiz|libz(\.[0-9]+)*)\.dylib'; then
+            echo "miniz must not add a compression dylib dependency"
+            exit 1
+          fi
           otool -l "$library" | grep -A2 LC_RPATH | grep -F '@loader_path'
           otool -l "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib'
 
@@ -328,6 +352,9 @@ jobs:
             boost_destination="$runtime_root/$rid/native/licenses/boost"
             mkdir -p "$boost_destination"
             cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/boost/LICENSE_1_0.txt" "$boost_destination/"
+            miniz_destination="$runtime_root/$rid/native/licenses/miniz"
+            mkdir -p "$miniz_destination"
+            cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/miniz/LICENSE" "$miniz_destination/"
           done
 
       - name: Pack the real native NuGet package

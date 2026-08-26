@@ -45,6 +45,14 @@
     "cmakeArchiveSha256": "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d",
     "license": "BSL-1.0"
   },
+  "miniz": {
+    "requiredVersion": "3.1.2",
+    "sourceTag": "3.1.2",
+    "sourceCommit": "77d0dce8627735138c51770d1799a1ef48f2117d",
+    "sourceArchive": "https://github.com/richgel999/miniz/releases/download/3.1.2/miniz-3.1.2.zip",
+    "sourceArchiveSha256": "f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a",
+    "license": "MIT"
+  },
   "remainingCompatibilityGates": [
     "generate the complete CLI and image inventory",
     "run differential traces against every platform binary",

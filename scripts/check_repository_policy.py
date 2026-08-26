@@ -74,6 +74,12 @@ def check_workflows() -> None:
             ),
             "Boost license release asset": "Boost-1.92.0-LICENSE_1_0.txt",
             "Boost SBOM source input": "--boost-source",
+            "locked miniz source archive": "miniz-3.1.2.zip",
+            "miniz release archive digest": (
+                "f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a"
+            ),
+            "miniz license release asset": "miniz-3.1.2-LICENSE",
+            "miniz SBOM source input": "--miniz-source",
             "macOS split debug symbols": "dsymutil",
             "Windows dedicated symbol staging": "--symbols-root build/symbols/Release",
             "macOS stripped libusb runtime": (
@@ -258,6 +264,74 @@ def check_compatibility_baseline() -> None:
     for contract, (path, marker) in distribution_contracts.items():
         if marker not in path.read_text(encoding="utf-8"):
             fail(f"Boost distribution contract is missing {contract}: {marker}")
+
+    miniz = lock.get("miniz", {})
+    miniz_url = (
+        "https://github.com/richgel999/miniz/releases/download/3.1.2/"
+        "miniz-3.1.2.zip"
+    )
+    miniz_sha256 = "f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a"
+    expected_miniz = {
+        "requiredVersion": "3.1.2",
+        "sourceTag": "3.1.2",
+        "sourceCommit": "77d0dce8627735138c51770d1799a1ef48f2117d",
+        "sourceArchive": miniz_url,
+        "sourceArchiveSha256": miniz_sha256,
+        "license": "MIT",
+    }
+    if miniz != expected_miniz:
+        fail("miniz baseline must exactly match the validated stable 3.1.2 release")
+
+    miniz_cmake_contract = {
+        "miniz declaration": "FetchContent_Declare(\n  kairosboot_miniz_source",
+        "miniz population": "FetchContent_MakeAvailable(kairosboot_miniz_source)",
+        "miniz digest verification": 'URL_HASH "SHA256=${KAIROSBOOT_MINIZ_SHA256}"',
+        "private static target": "add_library(kairosboot_miniz STATIC",
+        "position-independent static code": "PROPERTIES POSITION_INDEPENDENT_CODE ON",
+        "hidden C symbols": "C_VISIBILITY_PRESET hidden",
+        "archive writing disabled": "MINIZ_NO_ARCHIVE_WRITING_APIS",
+        "stdio disabled": "MINIZ_NO_STDIO",
+        "zlib names disabled": "MINIZ_NO_ZLIB_COMPATIBLE_NAMES",
+        "miniz target linked privately": "PRIVATE kairosboot_libusb kairosboot_miniz",
+    }
+    for contract, marker in miniz_cmake_contract.items():
+        if marker not in cmake:
+            fail(f"root CMake is missing {contract}: {marker}")
+    if "MINIZ_DISABLE_ZIP_READER_CRC32_CHECKS" in cmake:
+        fail("miniz ZIP reader CRC validation must remain enabled")
+    if "add_library(kairosboot_miniz SHARED" in cmake:
+        fail("miniz must not be built as a shared library")
+    if "install(TARGETS kairosboot_miniz" in cmake:
+        fail("private miniz target must not enter the installed CMake export")
+
+    for contract, marker in {
+        "locked miniz release URL": miniz_url,
+        "locked miniz release digest": miniz_sha256,
+        "miniz license asset": "miniz-3.1.2-LICENSE",
+        "miniz SBOM input": "--miniz-source",
+    }.items():
+        if marker not in release:
+            fail(f"release workflow is missing {contract}: {marker}")
+
+    miniz_distribution_contracts = {
+        "third-party notice": (ROOT / "THIRD_PARTY_NOTICES.md", "miniz 3.1.2"),
+        "SPDX package": (ROOT / "scripts" / "generate_sbom.py", '"name": "miniz"'),
+        "NuGet miniz license": (
+            ROOT / "bindings" / "dotnet" / "KairosBoot" / "KairosBoot.csproj",
+            "licenses/miniz/LICENSE",
+        ),
+        "CI miniz license staging": (
+            ROOT / ".github" / "workflows" / "ci.yml",
+            "share/kairosboot/miniz/LICENSE",
+        ),
+        "native archive runtime dependency gate": (
+            ROOT / "scripts" / "smoke_native_archive.py",
+            "forbidden compression runtime dependency",
+        ),
+    }
+    for contract, (path, marker) in miniz_distribution_contracts.items():
+        if marker not in path.read_text(encoding="utf-8"):
+            fail(f"miniz distribution contract is missing {contract}: {marker}")
 
 
 def main() -> None:

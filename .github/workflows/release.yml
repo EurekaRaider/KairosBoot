@@ -448,6 +448,9 @@ jobs:
             boost_destination="bindings/dotnet/KairosBoot/runtimes/${rid}/native/licenses/boost"
             mkdir -p "$boost_destination"
             cp "native/${artifact}/share/kairosboot/boost/LICENSE_1_0.txt" "$boost_destination/"
+            miniz_destination="bindings/dotnet/KairosBoot/runtimes/${rid}/native/licenses/miniz"
+            mkdir -p "$miniz_destination"
+            cp "native/${artifact}/share/kairosboot/miniz/LICENSE" "$miniz_destination/"
           done
 
       - name: Pack managed SDK with native runtimes and symbols
@@ -637,6 +640,16 @@ jobs:
           tar -xOf release-assets/boost-1.92.0-cmake.tar.xz \
             boost-1.92.0/LICENSE_1_0.txt \
             >release-assets/Boost-1.92.0-LICENSE_1_0.txt
+          curl --fail --silent --show-error --location \
+            --output release-assets/miniz-3.1.2.zip \
+            https://github.com/richgel999/miniz/releases/download/3.1.2/miniz-3.1.2.zip
+          printf '%s  %s\n' \
+            'f0446d863f9c19926ad9483c523fdc42e42b8d4a6a431d27e09d49c79a140d9a' \
+            'release-assets/miniz-3.1.2.zip' | sha256sum --check
+          python3 -c 'import sys, zipfile; archive = zipfile.ZipFile(sys.argv[1]); open(sys.argv[2], "wb").write(archive.read("LICENSE"))' \
+            release-assets/miniz-3.1.2.zip \
+            release-assets/miniz-3.1.2-LICENSE
+          test -s release-assets/miniz-3.1.2-LICENSE
           cp LICENSE "release-assets/KairosBoot-v${VERSION}-LICENSE.txt"
           cp THIRD_PARTY_NOTICES.md "release-assets/KairosBoot-v${VERSION}-THIRD_PARTY_NOTICES.md"
           cp UNSIGNED.txt "release-assets/KairosBoot-v${VERSION}-UNSIGNED.txt"
@@ -650,6 +663,7 @@ jobs:
             --source-archive "release-assets/KairosBoot-v${VERSION}-source.tar.gz" \
             --libusb-source release-assets/libusb-1.0.30.tar.bz2 \
             --boost-source release-assets/boost-1.92.0-cmake.tar.xz \
+            --miniz-source release-assets/miniz-3.1.2.zip \
             --output release-assets/KairosBoot.spdx.json
           python3 scripts/generate_provenance.py \
             --assets release-assets \

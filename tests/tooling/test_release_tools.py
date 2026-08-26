@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -15,6 +16,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "kairosboot_smoke_native_archive", ROOT / "scripts" / "smoke_native_archive.py"
+)
+if SMOKE_SPEC is None or SMOKE_SPEC.loader is None:
+    raise RuntimeError("unable to load native archive smoke module")
+SMOKE_MODULE = importlib.util.module_from_spec(SMOKE_SPEC)
+SMOKE_SPEC.loader.exec_module(SMOKE_MODULE)
 
 
 def run_script(name: str, *arguments: object, environment: dict[str, str] | None = None) -> None:
@@ -49,6 +57,10 @@ class ReleaseToolTests(unittest.TestCase):
         )
         (install / "share" / "kairosboot" / "LICENSE").write_text(
             "MIT\n", encoding="utf-8"
+        )
+        (install / "share" / "kairosboot" / "miniz").mkdir()
+        (install / "share" / "kairosboot" / "miniz" / "LICENSE").write_text(
+            "miniz MIT\n", encoding="utf-8"
         )
         return install
 
@@ -101,11 +113,19 @@ class ReleaseToolTests(unittest.TestCase):
                 "KairosBoot-v1.2.3-linux-x64-sdk/lib/cmake/KairosBoot/KairosBootConfig.cmake",
                 names,
             )
+            self.assertIn(
+                "KairosBoot-v1.2.3-linux-x64-sdk/share/kairosboot/miniz/LICENSE",
+                names,
+            )
         with tarfile.open(cli, "r:gz") as archive:
             member = archive.getmember("KairosBoot-v1.2.3-linux-x64-cli/bin/kairosboot")
             self.assertEqual(member.mode & 0o777, 0o755)
             self.assertNotIn(
                 "KairosBoot-v1.2.3-linux-x64-cli/lib/cmake",
+                archive.getnames(),
+            )
+            self.assertIn(
+                "KairosBoot-v1.2.3-linux-x64-cli/share/kairosboot/miniz/LICENSE",
                 archive.getnames(),
             )
         with tarfile.open(symbol_archive, "r:gz") as archive:
@@ -215,10 +235,12 @@ class ReleaseToolTests(unittest.TestCase):
         source = self.root / "source.tar.gz"
         libusb = self.root / "libusb.tar.bz2"
         boost = self.root / "boost.tar.xz"
+        miniz = self.root / "miniz.zip"
         output = self.root / "KairosBoot.spdx.json"
         source.write_bytes(b"source")
         libusb.write_bytes(b"libusb")
         boost.write_bytes(b"boost")
+        miniz.write_bytes(b"miniz")
         run_script(
             "generate_sbom.py",
             "--version",
@@ -229,6 +251,8 @@ class ReleaseToolTests(unittest.TestCase):
             libusb,
             "--boost-source",
             boost,
+            "--miniz-source",
+            miniz,
             "--output",
             output,
         )
@@ -248,6 +272,11 @@ class ReleaseToolTests(unittest.TestCase):
             hashlib.sha256(b"boost").hexdigest(),
         )
         self.assertEqual(packages["Boost"]["licenseDeclared"], "BSL-1.0")
+        self.assertEqual(
+            packages["miniz"]["checksums"][0]["checksumValue"],
+            hashlib.sha256(b"miniz").hexdigest(),
+        )
+        self.assertEqual(packages["miniz"]["licenseDeclared"], "MIT")
         self.assertEqual(
             packages["Microsoft Visual C++ Runtime"]["supplier"],
             "Organization: Microsoft Corporation",
@@ -304,6 +333,8 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertIn(f"KairosBoot.{version}.nupkg", expected)
         self.assertIn(f"KairosBoot.{version}.snupkg", expected)
         self.assertIn("libusb-1.0.30-COPYING", expected)
+        self.assertIn("miniz-3.1.2.zip", expected)
+        self.assertIn("miniz-3.1.2-LICENSE", expected)
         for name in expected:
             path = assets / name
             if not path.exists():
@@ -336,6 +367,35 @@ class ReleaseToolTests(unittest.TestCase):
         )
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn(missing.name, failed.stderr + failed.stdout)
+
+    def test_compression_runtime_dependency_gate_is_platform_specific(self) -> None:
+        fixtures = {
+            "linux-x64": """
+                0x0000000000000001 (NEEDED) Shared library: [libusb-1.0.so.0]
+                0x0000000000000001 (NEEDED) Shared library: [libz.so.1]
+            """,
+            "macos-arm64": """
+                library.dylib:
+                /usr/lib/libSystem.B.dylib (compatibility version 1.0.0)
+                /usr/lib/libz.1.dylib (compatibility version 1.0.0)
+            """,
+            "windows-x64": """
+                Image has the following dependencies:
+                    KERNEL32.dll
+                    zlib1.dll
+            """,
+        }
+        for platform, output in fixtures.items():
+            with self.subTest(platform=platform):
+                dependencies = SMOKE_MODULE.dependency_names(output, platform)
+                forbidden = {
+                    name
+                    for name in dependencies
+                    if SMOKE_MODULE.is_forbidden_compression_runtime(name)
+                }
+                self.assertEqual(len(forbidden), 1)
+
+        self.assertFalse(SMOKE_MODULE.is_forbidden_compression_runtime("libzstd.so.1"))
 
 
 if __name__ == "__main__":

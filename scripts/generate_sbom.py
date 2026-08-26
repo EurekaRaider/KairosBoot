@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--source-archive", type=Path, required=True)
     parser.add_argument("--libusb-source", type=Path, required=True)
     parser.add_argument("--boost-source", type=Path, required=True)
+    parser.add_argument("--miniz-source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -74,6 +75,18 @@ def main() -> None:
                 "comment": "Boost.Asio and its transitive Boost header dependencies are fetched at configure time."
             },
             {
+                "name": "miniz",
+                "SPDXID": "SPDXRef-Package-miniz",
+                "versionInfo": "3.1.2",
+                "downloadLocation": "https://github.com/richgel999/miniz/releases/download/3.1.2/miniz-3.1.2.zip",
+                "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": sha256(args.miniz_source)}],
+                "licenseConcluded": "MIT",
+                "licenseDeclared": "MIT",
+                "copyrightText": "NOASSERTION",
+                "comment": "miniz is built as a private static archive dependency with CRC validation enabled."
+            },
+            {
                 "name": "Microsoft Visual C++ Runtime",
                 "SPDXID": "SPDXRef-Package-MSVC-Runtime",
                 "downloadLocation": "NOASSERTION",
@@ -89,6 +102,7 @@ def main() -> None:
             {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-KairosBoot"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-libusb"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-Boost"},
+            {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-miniz"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-MSVC-Runtime", "comment": "Windows distributions only."}
         ]
     }
