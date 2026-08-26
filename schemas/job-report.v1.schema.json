@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kairosboot.io/schemas/job-report.v1.schema.json",
+  "title": "KairosBoot JobReport v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "jobId", "state", "startedAt", "devices", "summary"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "jobId": { "type": "string", "minLength": 1 },
+    "state": { "type": "string", "enum": ["planned", "running", "succeeded", "partially_failed", "failed", "cancelled"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["identifier", "target", "state", "steps"],
+        "properties": {
+          "identifier": { "type": "string", "minLength": 1 },
+          "target": { "type": "string", "minLength": 1 },
+          "state": { "type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+          "steps": { "type": "array", "items": { "type": "object" } },
+          "error": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "succeeded", "failed", "cancelled"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "succeeded": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "cancelled": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
