@@ -635,8 +635,12 @@ void test_cancellation_before_write_is_not_sent_and_closes() {
     const auto peer = peer4(1);
     auto script = std::make_shared<DatagramScriptState>();
     auto transport = ready_transport(script, peer);
-    transport->cancel();
+    transport->request_cancel();
     const auto result = transport->write(udp_bytes("reboot"), 5s);
+    require_equal(
+        result.status,
+        TransportStatus::Cancelled,
+        "pre-send cancellation was flattened to generic I/O");
     require_equal(
         result.certainty,
         TransferCertainty::NotTransferred,

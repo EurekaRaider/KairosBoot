@@ -1941,6 +1941,12 @@ bool LibusbBulkOutBackend::shutdown_quarantined() const noexcept {
     return state_ != nullptr && state_->quarantined.load(std::memory_order_acquire);
 }
 
+void LibusbBulkOutBackend::request_stop() noexcept {
+    if (state_ != nullptr) {
+        state_->request_stop();
+    }
+}
+
 void LibusbBulkOutBackend::stop() noexcept {
     if (state_ != nullptr) {
         state_->runtime->stop_backend(state_);

@@ -18,8 +18,8 @@ struct UsbFastbootTransportOptions final {
 };
 
 // Internal protocol adapter. One instance exclusively owns one claimed USB
-// interface. write()/read() are serialized; cancel()/close() may run from a
-// different thread and use the runtime's bounded drain/quarantine path.
+// interface. write()/read() are serialized; request_cancel()/close() may run
+// from a different thread and use the runtime's bounded drain/quarantine path.
 class UsbFastbootTransport final : public protocol::ITransportSession {
 public:
     [[nodiscard]] static std::expected<std::unique_ptr<UsbFastbootTransport>,
@@ -43,6 +43,7 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    void request_cancel() noexcept override;
     void cancel() noexcept;
     void close() noexcept override;
     [[nodiscard]] bool is_open() const noexcept;
@@ -57,6 +58,7 @@ private:
     std::unique_ptr<LibusbBulkOutBackend> backend_;
     UsbFastbootTransportOptions options_;
     std::shared_ptr<BufferBudget> budget_;
+    std::atomic<bool> cancellation_requested_{false};
     std::atomic<bool> open_{true};
     std::mutex operation_mutex_;
 };

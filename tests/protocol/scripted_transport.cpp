@@ -19,22 +19,33 @@ void ScriptedTransport::expect_write(
     const std::string_view expected_call,
     const std::optional<std::size_t> reported_transferred,
     const TransportStatus status,
-    const TransferCertainty certainty) {
+    const TransferCertainty certainty,
+    const int native_code,
+    std::string detail) {
     const auto bytes = to_bytes(expected_call);
-    expect_write(bytes, reported_transferred, status, certainty);
+    expect_write(
+        bytes,
+        reported_transferred,
+        status,
+        certainty,
+        native_code,
+        std::move(detail));
 }
 
 void ScriptedTransport::expect_write(
     const std::span<const std::byte> expected_call,
     const std::optional<std::size_t> reported_transferred,
     const TransportStatus status,
-    const TransferCertainty certainty) {
+    const TransferCertainty certainty,
+    const int native_code,
+    std::string detail) {
     steps_.push_back(WriteStep{
         .expected_call = {expected_call.begin(), expected_call.end()},
         .reported_transferred = reported_transferred.value_or(expected_call.size()),
         .status = status,
         .certainty = certainty,
-        .detail = {},
+        .detail = std::move(detail),
+        .native_code = native_code,
     });
 }
 
@@ -43,14 +54,17 @@ void ScriptedTransport::respond(
     const TransportStatus status,
     const TransferCertainty certainty,
     const bool truncated,
-    const std::optional<std::size_t> reported_transferred) {
+    const std::optional<std::size_t> reported_transferred,
+    const int native_code,
+    std::string detail) {
     steps_.push_back(ReadStep{
         .response = to_bytes(response),
         .reported_transferred = reported_transferred,
         .status = status,
         .certainty = certainty,
         .truncated = truncated,
-        .detail = {},
+        .detail = std::move(detail),
+        .native_code = native_code,
     });
 }
 
@@ -76,6 +90,7 @@ TransferResult ScriptedTransport::write(
         .certainty = step.certainty,
         .truncated = step.truncated,
         .detail = std::move(step.detail),
+        .native_code = step.native_code,
     };
 }
 
@@ -97,7 +112,12 @@ TransferResult ScriptedTransport::read(
         .certainty = step.certainty,
         .truncated = step.truncated || step.response.size() > destination.size(),
         .detail = std::move(step.detail),
+        .native_code = step.native_code,
     };
+}
+
+void ScriptedTransport::request_cancel() noexcept {
+    cancellation_requested_.store(true, std::memory_order_release);
 }
 
 void ScriptedTransport::close() noexcept {
@@ -118,6 +138,10 @@ const std::vector<std::byte>& ScriptedTransport::accepted_bytes() const noexcept
 
 bool ScriptedTransport::closed() const noexcept {
     return closed_;
+}
+
+bool ScriptedTransport::cancellation_requested() const noexcept {
+    return cancellation_requested_.load(std::memory_order_acquire);
 }
 
 TransferResult ScriptedTransport::unexpected_call(const std::string_view operation) {

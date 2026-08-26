@@ -229,6 +229,9 @@ public:
         std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     [[nodiscard]] bool shutdown_quarantined() const noexcept;
+    // Signals native transfers without waiting for their completion callbacks.
+    // stop() remains the owner of bounded drain and quarantine.
+    void request_stop() noexcept;
     void stop() noexcept;
 
 private:

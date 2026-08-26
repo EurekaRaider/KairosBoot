@@ -1323,14 +1323,17 @@ void test_usb_read_error_classification_timeout_disconnect_stall_and_cancel() {
     const auto timed_out = scripted_read(LIBUSB_TRANSFER_TIMED_OUT);
     KB_CHECK(timed_out.status == TransportStatus::Timeout);
     KB_CHECK(timed_out.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(timed_out.native_code == LIBUSB_ERROR_TIMEOUT);
 
     const auto disconnected = scripted_read(LIBUSB_TRANSFER_NO_DEVICE);
     KB_CHECK(disconnected.status == TransportStatus::Disconnected);
     KB_CHECK(disconnected.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(disconnected.native_code == LIBUSB_ERROR_NO_DEVICE);
 
     const auto stalled = scripted_read(LIBUSB_TRANSFER_STALL);
     KB_CHECK(stalled.status == TransportStatus::IoError);
     KB_CHECK(stalled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(stalled.native_code == LIBUSB_ERROR_PIPE);
 
     auto cancel_opened = UsbFastbootTransport::open(runtime, snapshot, options);
     KB_CHECK(cancel_opened.has_value());
@@ -1341,11 +1344,29 @@ void test_usb_read_error_classification_timeout_disconnect_stall_and_cancel() {
             cancelled_response, std::chrono::seconds(1));
     });
     wait_for_submissions(*fake, submission_index + 1U);
-    cancel_transport->cancel();
+    fake->suppress_in_cancel_completion = true;
+    cancel_transport->request_cancel();
+    KB_CHECK(fake->cancel_calls >= 1);
+    KB_CHECK(!runtime->shutdown_quarantined());
+    fake->complete_in_submission(
+        submission_index, LIBUSB_TRANSFER_CANCELLED, {});
+    ++submission_index;
     const auto cancelled = cancelled_read.get();
-    KB_CHECK(cancelled.status == TransportStatus::IoError);
+    KB_CHECK(cancelled.status == TransportStatus::Cancelled);
     KB_CHECK(cancelled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(cancelled.native_code == 0);
     KB_CHECK(!cancel_transport->is_open());
+    fake->suppress_in_cancel_completion = false;
+
+    auto pre_cancel_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(pre_cancel_opened.has_value());
+    auto pre_cancel_transport = std::move(*pre_cancel_opened);
+    pre_cancel_transport->request_cancel();
+    const auto pre_cancelled = pre_cancel_transport->write(
+        std::array{std::byte{1}}, std::chrono::seconds(1));
+    KB_CHECK(pre_cancelled.status == TransportStatus::Cancelled);
+    KB_CHECK(pre_cancelled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(pre_cancelled.native_code == 0);
 
     runtime->stop();
 }

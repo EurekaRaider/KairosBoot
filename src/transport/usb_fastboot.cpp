@@ -90,6 +90,8 @@ private:
             return protocol::TransportStatus::Disconnected;
         case TransferErrorKind::completion_timeout:
             return protocol::TransportStatus::Timeout;
+        case TransferErrorKind::user_cancelled:
+            return protocol::TransportStatus::Cancelled;
         case TransferErrorKind::invalid_configuration:
         case TransferErrorKind::source_read:
         case TransferErrorKind::submit_resource_exhausted:
@@ -99,10 +101,34 @@ private:
         case TransferErrorKind::completion_io:
         case TransferErrorKind::unexpected_cancellation:
         case TransferErrorKind::invalid_completion:
-        case TransferErrorKind::user_cancelled:
             return protocol::TransportStatus::IoError;
     }
     return protocol::TransportStatus::IoError;
+}
+
+[[nodiscard]] int transfer_native_error(const TransferErrorKind kind) noexcept {
+    switch (kind) {
+        case TransferErrorKind::submit_no_device:
+        case TransferErrorKind::completion_no_device:
+            return LIBUSB_ERROR_NO_DEVICE;
+        case TransferErrorKind::submit_resource_exhausted:
+            return LIBUSB_ERROR_NO_MEM;
+        case TransferErrorKind::completion_timeout:
+            return LIBUSB_ERROR_TIMEOUT;
+        case TransferErrorKind::completion_stall:
+            return LIBUSB_ERROR_PIPE;
+        case TransferErrorKind::submit_io:
+        case TransferErrorKind::completion_io:
+            return LIBUSB_ERROR_IO;
+        case TransferErrorKind::invalid_configuration:
+        case TransferErrorKind::source_read:
+        case TransferErrorKind::partial_transfer:
+        case TransferErrorKind::unexpected_cancellation:
+        case TransferErrorKind::invalid_completion:
+        case TransferErrorKind::user_cancelled:
+            return 0;
+    }
+    return 0;
 }
 
 [[nodiscard]] std::string_view transfer_error_detail(
@@ -155,6 +181,7 @@ private:
                 : protocol::TransferCertainty::PartialOrUnknown,
             .truncated = false,
             .detail = std::string(fallback_detail),
+            .native_code = 0,
         };
     }
     return {
@@ -163,6 +190,7 @@ private:
         .certainty = transfer_certainty(error->certainty),
         .truncated = false,
         .detail = std::string(transfer_error_detail(error->kind)),
+        .native_code = transfer_native_error(error->kind),
     };
 }
 
@@ -171,36 +199,46 @@ private:
     using ReadCode = LibusbBulkOutBackend::ReadCode;
     protocol::TransportStatus status = protocol::TransportStatus::IoError;
     std::string_view detail = "USB bulk IN failed";
+    int native_error = LIBUSB_ERROR_IO;
     switch (result.code) {
         case ReadCode::success:
             status = protocol::TransportStatus::Ok;
             detail = {};
+            native_error = 0;
             break;
         case ReadCode::timeout:
             status = protocol::TransportStatus::Timeout;
             detail = "USB bulk IN timed out";
+            native_error = LIBUSB_ERROR_TIMEOUT;
             break;
         case ReadCode::cancelled:
+            status = protocol::TransportStatus::Cancelled;
             detail = "USB bulk IN was cancelled";
+            native_error = 0;
             break;
         case ReadCode::no_device:
             status = protocol::TransportStatus::Disconnected;
             detail = "USB device disconnected during bulk IN";
+            native_error = LIBUSB_ERROR_NO_DEVICE;
             break;
         case ReadCode::stall:
             detail = "USB bulk IN endpoint stalled";
+            native_error = LIBUSB_ERROR_PIPE;
             break;
         case ReadCode::overflow:
             detail = "Fastboot USB logical response exceeded the destination";
+            native_error = LIBUSB_ERROR_OVERFLOW;
             break;
         case ReadCode::resource_exhausted:
             detail = "USB bulk IN exhausted host resources";
+            native_error = LIBUSB_ERROR_NO_MEM;
             break;
         case ReadCode::io_error:
             break;
         case ReadCode::closed:
             status = protocol::TransportStatus::Disconnected;
             detail = "Fastboot USB transport is closed";
+            native_error = 0;
             break;
     }
     return {
@@ -213,6 +251,7 @@ private:
                 : protocol::TransferCertainty::PartialOrUnknown,
         .truncated = result.truncated,
         .detail = std::string(detail),
+        .native_code = native_error,
     };
 }
 
@@ -270,12 +309,16 @@ protocol::TransferResult UsbFastbootTransport::write(
     const std::chrono::milliseconds timeout) {
     std::scoped_lock operation(operation_mutex_);
     if (!open_.load(std::memory_order_acquire)) {
+        const auto cancelled =
+            cancellation_requested_.load(std::memory_order_acquire);
         return {
-            .status = protocol::TransportStatus::Disconnected,
+            .status = cancelled ? protocol::TransportStatus::Cancelled
+                                : protocol::TransportStatus::Disconnected,
             .transferred = 0,
             .certainty = protocol::TransferCertainty::NotTransferred,
             .truncated = false,
-            .detail = "Fastboot USB transport is closed",
+            .detail = cancelled ? "Fastboot USB transport was cancelled"
+                                : "Fastboot USB transport is closed",
         };
     }
     if (bytes.empty()) {
@@ -389,12 +432,16 @@ protocol::TransferResult UsbFastbootTransport::read(
     const std::chrono::milliseconds timeout) {
     std::scoped_lock operation(operation_mutex_);
     if (!open_.load(std::memory_order_acquire)) {
+        const auto cancelled =
+            cancellation_requested_.load(std::memory_order_acquire);
         return {
-            .status = protocol::TransportStatus::Disconnected,
+            .status = cancelled ? protocol::TransportStatus::Cancelled
+                                : protocol::TransportStatus::Disconnected,
             .transferred = 0,
             .certainty = protocol::TransferCertainty::NotTransferred,
             .truncated = false,
-            .detail = "Fastboot USB transport is closed",
+            .detail = cancelled ? "Fastboot USB transport was cancelled"
+                                : "Fastboot USB transport is closed",
         };
     }
     auto result = read_result(backend_->read_logical_response(destination, timeout));
@@ -404,9 +451,15 @@ protocol::TransferResult UsbFastbootTransport::read(
     return result;
 }
 
-void UsbFastbootTransport::cancel() noexcept {
-    poison_and_stop();
+void UsbFastbootTransport::request_cancel() noexcept {
+    cancellation_requested_.store(true, std::memory_order_release);
+    open_.store(false, std::memory_order_release);
+    if (backend_ != nullptr) {
+        backend_->request_stop();
+    }
 }
+
+void UsbFastbootTransport::cancel() noexcept { request_cancel(); }
 
 void UsbFastbootTransport::close() noexcept {
     poison_and_stop();
@@ -417,7 +470,8 @@ bool UsbFastbootTransport::is_open() const noexcept {
 }
 
 void UsbFastbootTransport::poison_and_stop() noexcept {
-    if (open_.exchange(false, std::memory_order_acq_rel) && backend_ != nullptr) {
+    open_.store(false, std::memory_order_release);
+    if (backend_ != nullptr) {
         backend_->stop();
     }
 }

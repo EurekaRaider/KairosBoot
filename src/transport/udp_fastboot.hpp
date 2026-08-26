@@ -197,6 +197,7 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    void request_cancel() noexcept override;
     void cancel() noexcept;
     void close() noexcept override;
     [[nodiscard]] bool is_open() const noexcept;

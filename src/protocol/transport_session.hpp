@@ -12,6 +12,7 @@ namespace kairosboot::protocol {
 enum class TransportStatus : std::uint8_t {
     Ok,
     Timeout,
+    Cancelled,
     Disconnected,
     IoError,
 };
@@ -31,6 +32,7 @@ struct TransferResult {
     TransferCertainty certainty{TransferCertainty::FullyTransferred};
     bool truncated{false};
     std::string detail;
+    int native_code{0};
 };
 
 // Internal transport seam shared by USB, TCP and UDP adapters.
@@ -52,6 +54,9 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) = 0;
 
+    // Thread-safe cancellation signal for the currently active operation. It
+    // must not wait for the serialized read/write call to return.
+    virtual void request_cancel() noexcept = 0;
     virtual void close() noexcept = 0;
 };
 

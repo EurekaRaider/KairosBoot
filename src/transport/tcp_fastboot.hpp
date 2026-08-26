@@ -95,7 +95,8 @@ struct SocketIoResult {
     std::string detail{};
 };
 
-// Combines a caller-owned cancellation source with TcpFastbootTransport::cancel().
+// Combines a caller-owned cancellation source with
+// TcpFastbootTransport::request_cancel().
 struct CancellationSignal {
     std::stop_token external;
     std::stop_token local{};
@@ -153,6 +154,7 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    void request_cancel() noexcept override;
     void cancel() noexcept;
     void close() noexcept override;
     [[nodiscard]] bool is_open() const noexcept;
