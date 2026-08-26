@@ -37,6 +37,39 @@ deadline. Cancellation calls `kb_operation_cancel`; disposal unregisters that
 callback, releases and drains the native operation, and only then frees the
 managed progress delegate state.
 
+The same API exposes typed asynchronous primitives for `getvar`, `erase`,
+`set_active`, `reboot`, `continue`, `oem`, raw commands, `boot`, `stage`,
+`upload`, and `fetch`. Every primitive returns a binary-safe `CommandResult`:
+
+```csharp
+using var context = Context.Create();
+var options = new CommandOptions(
+    TimeSpan.FromSeconds(30),
+    maximumReceiveBytes: 128UL * 1024UL * 1024UL);
+
+var result = await context.FetchAsync(
+    "vendor_boot",
+    offset: 0,
+    size: 4UL * 1024UL * 1024UL,
+    deviceSelector: "tcp:192.0.2.10:5554",
+    options: options,
+    cancellationToken: cancellationToken);
+
+File.WriteAllBytes("vendor_boot-prefix.img", result.Data);
+```
+
+`TerminalPayload`, every ordered INFO/TEXT `CommandMessage.Payload`, upload or
+fetch `Data`, and extended exception diagnostics are owned managed byte arrays;
+embedded NUL and non-UTF-8 bytes are preserved. `CommandOptions.Default` uses
+an infinite per-I/O timeout and a 64 MiB hard receive bound. A custom receive
+bound must be positive and fit a managed byte array.
+
+Operation waiting polls the nonblocking native `kb_operation_wait(..., 0)` and
+uses task-based delays, so a fleet of pending operations does not consume one
+ThreadPool thread per device. Cancellation requests native cancellation and
+continues polling until the operation and callbacks are drained before any
+`SafeHandle`, pinned stage-start buffer, or progress state is released.
+
 Build and pack:
 
 ```sh

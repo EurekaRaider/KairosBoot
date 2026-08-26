@@ -9,9 +9,14 @@ internal static partial class NativeMethods
     // case-insensitive filesystems.
     internal const string LibraryName = "kairosboot_native";
     internal const uint ApiVersion = 1;
-    internal const uint WaitSliceMilliseconds = 50;
+    internal const uint PollTimeoutMilliseconds = 0;
+    internal const int PollDelayMilliseconds = 10;
+    internal const ulong FetchUnspecified = ulong.MaxValue;
+    internal const ulong DefaultMaximumReceiveBytes = 64UL * 1024UL * 1024UL;
     internal static readonly uint ProgressStructSize =
         checked((uint)Marshal.SizeOf<NativeProgress>());
+    internal static readonly uint CommandOptionsStructSize =
+        checked((uint)Marshal.SizeOf<NativeCommandOptions>());
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -26,6 +31,15 @@ internal struct NativeVersion
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct NativeContextOptions
+{
+    internal uint StructSize;
+    internal uint ApiVersion;
+    internal IntPtr LogCallback;
+    internal IntPtr LogUserData;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct NativeFlashOptions
 {
     internal uint StructSize;
@@ -33,6 +47,17 @@ internal struct NativeFlashOptions
     internal uint TimeoutMilliseconds;
     internal IntPtr ProgressCallback;
     internal IntPtr ProgressUserData;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeCommandOptions
+{
+    internal uint StructSize;
+    internal uint ApiVersion;
+    internal uint TimeoutMilliseconds;
+    internal IntPtr ProgressCallback;
+    internal IntPtr ProgressUserData;
+    internal ulong MaximumReceiveBytes;
 }
 
 [StructLayout(LayoutKind.Sequential)]

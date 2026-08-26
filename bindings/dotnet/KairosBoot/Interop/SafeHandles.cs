@@ -69,3 +69,17 @@ internal sealed class OperationSafeHandle : KairosBootSafeHandle
         return true;
     }
 }
+
+internal sealed class CommandResultSafeHandle : KairosBootSafeHandle
+{
+    internal CommandResultSafeHandle(IntPtr existingHandle)
+        : base(existingHandle)
+    {
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.CommandResultRelease(handle);
+        return true;
+    }
+}
