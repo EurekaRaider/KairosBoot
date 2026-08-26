@@ -1,36 +1,29 @@
 // SPDX-License-Identifier: MIT
 #include "udp_fastboot.hpp"
 
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/error.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/udp.hpp>
+#include <boost/system/system_error.hpp>
+
 #include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cctype>
-#include <cstring>
+#include <exception>
 #include <limits>
 #include <new>
 #include <ranges>
 #include <system_error>
 #include <utility>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <cerrno>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
+#include <vector>
 
 namespace kairosboot::transport {
 namespace {
 
+namespace asio = boost::asio;
+using AsioUdp = asio::ip::udp;
 using Clock = std::chrono::steady_clock;
 
 inline constexpr std::size_t kMaximumIgnoredDatagrams = 64;
@@ -185,225 +178,192 @@ private:
     return true;
 }
 
-#ifdef _WIN32
-
-using NativeSocketHandle = SOCKET;
-inline constexpr NativeSocketHandle kInvalidNativeSocket = INVALID_SOCKET;
-
-class WinsockLease {
-public:
-    WinsockLease() {
-        WSADATA data{};
-        error_ = WSAStartup(MAKEWORD(2, 2), &data);
-        active_ = error_ == 0;
-    }
-
-    ~WinsockLease() {
-        if (active_) {
-            WSACleanup();
-        }
-    }
-
-    WinsockLease(const WinsockLease&) = delete;
-    WinsockLease& operator=(const WinsockLease&) = delete;
-
-    [[nodiscard]] int error() const noexcept { return error_; }
-
-private:
-    int error_{0};
-    bool active_{false};
+enum class AsioOperationStatus : std::uint8_t {
+    Completed,
+    Timeout,
+    Cancelled,
+    Error,
 };
 
-[[nodiscard]] int last_socket_error() noexcept { return WSAGetLastError(); }
-
-[[nodiscard]] bool socket_error_would_block(const int error) noexcept {
-    return error == WSAEWOULDBLOCK;
-}
-
-[[nodiscard]] bool socket_error_interrupted(const int error) noexcept {
-    return error == WSAEINTR;
-}
-
-void close_native_socket(const NativeSocketHandle socket) noexcept {
-    if (socket != kInvalidNativeSocket) {
-        closesocket(socket);
-    }
-}
-
-[[nodiscard]] bool set_nonblocking(const NativeSocketHandle socket) noexcept {
-    u_long enabled = 1;
-    return ioctlsocket(socket, FIONBIO, &enabled) == 0;
-}
-
-#else
-
-using NativeSocketHandle = int;
-inline constexpr NativeSocketHandle kInvalidNativeSocket = -1;
-
-[[nodiscard]] int last_socket_error() noexcept { return errno; }
-
-[[nodiscard]] bool socket_error_would_block(const int error) noexcept {
-    return error == EAGAIN || error == EWOULDBLOCK;
-}
-
-[[nodiscard]] bool socket_error_interrupted(const int error) noexcept {
-    return error == EINTR;
-}
-
-void close_native_socket(const NativeSocketHandle socket) noexcept {
-    if (socket != kInvalidNativeSocket) {
-        ::close(socket);
-    }
-}
-
-[[nodiscard]] bool set_nonblocking(const NativeSocketHandle socket) noexcept {
-    const auto flags = fcntl(socket, F_GETFL, 0);
-    if (flags == -1 || fcntl(socket, F_SETFL, flags | O_NONBLOCK) == -1) {
-        return false;
-    }
-    const auto descriptor_flags = fcntl(socket, F_GETFD, 0);
-    return descriptor_flags != -1 &&
-           fcntl(socket, F_SETFD, descriptor_flags | FD_CLOEXEC) != -1;
-}
-
-#endif
-
-class NativeSocketGuard {
-public:
-    explicit NativeSocketGuard(const NativeSocketHandle socket) noexcept
-        : socket_(socket) {}
-
-    ~NativeSocketGuard() noexcept { close_native_socket(socket_); }
-
-    NativeSocketGuard(const NativeSocketGuard&) = delete;
-    NativeSocketGuard& operator=(const NativeSocketGuard&) = delete;
-
-    [[nodiscard]] NativeSocketHandle get() const noexcept { return socket_; }
-
-    [[nodiscard]] NativeSocketHandle release() noexcept {
-        return std::exchange(socket_, kInvalidNativeSocket);
-    }
-
-private:
-    NativeSocketHandle socket_{kInvalidNativeSocket};
+struct AsioOperationResult {
+    AsioOperationStatus status{AsioOperationStatus::Error};
+    std::size_t transferred{0};
+    boost::system::error_code error;
+    std::string detail;
 };
 
-[[nodiscard]] std::string native_error_message(const int error) {
-    return std::system_category().message(error);
-}
-
-[[nodiscard]] DatagramSendResult wait_for_native_socket(
-    const NativeSocketHandle socket,
-    const bool writable,
-    Deadline& deadline,
-    const UdpCancellationSignal cancellation) {
-    constexpr auto poll_slice = std::chrono::milliseconds(50);
-    for (;;) {
-        if (cancellation.stop_requested()) {
-            return {
-                .status = DatagramIoStatus::Cancelled,
-                .detail = "cancellation requested",
-            };
-        }
-        const auto remaining = deadline.remaining();
-        if (remaining <= std::chrono::milliseconds::zero()) {
-            return {
-                .status = DatagramIoStatus::Timeout,
-                .detail = "socket readiness deadline expired",
-            };
-        }
-        const auto slice = remaining == std::chrono::milliseconds::max()
-            ? poll_slice
-            : std::min(remaining, poll_slice);
-
-#ifdef _WIN32
-        fd_set requested;
-        FD_ZERO(&requested);
-        FD_SET(socket, &requested);
-        fd_set exceptions;
-        FD_ZERO(&exceptions);
-        FD_SET(socket, &exceptions);
-        timeval wait_time{
-            .tv_sec = static_cast<long>(slice.count() / 1000),
-            .tv_usec = static_cast<long>((slice.count() % 1000) * 1000),
-        };
-        const auto ready = select(
-            0,
-            writable ? nullptr : &requested,
-            writable ? &requested : nullptr,
-            &exceptions,
-            &wait_time);
-#else
-        pollfd descriptor{
-            .fd = socket,
-            .events = static_cast<short>(writable ? POLLOUT : POLLIN),
-            .revents = 0,
-        };
-        const auto ready = poll(&descriptor, 1, static_cast<int>(slice.count()));
-#endif
-        if (ready > 0) {
-#ifdef _WIN32
-            if (FD_ISSET(socket, &exceptions)) {
-                int pending_error = 0;
-                int pending_error_size = sizeof(pending_error);
-                if (getsockopt(
-                        socket,
-                        SOL_SOCKET,
-                        SO_ERROR,
-                        reinterpret_cast<char*>(&pending_error),
-                        &pending_error_size) != 0) {
-                    pending_error = last_socket_error();
-                }
-                if (pending_error != 0) {
-                    return {
-                        .status = DatagramIoStatus::Error,
-                        .native_error = pending_error,
-                        .detail = native_error_message(pending_error),
-                    };
-                }
-            }
-#else
-            if ((descriptor.revents & POLLNVAL) != 0) {
-                return {
-                    .status = DatagramIoStatus::Error,
-                    .detail = "poll reported an invalid UDP socket",
-                };
-            }
-#endif
-            return {};
-        }
-        if (ready == 0) {
-            continue;
-        }
-        const auto native_error = last_socket_error();
-        if (socket_error_interrupted(native_error)) {
-            continue;
-        }
+template <typename Initiate>
+[[nodiscard]] AsioOperationResult run_asio_datagram_operation(
+    asio::io_context& context,
+    AsioUdp::socket& socket,
+    const std::chrono::milliseconds timeout,
+    const UdpCancellationSignal cancellation,
+    Initiate&& initiate) {
+    if (cancellation.stop_requested()) {
         return {
-            .status = DatagramIoStatus::Error,
-            .native_error = native_error,
-            .detail = native_error_message(native_error),
+            .status = AsioOperationStatus::Cancelled,
+            .detail = "cancellation requested",
         };
+    }
+
+    Deadline deadline(timeout);
+    if (deadline.expired()) {
+        return {
+            .status = AsioOperationStatus::Timeout,
+            .detail = "socket readiness deadline expired",
+        };
+    }
+
+    struct Completion {
+        bool finished{false};
+        std::size_t transferred{0};
+        boost::system::error_code error;
+    } completion;
+
+    if (context.stopped()) {
+        context.restart();
+    }
+    try {
+        std::forward<Initiate>(initiate)(
+            [&completion](
+                const boost::system::error_code& error,
+                const std::size_t transferred) noexcept {
+                completion.finished = true;
+                completion.transferred = transferred;
+                completion.error = error;
+            });
+    } catch (const std::bad_alloc&) {
+        return {
+            .status = AsioOperationStatus::Error,
+            .detail = "allocating a Boost.Asio UDP operation failed",
+        };
+    } catch (const boost::system::system_error& error) {
+        return {
+            .status = AsioOperationStatus::Error,
+            .error = error.code(),
+            .detail = error.what(),
+        };
+    } catch (const std::exception& error) {
+        return {
+            .status = AsioOperationStatus::Error,
+            .detail = error.what(),
+        };
+    } catch (...) {
+        return {
+            .status = AsioOperationStatus::Error,
+            .detail = "starting a Boost.Asio UDP operation failed",
+        };
+    }
+
+    const auto cancel_and_drain = [&context, &socket, &completion](
+                                      const AsioOperationStatus status,
+                                      std::string detail,
+                                      boost::system::error_code error = {}) {
+        boost::system::error_code cancel_error;
+        socket.cancel(cancel_error);
+        if (cancel_error) {
+            boost::system::error_code ignored;
+            socket.close(ignored);
+            if (!error) {
+                error = cancel_error;
+            }
+            detail.append(": ");
+            detail.append(cancel_error.message());
+        }
+        try {
+            while (!completion.finished) {
+                if (context.stopped()) {
+                    context.restart();
+                }
+                if (context.run_one() == 0) {
+                    break;
+                }
+            }
+        } catch (const boost::system::system_error& drain_error) {
+            if (!error) {
+                error = drain_error.code();
+            }
+            detail.append(": ");
+            detail.append(drain_error.what());
+        } catch (...) {
+            detail.append(": draining the cancelled UDP operation failed");
+        }
+        return AsioOperationResult{
+            .status = status,
+            .transferred = completion.transferred,
+            .error = error,
+            .detail = std::move(detail),
+        };
+    };
+
+    constexpr auto cancellation_slice = std::chrono::milliseconds(50);
+    for (;;) {
+        if (completion.finished) {
+            return {
+                .status = AsioOperationStatus::Completed,
+                .transferred = completion.transferred,
+                .error = completion.error,
+            };
+        }
+        if (cancellation.stop_requested()) {
+            return cancel_and_drain(
+                AsioOperationStatus::Cancelled,
+                "cancellation requested");
+        }
+        if (deadline.expired()) {
+            return cancel_and_drain(
+                AsioOperationStatus::Timeout,
+                "socket readiness deadline expired");
+        }
+
+        const auto slice = bounded_wait(deadline, cancellation_slice);
+        try {
+            static_cast<void>(context.run_for(slice));
+        } catch (const boost::system::system_error& error) {
+            return cancel_and_drain(
+                AsioOperationStatus::Error,
+                error.what(),
+                error.code());
+        } catch (const std::exception& error) {
+            return cancel_and_drain(
+                AsioOperationStatus::Error,
+                error.what());
+        } catch (...) {
+            return cancel_and_drain(
+                AsioOperationStatus::Error,
+                "running a Boost.Asio UDP operation failed");
+        }
     }
 }
 
-[[nodiscard]] std::expected<UdpPeer, UdpError> peer_from_sockaddr(
-    const sockaddr* const address,
-    const std::size_t address_length) {
+[[nodiscard]] std::expected<UdpPeer, UdpError> peer_from_endpoint(
+    const AsioUdp::endpoint& endpoint) {
     UdpPeer peer;
-    if (address->sa_family == AF_INET && address_length >= sizeof(sockaddr_in)) {
-        const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(address);
+    const auto address = endpoint.address();
+    if (address.is_v4()) {
+        const auto bytes = address.to_v4().to_bytes();
         peer.family = UdpAddressFamily::Ipv4;
-        std::memcpy(peer.address.data(), &ipv4->sin_addr, sizeof(ipv4->sin_addr));
-        peer.port = ntohs(ipv4->sin_port);
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            peer.address[index] = static_cast<std::byte>(bytes[index]);
+        }
+        peer.port = endpoint.port();
         return peer;
     }
-    if (address->sa_family == AF_INET6 && address_length >= sizeof(sockaddr_in6)) {
-        const auto* ipv6 = reinterpret_cast<const sockaddr_in6*>(address);
+    if (address.is_v6()) {
+        const auto ipv6 = address.to_v6();
+        const auto bytes = ipv6.to_bytes();
+        if (ipv6.scope_id() > std::numeric_limits<std::uint32_t>::max()) {
+            return std::unexpected(UdpError{
+                .kind = UdpErrorKind::SocketFailed,
+                .message = "resolved UDP IPv6 scope ID exceeds 32 bits",
+            });
+        }
         peer.family = UdpAddressFamily::Ipv6;
-        std::memcpy(peer.address.data(), &ipv6->sin6_addr, sizeof(ipv6->sin6_addr));
-        peer.port = ntohs(ipv6->sin6_port);
-        peer.scope_id = ipv6->sin6_scope_id;
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            peer.address[index] = static_cast<std::byte>(bytes[index]);
+        }
+        peer.port = endpoint.port();
+        peer.scope_id = static_cast<std::uint32_t>(ipv6.scope_id());
         return peer;
     }
     return std::unexpected(UdpError{
@@ -414,34 +374,25 @@ private:
 
 class NativeUdpSocket final : public IUdpSocket {
 public:
-    NativeUdpSocket(
-        const NativeSocketHandle socket,
-        const sockaddr_storage& peer_address,
-        const std::size_t peer_address_length,
-        UdpPeer peer
-#ifdef _WIN32
-        ,
-        std::unique_ptr<WinsockLease> winsock
-#endif
-        )
-        : socket_(socket),
-          peer_address_(peer_address),
-          peer_address_length_(peer_address_length),
-          peer_(peer)
-#ifdef _WIN32
-          ,
-          winsock_(std::move(winsock))
-#endif
-    {}
+    NativeUdpSocket(AsioUdp::endpoint peer_endpoint, UdpPeer peer)
+        : socket_(context_),
+          peer_endpoint_(std::move(peer_endpoint)),
+          peer_(peer) {}
 
     ~NativeUdpSocket() override { close(); }
+
+    [[nodiscard]] boost::system::error_code open() noexcept {
+        boost::system::error_code error;
+        socket_.open(peer_endpoint_.protocol(), error);
+        return error;
+    }
 
     [[nodiscard]] DatagramSendResult send_datagram(
         const std::span<const std::byte> datagram,
         const UdpPeer& peer,
         const std::chrono::milliseconds timeout,
         const UdpCancellationSignal cancellation) override {
-        if (socket_ == kInvalidNativeSocket) {
+        if (!socket_.is_open()) {
             return {
                 .status = DatagramIoStatus::Error,
                 .detail = "UDP socket is closed",
@@ -453,194 +404,156 @@ public:
                 .detail = "send peer does not match the resolved UDP endpoint",
             };
         }
-        Deadline deadline(timeout);
-        for (;;) {
-            auto ready = wait_for_native_socket(socket_, true, deadline, cancellation);
-            if (ready.status != DatagramIoStatus::Ok) {
-                return ready;
-            }
-#ifdef _WIN32
-            const auto amount = static_cast<int>(datagram.size());
-            const auto sent = sendto(
-                socket_,
-                reinterpret_cast<const char*>(datagram.data()),
-                amount,
-                0,
-                reinterpret_cast<const sockaddr*>(&peer_address_),
-                static_cast<int>(peer_address_length_));
-#else
-#ifdef MSG_NOSIGNAL
-            constexpr int send_flags = MSG_NOSIGNAL;
-#else
-            constexpr int send_flags = 0;
-#endif
-            const auto sent = sendto(
-                socket_,
-                datagram.data(),
-                datagram.size(),
-                send_flags,
-                reinterpret_cast<const sockaddr*>(&peer_address_),
-                static_cast<socklen_t>(peer_address_length_));
-#endif
-            if (sent >= 0) {
-                const auto transferred = static_cast<std::size_t>(sent);
-                return {
-                    .status = transferred == datagram.size()
-                        ? DatagramIoStatus::Ok
-                        : DatagramIoStatus::Error,
-                    .transferred = transferred,
-                    .detail = transferred == datagram.size()
-                        ? std::string{}
-                        : std::string{"UDP socket reported a partial datagram send"},
-                };
-            }
-            const auto native_error = last_socket_error();
-            if (socket_error_would_block(native_error) ||
-                socket_error_interrupted(native_error)) {
-                continue;
-            }
+
+        auto result = run_asio_datagram_operation(
+            context_,
+            socket_,
+            timeout,
+            cancellation,
+            [this, datagram](auto&& handler) {
+                socket_.async_send_to(
+                    asio::buffer(datagram.data(), datagram.size()),
+                    peer_endpoint_,
+                    std::forward<decltype(handler)>(handler));
+            });
+        if (result.status != AsioOperationStatus::Completed) {
             return {
-                .status = DatagramIoStatus::Error,
-                .native_error = native_error,
-                .detail = native_error_message(native_error),
+                .status = result.status == AsioOperationStatus::Timeout
+                    ? DatagramIoStatus::Timeout
+                    : (result.status == AsioOperationStatus::Cancelled
+                           ? DatagramIoStatus::Cancelled
+                           : DatagramIoStatus::Error),
+                .transferred = result.transferred,
+                .native_error = result.error.value(),
+                .detail = std::move(result.detail),
             };
         }
+        if (result.error) {
+            return {
+                .status = DatagramIoStatus::Error,
+                .transferred = result.transferred,
+                .native_error = result.error.value(),
+                .detail = result.error.message(),
+            };
+        }
+        return {
+            .status = result.transferred == datagram.size()
+                ? DatagramIoStatus::Ok
+                : DatagramIoStatus::Error,
+            .transferred = result.transferred,
+            .detail = result.transferred == datagram.size()
+                ? std::string{}
+                : std::string{"UDP socket reported a partial datagram send"},
+        };
     }
 
     [[nodiscard]] DatagramReceiveResult receive_datagram(
         const std::span<std::byte> destination,
         const std::chrono::milliseconds timeout,
         const UdpCancellationSignal cancellation) override {
-        if (socket_ == kInvalidNativeSocket) {
+        if (!socket_.is_open()) {
             return {
                 .status = DatagramIoStatus::Error,
                 .detail = "UDP socket is closed",
             };
         }
-        Deadline deadline(timeout);
-        for (;;) {
-            auto ready = wait_for_native_socket(socket_, false, deadline, cancellation);
-            if (ready.status != DatagramIoStatus::Ok) {
-                return {
-                    .status = ready.status,
-                    .native_error = ready.native_error,
-                    .detail = std::move(ready.detail),
-                };
-            }
-
-            sockaddr_storage sender{};
-#ifdef _WIN32
-            int sender_length = sizeof(sender);
-            const auto received = recvfrom(
-                socket_,
-                reinterpret_cast<char*>(destination.data()),
-                static_cast<int>(destination.size()),
-                0,
-                reinterpret_cast<sockaddr*>(&sender),
-                &sender_length);
-            if (received >= 0) {
-                auto sender_peer = peer_from_sockaddr(
-                    reinterpret_cast<const sockaddr*>(&sender),
-                    static_cast<std::size_t>(sender_length));
-                if (!sender_peer) {
-                    return {
-                        .status = DatagramIoStatus::Error,
-                        .detail = sender_peer.error().message,
-                    };
-                }
-                return {
-                    .transferred = static_cast<std::size_t>(received),
-                    .peer = *sender_peer,
-                };
-            }
-            const auto native_error = last_socket_error();
-            if (native_error == WSAEMSGSIZE) {
-                auto sender_peer = peer_from_sockaddr(
-                    reinterpret_cast<const sockaddr*>(&sender),
-                    static_cast<std::size_t>(sender_length));
-                if (!sender_peer) {
-                    return {
-                        .status = DatagramIoStatus::Truncated,
-                        .transferred = destination.size(),
-                        .native_error = native_error,
-                        .detail = "oversized UDP datagram had an invalid source address",
-                    };
-                }
-                return {
-                    .status = DatagramIoStatus::Truncated,
-                    .transferred = destination.size(),
-                    .peer = *sender_peer,
-                    .native_error = native_error,
-                    .detail = "UDP datagram exceeded the receive buffer",
-                };
-            }
-#else
-            iovec data{
-                .iov_base = destination.data(),
-                .iov_len = destination.size(),
-            };
-            msghdr message{
-                .msg_name = &sender,
-                .msg_namelen = sizeof(sender),
-                .msg_iov = &data,
-                .msg_iovlen = 1,
-                .msg_control = nullptr,
-                .msg_controllen = 0,
-                .msg_flags = 0,
-            };
-            const auto received = recvmsg(socket_, &message, MSG_TRUNC);
-            if (received >= 0) {
-                auto sender_peer = peer_from_sockaddr(
-                    reinterpret_cast<const sockaddr*>(&sender),
-                    static_cast<std::size_t>(message.msg_namelen));
-                if (!sender_peer) {
-                    return {
-                        .status = DatagramIoStatus::Error,
-                        .detail = sender_peer.error().message,
-                    };
-                }
-                const auto actual = static_cast<std::size_t>(received);
-                return {
-                    .status = actual > destination.size()
-                        ? DatagramIoStatus::Truncated
-                        : DatagramIoStatus::Ok,
-                    .transferred = std::min(actual, destination.size()),
-                    .peer = *sender_peer,
-                    .detail = actual > destination.size()
-                        ? std::string{"UDP datagram exceeded the receive buffer"}
-                        : std::string{},
-                };
-            }
-            const auto native_error = last_socket_error();
-#endif
-            if (socket_error_would_block(native_error) ||
-                socket_error_interrupted(native_error)) {
-                continue;
-            }
+        if (destination.size() == std::numeric_limits<std::size_t>::max()) {
             return {
                 .status = DatagramIoStatus::Error,
-                .native_error = native_error,
-                .detail = native_error_message(native_error),
+                .detail = "UDP receive buffer size cannot be represented",
             };
         }
+        try {
+            // Boost.Asio does not report datagram truncation consistently on
+            // every platform. One extra byte makes oversized datagrams
+            // observable even when the native receive completes successfully.
+            receive_buffer_.resize(destination.size() + 1U);
+        } catch (const std::bad_alloc&) {
+            return {
+                .status = DatagramIoStatus::Error,
+                .detail = "allocating the Boost.Asio UDP receive buffer failed",
+            };
+        }
+
+        AsioUdp::endpoint sender;
+        auto result = run_asio_datagram_operation(
+            context_,
+            socket_,
+            timeout,
+            cancellation,
+            [this, &sender](auto&& handler) {
+                socket_.async_receive_from(
+                    asio::buffer(receive_buffer_.data(), receive_buffer_.size()),
+                    sender,
+                    std::forward<decltype(handler)>(handler));
+            });
+        if (result.status != AsioOperationStatus::Completed) {
+            return {
+                .status = result.status == AsioOperationStatus::Timeout
+                    ? DatagramIoStatus::Timeout
+                    : (result.status == AsioOperationStatus::Cancelled
+                           ? DatagramIoStatus::Cancelled
+                           : DatagramIoStatus::Error),
+                .transferred = result.transferred,
+                .native_error = result.error.value(),
+                .detail = std::move(result.detail),
+            };
+        }
+
+        const bool truncated = result.error == asio::error::message_size ||
+                               result.transferred > destination.size();
+        if (result.error && !truncated) {
+            return {
+                .status = DatagramIoStatus::Error,
+                .transferred = result.transferred,
+                .native_error = result.error.value(),
+                .detail = result.error.message(),
+            };
+        }
+        const auto copied = std::min(result.transferred, destination.size());
+        std::ranges::copy_n(receive_buffer_.begin(), copied, destination.begin());
+        auto sender_peer = peer_from_endpoint(sender);
+        if (!sender_peer) {
+            return {
+                .status = truncated
+                    ? DatagramIoStatus::Truncated
+                    : DatagramIoStatus::Error,
+                .transferred = truncated
+                    ? destination.size()
+                    : result.transferred,
+                .native_error = result.error.value(),
+                .detail = truncated
+                    ? "oversized UDP datagram had an invalid source address"
+                    : sender_peer.error().message,
+            };
+        }
+        return {
+            .status = truncated
+                ? DatagramIoStatus::Truncated
+                : DatagramIoStatus::Ok,
+            .transferred = truncated
+                ? destination.size()
+                : result.transferred,
+            .peer = *sender_peer,
+            .native_error = result.error.value(),
+            .detail = truncated
+                ? std::string{"UDP datagram exceeded the receive buffer"}
+                : std::string{},
+        };
     }
 
     void close() noexcept override {
-        if (socket_ != kInvalidNativeSocket) {
-            close_native_socket(socket_);
-            socket_ = kInvalidNativeSocket;
-        }
+        boost::system::error_code ignored;
+        socket_.cancel(ignored);
+        socket_.close(ignored);
     }
 
 private:
-    NativeSocketHandle socket_{kInvalidNativeSocket};
-    sockaddr_storage peer_address_{};
-    std::size_t peer_address_length_{0};
+    asio::io_context context_;
+    AsioUdp::socket socket_;
+    AsioUdp::endpoint peer_endpoint_;
     UdpPeer peer_;
-#ifdef _WIN32
-    // Per-connection ownership avoids a module-static WSACleanup destructor.
-    std::unique_ptr<WinsockLease> winsock_;
-#endif
+    std::vector<std::byte> receive_buffer_;
 };
 
 }  // namespace
@@ -1405,47 +1318,34 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
         });
     }
 
-#ifdef _WIN32
-    std::unique_ptr<WinsockLease> winsock;
-    try {
-        winsock = std::make_unique<WinsockLease>();
-    } catch (const std::bad_alloc&) {
-        return std::unexpected(UdpError{
-            .kind = UdpErrorKind::Io,
-            .message = "allocating Winsock lifetime state failed",
-        });
-    }
-    if (winsock->error() != 0) {
-        return std::unexpected(UdpError{
-            .kind = UdpErrorKind::SocketFailed,
-            .native_error = winsock->error(),
-            .message = "Winsock 2.2 initialization failed",
-        });
-    }
-#endif
-
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_protocol = IPPROTO_UDP;
-    addrinfo* addresses = nullptr;
+    asio::io_context resolve_io;
+    AsioUdp::resolver resolver(resolve_io);
     const auto service = std::to_string(endpoint.port);
     struct ResolveContext {
-        const char* host;
-        const char* service;
-        const addrinfo* hints;
-        addrinfo** addresses;
-        int result{0};
+        AsioUdp::resolver* resolver;
+        const std::string* host;
+        const std::string* service;
+        AsioUdp::resolver::results_type results;
+        boost::system::error_code error;
+        bool allocation_failed{false};
+        bool unexpected_failure{false};
     } resolve_context{
-        .host = endpoint.host.c_str(),
-        .service = service.c_str(),
-        .hints = &hints,
-        .addresses = &addresses,
+        .resolver = &resolver,
+        .host = &endpoint.host,
+        .service = &service,
     };
     const auto resolve = [](void* const opaque) noexcept {
         auto& context = *static_cast<ResolveContext*>(opaque);
-        context.result = getaddrinfo(
-            context.host, context.service, context.hints, context.addresses);
+        try {
+            context.results = context.resolver->resolve(
+                *context.host, *context.service, context.error);
+        } catch (const std::bad_alloc&) {
+            context.allocation_failed = true;
+        } catch (const boost::system::system_error& error) {
+            context.error = error.code();
+        } catch (...) {
+            context.unexpected_failure = true;
+        }
     };
     const auto now = [](void*) noexcept { return Clock::now(); };
     const auto resolve_phase = detail::run_udp_resolve_phase(
@@ -1455,8 +1355,6 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
         &resolve_context,
         now,
         nullptr);
-    const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> address_list(
-        addresses, &freeaddrinfo);
     if (resolve_phase.cancelled) {
         return std::unexpected(UdpError{
             .kind = UdpErrorKind::Cancelled,
@@ -1471,19 +1369,31 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
             .message = "UDP connect deadline expired during name resolution",
         });
     }
-    if (resolve_context.result != 0) {
+    if (resolve_context.allocation_failed) {
+        return std::unexpected(UdpError{
+            .kind = UdpErrorKind::Io,
+            .message = "allocating Boost.Asio UDP resolver results failed",
+        });
+    }
+    if (resolve_context.unexpected_failure) {
         return std::unexpected(UdpError{
             .kind = UdpErrorKind::ResolveFailed,
-            .native_error = resolve_context.result,
-            .message = "getaddrinfo failed for UDP endpoint with code " +
-                       std::to_string(resolve_context.result),
+            .message = "Boost.Asio UDP resolution failed unexpectedly",
+        });
+    }
+    if (resolve_context.error) {
+        return std::unexpected(UdpError{
+            .kind = UdpErrorKind::ResolveFailed,
+            .native_error = resolve_context.error.value(),
+            .message = "Boost.Asio UDP resolution failed: " +
+                       resolve_context.error.message(),
         });
     }
 
     Deadline deadline(resolve_phase.deadline);
     int last_error = 0;
     std::string last_detail = "no usable UDP address candidate";
-    for (auto* address = address_list.get(); address != nullptr; address = address->ai_next) {
+    for (const auto& resolved : resolve_context.results) {
         if (cancellation.stop_requested()) {
             return std::unexpected(UdpError{
                 .kind = UdpErrorKind::Cancelled,
@@ -1496,55 +1406,22 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
                 .message = "UDP socket creation deadline expired",
             });
         }
-        if (address->ai_addr == nullptr || address->ai_addrlen == 0 ||
-            static_cast<std::size_t>(address->ai_addrlen) > sizeof(sockaddr_storage)) {
-            last_detail = "resolver returned an invalid UDP address length";
-            continue;
-        }
-        auto peer = peer_from_sockaddr(
-            address->ai_addr, static_cast<std::size_t>(address->ai_addrlen));
+        const auto peer_endpoint = resolved.endpoint();
+        auto peer = peer_from_endpoint(peer_endpoint);
         if (!peer) {
             last_detail = peer.error().message;
             continue;
         }
 
-        NativeSocketGuard socket_guard(::socket(
-            address->ai_family, address->ai_socktype, address->ai_protocol));
-        if (socket_guard.get() == kInvalidNativeSocket) {
-            last_error = last_socket_error();
-            last_detail = native_error_message(last_error);
-            continue;
-        }
-        if (!set_nonblocking(socket_guard.get())) {
-            last_error = last_socket_error();
-            last_detail = native_error_message(last_error);
-            continue;
-        }
-#ifndef _WIN32
-#ifdef SO_NOSIGPIPE
-        int enabled = 1;
-        static_cast<void>(setsockopt(
-            socket_guard.get(), SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled)));
-#endif
-#endif
-
-        sockaddr_storage peer_address{};
-        std::memcpy(
-            &peer_address,
-            address->ai_addr,
-            static_cast<std::size_t>(address->ai_addrlen));
         try {
             auto socket = std::make_unique<NativeUdpSocket>(
-                socket_guard.get(),
-                peer_address,
-                static_cast<std::size_t>(address->ai_addrlen),
-                *peer
-#ifdef _WIN32
-                ,
-                std::move(winsock)
-#endif
-                );
-            static_cast<void>(socket_guard.release());
+                peer_endpoint, *peer);
+            const auto open_error = socket->open();
+            if (open_error) {
+                last_error = open_error.value();
+                last_detail = open_error.message();
+                continue;
+            }
             return UdpSocketConnection{
                 .socket = std::unique_ptr<IUdpSocket>(std::move(socket)),
                 .peer = *peer,
@@ -1554,6 +1431,9 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
                 .kind = UdpErrorKind::Io,
                 .message = "allocating native UDP socket ownership failed",
             });
+        } catch (const boost::system::system_error& error) {
+            last_error = error.code().value();
+            last_detail = error.what();
         }
     }
 
