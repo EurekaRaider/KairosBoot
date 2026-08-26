@@ -240,7 +240,7 @@ const kb_error_t *materialize_operation_error(
     operation->public_error = std::make_unique<kb_error>(kb_error{
         payload->status,
         payload->message,
-        {},
+        payload->device_identifier,
         payload->native_code,
         payload->transfer_state,
     });

@@ -128,6 +128,7 @@ endfunction()
 add_library(
   kairosboot_internal STATIC
   src/api/device_selection.cpp
+  src/api/error_mapping.cpp
   src/api/operation_state.cpp
   src/fastboot/primitive_service.cpp
   src/fleet/controller_scheduler.cpp
@@ -266,6 +267,17 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_error_mapping_tests
+                 tests/api/error_mapping_tests.cpp)
+  target_compile_features(kairosboot_error_mapping_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_error_mapping_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_error_mapping_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_error_mapping_tests)
+  add_test(NAME error_mapping COMMAND kairosboot_error_mapping_tests)
+  set_tests_properties(error_mapping PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_primitive_service_tests
                  tests/fastboot/primitive_service_tests.cpp
                  tests/protocol/scripted_transport.cpp)
