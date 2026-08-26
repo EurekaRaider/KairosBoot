@@ -206,6 +206,61 @@ maximum_trace_events(const std::size_t requirements, const std::size_t tasks,
 }
 
 using ArtifactMap = std::map<std::string, const PreparedUpdateArtifact*, std::less<>>;
+inline constexpr std::string_view kSuperEmptyName = "super_empty.img";
+
+[[nodiscard]] bool known_origin(
+    const image::ArtifactSourceOrigin origin) noexcept {
+    switch (origin) {
+    case image::ArtifactSourceOrigin::DirectFile:
+    case image::ArtifactSourceOrigin::DirectoryEntry:
+    case image::ArtifactSourceOrigin::ZipEntry:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool same_sparse_header(const image::SparseHeader& left,
+                                      const image::SparseHeader& right) noexcept {
+    return left.major_version == right.major_version &&
+           left.minor_version == right.minor_version &&
+           left.file_header_size == right.file_header_size &&
+           left.chunk_header_size == right.chunk_header_size &&
+           left.block_size == right.block_size &&
+           left.total_blocks == right.total_blocks &&
+           left.total_chunks == right.total_chunks &&
+           left.image_checksum == right.image_checksum;
+}
+
+[[nodiscard]] bool flash_mapping_is_consistent(
+    const std::shared_ptr<const image::ResolvedArtifact>& resolved,
+    const std::shared_ptr<const image::FlashArtifact>& artifact,
+    const std::string_view expected_name) noexcept {
+    if (!resolved || !resolved->source || !artifact || expected_name.empty() ||
+        resolved->logical_name != expected_name || !known_origin(resolved->origin) ||
+        artifact->transfer_source() != resolved->source) {
+        return false;
+    }
+
+    const auto& metadata = artifact->metadata();
+    if (metadata.transfer_size != resolved->source->size()) {
+        return false;
+    }
+    switch (metadata.kind) {
+    case image::FlashArtifactKind::Raw:
+        return artifact->sparse_image() == nullptr &&
+               !metadata.sparse_header.has_value() &&
+               metadata.expanded_size == metadata.transfer_size;
+    case image::FlashArtifactKind::AndroidSparse: {
+        const auto* sparse = artifact->sparse_image();
+        return sparse != nullptr && metadata.sparse_header.has_value() &&
+               metadata.expanded_size == sparse->output_size() &&
+               same_sparse_header(*metadata.sparse_header, sparse->header());
+    }
+    default:
+        return false;
+    }
+}
 
 [[nodiscard]] std::string task_event_name(const PlannedUpdateTask& task) {
     switch (task.kind) {
@@ -237,9 +292,8 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
                 context, "while validating prepared artifacts")) {
             return std::unexpected(std::move(*stopped));
         }
-        if (artifact.name.empty() || !artifact.resolved || !artifact.resolved->source ||
-            artifact.resolved->logical_name != artifact.name ||
-            artifact.artifact.transfer_source() != artifact.resolved->source) {
+        if (!flash_mapping_is_consistent(artifact.resolved, artifact.artifact,
+                                         artifact.name)) {
             return std::unexpected(PendingFailure{
                 .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
                 .name = artifact.name,
@@ -256,6 +310,7 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
     }
 
     std::set<std::string, std::less<>> referenced;
+    bool has_update_super_task = false;
     for (std::size_t index = 0; index < prepared.plan.tasks.size(); ++index) {
         const auto& task = prepared.plan.tasks[index];
         if (auto stopped = interruption(context, "while validating prepared tasks",
@@ -316,6 +371,7 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
             }
             break;
         case UpdateTaskKind::UpdateSuper:
+            has_update_super_task = true;
             break;
         default:
             return std::unexpected(PendingFailure{
@@ -325,6 +381,51 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
                 .message = "prepared update contains an unknown task kind",
             });
         }
+    }
+
+    const auto super_state_failure = [&]() {
+        return PendingFailure{
+            .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+            .name = std::string(kSuperEmptyName),
+            .message =
+                "prepared update-super state, task and artifact are inconsistent",
+        };
+    };
+    switch (prepared.update_super_state) {
+    case UpdateSuperPreparationState::NotRequired:
+    case UpdateSuperPreparationState::SkippedNotFound:
+        if (has_update_super_task || prepared.prepared_super_artifact) {
+            return std::unexpected(super_state_failure());
+        }
+        break;
+    case UpdateSuperPreparationState::Prepared:
+        if (!has_update_super_task || !prepared.prepared_super_artifact ||
+            !flash_mapping_is_consistent(
+                prepared.prepared_super_artifact->resolved(),
+                prepared.prepared_super_artifact->artifact(), kSuperEmptyName)) {
+            return std::unexpected(super_state_failure());
+        }
+        if (const auto ordinary = artifacts.find(kSuperEmptyName);
+            ordinary != artifacts.end() &&
+            (ordinary->second->resolved !=
+                 prepared.prepared_super_artifact->resolved() ||
+             ordinary->second->artifact !=
+                 prepared.prepared_super_artifact->artifact())) {
+            return std::unexpected(PendingFailure{
+                .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                .name = std::string(kSuperEmptyName),
+                .message =
+                    "flash and update-super tasks do not share one immutable "
+                    "preflight artifact",
+            });
+        }
+        break;
+    default:
+        return std::unexpected(PendingFailure{
+            .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+            .name = std::string(kSuperEmptyName),
+            .message = "prepared update contains an unknown update-super state",
+        });
     }
 
     for (const auto& [name, unused] : artifacts) {
@@ -587,20 +688,18 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
 
 [[nodiscard]] UpdateDeviceTaskInput task_input(
     const PlannedUpdateTask& task, const ArtifactMap& artifacts,
-    const std::optional<UpdateSuperArtifactInput>& super_artifact) {
+    const std::shared_ptr<const PreparedSuperArtifact>& super_artifact) {
     UpdateDeviceTaskInput input{
         .task = task,
     };
     if (task.kind == UpdateTaskKind::Flash) {
         const auto* artifact = artifacts.at(task.artifact);
         input.flash_artifact = UpdateFlashArtifactInput{
-            .logical_name = artifact->name,
-            .source = artifact->artifact.transfer_source(),
-            .metadata = artifact->artifact.metadata(),
-            .sha256 = artifact->resolved->sha256,
+            .resolved = artifact->resolved,
+            .artifact = artifact->artifact,
         };
     } else if (task.kind == UpdateTaskKind::UpdateSuper && super_artifact) {
-        input.super_artifact = *super_artifact;
+        input.super_artifact = super_artifact;
     }
     return input;
 }
@@ -610,7 +709,7 @@ using PreparedDeviceTasks = std::vector<std::unique_ptr<IPreparedDeviceTask>>;
 [[nodiscard]] std::expected<PreparedDeviceTasks, PendingFailure>
 prepare_all_tasks(const PreparedUpdatePackage& prepared, IUpdateDevice& device,
                   const ArtifactMap& artifacts,
-                  const std::optional<UpdateSuperArtifactInput>& super_artifact,
+                  const std::shared_ptr<const PreparedSuperArtifact>& super_artifact,
                   const UpdateOperationContext& context) {
     PreparedDeviceTasks result;
     result.reserve(prepared.plan.tasks.size());
@@ -707,17 +806,6 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
         if (!artifacts) {
             return std::unexpected(finish_error(state, std::move(artifacts.error())));
         }
-        if (options.super_artifact &&
-            (options.super_artifact->logical_name.empty() ||
-             !options.super_artifact->source)) {
-            return std::unexpected(finish_error(
-                state,
-                PendingFailure{
-                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
-                    .name = options.super_artifact->logical_name,
-                    .message = "executor super artifact binding is invalid",
-                }));
-        }
         if (auto failure = emit_checked(
                 state, event(UpdateExecutionEventKind::PreparedPackageValidated));
             failure) {
@@ -752,7 +840,8 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
         // Phase one: bind and validate every exact device task. No token may
         // execute until every later task has also prepared successfully.
         auto prepared_tasks = prepare_all_tasks(prepared, device, *artifacts,
-                                                options.super_artifact, context);
+                                                prepared.prepared_super_artifact,
+                                                context);
         if (!prepared_tasks) {
             return std::unexpected(
                 finish_error(state, std::move(prepared_tasks.error())));
