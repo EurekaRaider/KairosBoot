@@ -16,6 +16,7 @@ struct UsbFastbootTransportOptions final {
     BulkOutOptions bulk_out{};
     TransferRingConfig data_ring{};
     std::shared_ptr<BufferBudget> buffer_budget;
+    TransferTelemetryConfig data_telemetry{};
 };
 
 using TransferProgressAction = protocol::TransferProgressAction;
@@ -79,6 +80,9 @@ public:
     void cancel() noexcept;
     void close() noexcept override;
     [[nodiscard]] bool is_open() const noexcept;
+    // Serializes with DATA writes and returns the most recently completed ring
+    // snapshot. This is internal and does not invoke observers.
+    [[nodiscard]] TransferTelemetrySnapshot data_telemetry_snapshot() const;
 
 private:
     UsbFastbootTransport(std::unique_ptr<LibusbBulkOutBackend> backend,
@@ -90,9 +94,10 @@ private:
     std::unique_ptr<LibusbBulkOutBackend> backend_;
     UsbFastbootTransportOptions options_;
     std::shared_ptr<BufferBudget> budget_;
+    TransferTelemetry data_telemetry_;
     std::atomic<bool> cancellation_requested_{false};
     std::atomic<bool> open_{true};
-    std::mutex operation_mutex_;
+    mutable std::mutex operation_mutex_;
 };
 
 }  // namespace kairosboot::transport

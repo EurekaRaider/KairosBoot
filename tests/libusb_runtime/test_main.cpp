@@ -47,6 +47,8 @@ using kairosboot::transport::TransferRingState;
 using kairosboot::transport::TransferProgressAction;
 using kairosboot::transport::TransferSource;
 using kairosboot::transport::TransferSubmission;
+using kairosboot::transport::TransferTelemetryConfig;
+using kairosboot::transport::TransferTelemetryTimePoint;
 using kairosboot::transport::UsbDeviceInfo;
 using kairosboot::transport::UsbFastbootTransport;
 using kairosboot::transport::UsbFastbootTransportOptions;
@@ -78,6 +80,32 @@ void wait_until(Predicate predicate) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+
+struct IncrementingTelemetryClock final {
+    TransferTelemetryTimePoint current{};
+    std::chrono::nanoseconds step{1};
+    std::atomic<std::size_t> calls{0};
+    std::size_t block_on_call{};
+    std::atomic<bool> blocked{false};
+    std::atomic<bool> resume{false};
+    std::thread::id caller_thread;
+};
+
+[[nodiscard]] TransferTelemetryTimePoint sample_telemetry_clock(
+    void* const context) noexcept {
+    auto& clock = *static_cast<IncrementingTelemetryClock*>(context);
+    const auto sampled = clock.current;
+    clock.current += clock.step;
+    const auto call = clock.calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    clock.caller_thread = std::this_thread::get_id();
+    if (call == clock.block_on_call) {
+        clock.blocked.store(true, std::memory_order_release);
+        while (!clock.resume.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+    }
+    return sampled;
 }
 
 class FakeLibusb final : public std::enable_shared_from_this<FakeLibusb> {
@@ -1318,6 +1346,81 @@ void test_usb_transport_uses_process_budget_by_default() {
     KB_CHECK(result.status == TransportStatus::Ok);
     KB_CHECK(result.transferred == bytes->size());
     KB_CHECK(process_budget->used() == 0);
+    const auto telemetry = transport->data_telemetry_snapshot();
+    KB_CHECK(!telemetry.enabled);
+    KB_CHECK(telemetry.source_read_count == 0);
+    KB_CHECK(telemetry.submit_count == 0);
+    KB_CHECK(telemetry.completion_count == 0);
+
+    transport->close();
+    runtime->stop();
+}
+
+void test_usb_data_transport_exposes_internal_telemetry_snapshot() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto device = matching_device(runtime);
+    IncrementingTelemetryClock clock;
+    clock.block_on_call = 5;
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    const auto budget = std::make_shared<BufferBudget>(8);
+    auto held_budget = budget->try_acquire(8);
+    KB_CHECK(held_budget.has_value());
+    options.buffer_budget = budget;
+    options.data_telemetry = TransferTelemetryConfig{
+        .enabled = true,
+        .clock = {
+            .now = &sample_telemetry_clock,
+            .context = &clock,
+        },
+    };
+
+    auto opened = UsbFastbootTransport::open(runtime, device, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto bytes = payload(8);
+    std::thread::id worker_thread;
+    auto pending = std::async(std::launch::async, [&] {
+        worker_thread = std::this_thread::get_id();
+        return transport->write(*bytes, std::chrono::seconds(1));
+    });
+
+    wait_until([&] { return clock.blocked.load(std::memory_order_acquire); });
+    held_budget.reset();
+    clock.resume.store(true, std::memory_order_release);
+    wait_for_submissions(*fake, 2);
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto result = pending.get();
+    KB_CHECK(result.status == TransportStatus::Ok);
+
+    const auto telemetry = transport->data_telemetry_snapshot();
+    KB_CHECK(telemetry.enabled);
+    KB_CHECK(telemetry.source_read_count == 2);
+    KB_CHECK(telemetry.source_read_bytes == 8);
+    KB_CHECK(telemetry.source_read_time == std::chrono::nanoseconds(2));
+    KB_CHECK(telemetry.budget_acquire_attempt_count == 4);
+    KB_CHECK(telemetry.budget_acquire_count == 2);
+    KB_CHECK(telemetry.budget_acquire_time == std::chrono::nanoseconds(4));
+    KB_CHECK(telemetry.budget_wait_count == 1);
+    KB_CHECK(telemetry.budget_wait_time == std::chrono::nanoseconds(1));
+    KB_CHECK(telemetry.submit_attempt_count == 2);
+    KB_CHECK(telemetry.submit_count == 2);
+    KB_CHECK(telemetry.submitted_bytes == 8);
+    KB_CHECK(telemetry.completion_count == 2);
+    KB_CHECK(telemetry.completed_bytes == 8);
+    KB_CHECK(telemetry.current_in_flight == 0);
+    KB_CHECK(telemetry.peak_in_flight == 2);
+    KB_CHECK(telemetry.contiguous_watermark == 8);
+    KB_CHECK(telemetry.cancel_count == 0);
+    KB_CHECK(telemetry.backend_cancel_count == 0);
+    KB_CHECK(telemetry.cancelled_completion_count == 0);
+    KB_CHECK(telemetry.error_count == 0);
+    KB_CHECK(clock.calls.load(std::memory_order_relaxed) == 14);
+    KB_CHECK(clock.caller_thread == worker_thread);
+    KB_CHECK(clock.caller_thread != runtime->event_thread_id());
+    KB_CHECK(fake->callback_thread == runtime->event_thread_id());
 
     transport->close();
     runtime->stop();
@@ -2042,6 +2145,8 @@ int main() {
         {"explicit zero packet contract", test_explicit_zero_packet_contract},
         {"USB default process budget",
          test_usb_transport_uses_process_budget_by_default},
+        {"USB DATA internal telemetry snapshot",
+         test_usb_data_transport_exposes_internal_telemetry_snapshot},
         {"USB logical read ZLP, short packet, overflow",
          test_usb_logical_read_short_packet_zlp_and_overflow},
         {"USB DATA read does not over-read",

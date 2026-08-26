@@ -90,6 +90,9 @@ using kairosboot::transport::TransferRing;
 using kairosboot::transport::TransferRingConfig;
 using kairosboot::transport::TransferRingState;
 using kairosboot::transport::TransferSubmission;
+using kairosboot::transport::TransferTelemetry;
+using kairosboot::transport::TransferTelemetryConfig;
+using kairosboot::transport::TransferTelemetryTimePoint;
 using kairosboot::transport::TuningSample;
 
 class TestFailure final : public std::runtime_error {
@@ -117,6 +120,33 @@ public:
 private:
     time_point now_{};
 };
+
+struct IncrementingTelemetryClock final {
+    TransferTelemetryTimePoint current{};
+    std::chrono::nanoseconds step{1};
+    std::size_t calls{};
+};
+
+[[nodiscard]] TransferTelemetryTimePoint sample_telemetry_clock(
+    void* const context) noexcept {
+    auto& clock = *static_cast<IncrementingTelemetryClock*>(context);
+    const auto sampled = clock.current;
+    clock.current += clock.step;
+    ++clock.calls;
+    return sampled;
+}
+
+[[nodiscard]] TransferTelemetry make_telemetry(
+    IncrementingTelemetryClock& clock,
+    const bool enabled = true) noexcept {
+    return TransferTelemetry(TransferTelemetryConfig{
+        .enabled = enabled,
+        .clock = {
+            .now = &sample_telemetry_clock,
+            .context = &clock,
+        },
+    });
+}
 
 class FakeBackend final : public TransferBackend {
 public:
@@ -182,6 +212,173 @@ public:
         bytes[index] = std::byte{static_cast<unsigned char>(index & 0xFFU)};
     }
     return std::make_shared<MemoryTransferSource>(std::move(bytes));
+}
+
+void test_transfer_telemetry_disabled_has_zero_clock_cost() {
+    IncrementingTelemetryClock clock;
+    auto telemetry = make_telemetry(clock, false);
+    FakeBackend backend;
+    const auto budget = std::make_shared<BufferBudget>(8);
+    TransferRing ring(
+        backend, budget, TransferRingConfig{4, 2}, &telemetry);
+
+    KB_CHECK(ring.start(make_source(8)));
+    KB_CHECK(ring.handle_completion({1, CompletionCode::success, 4}));
+    KB_CHECK(ring.handle_completion({2, CompletionCode::success, 4}));
+    KB_CHECK(clock.calls == 0);
+
+    {
+        AllocationFailureScope fault;
+        const auto snapshot = ring.telemetry_snapshot();
+        KB_CHECK(!snapshot.enabled);
+        KB_CHECK(snapshot.source_read_count == 0);
+        KB_CHECK(snapshot.budget_acquire_attempt_count == 0);
+        KB_CHECK(snapshot.submit_count == 0);
+        KB_CHECK(snapshot.completion_count == 0);
+        KB_CHECK(snapshot.current_in_flight == 0);
+        KB_CHECK(snapshot.peak_in_flight == 0);
+        KB_CHECK(snapshot.cancel_count == 0);
+        KB_CHECK(snapshot.error_count == 0);
+    }
+    KB_CHECK(allocation_fault::attempts == 0);
+}
+
+void test_transfer_telemetry_counts_and_out_of_order_watermark() {
+    IncrementingTelemetryClock clock;
+    auto telemetry = make_telemetry(clock);
+    FakeBackend backend;
+    const auto budget = std::make_shared<BufferBudget>(12);
+    TransferRing ring(
+        backend, budget, TransferRingConfig{4, 3}, &telemetry);
+
+    KB_CHECK(ring.start(make_source(12)));
+    auto snapshot = ring.telemetry_snapshot();
+    KB_CHECK(snapshot.enabled);
+    KB_CHECK(snapshot.source_read_count == 3);
+    KB_CHECK(snapshot.source_read_bytes == 12);
+    KB_CHECK(snapshot.source_read_time == std::chrono::nanoseconds(3));
+    KB_CHECK(snapshot.budget_acquire_attempt_count == 3);
+    KB_CHECK(snapshot.budget_acquire_count == 3);
+    KB_CHECK(snapshot.budget_acquire_time == std::chrono::nanoseconds(3));
+    KB_CHECK(snapshot.budget_wait_count == 0);
+    KB_CHECK(snapshot.budget_wait_time == std::chrono::nanoseconds::zero());
+    KB_CHECK(snapshot.submit_attempt_count == 3);
+    KB_CHECK(snapshot.submit_count == 3);
+    KB_CHECK(snapshot.submitted_bytes == 12);
+    KB_CHECK(snapshot.completion_count == 0);
+    KB_CHECK(snapshot.completed_bytes == 0);
+    KB_CHECK(snapshot.current_in_flight == 3);
+    KB_CHECK(snapshot.peak_in_flight == 3);
+    KB_CHECK(snapshot.contiguous_watermark == 0);
+    KB_CHECK(clock.calls == 12);
+
+    KB_CHECK(ring.handle_completion({2, CompletionCode::success, 4}));
+    snapshot = ring.telemetry_snapshot();
+    KB_CHECK(snapshot.completion_count == 1);
+    KB_CHECK(snapshot.completed_bytes == 4);
+    KB_CHECK(snapshot.current_in_flight == 2);
+    KB_CHECK(snapshot.contiguous_watermark == 0);
+
+    KB_CHECK(ring.handle_completion({1, CompletionCode::success, 4}));
+    snapshot = ring.telemetry_snapshot();
+    KB_CHECK(snapshot.completion_count == 2);
+    KB_CHECK(snapshot.completed_bytes == 8);
+    KB_CHECK(snapshot.current_in_flight == 1);
+    KB_CHECK(snapshot.contiguous_watermark == 8);
+
+    KB_CHECK(ring.handle_completion({3, CompletionCode::success, 4}));
+    snapshot = ring.telemetry_snapshot();
+    KB_CHECK(snapshot.completion_count == 3);
+    KB_CHECK(snapshot.completed_bytes == 12);
+    KB_CHECK(snapshot.current_in_flight == 0);
+    KB_CHECK(snapshot.peak_in_flight == 3);
+    KB_CHECK(snapshot.contiguous_watermark == 12);
+    KB_CHECK(snapshot.cancel_count == 0);
+    KB_CHECK(snapshot.backend_cancel_count == 0);
+    KB_CHECK(snapshot.cancelled_completion_count == 0);
+    KB_CHECK(snapshot.error_count == 0);
+}
+
+void test_transfer_telemetry_budget_contention_does_not_invent_waits() {
+    IncrementingTelemetryClock clock;
+    auto telemetry = make_telemetry(clock);
+    FakeBackend backend;
+    const auto budget = std::make_shared<BufferBudget>(8);
+    TransferRing ring(
+        backend, budget, TransferRingConfig{4, 4}, &telemetry);
+
+    KB_CHECK(ring.start(make_source(12)));
+    auto snapshot = ring.telemetry_snapshot();
+    KB_CHECK(snapshot.budget_acquire_attempt_count == 3);
+    KB_CHECK(snapshot.budget_acquire_count == 2);
+    KB_CHECK(snapshot.budget_wait_count == 0);
+    KB_CHECK(snapshot.budget_wait_time == std::chrono::nanoseconds::zero());
+
+    KB_CHECK(ring.handle_completion({1, CompletionCode::success, 4}));
+    snapshot = ring.telemetry_snapshot();
+    KB_CHECK(snapshot.budget_acquire_attempt_count == 4);
+    KB_CHECK(snapshot.budget_acquire_count == 3);
+    KB_CHECK(snapshot.budget_acquire_time == std::chrono::nanoseconds(4));
+    KB_CHECK(snapshot.budget_wait_count == 0);
+    KB_CHECK(snapshot.source_read_count == 3);
+    KB_CHECK(snapshot.source_read_bytes == 12);
+
+    KB_CHECK(ring.handle_completion({2, CompletionCode::success, 4}));
+    KB_CHECK(ring.handle_completion({3, CompletionCode::success, 4}));
+}
+
+void test_transfer_telemetry_cancel_and_error_counts() {
+    {
+        IncrementingTelemetryClock clock;
+        auto telemetry = make_telemetry(clock);
+        FakeBackend backend;
+        const auto budget = std::make_shared<BufferBudget>(12);
+        TransferRing ring(
+            backend, budget, TransferRingConfig{4, 3}, &telemetry);
+
+        KB_CHECK(ring.start(make_source(12)));
+        KB_CHECK(ring.handle_completion({1, CompletionCode::success, 2}));
+        auto snapshot = ring.telemetry_snapshot();
+        KB_CHECK(snapshot.completion_count == 1);
+        KB_CHECK(snapshot.completed_bytes == 2);
+        KB_CHECK(snapshot.contiguous_watermark == 0);
+        KB_CHECK(snapshot.cancel_count == 0);
+        KB_CHECK(snapshot.backend_cancel_count == 2);
+        KB_CHECK(snapshot.cancelled_completion_count == 0);
+        KB_CHECK(snapshot.error_count == 1);
+
+        KB_CHECK(ring.handle_completion({2, CompletionCode::cancelled, 0}));
+        KB_CHECK(ring.handle_completion({3, CompletionCode::cancelled, 0}));
+        snapshot = ring.telemetry_snapshot();
+        KB_CHECK(snapshot.completion_count == 3);
+        KB_CHECK(snapshot.completed_bytes == 2);
+        KB_CHECK(snapshot.current_in_flight == 0);
+        KB_CHECK(snapshot.cancelled_completion_count == 2);
+        KB_CHECK(snapshot.error_count == 1);
+    }
+
+    {
+        IncrementingTelemetryClock clock;
+        auto telemetry = make_telemetry(clock);
+        FakeBackend backend;
+        const auto budget = std::make_shared<BufferBudget>(8);
+        TransferRing ring(
+            backend, budget, TransferRingConfig{4, 2}, &telemetry);
+
+        KB_CHECK(ring.start(make_source(8)));
+        ring.cancel();
+        auto snapshot = ring.telemetry_snapshot();
+        KB_CHECK(snapshot.cancel_count == 1);
+        KB_CHECK(snapshot.backend_cancel_count == 2);
+        KB_CHECK(snapshot.error_count == 0);
+        KB_CHECK(ring.handle_completion({2, CompletionCode::success, 4}));
+        KB_CHECK(ring.handle_completion({1, CompletionCode::cancelled, 0}));
+        snapshot = ring.telemetry_snapshot();
+        KB_CHECK(snapshot.completion_count == 2);
+        KB_CHECK(snapshot.completed_bytes == 4);
+        KB_CHECK(snapshot.cancelled_completion_count == 1);
+        KB_CHECK(snapshot.error_count == 0);
+    }
 }
 
 void test_buffer_lease_lifetime_and_limit() {
@@ -744,6 +941,14 @@ int main() {
     const std::vector<TestCase> tests{
         {"buffer lease lifetime and limit", test_buffer_lease_lifetime_and_limit},
         {"buffer release before concurrent budget reuse", test_buffer_release_precedes_concurrent_budget_reuse},
+        {"disabled transfer telemetry has zero clock cost",
+         test_transfer_telemetry_disabled_has_zero_clock_cost},
+        {"transfer telemetry counts and watermark",
+         test_transfer_telemetry_counts_and_out_of_order_watermark},
+        {"transfer telemetry does not invent budget waits",
+         test_transfer_telemetry_budget_contention_does_not_invent_waits},
+        {"transfer telemetry cancel and error counts",
+         test_transfer_telemetry_cancel_and_error_counts},
         {"out-of-order completion watermark", test_transfer_ring_out_of_order_watermark},
         {"transfer ring shared budget", test_transfer_ring_respects_shared_budget},
         {"partial transfer cancel and drain", test_transfer_ring_partial_failure_cancels_and_drains},
