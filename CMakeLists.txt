@@ -462,11 +462,16 @@ if(BUILD_TESTING)
     NAME libusb_dependency_tooling
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_prepare_libusb.py")
+  add_test(
+    NAME abi_tooling
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_check_abi.py")
   if(WIN32)
     add_test(
       NAME abi_symbols
       COMMAND "${Python3_EXECUTABLE}"
-              "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py")
+              "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py" --library
+              "$<TARGET_FILE:kairosboot>" --dumpbin "${CMAKE_DUMPBIN}")
   else()
     add_test(
       NAME abi_symbols
