@@ -178,3 +178,219 @@ if(NOT TEXT_FLASH_RESULT EQUAL 4 OR NOT TEXT_FLASH_OUTPUT STREQUAL "" OR
   message(FATAL_ERROR
           "valid text flash syntax did not reach runtime: ${TEXT_FLASH_RESULT} ${TEXT_FLASH_ERROR}")
 endif()
+
+function(expect_json_parse_error NAME EXPECTED_MESSAGE)
+  execute_process(
+    COMMAND "${CLI}" --json ${ARGN}
+    RESULT_VARIABLE PARSE_RESULT
+    OUTPUT_VARIABLE PARSE_OUTPUT
+    ERROR_VARIABLE PARSE_ERROR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_STRIP_TRAILING_WHITESPACE)
+  if(NOT PARSE_RESULT EQUAL 2 OR NOT PARSE_ERROR STREQUAL "")
+    message(FATAL_ERROR
+            "${NAME}: expected JSON parse exit 2: ${PARSE_RESULT} ${PARSE_ERROR}")
+  endif()
+  string(JSON PARSE_OK GET "${PARSE_OUTPUT}" ok)
+  string(JSON PARSE_STATUS GET "${PARSE_OUTPUT}" status)
+  string(JSON PARSE_MESSAGE GET "${PARSE_OUTPUT}" message)
+  if(PARSE_OK OR NOT PARSE_STATUS STREQUAL "invalid_argument" OR
+     NOT PARSE_MESSAGE STREQUAL EXPECTED_MESSAGE)
+    message(FATAL_ERROR "${NAME}: unexpected JSON parse error: ${PARSE_OUTPUT}")
+  endif()
+endfunction()
+
+expect_json_parse_error(
+  duplicate_device "option --device may only be specified once" --device A
+  --device B getvar product)
+expect_json_parse_error(
+  mixed_selectors "options --device and --serial are mutually exclusive"
+  --device A --serial B getvar product)
+expect_json_parse_error(
+  missing_device "option --device requires a non-empty value" --device)
+expect_json_parse_error(
+  missing_timeout
+  "option --timeout-ms requires an integer in [0, 4294967294]" --timeout-ms)
+expect_json_parse_error(
+  negative_timeout
+  "option --timeout-ms requires an integer in [0, 4294967294]" --timeout-ms -1
+  getvar product)
+expect_json_parse_error(
+  overflow_timeout
+  "option --timeout-ms requires an integer in [0, 4294967294]" --timeout-ms
+  4294967295 getvar product)
+expect_json_parse_error(
+  duplicate_timeout "option --timeout-ms may only be specified once"
+  --timeout-ms 1 --timeout-ms 2 getvar product)
+expect_json_parse_error(
+  missing_receive_limit
+  "option --max-receive-bytes requires a positive integer"
+  --max-receive-bytes)
+expect_json_parse_error(
+  zero_receive_limit
+  "option --max-receive-bytes requires a positive integer"
+  --max-receive-bytes 0 upload output.bin)
+expect_json_parse_error(
+  overflow_receive_limit
+  "option --max-receive-bytes requires a positive integer"
+  --max-receive-bytes 18446744073709551616 upload output.bin)
+expect_json_parse_error(
+  duplicate_receive_limit
+  "option --max-receive-bytes may only be specified once"
+  --max-receive-bytes 1 --max-receive-bytes 2 upload output.bin)
+expect_json_parse_error(
+  receive_limit_flash "option --max-receive-bytes is not valid for flash"
+  --max-receive-bytes 1 flash boot image.img)
+expect_json_parse_error(
+  typed_trailing_global "global options must precede the command" getvar
+  product --timeout-ms 1)
+expect_json_parse_error(
+  invalid_reboot_target
+  "reboot target must be system, bootloader, recovery, or fastboot" reboot
+  invalid)
+expect_json_parse_error(
+  reboot_arity
+  "reboot accepts at most one target: system, bootloader, recovery, or fastboot"
+  reboot system extra)
+expect_json_parse_error(
+  continue_arity "continue does not accept operands" continue extra)
+expect_json_parse_error(
+  boot_staged_arity "boot-staged does not accept operands" boot-staged extra)
+expect_json_parse_error(
+  getvar_arity "getvar requires exactly <variable>" getvar)
+expect_json_parse_error(
+  erase_arity "erase requires exactly <partition>" erase)
+expect_json_parse_error(
+  set_active_arity "set-active requires exactly <slot>" set-active)
+expect_json_parse_error(
+  oem_arity "oem requires a command string" oem)
+expect_json_parse_error(
+  raw_arity "raw requires a command string" raw)
+expect_json_parse_error(
+  stage_arity "stage requires exactly <file>" stage)
+expect_json_parse_error(
+  upload_arity "upload requires exactly <output>" upload)
+expect_json_parse_error(
+  fetch_arity "fetch requires <partition> and <output>" fetch vendor)
+expect_json_parse_error(
+  fetch_size_without_offset "fetch --size requires --offset" fetch vendor
+  output.bin --size 1)
+expect_json_parse_error(
+  fetch_duplicate_offset
+  "fetch option --offset may only be specified once" fetch vendor output.bin
+  --offset 1 --offset 2)
+expect_json_parse_error(
+  fetch_bad_offset
+  "fetch option --offset requires an integer in [0, 9223372036854775807]"
+  fetch vendor output.bin --offset nope)
+expect_json_parse_error(
+  fetch_overflow_size
+  "fetch option --size requires an integer in [0, 9223372036854775807]"
+  fetch vendor output.bin --offset 0 --size 9223372036854775808)
+expect_json_parse_error(
+  fetch_unknown_option
+  "fetch supports only --offset <bytes> and --size <bytes> after <output>"
+  fetch vendor output.bin --length 1)
+
+function(expect_json_runtime NAME)
+  execute_process(
+    COMMAND "${CLI}" --device tcp:127.0.0.1:1 --json --timeout-ms 100
+            ${ARGN}
+    RESULT_VARIABLE RUNTIME_RESULT
+    OUTPUT_VARIABLE RUNTIME_OUTPUT
+    ERROR_VARIABLE RUNTIME_ERROR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_STRIP_TRAILING_WHITESPACE
+    TIMEOUT 10)
+  if(NOT RUNTIME_RESULT EQUAL 4 OR NOT RUNTIME_ERROR STREQUAL "")
+    message(FATAL_ERROR
+            "${NAME}: valid syntax did not reach runtime: ${RUNTIME_RESULT} ${RUNTIME_ERROR}")
+  endif()
+  string(JSON RUNTIME_OK GET "${RUNTIME_OUTPUT}" ok)
+  string(JSON RUNTIME_STATUS GET "${RUNTIME_OUTPUT}" status)
+  string(JSON RUNTIME_MESSAGE GET "${RUNTIME_OUTPUT}" message)
+  if(RUNTIME_OK OR RUNTIME_STATUS STREQUAL "invalid_argument" OR
+     RUNTIME_MESSAGE STREQUAL "")
+    message(FATAL_ERROR "${NAME}: unexpected runtime JSON: ${RUNTIME_OUTPUT}")
+  endif()
+endfunction()
+
+set(CLI_STAGE_FILE "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-stage.bin")
+set(CLI_EMPTY_STAGE_FILE
+    "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-empty-stage.bin")
+set(CLI_UPLOAD_FILE "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-upload.bin")
+set(CLI_FETCH_FILE "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-fetch.bin")
+file(WRITE "${CLI_STAGE_FILE}" "stage-data")
+file(WRITE "${CLI_EMPTY_STAGE_FILE}" "")
+file(REMOVE "${CLI_UPLOAD_FILE}" "${CLI_FETCH_FILE}")
+
+expect_json_runtime(getvar_runtime getvar product)
+expect_json_runtime(erase_runtime erase userdata)
+expect_json_runtime(set_active_runtime set-active a)
+expect_json_runtime(reboot_default_runtime reboot)
+foreach(REBOOT_TARGET IN ITEMS system bootloader recovery fastboot)
+  expect_json_runtime(reboot_${REBOOT_TARGET}_runtime reboot ${REBOOT_TARGET})
+endforeach()
+expect_json_runtime(continue_runtime continue)
+expect_json_runtime(oem_runtime oem flashing unlock)
+expect_json_runtime(raw_runtime raw getvar:product)
+expect_json_runtime(boot_staged_runtime boot-staged)
+expect_json_runtime(stage_runtime stage "${CLI_STAGE_FILE}")
+expect_json_runtime(upload_runtime --max-receive-bytes 16 upload
+                    "${CLI_UPLOAD_FILE}")
+expect_json_runtime(fetch_runtime --max-receive-bytes 16 fetch vendor
+                    "${CLI_FETCH_FILE}" --offset 2 --size 3)
+
+execute_process(
+  COMMAND "${CLI}" --device tcp:127.0.0.1:1 --json stage
+          "${CLI_EMPTY_STAGE_FILE}"
+  RESULT_VARIABLE EMPTY_STAGE_RESULT
+  OUTPUT_VARIABLE EMPTY_STAGE_OUTPUT
+  ERROR_VARIABLE EMPTY_STAGE_ERROR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_STRIP_TRAILING_WHITESPACE)
+string(JSON EMPTY_STAGE_OK GET "${EMPTY_STAGE_OUTPUT}" ok)
+string(JSON EMPTY_STAGE_STATUS GET "${EMPTY_STAGE_OUTPUT}" status)
+if(NOT EMPTY_STAGE_RESULT EQUAL 4 OR EMPTY_STAGE_OK OR
+   NOT EMPTY_STAGE_STATUS STREQUAL "invalid_argument" OR
+   NOT EMPTY_STAGE_ERROR STREQUAL "")
+  message(FATAL_ERROR
+          "empty stage file did not fail before transport: ${EMPTY_STAGE_OUTPUT} ${EMPTY_STAGE_ERROR}")
+endif()
+
+execute_process(
+  COMMAND "${CLI}" --device udp:127.0.0.1:1 --json --timeout-ms 20 getvar
+          product
+  RESULT_VARIABLE UDP_RUNTIME_RESULT
+  OUTPUT_VARIABLE UDP_RUNTIME_OUTPUT
+  ERROR_VARIABLE UDP_RUNTIME_ERROR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_STRIP_TRAILING_WHITESPACE
+  TIMEOUT 10)
+string(JSON UDP_RUNTIME_OK GET "${UDP_RUNTIME_OUTPUT}" ok)
+if(NOT UDP_RUNTIME_RESULT EQUAL 4 OR UDP_RUNTIME_OK OR
+   NOT UDP_RUNTIME_ERROR STREQUAL "")
+  message(FATAL_ERROR
+          "valid UDP selector did not reach runtime: ${UDP_RUNTIME_RESULT} ${UDP_RUNTIME_OUTPUT} ${UDP_RUNTIME_ERROR}")
+endif()
+
+find_program(CLI_PYTHON_EXECUTABLE NAMES python3 python)
+if(NOT CLI_PYTHON_EXECUTABLE)
+  message(FATAL_ERROR "Python is required for scripted CLI TCP tests")
+endif()
+execute_process(
+  COMMAND "${CLI_PYTHON_EXECUTABLE}"
+          "${CMAKE_CURRENT_LIST_DIR}/cli/scripted_cli_test.py" --cli "${CLI}"
+  RESULT_VARIABLE SCRIPTED_RESULT
+  OUTPUT_VARIABLE SCRIPTED_OUTPUT
+  ERROR_VARIABLE SCRIPTED_ERROR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_STRIP_TRAILING_WHITESPACE
+  TIMEOUT 90)
+if(NOT SCRIPTED_RESULT EQUAL 0)
+  message(FATAL_ERROR
+          "scripted CLI TCP test failed: ${SCRIPTED_RESULT}\nstdout: ${SCRIPTED_OUTPUT}\nstderr: ${SCRIPTED_ERROR}")
+endif()
+
+file(REMOVE "${CLI_STAGE_FILE}" "${CLI_EMPTY_STAGE_FILE}"
+            "${CLI_UPLOAD_FILE}" "${CLI_FETCH_FILE}")
