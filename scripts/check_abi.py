@@ -34,6 +34,11 @@ def header_symbols() -> set[str]:
     return set(DECLARATION.findall(header))
 
 
+def windows_definition_symbols() -> set[str]:
+    lines = (ROOT / "abi" / "kairosboot.def").read_text(encoding="utf-8").splitlines()
+    return {line.strip() for line in lines if line.strip() and line.strip() != "EXPORTS"}
+
+
 def run_symbols(library: Path) -> str:
     if sys.platform == "darwin":
         command = ["nm", "-gU", str(library)]
@@ -70,6 +75,12 @@ def main() -> None:
         fail(
             "public header and ABI manifest differ; "
             f"missing={sorted(declared - manifest)}, stale={sorted(manifest - declared)}"
+        )
+    definitions = windows_definition_symbols()
+    if definitions != manifest:
+        fail(
+            "Windows module definition and ABI manifest differ; "
+            f"missing={sorted(manifest - definitions)}, extra={sorted(definitions - manifest)}"
         )
 
     if args.library is not None:

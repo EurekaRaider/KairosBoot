@@ -51,6 +51,9 @@ target_include_directories(kairosboot_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DI
 kairosboot_enable_strict_warnings(kairosboot_internal)
 
 add_library(kairosboot SHARED src/kairosboot.cpp)
+if(WIN32)
+  target_sources(kairosboot PRIVATE abi/kairosboot.def)
+endif()
 add_library(KairosBoot::C ALIAS kairosboot)
 set_target_properties(
   kairosboot
@@ -153,11 +156,18 @@ if(BUILD_TESTING)
   add_test(NAME performance COMMAND kairosboot_performance_tests)
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
-  add_test(
-    NAME abi_symbols
-    COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py" --library
-            "$<TARGET_FILE:kairosboot>")
+  if(WIN32)
+    add_test(
+      NAME abi_symbols
+      COMMAND "${Python3_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py")
+  else()
+    add_test(
+      NAME abi_symbols
+      COMMAND "${Python3_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py" --library
+              "$<TARGET_FILE:kairosboot>")
+  endif()
 
   add_test(
     NAME cli_contract
@@ -174,6 +184,9 @@ install(
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(
+  FILES LICENSE THIRD_PARTY_NOTICES.md UNSIGNED.txt signing-status.json
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot")
 
 configure_package_config_file(
   cmake/KairosBootConfig.cmake.in

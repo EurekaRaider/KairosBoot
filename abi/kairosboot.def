@@ -1,0 +1,27 @@
+EXPORTS
+    kb_context_create
+    kb_context_options_init
+    kb_context_release
+    kb_device_list_count
+    kb_device_list_product
+    kb_device_list_release
+    kb_device_list_serial
+    kb_device_list_usb_path
+    kb_enumerate_devices
+    kb_error_device_identifier
+    kb_error_message
+    kb_error_native_code
+    kb_error_release
+    kb_error_status
+    kb_error_transfer_state
+    kb_flash_file
+    kb_flash_file_async
+    kb_flash_options_init
+    kb_get_version
+    kb_operation_cancel
+    kb_operation_error
+    kb_operation_release
+    kb_operation_state
+    kb_operation_wait
+    kb_status_string
+    kb_version_init

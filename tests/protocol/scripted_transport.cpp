@@ -34,6 +34,7 @@ void ScriptedTransport::expect_write(
         .reported_transferred = reported_transferred.value_or(expected_call.size()),
         .status = status,
         .certainty = certainty,
+        .detail = {},
     });
 }
 
@@ -49,6 +50,7 @@ void ScriptedTransport::respond(
         .status = status,
         .certainty = certainty,
         .truncated = truncated,
+        .detail = {},
     });
 }
 

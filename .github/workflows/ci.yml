@@ -71,15 +71,19 @@ jobs:
         include:
           - id: windows-x64
             runner: windows-2025
+            architecture: x64
             deployment-target: ""
           - id: windows-arm64
             runner: windows-11-arm
+            architecture: ARM64
             deployment-target: ""
           - id: macos-x64
             runner: macos-15-intel
+            architecture: ""
             deployment-target: "14.0"
           - id: macos-arm64
             runner: macos-15
+            architecture: ""
             deployment-target: "14.0"
     runs-on: ${{ matrix.runner }}
     env:
@@ -88,19 +92,42 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Configure
+      - name: Configure Windows with MSVC
+        if: runner.os == 'Windows'
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022"
+          -A ${{ matrix.architecture }}
+          -DBUILD_TESTING=ON
+
+      - name: Configure macOS
+        if: runner.os == 'macOS'
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=ON
 
-      - name: Build
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release --parallel
+
+      - name: Test Windows
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install Windows
+        if: runner.os == 'Windows'
+        run: cmake --install build --config Release --prefix "${{ runner.temp }}/kairosboot-install"
+
+      - name: Build macOS
+        if: runner.os == 'macOS'
         run: cmake --build build --parallel
 
-      - name: Test
+      - name: Test macOS
+        if: runner.os == 'macOS'
         run: ctest --test-dir build --output-on-failure
 
-      - name: Install
+      - name: Install macOS
+        if: runner.os == 'macOS'
         run: cmake --install build --prefix "${{ runner.temp }}/kairosboot-install"
 
       - name: Upload install tree
