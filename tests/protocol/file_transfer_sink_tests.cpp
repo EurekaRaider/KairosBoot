@@ -398,10 +398,9 @@ void windows_native_rename_fallback_policy_is_fail_closed() {
 
     CHECK(classify_windows_native_rename_status(0) ==
           WindowsNativeRenameAction::Succeeded);
-    CHECK(classify_windows_native_rename_status(1) ==
-          WindowsNativeRenameAction::Succeeded);
-
     constexpr std::array rejected_statuses{
+        windows_nt_status(0x00000001U),  // Informational, not STATUS_SUCCESS
+        windows_nt_status(0x00000103U),  // STATUS_PENDING
         windows_nt_status(0xC0000004U),  // STATUS_INFO_LENGTH_MISMATCH
         windows_nt_status(0xC0000022U),  // STATUS_ACCESS_DENIED
         windows_nt_status(0xC0000035U),  // STATUS_OBJECT_NAME_COLLISION
