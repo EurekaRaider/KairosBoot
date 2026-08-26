@@ -194,6 +194,7 @@ add_library(
   src/transport/buffer_budget.cpp
   src/transport/image_transfer_source.cpp
   src/transport/libusb_runtime.cpp
+  src/transport/linux_usb_topology.cpp
   src/transport/sequential_streaming_transport.cpp
   src/transport/tcp_fastboot.cpp
   src/transport/transfer_ring.cpp
@@ -668,6 +669,17 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME libusb_runtime COMMAND kairosboot_libusb_runtime_tests)
   set_tests_properties(libusb_runtime PROPERTIES TIMEOUT 15)
+
+  add_executable(kairosboot_linux_usb_topology_tests
+                 tests/libusb_runtime/linux_usb_topology_tests.cpp)
+  target_compile_features(kairosboot_linux_usb_topology_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_linux_usb_topology_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_linux_usb_topology_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_linux_usb_topology_tests)
+  add_test(NAME linux_usb_topology COMMAND kairosboot_linux_usb_topology_tests)
+  set_tests_properties(linux_usb_topology PROPERTIES TIMEOUT 30)
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(

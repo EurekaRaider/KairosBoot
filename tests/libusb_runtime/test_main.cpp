@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -18,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -37,6 +39,11 @@ using kairosboot::transport::LibusbFunctions;
 using kairosboot::transport::LibusbRuntime;
 using kairosboot::transport::LibusbRuntimeErrorKind;
 using kairosboot::transport::LibusbSubmitFaultPoint;
+using kairosboot::transport::LinuxUsbTopology;
+using kairosboot::transport::LinuxUsbTopologyError;
+using kairosboot::transport::LinuxUsbTopologyErrorKind;
+using kairosboot::transport::LinuxUsbTopologyQuery;
+using kairosboot::transport::LinuxUsbTopologyStage;
 using kairosboot::transport::MemoryTransferSource;
 using kairosboot::transport::SubmitResult;
 using kairosboot::transport::TransferCompletion;
@@ -719,6 +726,150 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     KB_CHECK(device.bulk_in_endpoint == 0x81);
     KB_CHECK(device.bulk_in_max_packet_size == 4);
     KB_CHECK(fake->serial_calls == 1);
+    runtime->stop();
+}
+
+void test_enumeration_retains_linux_topology_or_diagnostic() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+    std::optional<LinuxUsbTopologyQuery> observed_query;
+    functions.resolve_linux_topology = [&](const LinuxUsbTopologyQuery& query) {
+        observed_query = query;
+        return std::expected<LinuxUsbTopology, LinuxUsbTopologyError>{
+            LinuxUsbTopology{
+                .physical_port_path = "usb:2-3.4",
+                .root_controller_id = "linux-sysfs:pci0000:00/0000:00:14.0",
+                .hub_port_chain = {3U, 4U},
+                .vendor_id = query.vendor_id,
+                .product_id = query.product_id,
+                .bus_number = query.bus_number,
+                .device_address = query.device_address,
+                .serial_utf8 = query.serial_utf8,
+                .product_utf8 = std::string{"USB Fastboot"},
+                .sysfs_device_path =
+                    "devices/pci0000:00/0000:00:14.0/usb2/2-3/2-3.4",
+            }};
+    };
+    auto runtime = create_runtime(fake, std::move(functions));
+    const auto enriched = matching_device(runtime);
+    KB_CHECK(observed_query.has_value());
+    KB_CHECK(observed_query->vendor_id == enriched.vendor_id);
+    KB_CHECK(observed_query->product_id == enriched.product_id);
+    KB_CHECK(observed_query->bus_number == enriched.bus_number);
+    KB_CHECK(observed_query->device_address == enriched.device_address);
+    KB_CHECK(observed_query->port_numbers == enriched.port_path);
+    KB_CHECK(observed_query->serial_utf8 ==
+             std::optional<std::string>{enriched.serial_utf8});
+    KB_CHECK(enriched.linux_topology.has_value());
+    KB_CHECK(enriched.linux_topology->physical_port_path == "usb:2-3.4");
+    KB_CHECK(!enriched.linux_topology_error.has_value());
+    runtime->stop();
+
+    auto failing_fake = std::make_shared<FakeLibusb>();
+    auto failing_functions = failing_fake->functions();
+    failing_functions.resolve_linux_topology = [](const LinuxUsbTopologyQuery&) {
+        return std::expected<LinuxUsbTopology, LinuxUsbTopologyError>{
+            std::unexpected(LinuxUsbTopologyError{
+                .kind = LinuxUsbTopologyErrorKind::PermissionDenied,
+                .stage = LinuxUsbTopologyStage::AttributeRead,
+                .native_code = EACCES,
+                .path = "bus/usb/devices/2-3.4/idVendor",
+                .message = "permission denied",
+            })};
+    };
+    auto failing_runtime = create_runtime(failing_fake, std::move(failing_functions));
+    const auto diagnosed = matching_device(failing_runtime);
+    KB_CHECK(!diagnosed.linux_topology.has_value());
+    KB_CHECK(diagnosed.linux_topology_error.has_value());
+    KB_CHECK(diagnosed.linux_topology_error->kind ==
+             LinuxUsbTopologyErrorKind::PermissionDenied);
+    KB_CHECK(diagnosed.linux_topology_error->native_code == EACCES);
+    failing_runtime->stop();
+}
+
+void test_device_topology_is_resolved_once_for_distinct_interfaces() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+
+    std::array<std::array<libusb_endpoint_descriptor, 2U>, 2U> endpoints{};
+    std::array<libusb_interface_descriptor, 2U> alternates{};
+    std::array<libusb_interface, 2U> interfaces{};
+    for (std::size_t index = 0; index < alternates.size(); ++index) {
+        endpoints[index][0].bEndpointAddress =
+            static_cast<std::uint8_t>(0x01U + index);
+        endpoints[index][0].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
+        endpoints[index][0].wMaxPacketSize = 512U;
+        endpoints[index][1].bEndpointAddress =
+            static_cast<std::uint8_t>(0x81U + index);
+        endpoints[index][1].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
+        endpoints[index][1].wMaxPacketSize = 512U;
+
+        alternates[index].bInterfaceNumber =
+            static_cast<std::uint8_t>(2U + index);
+        alternates[index].bAlternateSetting = 0U;
+        alternates[index].bNumEndpoints = 2U;
+        alternates[index].bInterfaceClass = 0xFFU;
+        alternates[index].bInterfaceSubClass = 0x42U;
+        alternates[index].bInterfaceProtocol = 0x03U;
+        alternates[index].endpoint = endpoints[index].data();
+        interfaces[index].altsetting = &alternates[index];
+        interfaces[index].num_altsetting = 1;
+    }
+    libusb_config_descriptor config{};
+    config.bConfigurationValue = 1U;
+    config.bNumInterfaces = static_cast<std::uint8_t>(interfaces.size());
+    config.interface = interfaces.data();
+    functions.get_active_config_descriptor =
+        [&config](libusb_device*, libusb_config_descriptor** output) {
+            *output = &config;
+            return LIBUSB_SUCCESS;
+        };
+    functions.get_config_descriptor =
+        [&config](libusb_device*,
+                  std::uint8_t,
+                  libusb_config_descriptor** output) {
+            *output = &config;
+            return LIBUSB_SUCCESS;
+        };
+
+    std::size_t resolver_calls = 0U;
+    functions.resolve_linux_topology =
+        [&resolver_calls](const LinuxUsbTopologyQuery& query) {
+            ++resolver_calls;
+            return std::expected<LinuxUsbTopology, LinuxUsbTopologyError>{
+                LinuxUsbTopology{
+                    .physical_port_path = "usb:2-3.4",
+                    .root_controller_id =
+                        "linux-sysfs:pci0000:00/0000:00:14.0",
+                    .hub_port_chain = {3U, 4U},
+                    .vendor_id = query.vendor_id,
+                    .product_id = query.product_id,
+                    .bus_number = query.bus_number,
+                    .device_address = query.device_address,
+                    .serial_utf8 = query.serial_utf8,
+                    .product_utf8 = std::nullopt,
+                    .sysfs_device_path =
+                        "devices/pci0000:00/0000:00:14.0/usb2/2-3/2-3.4",
+                }};
+        };
+
+    auto runtime = create_runtime(fake, std::move(functions));
+    UsbInterfaceFilter filter;
+    filter.interface_class = 0xFFU;
+    filter.interface_subclass = 0x42U;
+    filter.interface_protocol = 0x03U;
+    const auto enumerated = runtime->enumerate(filter);
+    KB_CHECK(enumerated.has_value());
+    KB_CHECK(enumerated->size() == 2U);
+    KB_CHECK(resolver_calls == 1U);
+    KB_CHECK((*enumerated)[0].interface_number !=
+             (*enumerated)[1].interface_number);
+    KB_CHECK((*enumerated)[0].linux_topology.has_value());
+    KB_CHECK((*enumerated)[1].linux_topology.has_value());
+    KB_CHECK((*enumerated)[0].linux_topology ==
+             (*enumerated)[1].linux_topology);
+    KB_CHECK(!(*enumerated)[0].linux_topology_error.has_value());
+    KB_CHECK(!(*enumerated)[1].linux_topology_error.has_value());
     runtime->stop();
 }
 
@@ -2136,6 +2287,10 @@ int main() {
     const std::vector<TestCase> tests{
         {"init failure, version, and singleton", test_init_failure_version_and_singleton},
         {"event loop and filtered UTF-8 enumeration", test_event_loop_and_filtered_utf8_enumeration},
+        {"Linux topology enrichment and diagnostic",
+         test_enumeration_retains_linux_topology_or_diagnostic},
+        {"Linux topology device/interface identity",
+         test_device_topology_is_resolved_once_for_distinct_interfaces},
         {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
         {"open rejects changed interface snapshot", test_open_rejects_changed_interface_snapshot},
         {"open configuration before claim", test_open_configuration_is_verified_before_claim},
