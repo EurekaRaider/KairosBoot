@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -45,6 +46,52 @@ namespace {
 
 [[nodiscard]] std::error_code windows_error(const DWORD value) {
     return {static_cast<int>(value), std::system_category()};
+}
+
+[[nodiscard]] std::expected<std::wstring, FileSourceError> final_path(
+    const HANDLE handle) {
+    constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+    const DWORD required = ::GetFinalPathNameByHandleW(handle, nullptr, 0U, flags);
+    if (required == 0U) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::OpenFailed,
+            windows_error(::GetLastError()),
+            "unable to resolve the final image path"));
+    }
+    try {
+        std::wstring path(static_cast<std::size_t>(required), L'\0');
+        const DWORD written = ::GetFinalPathNameByHandleW(
+            handle, path.data(), required, flags);
+        if (written == 0U || written >= required) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::OpenFailed,
+                windows_error(::GetLastError()),
+                "unable to resolve the final image path"));
+        }
+        path.resize(static_cast<std::size_t>(written));
+        while (path.size() > 1U &&
+               (path.back() == L'\\' || path.back() == L'/')) {
+            path.pop_back();
+        }
+        return path;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::OpenFailed,
+            std::make_error_code(std::errc::not_enough_memory),
+            "unable to allocate the final image path"));
+    }
+}
+
+[[nodiscard]] bool is_immediate_final_child(
+    const std::wstring_view parent,
+    const std::wstring_view child) noexcept {
+    if (child.size() <= parent.size() + 1U ||
+        parent != child.substr(0U, parent.size()) ||
+        (child[parent.size()] != L'\\' && child[parent.size()] != L'/')) {
+        return false;
+    }
+    const auto leaf = child.substr(parent.size() + 1U);
+    return leaf.find_first_of(L"\\/") == std::wstring_view::npos;
 }
 
 class ScopedHandle final {
@@ -352,6 +399,10 @@ FileImageSource::open_beneath(
             {},
             "image base path is not a directory"));
     }
+    auto current_final_path = final_path(held_directories.front().get());
+    if (!current_final_path) {
+        return std::unexpected(std::move(current_final_path.error()));
+    }
 
     auto candidate = directory;
     for (std::size_t index = 0; index < components.size(); ++index) {
@@ -394,6 +445,16 @@ FileImageSource::open_beneath(
                 {},
                 "image path below directory traverses a reparse point"));
         }
+        auto opened_final_path = final_path(opened.get());
+        if (!opened_final_path) {
+            return std::unexpected(std::move(opened_final_path.error()));
+        }
+        if (!is_immediate_final_child(*current_final_path, *opened_final_path)) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::UnsafePath,
+                {},
+                "image path below directory escaped its parent handle"));
+        }
         if (!leaf) {
             if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U) {
                 return std::unexpected(file_error(
@@ -402,6 +463,7 @@ FileImageSource::open_beneath(
                     "image path below directory contains a non-directory component"));
             }
             held_directories.push_back(std::move(opened));
+            current_final_path = std::move(opened_final_path);
             continue;
         }
         if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U ||
@@ -412,13 +474,18 @@ FileImageSource::open_beneath(
                 "image path below directory is not a regular file"));
         }
         LARGE_INTEGER native_size{};
-        if (::GetFileSizeEx(opened.get(), &native_size) == FALSE ||
-            native_size.QuadPart < 0) {
+        if (::GetFileSizeEx(opened.get(), &native_size) == FALSE) {
             const auto native = ::GetLastError();
             return std::unexpected(file_error(
                 FileSourceErrorKind::SizeUnavailable,
                 windows_error(native),
                 "unable to determine image size below directory"));
+        }
+        if (native_size.QuadPart < 0) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::SizeUnavailable,
+                {},
+                "image size below directory is invalid"));
         }
         try {
             auto source = std::unique_ptr<FileImageSource>(new FileImageSource(
