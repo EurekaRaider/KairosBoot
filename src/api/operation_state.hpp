@@ -8,11 +8,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace kairosboot::api {
 
@@ -34,11 +36,32 @@ struct OperationErrorPayload final {
     [[nodiscard]] bool operator==(const OperationErrorPayload&) const = default;
 };
 
+enum class CommandMessageKind : std::uint8_t {
+    Info,
+    Text,
+};
+
+struct CommandMessagePayload final {
+    CommandMessageKind kind{CommandMessageKind::Info};
+    std::string text;
+
+    [[nodiscard]] bool operator==(const CommandMessagePayload&) const = default;
+};
+
+struct CommandResultPayload final {
+    std::string terminal_payload;
+    std::vector<CommandMessagePayload> messages;
+
+    [[nodiscard]] bool operator==(const CommandResultPayload&) const = default;
+};
+
 struct OperationOutcome final {
     OperationPhase phase{OperationPhase::Failed};
     std::optional<OperationErrorPayload> error;
+    std::shared_ptr<const CommandResultPayload> command_result;
 
-    [[nodiscard]] static OperationOutcome succeeded();
+    [[nodiscard]] static OperationOutcome succeeded(
+        std::shared_ptr<const CommandResultPayload> command_result = {});
     [[nodiscard]] static OperationOutcome failed(OperationErrorPayload error);
     [[nodiscard]] static OperationOutcome cancelled(
         OperationErrorPayload error = {
@@ -87,6 +110,7 @@ public:
     [[nodiscard]] OperationPhase phase() const noexcept;
     [[nodiscard]] kb_status_t status() const noexcept;
     [[nodiscard]] std::optional<OperationErrorPayload> error() const;
+    [[nodiscard]] std::shared_ptr<const CommandResultPayload> command_result() const;
 
     [[nodiscard]] OperationWaitResult wait_for(
         std::chrono::milliseconds timeout) const;
@@ -149,6 +173,7 @@ private:
     mutable std::condition_variable hook_finished_;
     OperationPhase phase_{OperationPhase::Created};
     std::optional<OperationErrorPayload> error_;
+    std::shared_ptr<const CommandResultPayload> command_result_;
     Task task_;
     std::stop_source cancellation_;
     std::optional<HookRecord> cancellation_hook_;

@@ -30,8 +30,9 @@ namespace {
 
 }  // namespace
 
-OperationOutcome OperationOutcome::succeeded() {
-    return {OperationPhase::Succeeded, std::nullopt};
+OperationOutcome OperationOutcome::succeeded(
+    std::shared_ptr<const CommandResultPayload> command_result) {
+    return {OperationPhase::Succeeded, std::nullopt, std::move(command_result)};
 }
 
 OperationOutcome OperationOutcome::failed(OperationErrorPayload error) {
@@ -41,7 +42,7 @@ OperationOutcome OperationOutcome::failed(OperationErrorPayload error) {
     if (error.message.empty()) {
         error.message = "operation failed";
     }
-    return {OperationPhase::Failed, std::move(error)};
+    return {OperationPhase::Failed, std::move(error), {}};
 }
 
 OperationOutcome OperationOutcome::cancelled(OperationErrorPayload error) {
@@ -49,7 +50,7 @@ OperationOutcome OperationOutcome::cancelled(OperationErrorPayload error) {
     if (error.message.empty()) {
         error.message = "operation cancelled";
     }
-    return {OperationPhase::Cancelled, std::move(error)};
+    return {OperationPhase::Cancelled, std::move(error), {}};
 }
 
 OperationState::OperationState(Task task) : task_(std::move(task)) {}
@@ -140,6 +141,11 @@ kb_status_t OperationState::status() const noexcept {
 std::optional<OperationErrorPayload> OperationState::error() const {
     std::scoped_lock lock(mutex_);
     return error_;
+}
+
+std::shared_ptr<const CommandResultPayload> OperationState::command_result() const {
+    std::scoped_lock lock(mutex_);
+    return command_result_;
 }
 
 OperationWaitResult OperationState::wait_for(
@@ -316,9 +322,13 @@ void OperationState::publish_terminal(OperationOutcome outcome) noexcept {
                           : OperationOutcome::failed(
                                 internal_error("operation task returned no error"));
         }
+        if (outcome.phase != OperationPhase::Succeeded) {
+            outcome.command_result.reset();
+        }
 
         phase_ = outcome.phase;
         error_ = std::move(outcome.error);
+        command_result_ = std::move(outcome.command_result);
     }
     state_changed_.notify_all();
 }
