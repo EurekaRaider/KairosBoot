@@ -9,8 +9,8 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
     <PackageId>KairosBoot</PackageId>
-    <VersionPrefix>0.1.0</VersionPrefix>
-    <VersionSuffix>dev</VersionSuffix>
+    <Version>0.1.0-dev</Version>
+    <PackageVersion>$(Version)</PackageVersion>
     <Authors>EurekaRaider</Authors>
     <Description>C# bindings for the cross-platform KairosBoot Fastboot host SDK.</Description>
     <PackageTags>android;fastboot;usb;flashing;interop</PackageTags>
@@ -20,6 +20,9 @@
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
+    <IncludeNativeRuntimes Condition="'$(IncludeNativeRuntimes)' == ''">false</IncludeNativeRuntimes>
+    <NativeRuntimeRoot Condition="'$(NativeRuntimeRoot)' == ''">$(MSBuildProjectDirectory)/runtimes</NativeRuntimeRoot>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
@@ -41,4 +44,44 @@
   <ItemGroup>
     <None Include="PACKAGE.md" Pack="true" PackagePath="/" />
   </ItemGroup>
+
+  <ItemGroup Condition="'$(IncludeNativeRuntimes)' == 'true'">
+    <None Remove="$(NativeRuntimeRoot)/**/*" />
+    <None Include="$(NativeRuntimeRoot)/win-x64/native/**/*"
+          Pack="true"
+          PackagePath="runtimes/win-x64/native/" />
+    <None Include="$(NativeRuntimeRoot)/win-arm64/native/**/*"
+          Pack="true"
+          PackagePath="runtimes/win-arm64/native/" />
+    <None Include="$(NativeRuntimeRoot)/linux-x64/native/**/*"
+          Pack="true"
+          PackagePath="runtimes/linux-x64/native/" />
+    <None Include="$(NativeRuntimeRoot)/linux-arm64/native/**/*"
+          Pack="true"
+          PackagePath="runtimes/linux-arm64/native/" />
+    <None Include="$(NativeRuntimeRoot)/osx-x64/native/**/*"
+          Pack="true"
+          PackagePath="runtimes/osx-x64/native/" />
+    <None Include="$(NativeRuntimeRoot)/osx-arm64/native/**/*"
+          Pack="true"
+          PackagePath="runtimes/osx-arm64/native/" />
+  </ItemGroup>
+
+  <Target Name="ValidateNativeRuntimeAssets"
+          BeforeTargets="_IntermediatePack"
+          Condition="'$(IncludeNativeRuntimes)' == 'true'">
+    <ItemGroup>
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/kairosboot.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/kairosboot.dll" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/libkairosboot.so" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/libkairosboot.so" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/libkairosboot.dylib" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/libkairosboot.dylib" />
+      <_MissingNativeAsset Include="@(_ExpectedNativeAsset)"
+                           Condition="!Exists('%(Identity)')" />
+    </ItemGroup>
+
+    <Error Condition="'@(_MissingNativeAsset)' != ''"
+           Text="IncludeNativeRuntimes=true requires all six native assets. Missing: @(_MissingNativeAsset, ', ')" />
+  </Target>
 </Project>

@@ -39,7 +39,7 @@ internal static class Program
         {
             var exception = Expect<KairosBootException>(() => { _ = context.Devices; });
             Check(exception.Status == KairosBootStatus.NotSupported, "device status");
-            Check(exception.Message.Contains("transport", StringComparison.Ordinal), "device message");
+            Check(exception.Message.IndexOf("transport", StringComparison.Ordinal) >= 0, "device message");
         }
     }
 

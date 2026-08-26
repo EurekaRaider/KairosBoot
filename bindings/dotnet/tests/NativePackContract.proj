@@ -1,0 +1,103 @@
+<Project DefaultTargets="Verify">
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <DotNetRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</DotNetRoot>
+    <PackageProject>$(DotNetRoot)/KairosBoot/KairosBoot.csproj</PackageProject>
+    <TestRoot>$(MSBuildThisFileDirectory)obj/native-pack-contract</TestRoot>
+    <ManagedOutput>$(TestRoot)/managed</ManagedOutput>
+    <ManagedExtract>$(TestRoot)/managed-extract</ManagedExtract>
+    <MissingOutput>$(TestRoot)/missing</MissingOutput>
+    <CompleteRuntimeRoot>$(TestRoot)/complete-runtimes</CompleteRuntimeRoot>
+    <CompleteOutput>$(TestRoot)/complete</CompleteOutput>
+    <CompleteExtract>$(TestRoot)/complete-extract</CompleteExtract>
+    <ManagedVersion>9.8.7-managedtest</ManagedVersion>
+    <CompleteVersion>9.8.7-nativepacktest</CompleteVersion>
+    <ManagedPackage>$(ManagedOutput)/KairosBoot.$(ManagedVersion).nupkg</ManagedPackage>
+    <MissingPackage>$(MissingOutput)/KairosBoot.9.8.7-missingtest.nupkg</MissingPackage>
+    <CompletePackage>$(CompleteOutput)/KairosBoot.$(CompleteVersion).nupkg</CompletePackage>
+  </PropertyGroup>
+
+  <Target Name="Prepare">
+    <RemoveDir Directories="$(TestRoot)" />
+    <MakeDir Directories="$(ManagedOutput);$(MissingOutput);$(CompleteOutput)" />
+
+    <ItemGroup>
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/kairosboot.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/kairosboot.dll" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/libkairosboot.so" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/libkairosboot.so" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/libkairosboot.dylib" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/libkairosboot.dylib" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/licenses/NOTICE.txt" />
+    </ItemGroup>
+
+    <MakeDir Directories="@(_PlaceholderAsset->'%(RootDir)%(Directory)')" />
+    <WriteLinesToFile File="%(_PlaceholderAsset.Identity)"
+                      Lines="KairosBoot native pack contract placeholder"
+                      Overwrite="true" />
+  </Target>
+
+  <Target Name="BuildManaged" DependsOnTargets="Prepare">
+    <MSBuild Projects="$(PackageProject)"
+             Targets="Build"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="VerifyManagedOnly" DependsOnTargets="BuildManaged">
+    <MSBuild Projects="$(PackageProject)"
+             Targets="Pack"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);NoBuild=true;IncludeNativeRuntimes=false;NativeRuntimeRoot=$(TestRoot)/absent;PackageVersion=$(ManagedVersion);PackageOutputPath=$(ManagedOutput)" />
+
+    <Error Condition="!Exists('$(ManagedPackage)')"
+           Text="Managed-only package was not created at $(ManagedPackage)." />
+    <Unzip SourceFiles="$(ManagedPackage)"
+           DestinationFolder="$(ManagedExtract)"
+           OverwriteReadOnlyFiles="true" />
+    <Error Condition="Exists('$(ManagedExtract)/runtimes')"
+           Text="Managed-only package unexpectedly contains native runtime assets." />
+  </Target>
+
+  <Target Name="VerifyMissingRuntimeFailure" DependsOnTargets="VerifyManagedOnly">
+    <MSBuild Projects="$(PackageProject)"
+             Targets="Pack"
+             BuildInParallel="false"
+             ContinueOnError="WarnAndContinue"
+             Properties="Configuration=$(Configuration);NoBuild=true;IncludeNativeRuntimes=true;NativeRuntimeRoot=$(TestRoot)/absent;PackageVersion=9.8.7-missingtest;PackageOutputPath=$(MissingOutput)" />
+    <Error Condition="'$(MSBuildLastTaskResult)' == 'true'"
+           Text="Native runtime pack unexpectedly succeeded with all RID files missing." />
+    <Error Condition="Exists('$(MissingPackage)')"
+           Text="Native runtime validation ran too late; an invalid package was created." />
+  </Target>
+
+  <Target Name="VerifyCompleteRuntimeLayout" DependsOnTargets="VerifyMissingRuntimeFailure">
+    <MSBuild Projects="$(PackageProject)"
+             Targets="Pack"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);NoBuild=true;IncludeNativeRuntimes=true;NativeRuntimeRoot=$(CompleteRuntimeRoot);PackageVersion=$(CompleteVersion);PackageOutputPath=$(CompleteOutput)" />
+
+    <Error Condition="!Exists('$(CompletePackage)')"
+           Text="Complete native package was not created at $(CompletePackage)." />
+    <Unzip SourceFiles="$(CompletePackage)"
+           DestinationFolder="$(CompleteExtract)"
+           OverwriteReadOnlyFiles="true" />
+
+    <ItemGroup>
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/kairosboot.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-arm64/native/kairosboot.dll" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-x64/native/libkairosboot.so" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/linux-arm64/native/libkairosboot.so" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-x64/native/libkairosboot.dylib" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/osx-arm64/native/libkairosboot.dylib" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/runtimes/win-x64/native/licenses/NOTICE.txt" />
+    </ItemGroup>
+
+    <Error Condition="!Exists('%(_ExpectedPackageAsset.Identity)')"
+           Text="Native package is missing: %(_ExpectedPackageAsset.Identity)" />
+  </Target>
+
+  <Target Name="Verify"
+          DependsOnTargets="VerifyCompleteRuntimeLayout"
+          Returns="$(CompletePackage)" />
+</Project>
