@@ -38,6 +38,7 @@ using kairosboot::protocol::ITransferSource;
 using kairosboot::protocol::ITransportSession;
 using kairosboot::protocol::ProtocolPhase;
 using kairosboot::protocol::ResponseKind;
+using kairosboot::protocol::SessionOptions;
 using kairosboot::protocol::SessionState;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::protocol::TransferProgressAction;
@@ -279,6 +280,8 @@ void raw_data_response_is_unsupported_and_poisons_session() {
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
     script->expect_write("download:00000001");
+    script->respond("INFOpreparing");
+    script->respond("TEXTready for data");
     script->respond("DATA00000001");
 
     FastbootSession session(std::move(transport));
@@ -289,6 +292,11 @@ void raw_data_response_is_unsupported_and_poisons_session() {
     CHECK(raw.error().operation == PrimitiveOperation::RawCommand);
     CHECK(raw.error().phase == ProtocolPhase::FinalResponse);
     CHECK(raw.error().message.find("DATA") != std::string::npos);
+    CHECK(raw.error().informational.size() == 2);
+    CHECK(raw.error().informational[0].kind == ResponseKind::Info);
+    CHECK(raw.error().informational[0].payload == "preparing");
+    CHECK(raw.error().informational[1].kind == ResponseKind::Text);
+    CHECK(raw.error().informational[1].payload == "ready for data");
     CHECK(raw.error().outbound_certainty ==
           TransferCertainty::FullyTransferred);
     CHECK(raw.error().session_poisoned);
@@ -298,6 +306,77 @@ void raw_data_response_is_unsupported_and_poisons_session() {
     CHECK(!retry);
     CHECK(retry.error().code == PrimitiveErrorCode::Poisoned);
     CHECK(script->complete());
+}
+
+void protocol_errors_preserve_bounded_informational_history() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:product");
+        script->respond("INFOwaiting");
+        script->respond(
+            "", TransportStatus::Timeout, TransferCertainty::NotTransferred);
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.getvar("product");
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::Timeout);
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "waiting");
+        CHECK(result.error().session_poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:product");
+        script->respond("INFOparsing");
+        script->respond("NOPEbad");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.getvar("product");
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::ProtocolViolation);
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "parsing");
+        CHECK(result.error().session_poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:product");
+        script->respond("INFOone");
+        script->respond("TEXTtwo");
+        SessionOptions options;
+        options.max_informational_responses = 1;
+        FastbootSession session(std::move(transport), options);
+        PrimitiveService service(session);
+        const auto result = service.getvar("product");
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::ProtocolViolation);
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "one");
+        CHECK(result.error().session_poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:product");
+        script->respond("NOPEbad");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        const auto result = service.getvar("product");
+        CHECK(!result);
+        CHECK(result.error().code == PrimitiveErrorCode::ProtocolViolation);
+        CHECK(result.error().informational.empty());
+        CHECK(result.error().session_poisoned);
+        CHECK(script->complete());
+    }
 }
 
 void reboot_variants_and_continue_are_terminal() {
@@ -1303,6 +1382,8 @@ int main() {
          set_active_and_raw_commands_preserve_response_order},
         {"raw FAIL response order", raw_fail_preserves_response_order_and_session},
         {"raw DATA rejection", raw_data_response_is_unsupported_and_poisons_session},
+        {"protocol error informational history",
+         protocol_errors_preserve_bounded_informational_history},
         {"terminal reboot and continue", reboot_variants_and_continue_are_terminal},
         {"canonical download and flash trace", canonical_download_and_flash_trace},
         {"pre-DATA FAIL", pre_data_fail_is_not_sent_and_reusable},

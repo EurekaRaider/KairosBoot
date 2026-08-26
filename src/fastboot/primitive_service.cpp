@@ -460,7 +460,7 @@ PrimitiveError PrimitiveService::protocol_error(
         .phase = error.phase,
         .message = error.message,
         .device_message = {},
-        .informational = {},
+        .informational = error.informational,
         .transport_status = error.transport_status,
         .transport_certainty = error.transfer_certainty,
         .outbound_certainty = download_semantics

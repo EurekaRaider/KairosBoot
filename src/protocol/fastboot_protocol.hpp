@@ -92,6 +92,9 @@ enum class ProtocolPhase : std::uint8_t {
 struct ProtocolError {
     ProtocolErrorCode code;
     std::string message;
+    // Informational responses successfully received before the terminal error.
+    // The session's configured informational-response limit bounds this list.
+    std::vector<Response> informational;
     TransportStatus transport_status{TransportStatus::Ok};
     // Certainty reported by the individual transport call that failed.
     TransferCertainty transfer_certainty{TransferCertainty::FullyTransferred};
@@ -169,7 +172,8 @@ private:
         const TransferProgressObserver& observer);
     [[nodiscard]] std::expected<Response, ProtocolError> read_response_locked(
         ProtocolPhase phase,
-        TransferCertainty outbound_certainty);
+        TransferCertainty outbound_certainty,
+        const std::vector<Response>& informational);
     [[nodiscard]] std::expected<CommandResult, ProtocolError> read_terminal_locked(
         std::vector<Response> informational,
         ProtocolPhase phase,

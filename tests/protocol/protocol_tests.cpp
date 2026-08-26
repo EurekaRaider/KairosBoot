@@ -239,6 +239,38 @@ void download_length_mismatch_poisons_before_payload() {
     CHECK(script->complete());
 }
 
+void download_write_failure_preserves_initial_information() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    const auto payload = to_bytes("abcdef");
+    script->expect_write("download:00000006");
+    script->respond("INFOpreparing payload");
+    script->respond("DATA00000006");
+    script->expect_write(
+        payload,
+        2,
+        TransportStatus::IoError,
+        TransferCertainty::PartialOrUnknown,
+        5,
+        "payload write failed");
+
+    FastbootSession session(std::move(transport));
+    const auto result = session.download(payload);
+    CHECK(!result);
+    CHECK(result.error().code == ProtocolErrorCode::TransportIo);
+    CHECK(result.error().informational.size() == 1);
+    CHECK(result.error().informational[0].kind == ResponseKind::Info);
+    CHECK(result.error().informational[0].payload == "preparing payload");
+    const auto poison = session.poison_error();
+    CHECK(poison.has_value());
+    CHECK(poison->informational.size() == 1);
+    CHECK(poison->informational[0].kind == ResponseKind::Info);
+    CHECK(poison->informational[0].payload == "preparing payload");
+    CHECK(session.state() == SessionState::Poisoned);
+    CHECK(script->accepted_bytes() == to_bytes("download:00000006ab"));
+    CHECK(script->complete());
+}
+
 void timeout_and_partial_unknown_poison_session() {
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
@@ -344,11 +376,21 @@ void unexpected_data_and_info_flood_poison_session() {
         auto transport = std::make_unique<ScriptedTransport>();
         auto* script = transport.get();
         script->expect_write("getvar:x");
+        script->respond("INFOchecking");
+        script->respond("TEXTstill checking");
         script->respond("DATA00000001");
         FastbootSession session(std::move(transport));
         const auto result = session.command("getvar:x");
         CHECK(!result);
         CHECK(result.error().code == ProtocolErrorCode::UnexpectedResponse);
+        CHECK(result.error().informational.size() == 2);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "checking");
+        CHECK(result.error().informational[1].kind == ResponseKind::Text);
+        CHECK(result.error().informational[1].payload == "still checking");
+        const auto poison = session.poison_error();
+        CHECK(poison.has_value());
+        CHECK(poison->informational.size() == 2);
         CHECK(session.state() == SessionState::Poisoned);
         CHECK(script->complete());
     }
@@ -364,6 +406,55 @@ void unexpected_data_and_info_flood_poison_session() {
         const auto result = session.command("getvar:x");
         CHECK(!result);
         CHECK(result.error().code == ProtocolErrorCode::TooManyInformationalResponses);
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "one");
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:x");
+        script->respond("INFOwaiting");
+        script->respond(
+            "", TransportStatus::Timeout, TransferCertainty::NotTransferred);
+        FastbootSession session(std::move(transport));
+        const auto result = session.command("getvar:x");
+        CHECK(!result);
+        CHECK(result.error().code == ProtocolErrorCode::TransportTimeout);
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "waiting");
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:x");
+        script->respond("INFOparsing");
+        script->respond("NOPEbad");
+        FastbootSession session(std::move(transport));
+        const auto result = session.command("getvar:x");
+        CHECK(!result);
+        CHECK(result.error().code == ProtocolErrorCode::MalformedResponse);
+        CHECK(result.error().informational.size() == 1);
+        CHECK(result.error().informational[0].kind == ResponseKind::Info);
+        CHECK(result.error().informational[0].payload == "parsing");
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:x");
+        script->respond("NOPEbad");
+        FastbootSession session(std::move(transport));
+        const auto result = session.command("getvar:x");
+        CHECK(!result);
+        CHECK(result.error().code == ProtocolErrorCode::MalformedResponse);
+        CHECK(result.error().informational.empty());
         CHECK(session.state() == SessionState::Poisoned);
         CHECK(script->complete());
     }
@@ -400,6 +491,8 @@ int main() {
         {"download writes exact length", download_requires_and_writes_exact_length},
         {"zero length download", zero_length_download_is_well_defined},
         {"download length mismatch poisons", download_length_mismatch_poisons_before_payload},
+        {"download write errors preserve INFO",
+         download_write_failure_preserves_initial_information},
         {"timeout and partial unknown poison", timeout_and_partial_unknown_poison_session},
         {"read timeout and ambiguous success poison", read_timeout_and_ambiguous_success_poison_session},
         {"malformed responses poison", malformed_wire_responses_poison_session},
