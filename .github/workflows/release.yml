@@ -24,7 +24,7 @@ jobs:
       commit: ${{ steps.contract.outputs.commit }}
     steps:
       - name: Check out signed tag
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -116,7 +116,7 @@ jobs:
             binutils ca-certificates cmake g++-12 git make ninja-build python3
 
       - name: Check out release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
@@ -232,7 +232,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment-target }}
     steps:
       - name: Check out release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
@@ -402,7 +402,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
@@ -507,7 +507,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
@@ -600,7 +600,7 @@ jobs:
       attestations: write
     steps:
       - name: Check out release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
           fetch-depth: 0
