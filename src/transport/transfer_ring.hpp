@@ -3,6 +3,7 @@
 #include "src/protocol/transport_session.hpp"
 #include "src/transport/buffer_budget.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -93,6 +94,89 @@ struct TransferRingConfig final {
     std::size_t depth{8};
 };
 
+using TransferTelemetryTimePoint = std::chrono::steady_clock::time_point;
+using TransferTelemetryNow =
+    TransferTelemetryTimePoint (*)(void* context) noexcept;
+
+struct TransferTelemetryClock final {
+    // A null function selects std::chrono::steady_clock::now(). The context is
+    // only used by deterministic internal tests.
+    TransferTelemetryNow now{};
+    void* context{};
+};
+
+struct TransferTelemetryConfig final {
+    bool enabled{false};
+    TransferTelemetryClock clock{};
+};
+
+// Internal, single-executor telemetry. Disabled instances remain all-zero and
+// are omitted from the ring hot path. Values describe one TransferRing run;
+// taking a snapshot does not allocate or invoke a callback. completed_bytes is
+// the valid byte count reported by recognized completions, while
+// contiguous_watermark only advances across complete successful segments.
+struct TransferTelemetrySnapshot final {
+    bool enabled{false};
+    std::uint64_t source_read_count{};
+    std::uint64_t source_read_bytes{};
+    std::chrono::nanoseconds source_read_time{};
+    std::uint64_t budget_acquire_attempt_count{};
+    std::uint64_t budget_acquire_count{};
+    std::chrono::nanoseconds budget_acquire_time{};
+    // Failed non-blocking acquisitions are not waits. These fields only cover
+    // actual budget waits performed by the USB DATA loop.
+    std::uint64_t budget_wait_count{};
+    std::chrono::nanoseconds budget_wait_time{};
+    std::uint64_t submit_attempt_count{};
+    std::uint64_t submit_count{};
+    std::uint64_t submitted_bytes{};
+    std::uint64_t completion_count{};
+    std::uint64_t completed_bytes{};
+    std::size_t current_in_flight{};
+    std::size_t peak_in_flight{};
+    std::uint64_t contiguous_watermark{};
+    std::uint64_t cancel_count{};
+    std::uint64_t backend_cancel_count{};
+    std::uint64_t cancelled_completion_count{};
+    std::uint64_t error_count{};
+};
+
+class TransferTelemetry final {
+public:
+    explicit TransferTelemetry(TransferTelemetryConfig config = {}) noexcept;
+
+    [[nodiscard]] bool enabled() const noexcept;
+    void reset() noexcept;
+    [[nodiscard]] TransferTelemetrySnapshot snapshot() const noexcept;
+
+    [[nodiscard]] TransferTelemetryTimePoint now() const noexcept;
+    void record_budget_wait(TransferTelemetryTimePoint started,
+                            TransferTelemetryTimePoint finished) noexcept;
+
+private:
+    friend class TransferRing;
+
+    void record_source_read(std::size_t bytes,
+                            bool succeeded,
+                            TransferTelemetryTimePoint started,
+                            TransferTelemetryTimePoint finished) noexcept;
+    void record_budget_acquire(bool acquired,
+                               TransferTelemetryTimePoint started,
+                               TransferTelemetryTimePoint finished) noexcept;
+    void record_submit_attempt() noexcept;
+    void record_submit(std::size_t bytes, std::size_t current_in_flight) noexcept;
+    void record_completion(std::size_t bytes,
+                           std::size_t current_in_flight,
+                           std::uint64_t contiguous_watermark,
+                           bool cancelled) noexcept;
+    void record_cancel() noexcept;
+    void record_backend_cancel() noexcept;
+    void record_error() noexcept;
+
+    TransferTelemetryConfig config_;
+    TransferTelemetrySnapshot snapshot_;
+};
+
 class TransferBackend {
 public:
     virtual ~TransferBackend() = default;
@@ -123,9 +207,11 @@ private:
 // serialized by the owning device actor/event executor.
 class TransferRing final {
 public:
+    // The optional internal telemetry sink must outlive the ring.
     TransferRing(TransferBackend& backend,
                  std::shared_ptr<BufferBudget> budget,
-                 TransferRingConfig config = {});
+                 TransferRingConfig config = {},
+                 TransferTelemetry* telemetry = nullptr);
 
     [[nodiscard]] bool start(std::shared_ptr<TransferSource> source,
                              bool logical_message_end = false);
@@ -140,6 +226,7 @@ public:
     [[nodiscard]] std::uint64_t completed_bytes() const noexcept;
     [[nodiscard]] std::uint64_t completion_watermark() const noexcept;
     [[nodiscard]] std::size_t in_flight() const noexcept;
+    [[nodiscard]] TransferTelemetrySnapshot telemetry_snapshot() const noexcept;
 
 private:
     struct InFlight final {
@@ -157,6 +244,7 @@ private:
     TransferBackend& backend_;
     std::shared_ptr<BufferBudget> budget_;
     TransferRingConfig config_;
+    TransferTelemetry* telemetry_{};
     std::shared_ptr<TransferSource> source_;
     TransferRingState state_{TransferRingState::idle};
     std::optional<TransferError> error_;

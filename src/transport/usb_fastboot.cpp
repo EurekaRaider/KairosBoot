@@ -314,7 +314,8 @@ UsbFastbootTransport::UsbFastbootTransport(
     std::shared_ptr<BufferBudget> budget)
     : backend_(std::move(backend)),
       options_(std::move(options)),
-      budget_(std::move(budget)) {}
+      budget_(std::move(budget)),
+      data_telemetry_(options_.data_telemetry) {}
 
 UsbFastbootTransport::~UsbFastbootTransport() {
     close();
@@ -342,6 +343,7 @@ protocol::TransferResult UsbFastbootTransport::write_source(
     const std::chrono::milliseconds timeout,
     const TransferProgressObserver& observer) {
     std::scoped_lock operation(operation_mutex_);
+    data_telemetry_.reset();
     if (!open_.load(std::memory_order_acquire)) {
         const auto cancelled =
             cancellation_requested_.load(std::memory_order_acquire);
@@ -388,7 +390,8 @@ protocol::TransferResult UsbFastbootTransport::write_source(
         return failure;
     }
 
-    TransferRing ring(*backend_, budget_, options_.data_ring);
+    TransferRing ring(
+        *backend_, budget_, options_.data_ring, &data_telemetry_);
     try {
         if (!ring.start(std::move(source), true)) {
             auto failure = ring_failure(
@@ -421,7 +424,15 @@ protocol::TransferResult UsbFastbootTransport::write_source(
                         poison_and_stop();
                         return failure;
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (data_telemetry_.enabled()) {
+                        const auto wait_started = data_telemetry_.now();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        const auto wait_finished = data_telemetry_.now();
+                        data_telemetry_.record_budget_wait(
+                            wait_started, wait_finished);
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
                     continue;
                 }
             }
@@ -514,6 +525,11 @@ protocol::TransferResult UsbFastbootTransport::write_source(
             std::move(failure),
             cancellation_requested_.load(std::memory_order_acquire));
     }
+}
+
+TransferTelemetrySnapshot UsbFastbootTransport::data_telemetry_snapshot() const {
+    std::scoped_lock operation(operation_mutex_);
+    return data_telemetry_.snapshot();
 }
 
 protocol::TransferResult UsbFastbootTransport::read(

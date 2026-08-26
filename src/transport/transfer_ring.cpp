@@ -1,6 +1,7 @@
 #include "src/transport/transfer_ring.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -8,6 +9,15 @@
 namespace kairosboot::transport {
 
 namespace {
+
+[[nodiscard]] std::chrono::nanoseconds telemetry_elapsed(
+    const TransferTelemetryTimePoint started,
+    const TransferTelemetryTimePoint finished) noexcept {
+    if (finished <= started) {
+        return {};
+    }
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(finished - started);
+}
 
 [[nodiscard]] TransferErrorKind submit_error_kind(const SubmitResult result) noexcept {
     switch (result) {
@@ -43,6 +53,100 @@ namespace {
 
 }  // namespace
 
+TransferTelemetry::TransferTelemetry(const TransferTelemetryConfig config) noexcept
+    : config_(config) {
+    reset();
+}
+
+bool TransferTelemetry::enabled() const noexcept { return config_.enabled; }
+
+void TransferTelemetry::reset() noexcept {
+    if (!config_.enabled) {
+        return;
+    }
+    snapshot_ = {};
+    snapshot_.enabled = true;
+}
+
+TransferTelemetrySnapshot TransferTelemetry::snapshot() const noexcept {
+    return snapshot_;
+}
+
+TransferTelemetryTimePoint TransferTelemetry::now() const noexcept {
+    if (config_.clock.now != nullptr) {
+        return config_.clock.now(config_.clock.context);
+    }
+    return std::chrono::steady_clock::now();
+}
+
+void TransferTelemetry::record_budget_wait(
+    const TransferTelemetryTimePoint started,
+    const TransferTelemetryTimePoint finished) noexcept {
+    if (!config_.enabled) {
+        return;
+    }
+    ++snapshot_.budget_wait_count;
+    snapshot_.budget_wait_time += telemetry_elapsed(started, finished);
+}
+
+void TransferTelemetry::record_source_read(
+    const std::size_t bytes,
+    const bool succeeded,
+    const TransferTelemetryTimePoint started,
+    const TransferTelemetryTimePoint finished) noexcept {
+    ++snapshot_.source_read_count;
+    if (succeeded) {
+        snapshot_.source_read_bytes += static_cast<std::uint64_t>(bytes);
+    }
+    snapshot_.source_read_time += telemetry_elapsed(started, finished);
+}
+
+void TransferTelemetry::record_budget_acquire(
+    const bool acquired,
+    const TransferTelemetryTimePoint started,
+    const TransferTelemetryTimePoint finished) noexcept {
+    ++snapshot_.budget_acquire_attempt_count;
+    if (acquired) {
+        ++snapshot_.budget_acquire_count;
+    }
+    snapshot_.budget_acquire_time += telemetry_elapsed(started, finished);
+}
+
+void TransferTelemetry::record_submit_attempt() noexcept {
+    ++snapshot_.submit_attempt_count;
+}
+
+void TransferTelemetry::record_submit(const std::size_t bytes,
+                                      const std::size_t current_in_flight) noexcept {
+    ++snapshot_.submit_count;
+    snapshot_.submitted_bytes += static_cast<std::uint64_t>(bytes);
+    snapshot_.current_in_flight = current_in_flight;
+    snapshot_.peak_in_flight =
+        std::max(snapshot_.peak_in_flight, current_in_flight);
+}
+
+void TransferTelemetry::record_completion(
+    const std::size_t bytes,
+    const std::size_t current_in_flight,
+    const std::uint64_t contiguous_watermark,
+    const bool cancelled) noexcept {
+    ++snapshot_.completion_count;
+    snapshot_.completed_bytes += static_cast<std::uint64_t>(bytes);
+    snapshot_.current_in_flight = current_in_flight;
+    snapshot_.contiguous_watermark = contiguous_watermark;
+    if (cancelled) {
+        ++snapshot_.cancelled_completion_count;
+    }
+}
+
+void TransferTelemetry::record_cancel() noexcept { ++snapshot_.cancel_count; }
+
+void TransferTelemetry::record_backend_cancel() noexcept {
+    ++snapshot_.backend_cancel_count;
+}
+
+void TransferTelemetry::record_error() noexcept { ++snapshot_.error_count; }
+
 MemoryTransferSource::MemoryTransferSource(std::vector<std::byte> bytes)
     : bytes_(std::move(bytes)) {}
 
@@ -67,8 +171,16 @@ bool MemoryTransferSource::read_exact(const std::uint64_t offset,
 
 TransferRing::TransferRing(TransferBackend& backend,
                            std::shared_ptr<BufferBudget> budget,
-                           const TransferRingConfig config)
-    : backend_(backend), budget_(std::move(budget)), config_(config) {}
+                           const TransferRingConfig config,
+                           TransferTelemetry* const telemetry)
+    : backend_(backend),
+      budget_(std::move(budget)),
+      config_(config),
+      telemetry_(telemetry != nullptr && telemetry->enabled() ? telemetry : nullptr) {
+    if (telemetry_ != nullptr) {
+        telemetry_->reset();
+    }
+}
 
 bool TransferRing::start(std::shared_ptr<TransferSource> source,
                          const bool logical_message_end) {
@@ -79,6 +191,9 @@ bool TransferRing::start(std::shared_ptr<TransferSource> source,
             error_ = TransferError{TransferErrorKind::invalid_configuration,
                                    DeliveryCertainty::not_sent};
             state_ = TransferRingState::failed;
+            if (telemetry_ != nullptr) {
+                telemetry_->record_error();
+            }
         }
         return false;
     }
@@ -106,11 +221,30 @@ bool TransferRing::pump() {
         const auto remaining = total_bytes_ - next_offset_;
         const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
             remaining, static_cast<std::uint64_t>(config_.chunk_size)));
-        auto lease = budget_->try_acquire(chunk);
+        std::optional<BufferLease> lease;
+        if (telemetry_ != nullptr) {
+            const auto started = telemetry_->now();
+            lease = budget_->try_acquire(chunk);
+            const auto finished = telemetry_->now();
+            telemetry_->record_budget_acquire(
+                lease.has_value(), started, finished);
+        } else {
+            lease = budget_->try_acquire(chunk);
+        }
         if (!lease.has_value()) {
             break;
         }
-        if (!source_->read_exact(next_offset_, lease->bytes())) {
+        bool read_succeeded;
+        if (telemetry_ != nullptr) {
+            const auto started = telemetry_->now();
+            read_succeeded = source_->read_exact(next_offset_, lease->bytes());
+            const auto finished = telemetry_->now();
+            telemetry_->record_source_read(
+                chunk, read_succeeded, started, finished);
+        } else {
+            read_succeeded = source_->read_exact(next_offset_, lease->bytes());
+        }
+        if (!read_succeeded) {
             begin_failure(TransferErrorKind::source_read);
             break;
         }
@@ -131,6 +265,9 @@ bool TransferRing::pump() {
             entry->second.buffer.lifetime_token(),
             logical_message_end_ && offset + chunk == total_bytes_,
         };
+        if (telemetry_ != nullptr) {
+            telemetry_->record_submit_attempt();
+        }
         const auto result = backend_.submit(submission);
         if (result != SubmitResult::accepted) {
             in_flight_.erase(entry);
@@ -139,6 +276,9 @@ bool TransferRing::pump() {
         }
 
         next_offset_ += chunk;
+        if (telemetry_ != nullptr) {
+            telemetry_->record_submit(chunk, in_flight_.size());
+        }
         submitted = true;
     }
 
@@ -154,6 +294,9 @@ bool TransferRing::handle_completion(const TransferCompletion& completion) {
 
     const auto offset = entry->second.offset;
     const auto requested = entry->second.requested_bytes;
+    const auto valid_completed_bytes = completion.transferred_bytes <= requested
+        ? completion.transferred_bytes
+        : std::size_t{0};
     in_flight_.erase(entry);
 
     if (completion.transferred_bytes > requested) {
@@ -175,12 +318,22 @@ bool TransferRing::handle_completion(const TransferCompletion& completion) {
         static_cast<void>(pump());
     }
     settle_terminal_state();
+    if (telemetry_ != nullptr) {
+        telemetry_->record_completion(
+            valid_completed_bytes,
+            in_flight_.size(),
+            completion_watermark_,
+            completion.code == CompletionCode::cancelled);
+    }
     return true;
 }
 
 void TransferRing::cancel() noexcept {
     if (state_ != TransferRingState::running) {
         return;
+    }
+    if (telemetry_ != nullptr) {
+        telemetry_->record_cancel();
     }
     error_ = TransferError{TransferErrorKind::user_cancelled, current_certainty()};
     state_ = TransferRingState::cancelling;
@@ -204,6 +357,11 @@ std::uint64_t TransferRing::completion_watermark() const noexcept {
 
 std::size_t TransferRing::in_flight() const noexcept { return in_flight_.size(); }
 
+TransferTelemetrySnapshot TransferRing::telemetry_snapshot() const noexcept {
+    return telemetry_ != nullptr ? telemetry_->snapshot()
+                                 : TransferTelemetrySnapshot{};
+}
+
 DeliveryCertainty TransferRing::current_certainty() const noexcept {
     if (total_bytes_ != 0 && completion_watermark_ == total_bytes_) {
         return DeliveryCertainty::fully_transferred;
@@ -217,6 +375,9 @@ DeliveryCertainty TransferRing::current_certainty() const noexcept {
 void TransferRing::begin_failure(const TransferErrorKind kind) noexcept {
     if (!error_.has_value()) {
         error_ = TransferError{kind, current_certainty()};
+        if (telemetry_ != nullptr) {
+            telemetry_->record_error();
+        }
     }
     if (state_ == TransferRingState::running) {
         state_ = TransferRingState::draining_failure;
@@ -229,6 +390,9 @@ void TransferRing::cancel_outstanding() noexcept {
     for (const auto& [id, ignored] : in_flight_) {
         static_cast<void>(ignored);
         backend_.cancel(id);
+        if (telemetry_ != nullptr) {
+            telemetry_->record_backend_cancel();
+        }
     }
 }
 
