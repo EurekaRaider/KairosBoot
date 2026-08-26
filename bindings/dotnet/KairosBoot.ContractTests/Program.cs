@@ -40,6 +40,9 @@ internal static class Program
             await CheckPreCancellation().ConfigureAwait(false);
             await CheckTypedPreCancellation().ConfigureAwait(false);
             CheckTypedManagedPreflight();
+#if NET10_0_OR_GREATER
+            await CheckScriptedTcpParity().ConfigureAwait(false);
+#endif
             CheckDisposedContext();
             Console.WriteLine($"KairosBoot .NET contract checks passed: {checks}");
             return 0;
@@ -477,6 +480,129 @@ internal static class Program
             Expect<ArgumentException>(() => _ = context.StageAsync(Array.Empty<byte>()));
         }
     }
+
+#if NET10_0_OR_GREATER
+    private static async Task CheckScriptedTcpParity()
+    {
+        using (var server = new ScriptedTcpDevice())
+        using (var context = Context.Create())
+        {
+            var options = new CommandOptions(TimeSpan.FromSeconds(5), 1024);
+            var getvar = await context.GetVarAsync(
+                "product",
+                server.Selector,
+                options).ConfigureAwait(false);
+
+            Check(
+                getvar.TerminalPayload.SequenceEqual(new byte[]
+                {
+                    (byte)'p', (byte)'r', (byte)'o', (byte)'d', (byte)'u',
+                    (byte)'c', (byte)'t', (byte)'_', (byte)'a', 0, 0xff,
+                }),
+                "scripted TCP binary OKAY");
+            Check(getvar.Messages.Count == 2, "scripted TCP message count");
+            Check(getvar.Messages[0].Kind == CommandMessageKind.Info, "scripted TCP INFO kind");
+            Check(
+                getvar.Messages[0].Payload.SequenceEqual(new byte[]
+                {
+                    (byte)'o', (byte)'n', (byte)'e', 0,
+                    (byte)'t', (byte)'w', (byte)'o',
+                }),
+                "scripted TCP binary INFO");
+            Check(getvar.Messages[1].Kind == CommandMessageKind.Text, "scripted TCP TEXT kind");
+            Check(
+                getvar.Messages[1].Payload.SequenceEqual(new byte[]
+                {
+                    (byte)'h', (byte)'u', (byte)'m', (byte)'a', (byte)'n', 0,
+                    (byte)'t', (byte)'e', (byte)'x', (byte)'t', 0xff,
+                }),
+                "scripted TCP binary TEXT");
+            Check(getvar.Data.Length == 0, "scripted TCP getvar has no DATA");
+            Check(
+                getvar.DeviceIdentifier == server.Selector,
+                "scripted TCP success selector passthrough");
+
+            var deviceFail = await ExpectAsync<KairosBootException>(
+                () => context.EraseAsync(
+                    "userdata",
+                    server.Selector,
+                    options)).ConfigureAwait(false);
+            Check(deviceFail.Status == KairosBootStatus.DeviceFail, "scripted TCP FAIL status");
+            Check(
+                deviceFail.DeviceMessage.SequenceEqual(
+                    System.Text.Encoding.ASCII.GetBytes("partition locked")),
+                "scripted TCP FAIL device message");
+            Check(deviceFail.CommandMessages.Count == 1, "scripted TCP FAIL INFO count");
+            Check(
+                deviceFail.CommandMessages[0].Kind == CommandMessageKind.Info,
+                "scripted TCP FAIL INFO kind");
+            Check(
+                deviceFail.CommandMessages[0].Payload.SequenceEqual(
+                    System.Text.Encoding.ASCII.GetBytes("warning")),
+                "scripted TCP FAIL INFO payload");
+            Check(!deviceFail.InboundExpectedBytes.HasValue, "scripted TCP FAIL inbound unset");
+            Check(deviceFail.InboundTransferredBytes == 0, "scripted TCP FAIL inbound bytes");
+            Check(
+                deviceFail.InboundTransferState == TransferState.NotSent,
+                "scripted TCP FAIL inbound certainty");
+            Check(
+                deviceFail.TransferState == TransferState.FullyTransferred,
+                "scripted TCP FAIL outbound certainty");
+            Check(!deviceFail.SessionPoisoned, "scripted TCP FAIL session reusable");
+            Check(
+                deviceFail.DeviceIdentifier == server.Selector,
+                "scripted TCP FAIL selector passthrough");
+
+            var disconnected = await ExpectAsync<KairosBootException>(
+                () => context.UploadAsync(
+                    server.Selector,
+                    options)).ConfigureAwait(false);
+            Check(disconnected.Status == KairosBootStatus.NoDevice, "scripted TCP disconnect status");
+            Check(disconnected.InboundExpectedBytes == 5, "scripted TCP disconnect expected bytes");
+            Check(disconnected.InboundTransferredBytes == 2, "scripted TCP disconnect committed bytes");
+            Check(
+                disconnected.InboundTransferState == TransferState.PartialOrUnknown,
+                "scripted TCP disconnect inbound certainty");
+            Check(
+                disconnected.TransferState == TransferState.FullyTransferred,
+                "scripted TCP disconnect outbound certainty");
+            Check(disconnected.SessionPoisoned, "scripted TCP disconnect poisons session");
+            Check(
+                disconnected.DeviceIdentifier == server.Selector,
+                "scripted TCP disconnect selector passthrough");
+
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var pending = context.GetVarAsync(
+                    "cancel",
+                    server.Selector,
+                    options,
+                    cancellationToken: cancellation.Token);
+                Check(
+                    server.WaitForCancellationCommand(TimeSpan.FromSeconds(5)),
+                    "scripted TCP cancellation command observed");
+                cancellation.Cancel();
+                await ExpectAsync<OperationCanceledException>(() => pending)
+                    .ConfigureAwait(false);
+                Check(
+                    server.WaitForCancellationDrain(TimeSpan.FromSeconds(2)),
+                    "scripted TCP cancellation drained connection");
+            }
+
+            server.Finish();
+            Check(server.HandshakeCount == 4, "scripted TCP handshake count");
+            Check(
+                server.Commands.SequenceEqual(new[]
+                {
+                    "getvar:product",
+                    "erase:userdata",
+                    "upload",
+                    "getvar:cancel",
+                }),
+                "scripted TCP normalized command trace");
+        }
+    }
+#endif
 
     private static void CheckDisposedContext()
     {
