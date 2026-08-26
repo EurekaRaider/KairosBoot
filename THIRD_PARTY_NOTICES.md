@@ -30,6 +30,18 @@ and verifies its SHA-256 digest. Boost.Asio is used as an internal networking
 implementation dependency; it is not exposed by the installed C or C++ API.
 Binary and SDK distributions include `LICENSE_1_0.txt`.
 
+## miniz 3.1.2
+
+- Project: https://github.com/richgel999/miniz
+- Version: 3.1.2
+- License: MIT
+- Source archive: https://github.com/richgel999/miniz/releases/download/3.1.2/miniz-3.1.2.zip
+
+KairosBoot builds `miniz.c` into a private static library with archive-writing,
+stdio, and zlib-compatible names disabled. CRC validation remains enabled.
+miniz is not exposed by the installed APIs and does not add a shared-library
+runtime dependency. Binary, SDK, and NuGet distributions include its `LICENSE`.
+
 ## Microsoft Visual C++ Runtime
 
 Windows binary distributions include the architecture-matching, app-local

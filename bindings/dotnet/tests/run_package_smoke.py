@@ -59,6 +59,7 @@ def assert_package_licenses(package: Path) -> None:
     required = {
         "licenses/boost/LICENSE_1_0.txt",
         "licenses/libusb/COPYING",
+        "licenses/miniz/LICENSE",
         "licenses/microsoft-vc-runtime/NOTICE.txt",
     }
     missing = sorted(required - names)
@@ -74,7 +75,8 @@ def assert_runtime_output(output: Path, rid: str) -> None:
         path
         for path in output.rglob("*")
         if path.is_file()
-        and path.name in {"COPYING", "LICENSE_1_0.txt", "kairosboot-libusb.json"}
+        and path.name
+        in {"COPYING", "LICENSE", "LICENSE_1_0.txt", "kairosboot-libusb.json"}
     ]
     if polluted:
         raise SystemExit(f"license metadata leaked into application output: {polluted}")

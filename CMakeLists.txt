@@ -100,6 +100,54 @@ if(NOT EXISTS "${boost_SOURCE_DIR}/LICENSE_1_0.txt")
   message(FATAL_ERROR "Boost release is missing LICENSE_1_0.txt")
 endif()
 
+# miniz is a private, statically linked archive dependency. Keep the source
+# release immutable and build our own narrowly configured target so upstream
+# build defaults cannot add a runtime dependency or enter the installed export.
+string(JSON KAIROSBOOT_LOCKED_MINIZ_VERSION GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" miniz requiredVersion)
+string(JSON KAIROSBOOT_LOCKED_MINIZ_URL GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" miniz sourceArchive)
+string(JSON KAIROSBOOT_LOCKED_MINIZ_SHA256 GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" miniz sourceArchiveSha256)
+set(KAIROSBOOT_MINIZ_VERSION "${KAIROSBOOT_LOCKED_MINIZ_VERSION}")
+set(KAIROSBOOT_MINIZ_URL "${KAIROSBOOT_LOCKED_MINIZ_URL}")
+set(KAIROSBOOT_MINIZ_SHA256 "${KAIROSBOOT_LOCKED_MINIZ_SHA256}")
+string(LENGTH "${KAIROSBOOT_MINIZ_SHA256}" KAIROSBOOT_MINIZ_SHA256_LENGTH)
+if(NOT KAIROSBOOT_MINIZ_SHA256_LENGTH EQUAL 64
+   OR NOT KAIROSBOOT_MINIZ_SHA256 MATCHES "^[0-9a-fA-F]+$")
+  message(FATAL_ERROR "KAIROSBOOT_MINIZ_SHA256 must be a SHA-256 digest")
+endif()
+
+FetchContent_Declare(
+  kairosboot_miniz_source
+  URL "${KAIROSBOOT_MINIZ_URL}"
+  URL_HASH "SHA256=${KAIROSBOOT_MINIZ_SHA256}"
+  SOURCE_SUBDIR _kairosboot_no_upstream_cmake_project)
+FetchContent_MakeAvailable(kairosboot_miniz_source)
+foreach(_miniz_file IN ITEMS miniz.c miniz.h LICENSE)
+  if(NOT EXISTS "${kairosboot_miniz_source_SOURCE_DIR}/${_miniz_file}")
+    message(FATAL_ERROR
+            "miniz ${KAIROSBOOT_MINIZ_VERSION} is missing ${_miniz_file}")
+  endif()
+endforeach()
+
+add_library(kairosboot_miniz STATIC
+            "${kairosboot_miniz_source_SOURCE_DIR}/miniz.c")
+set_target_properties(
+  kairosboot_miniz
+  PROPERTIES POSITION_INDEPENDENT_CODE ON
+             C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES)
+target_compile_features(kairosboot_miniz PRIVATE c_std_11)
+target_compile_definitions(
+  kairosboot_miniz
+  PUBLIC MINIZ_NO_ARCHIVE_WRITING_APIS
+         MINIZ_NO_STDIO
+         MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
+target_include_directories(
+  kairosboot_miniz SYSTEM
+  PUBLIC "$<BUILD_INTERFACE:${kairosboot_miniz_source_SOURCE_DIR}>")
+
 if(MSVC)
   set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
   set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
@@ -157,8 +205,8 @@ target_include_directories(
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
          "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(kairosboot_internal
-                      PRIVATE kairosboot_libusb Boost::asio_core Threads::Threads
-                              ${CMAKE_DL_LIBS})
+                      PRIVATE kairosboot_libusb kairosboot_miniz
+                              Boost::asio_core Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)
   # Boost.Asio still uses the operating system's Winsock implementation. Keep
   # the platform link dependency explicit for every supported Windows toolchain.
@@ -566,6 +614,8 @@ install(
   DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot")
 install(FILES "${boost_SOURCE_DIR}/LICENSE_1_0.txt"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/boost")
+install(FILES "${kairosboot_miniz_source_SOURCE_DIR}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/miniz")
 
 configure_package_config_file(
   cmake/KairosBootConfig.cmake.in

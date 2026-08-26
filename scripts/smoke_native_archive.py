@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -14,6 +15,65 @@ from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def dependency_names(output: str, platform: str) -> set[str]:
+    if platform.startswith("windows-"):
+        return {
+            line.strip().lower()
+            for line in output.splitlines()
+            if line.strip().lower().endswith(".dll")
+        }
+    if platform.startswith("macos-"):
+        return {
+            Path(line.strip().split(" ", 1)[0]).name.lower()
+            for line in output.splitlines()[1:]
+            if line.strip()
+        }
+    return {
+        match.group(1).lower()
+        for match in re.finditer(r"Shared library: \[([^]]+)\]", output)
+    }
+
+
+def is_forbidden_compression_runtime(name: str) -> bool:
+    return any(
+        re.fullmatch(pattern, name) is not None
+        for pattern in (
+            r"(?:lib)?miniz[^/\\]*\.(?:dll|dylib)",
+            r"libminiz[^/\\]*\.so(?:\.[0-9]+)*",
+            r"(?:lib)?zlib[0-9]*\.dll",
+            r"libz(?:\.[0-9]+)*\.dylib",
+            r"libz\.so(?:\.[0-9]+)*",
+        )
+    )
+
+
+def verify_no_compression_runtime_dependency(
+    library: Path, platform: str, dumpbin: Path | None, environment: dict[str, str]
+) -> None:
+    if platform.startswith("windows-"):
+        if dumpbin is None:
+            raise SystemExit("--dumpbin is required for Windows Release archive smoke")
+        tool_name = dumpbin.name.lower()
+        if tool_name in {"link", "link.exe", "lld-link", "lld-link.exe"}:
+            command = [str(dumpbin), "/dump", "/nologo", "/dependents", str(library)]
+        else:
+            command = [str(dumpbin), "/nologo", "/dependents", str(library)]
+    elif platform.startswith("macos-"):
+        command = ["otool", "-L", str(library)]
+    else:
+        command = ["readelf", "-d", str(library)]
+    output = run(command, cwd=ROOT, environment=environment)
+    forbidden = sorted(
+        name
+        for name in dependency_names(output, platform)
+        if is_forbidden_compression_runtime(name)
+    )
+    if forbidden:
+        raise SystemExit(
+            "forbidden compression runtime dependency: " + ", ".join(forbidden)
+        )
 
 
 def archive_members(path: Path) -> list[str]:
@@ -133,6 +193,12 @@ def main() -> None:
         work = Path(temporary)
         sdk_root = extract_archive(archives["sdk"], work / "sdk", f"{base}-sdk")
         cli_root = extract_archive(archives["cli"], work / "cli", f"{base}-cli")
+        for archive_root in (sdk_root, cli_root):
+            miniz_license = archive_root / "share" / "kairosboot" / "miniz" / "LICENSE"
+            if not miniz_license.is_file():
+                raise SystemExit(
+                    f"Release archive is missing the miniz license: {miniz_license}"
+                )
         symbol_names = archive_members(archives["symbols"])
         for name in symbol_names:
             validate_member(name, f"{base}-symbols")
@@ -202,6 +268,9 @@ def main() -> None:
             library = sdk_root / "lib" / f"libkairosboot.so.{args.version}"
         if not library.is_file():
             raise SystemExit(f"SDK library is missing: {library}")
+        verify_no_compression_runtime_dependency(
+            library, args.platform, args.dumpbin, environment
+        )
         abi_command = [
             sys.executable,
             str(ROOT / "scripts" / "check_abi.py"),

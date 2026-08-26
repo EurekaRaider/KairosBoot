@@ -201,7 +201,7 @@ KairosBoot requires:
 - Python 3 and `make` for the locked dependency preparation step
 - A C11 compiler and a compiler with C++23 support
 - Ninja or another supported CMake generator
-- Network access on the first configure so CMake `FetchContent` can download the locked Boost archive
+- Network access on the first configure so CMake `FetchContent` can download the locked Boost and miniz archives
 
 Release builds use exactly libusb 1.0.30 as a dynamically linked dependency.
 Prepare it from the repository's locked, hash-verified source archives before
@@ -227,6 +227,12 @@ committed SHA-256 digest. Boost.Asio is an internal transport dependency; Boost
 types are not exposed by the installed C, C++, or C# APIs, and the TCP/UDP
 implementations do not call native socket APIs directly.
 
+The same dependency lock pins miniz 3.1.2 from its official, hash-verified
+release archive. KairosBoot builds `miniz.c` as a hidden, position-independent
+private static target with archive-writing, stdio, and zlib-compatible names
+disabled while retaining CRC validation. It does not add a miniz or zlib shared
+runtime dependency and is not part of the public API.
+
 For a multi-configuration generator such as Visual Studio, build and test the
 explicit Release configuration:
 
@@ -242,8 +248,8 @@ cmake --install build --prefix "$PWD/install"
 ```
 
 The install contains the matching libusb runtime, LGPL license and dependency
-manifest, plus the Boost Software License. Release automation builds with the
-CMake `Release` configuration; when `KAIROSBOOT_RELEASE_SYMBOLS=ON`, debug
+manifest, plus the Boost and miniz license texts. Release automation builds with
+the CMake `Release` configuration; when `KAIROSBOOT_RELEASE_SYMBOLS=ON`, debug
 symbols are published separately without disabling optimization.
 
 ## Testing
@@ -305,5 +311,6 @@ security issues through [SECURITY.md](SECURITY.md).
 
 KairosBoot original source code is licensed under the [MIT License](LICENSE).
 libusb is dynamically linked and retains its LGPL license. Boost retains the
-Boost Software License 1.0. Other third-party components retain their own terms; see
+Boost Software License 1.0. miniz is statically linked under MIT. Other
+third-party components retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
