@@ -55,6 +55,13 @@ namespace {
     return TransferCertainty::PartialOrUnknown;
 }
 
+[[nodiscard]] ProtocolError with_informational(
+    ProtocolError error,
+    const std::vector<Response>& informational) {
+    error.informational = informational;
+    return error;
+}
+
 }  // namespace
 
 std::expected<Response, ResponseParseError> parse_response(
@@ -255,7 +262,8 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
     for (;;) {
         auto response = read_response_locked(
             ProtocolPhase::InitialResponse,
-            TransferCertainty::FullyTransferred);
+            TransferCertainty::FullyTransferred,
+            informational);
         if (!response) {
             return std::unexpected(response.error());
         }
@@ -265,6 +273,7 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
                 return poison_locked(ProtocolError{
                     .code = ProtocolErrorCode::TooManyInformationalResponses,
                     .message = "Fastboot device exceeded the informational response limit",
+                    .informational = informational,
                     .phase = ProtocolPhase::InitialResponse,
                     .outbound_certainty = TransferCertainty::FullyTransferred,
                 });
@@ -287,6 +296,7 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
             return poison_locked(ProtocolError{
                 .code = ProtocolErrorCode::UnexpectedResponse,
                 .message = "Fastboot download expected DATA or FAIL before sending payload",
+                .informational = informational,
                 .phase = ProtocolPhase::InitialResponse,
                 .outbound_certainty = TransferCertainty::FullyTransferred,
             });
@@ -296,6 +306,7 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
             return poison_locked(ProtocolError{
                 .code = ProtocolErrorCode::DataLengthMismatch,
                 .message = "Fastboot device accepted a different download length",
+                .informational = informational,
                 .phase = ProtocolPhase::InitialResponse,
                 .outbound_certainty = TransferCertainty::FullyTransferred,
             });
@@ -308,12 +319,14 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
         if (const auto write = write_source_locked(
                 *streaming, std::move(source), size, observer);
             !write) {
-            return std::unexpected(write.error());
+            return poison_locked(with_informational(
+                std::move(write.error()), informational));
         }
     } else {
         if (const auto write = write_exact_locked(bytes, ProtocolPhase::DataWrite);
             !write) {
-            return std::unexpected(write.error());
+            return poison_locked(with_informational(
+                std::move(write.error()), informational));
         }
     }
 
@@ -528,17 +541,20 @@ std::expected<void, ProtocolError> FastbootSession::write_source_locked(
 
 std::expected<Response, ProtocolError> FastbootSession::read_response_locked(
     const ProtocolPhase phase,
-    const TransferCertainty outbound_certainty) {
+    const TransferCertainty outbound_certainty,
+    const std::vector<Response>& informational) {
     std::vector<std::byte> buffer(options_.max_response_bytes);
     const auto result = transport_->read(buffer, options_.io_timeout);
     if (result.status != TransportStatus::Ok) {
-        return poison_locked(transport_error_locked(
-            result, "read", phase, outbound_certainty));
+        return poison_locked(with_informational(
+            transport_error_locked(result, "read", phase, outbound_certainty),
+            informational));
     }
     if (result.certainty != TransferCertainty::FullyTransferred) {
         return poison_locked(ProtocolError{
             .code = ProtocolErrorCode::TransportContractViolation,
             .message = "successful transport read has an uncertain transfer outcome",
+            .informational = informational,
             .transport_status = result.status,
             .transfer_certainty = result.certainty,
             .phase = phase,
@@ -551,6 +567,7 @@ std::expected<Response, ProtocolError> FastbootSession::read_response_locked(
         return poison_locked(ProtocolError{
             .code = ProtocolErrorCode::MalformedResponse,
             .message = "Fastboot response exceeded the configured response limit",
+            .informational = informational,
             .transport_status = result.status,
             .transfer_certainty = result.certainty,
             .phase = phase,
@@ -563,8 +580,9 @@ std::expected<Response, ProtocolError> FastbootSession::read_response_locked(
         std::span<const std::byte>(buffer.data(), result.transferred),
         options_.max_response_bytes);
     if (!parsed) {
-        return poison_locked(malformed_response_error(
-            parsed.error(), phase, outbound_certainty));
+        return poison_locked(with_informational(
+            malformed_response_error(parsed.error(), phase, outbound_certainty),
+            informational));
     }
     return *parsed;
 }
@@ -574,7 +592,8 @@ std::expected<CommandResult, ProtocolError> FastbootSession::read_terminal_locke
     const ProtocolPhase phase,
     const TransferCertainty outbound_certainty) {
     for (;;) {
-        auto response = read_response_locked(phase, outbound_certainty);
+        auto response = read_response_locked(
+            phase, outbound_certainty, informational);
         if (!response) {
             return std::unexpected(response.error());
         }
@@ -584,6 +603,7 @@ std::expected<CommandResult, ProtocolError> FastbootSession::read_terminal_locke
                 return poison_locked(ProtocolError{
                     .code = ProtocolErrorCode::TooManyInformationalResponses,
                     .message = "Fastboot device exceeded the informational response limit",
+                    .informational = informational,
                     .phase = phase,
                     .outbound_certainty = outbound_certainty,
                 });
@@ -605,6 +625,7 @@ std::expected<CommandResult, ProtocolError> FastbootSession::read_terminal_locke
         return poison_locked(ProtocolError{
             .code = ProtocolErrorCode::UnexpectedResponse,
             .message = "Fastboot DATA response is not valid in this session state",
+            .informational = informational,
             .phase = phase,
             .outbound_certainty = outbound_certainty,
         });
