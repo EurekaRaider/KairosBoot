@@ -152,7 +152,7 @@ def run(cli: pathlib.Path) -> None:
         if b"i\\x00\\xff" not in stdout or b"v\\x00\\xff" not in stdout:
             raise AssertionError(f"human output did not escape binary: {stdout!r}")
 
-        stage_file = directory / "stage.bin"
+        stage_file = directory / "阶段-镜像.bin"
         stage_payload = bytes(range(16))
         stage_file.write_bytes(stage_payload)
 
@@ -171,7 +171,7 @@ def run(cli: pathlib.Path) -> None:
             b"staged"
         ).decode("ascii")
 
-        upload_file = directory / "upload.bin"
+        upload_file = directory / "上传-结果.bin"
         upload_payload = b"d\x00\xff"
         upload_file.write_bytes(b"previous-complete-output")
 
@@ -192,7 +192,7 @@ def run(cli: pathlib.Path) -> None:
         assert upload_file.read_bytes() == upload_payload
         assert_no_temporary_outputs(directory)
 
-        fetch_file = directory / "fetch.bin"
+        fetch_file = directory / "分区-结果.bin"
         fetch_payload = b"f\x00\xff"
 
         def fetched_data(connection: socket.socket) -> None:
