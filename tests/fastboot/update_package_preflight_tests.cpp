@@ -496,7 +496,14 @@ void update_super_three_state_contract_and_unique_mapping() {
     UpdatePackagePreflightLimits exact_limits;
     exact_limits.maximum_unique_artifacts = 1U;
     exact_limits.maximum_total_artifact_bytes = super_empty.size();
-    ArtifactSourceResolver present_resolver;
+    std::size_t super_resolutions = 0U;
+    ArtifactSourceLimits source_limits;
+    source_limits.package_entry_observer = [&](const std::string_view name) {
+        if (name == "super_empty.img") {
+            ++super_resolutions;
+        }
+    };
+    ArtifactSourceResolver present_resolver(source_limits);
     auto prepared = preflight_update_package(
         present_resolver, present, false, exact_limits);
     CHECK(prepared);
@@ -508,6 +515,11 @@ void update_super_three_state_contract_and_unique_mapping() {
     CHECK(prepared->artifacts.front().name == "super_empty.img");
     CHECK(prepared->artifacts.front().resolved ==
           prepared->prepared_super_artifact->resolved());
+    CHECK(prepared->artifacts.front().artifact ==
+          prepared->prepared_super_artifact->artifact());
+    CHECK(prepared->artifacts.front().artifact->sparse_image() ==
+          prepared->prepared_super_artifact->artifact()->sparse_image());
+    CHECK(super_resolutions == 1U);
     CHECK(prepared->prepared_super_artifact->artifact()->metadata().transfer_size ==
           super_empty.size());
 
@@ -631,7 +643,7 @@ void duplicate_references_share_one_immutable_materialization() {
     CHECK(prepared);
     CHECK(prepared->plan.tasks.size() == 2U);
     CHECK(prepared->artifacts.size() == 1U);
-    CHECK(prepared->artifacts[0].artifact.metadata().transfer_size == 14U);
+    CHECK(prepared->artifacts[0].artifact->metadata().transfer_size == 14U);
     const auto immutable_hash =
         sha256_hex(prepared->artifacts[0].resolved->sha256);
 

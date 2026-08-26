@@ -521,32 +521,44 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                     failure(UpdatePackagePreflightErrorKind::Cancelled,
                             "update package preflight was cancelled", name));
             }
-            auto preflight = image::preflight_flash_artifact(snapshot, name);
-            if (!preflight) {
-                return std::unexpected(
-                    artifact_failure(name, std::move(preflight.error())));
+            std::shared_ptr<const image::ResolvedArtifact> resolved;
+            std::shared_ptr<const image::FlashArtifact> artifact;
+            if (name == kSuperEmptyName && prepared_super->artifact) {
+                // update-super already materialized and inspected this exact
+                // package entry. Reuse both immutable objects for an ordinary
+                // flash task instead of resolving or parsing sparse data twice.
+                resolved = prepared_super->artifact->resolved();
+                artifact = prepared_super->artifact->artifact();
+            } else {
+                auto preflight = image::preflight_flash_artifact(snapshot, name);
+                if (!preflight) {
+                    return std::unexpected(
+                        artifact_failure(name, std::move(preflight.error())));
+                }
+                resolved = std::move(preflight->resolved);
+                artifact = std::make_shared<const image::FlashArtifact>(
+                    std::move(preflight->artifact));
             }
-            if (name == kSuperEmptyName && prepared_super->artifact &&
-                prepared_super->artifact->resolved() != preflight->resolved) {
+            if (!resolved || !resolved->source || !artifact ||
+                artifact->transfer_source() != resolved->source) {
                 return std::unexpected(artifact_failure(
                     name,
                     image::ArtifactSourceError{
                         .kind = image::ArtifactSourceErrorKind::InvalidImage,
                         .message =
-                            "flash and update-super mappings do not share one "
-                            "immutable super_empty.img source",
+                            "prepared flash artifact mapping is incomplete or "
+                            "inconsistent",
                     }));
             }
             if (auto counted = add_to_aggregate_bytes(
-                    &total_bytes, preflight->resolved->source->size(), limits,
-                    name);
+                    &total_bytes, resolved->source->size(), limits, name);
                 !counted) {
                 return std::unexpected(std::move(counted.error()));
             }
             artifacts.push_back(PreparedUpdateArtifact{
                 .name = name,
-                .resolved = std::move(preflight->resolved),
-                .artifact = std::move(preflight->artifact),
+                .resolved = std::move(resolved),
+                .artifact = std::move(artifact),
             });
         }
 

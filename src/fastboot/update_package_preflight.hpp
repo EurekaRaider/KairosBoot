@@ -42,7 +42,9 @@ struct UpdatePackagePreflightLimits final {
 struct PreparedUpdateArtifact final {
     std::string name;
     std::shared_ptr<const image::ResolvedArtifact> resolved;
-    image::FlashArtifact artifact;
+    // Own the complete immutable preflight result. Device execute tokens can
+    // retain this object without copying metadata or reparsing sparse images.
+    std::shared_ptr<const image::FlashArtifact> artifact;
 };
 
 enum class UpdateSuperPreparationState : std::uint8_t {

@@ -30,6 +30,7 @@ using kairosboot::fastboot::PlannedRebootTarget;
 using kairosboot::fastboot::PlannedRequirement;
 using kairosboot::fastboot::PlannedSlot;
 using kairosboot::fastboot::PlannedUpdateTask;
+using kairosboot::fastboot::PreparedSuperArtifact;
 using kairosboot::fastboot::PreparedUpdateArtifact;
 using kairosboot::fastboot::PreparedUpdatePackage;
 using kairosboot::fastboot::RequirementAction;
@@ -39,8 +40,8 @@ using kairosboot::fastboot::UpdateDeviceTaskInput;
 using kairosboot::fastboot::UpdateExecutionErrorKind;
 using kairosboot::fastboot::UpdateExecutionEventKind;
 using kairosboot::fastboot::UpdateExecutorOptions;
+using kairosboot::fastboot::UpdateSuperPreparationState;
 using kairosboot::fastboot::UpdateOperationContext;
-using kairosboot::fastboot::UpdateSuperArtifactInput;
 using kairosboot::fastboot::UpdateManifestKind;
 using kairosboot::fastboot::UpdateSourceLocation;
 using kairosboot::fastboot::UpdateTaskKind;
@@ -75,6 +76,9 @@ public:
         std::memcpy(bytes_.data(), contents.data(), contents.size());
     }
 
+    explicit MemorySource(std::vector<std::byte> contents)
+        : bytes_(std::move(contents)) {}
+
     [[nodiscard]] std::uint64_t size() const noexcept override { return bytes_.size(); }
 
     [[nodiscard]] std::expected<std::size_t, ImageSourceError>
@@ -93,6 +97,33 @@ public:
 private:
     std::vector<std::byte> bytes_;
 };
+
+void append_u16(std::vector<std::byte>& bytes, const std::uint16_t value) {
+    bytes.push_back(static_cast<std::byte>(value & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xffU));
+}
+
+void append_u32(std::vector<std::byte>& bytes, const std::uint32_t value) {
+    bytes.push_back(static_cast<std::byte>(value & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 16U) & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 24U) & 0xffU));
+}
+
+[[nodiscard]] std::vector<std::byte> valid_empty_sparse_image() {
+    std::vector<std::byte> bytes;
+    bytes.reserve(28U);
+    append_u32(bytes, kairosboot::image::kAndroidSparseMagic);
+    append_u16(bytes, kairosboot::image::kAndroidSparseMajorVersion);
+    append_u16(bytes, 0U);
+    append_u16(bytes, 28U);
+    append_u16(bytes, 12U);
+    append_u32(bytes, 4096U);
+    append_u32(bytes, 0U);
+    append_u32(bytes, 0U);
+    append_u32(bytes, 0U);
+    return bytes;
+}
 
 [[nodiscard]] UpdateSourceLocation
 location(const std::size_t line,
@@ -159,8 +190,8 @@ flash_task(std::string partition, std::string artifact, const std::size_t line,
 }
 
 [[nodiscard]] PreparedUpdateArtifact
-make_artifact(std::string name, const std::string_view contents = "raw-image") {
-    auto source = std::make_shared<MemorySource>(contents);
+make_artifact_from_source(std::string name,
+                          std::shared_ptr<const IImageSource> source) {
     auto inspected = FlashArtifact::inspect(source);
     CHECK(inspected);
     auto resolved = std::make_shared<ResolvedArtifact>(ResolvedArtifact{
@@ -171,8 +202,20 @@ make_artifact(std::string name, const std::string_view contents = "raw-image") {
     return {
         .name = std::move(name),
         .resolved = std::move(resolved),
-        .artifact = std::move(*inspected),
+        .artifact = std::make_shared<const FlashArtifact>(std::move(*inspected)),
     };
+}
+
+[[nodiscard]] PreparedUpdateArtifact
+make_artifact(std::string name, const std::string_view contents = "raw-image") {
+    return make_artifact_from_source(
+        std::move(name), std::make_shared<MemorySource>(contents));
+}
+
+[[nodiscard]] PreparedUpdateArtifact make_sparse_artifact(std::string name) {
+    return make_artifact_from_source(
+        std::move(name),
+        std::make_shared<MemorySource>(valid_empty_sparse_image()));
 }
 
 [[nodiscard]] PreparedUpdatePackage
@@ -180,7 +223,11 @@ make_package(std::vector<PlannedRequirement> requirements,
              std::vector<PlannedUpdateTask> tasks,
              std::vector<PreparedUpdateArtifact> artifacts) {
     const bool requires_device_validation = !requirements.empty();
-    return {
+    const bool has_update_super =
+        std::ranges::any_of(tasks, [](const PlannedUpdateTask& task) {
+            return task.kind == UpdateTaskKind::UpdateSuper;
+        });
+    PreparedUpdatePackage result{
         .plan =
             {
                 .requirements = std::move(requirements),
@@ -189,6 +236,14 @@ make_package(std::vector<PlannedRequirement> requirements,
         .artifacts = std::move(artifacts),
         .requires_device_validation = requires_device_validation,
     };
+    if (has_update_super) {
+        auto super = make_artifact("super_empty.img", "prepared-super");
+        result.update_super_state = UpdateSuperPreparationState::Prepared;
+        result.prepared_super_artifact =
+            std::make_shared<const PreparedSuperArtifact>(super.resolved,
+                                                          super.artifact);
+    }
+    return result;
 }
 
 class ScriptedUpdateDevice final : public IUpdateDevice {
@@ -226,14 +281,23 @@ public:
         prepare_calls.push_back(call_name(input));
         if (input.task.kind == UpdateTaskKind::Flash) {
             CHECK(input.flash_artifact);
-            CHECK(input.flash_artifact->logical_name == input.task.artifact);
-            CHECK(input.flash_artifact->source);
-            last_flash_source = input.flash_artifact->source;
+            CHECK(input.flash_artifact->resolved);
+            CHECK(input.flash_artifact->artifact);
+            CHECK(input.flash_artifact->resolved->logical_name ==
+                  input.task.artifact);
+            CHECK(input.flash_artifact->artifact->transfer_source() ==
+                  input.flash_artifact->resolved->source);
+            last_flash_resolved = input.flash_artifact->resolved;
+            last_flash_artifact = input.flash_artifact->artifact;
+            last_flash_sparse_image = input.flash_artifact->artifact->sparse_image();
         } else {
             CHECK(!input.flash_artifact);
         }
-        if (input.task.kind == UpdateTaskKind::UpdateSuper && input.super_artifact) {
-            last_super_source = input.super_artifact->source;
+        if (input.task.kind == UpdateTaskKind::UpdateSuper) {
+            CHECK(input.super_artifact);
+            last_super_artifact = input.super_artifact;
+        } else {
+            CHECK(!input.super_artifact);
         }
         if (throw_prepare_index == index) {
             throw std::runtime_error("scripted task preparation exception");
@@ -270,8 +334,10 @@ public:
     std::optional<UpdateDeviceError> prepare_error;
     std::optional<UpdateDeviceError> task_error;
     std::stop_source* cancellation_source{};
-    std::shared_ptr<const IImageSource> last_flash_source;
-    std::shared_ptr<const IImageSource> last_super_source;
+    std::shared_ptr<const ResolvedArtifact> last_flash_resolved;
+    std::shared_ptr<const FlashArtifact> last_flash_artifact;
+    const kairosboot::image::SparseImage* last_flash_sparse_image{};
+    std::shared_ptr<const PreparedSuperArtifact> last_super_artifact;
 
 private:
     class Token final : public IPreparedDeviceTask {
@@ -389,8 +455,8 @@ void requirements_are_checked_once_before_ordered_tasks() {
                                    "update-super",
                                }));
     CHECK(device.prepare_calls == device.task_calls);
-    CHECK(device.last_flash_source ==
-          prepared.artifacts[0].artifact.transfer_source());
+    CHECK(device.last_flash_resolved == prepared.artifacts[0].resolved);
+    CHECK(device.last_flash_artifact == prepared.artifacts[0].artifact);
     CHECK(result->trace.front().kind == UpdateExecutionEventKind::ValidationStarted);
     CHECK(result->trace.back().kind == UpdateExecutionEventKind::ExecutionCompleted);
     CHECK(
@@ -509,6 +575,45 @@ void missing_duplicate_and_extra_artifacts_fail_before_getvar() {
     CHECK(extra_result.error().name == "unused.img");
     CHECK(extra_device.getvar_calls.empty());
     CHECK(extra_device.task_calls.empty());
+
+    auto missing_preflight = make_artifact("boot.img");
+    missing_preflight.artifact.reset();
+    auto without_preflight =
+        make_package(requirements, tasks, {std::move(missing_preflight)});
+    ScriptedUpdateDevice without_preflight_device;
+    auto without_preflight_result =
+        execute_prepared_update(without_preflight, without_preflight_device);
+    CHECK(!without_preflight_result);
+    CHECK(without_preflight_device.getvar_calls.empty());
+    CHECK(without_preflight_device.prepare_calls.empty());
+
+    auto mismatched = make_artifact("boot.img", "artifact-source");
+    mismatched.resolved = make_artifact("boot.img", "different-source").resolved;
+    auto mismatched_package =
+        make_package(requirements, tasks, {std::move(mismatched)});
+    ScriptedUpdateDevice mismatched_device;
+    auto mismatched_result =
+        execute_prepared_update(mismatched_package, mismatched_device);
+    CHECK(!mismatched_result);
+    CHECK(mismatched_device.getvar_calls.empty());
+    CHECK(mismatched_device.prepare_calls.empty());
+
+    auto unknown_origin = make_artifact("boot.img");
+    unknown_origin.resolved = std::make_shared<const ResolvedArtifact>(
+        ResolvedArtifact{
+            .source = unknown_origin.resolved->source,
+            .sha256 = unknown_origin.resolved->sha256,
+            .origin = static_cast<ArtifactSourceOrigin>(0xffU),
+            .logical_name = "boot.img",
+        });
+    auto unknown_origin_package =
+        make_package(requirements, tasks, {std::move(unknown_origin)});
+    ScriptedUpdateDevice unknown_origin_device;
+    auto unknown_origin_result =
+        execute_prepared_update(unknown_origin_package, unknown_origin_device);
+    CHECK(!unknown_origin_result);
+    CHECK(unknown_origin_device.getvar_calls.empty());
+    CHECK(unknown_origin_device.prepare_calls.empty());
 }
 
 void task_failure_stops_and_reports_completed_prefix() {
@@ -674,18 +779,110 @@ void invalid_task_enums_fail_before_device_preparation() {
 void prepared_super_binding_reaches_only_the_update_super_token() {
     auto prepared = make_package({}, {erase_task("cache", 91U),
                                       update_super_task(92U)}, {});
-    auto source = std::make_shared<MemorySource>("dedicated-super");
-    UpdateExecutorOptions options;
-    options.super_artifact = UpdateSuperArtifactInput{
-        .logical_name = "super.img",
-        .source = source,
-    };
+    const auto expected = prepared.prepared_super_artifact;
+    CHECK(expected);
     ScriptedUpdateDevice device;
-    auto result = execute_prepared_update(prepared, device, options);
+    auto result = execute_prepared_update(prepared, device);
     CHECK(result);
     CHECK(result->completed_tasks == 2U);
-    CHECK(device.last_super_source == source);
+    CHECK(device.last_super_artifact == expected);
+    CHECK(device.last_super_artifact->resolved() == expected->resolved());
+    CHECK(device.last_super_artifact->artifact() == expected->artifact());
     CHECK(device.prepare_calls == device.task_calls);
+}
+
+void update_super_states_fail_closed_before_device_queries() {
+    const auto assert_invalid = [](PreparedUpdatePackage prepared) {
+        ScriptedUpdateDevice device;
+        device.variables = {{"product", "atlas"}};
+        auto result = execute_prepared_update(prepared, device);
+        CHECK(!result);
+        CHECK(result.error().kind ==
+              UpdateExecutionErrorKind::InvalidPreparedPackage);
+        CHECK(device.getvar_calls.empty());
+        CHECK(device.prepare_calls.empty());
+        CHECK(device.task_calls.empty());
+    };
+
+    auto not_required_with_task = make_package(
+        {requirement("product", {"atlas"}, 101U)},
+        {update_super_task(102U)}, {});
+    not_required_with_task.update_super_state =
+        UpdateSuperPreparationState::NotRequired;
+    assert_invalid(std::move(not_required_with_task));
+
+    auto skipped_with_task = make_package(
+        {requirement("product", {"atlas"}, 103U)},
+        {update_super_task(104U)}, {});
+    skipped_with_task.update_super_state =
+        UpdateSuperPreparationState::SkippedNotFound;
+    skipped_with_task.prepared_super_artifact.reset();
+    assert_invalid(std::move(skipped_with_task));
+
+    auto prepared_without_task = make_package(
+        {requirement("product", {"atlas"}, 105U)},
+        {update_super_task(106U)}, {});
+    prepared_without_task.plan.tasks.clear();
+    assert_invalid(std::move(prepared_without_task));
+
+    auto prepared_without_artifact = make_package(
+        {requirement("product", {"atlas"}, 107U)},
+        {update_super_task(108U)}, {});
+    prepared_without_artifact.prepared_super_artifact.reset();
+    assert_invalid(std::move(prepared_without_artifact));
+
+    auto unknown_state = make_package(
+        {requirement("product", {"atlas"}, 109U)}, {}, {});
+    unknown_state.update_super_state =
+        static_cast<UpdateSuperPreparationState>(0xffU);
+    assert_invalid(std::move(unknown_state));
+
+    auto incomplete_super = make_package(
+        {requirement("product", {"atlas"}, 110U)},
+        {update_super_task(111U)}, {});
+    incomplete_super.prepared_super_artifact =
+        std::make_shared<const PreparedSuperArtifact>(
+            incomplete_super.prepared_super_artifact->resolved(), nullptr);
+    assert_invalid(std::move(incomplete_super));
+
+    std::vector<PreparedUpdateArtifact> split_super_artifacts;
+    split_super_artifacts.push_back(make_sparse_artifact("super_empty.img"));
+    auto split_super = make_package(
+        {requirement("product", {"atlas"}, 112U)},
+        {flash_task("metadata", "super_empty.img", 113U),
+         update_super_task(114U)},
+        std::move(split_super_artifacts));
+    assert_invalid(std::move(split_super));
+
+    auto valid_skipped = make_package(
+        {requirement("product", {"atlas"}, 115U)}, {}, {});
+    valid_skipped.update_super_state =
+        UpdateSuperPreparationState::SkippedNotFound;
+    ScriptedUpdateDevice skipped_device;
+    skipped_device.variables = {{"product", "atlas"}};
+    auto skipped_result = execute_prepared_update(valid_skipped, skipped_device);
+    CHECK(skipped_result);
+    CHECK(skipped_device.getvar_calls == std::vector<std::string>{"product"});
+    CHECK(skipped_device.prepare_calls.empty());
+}
+
+void immutable_flash_artifact_and_sparse_identity_reach_the_token() {
+    std::vector<PreparedUpdateArtifact> artifacts;
+    artifacts.push_back(make_sparse_artifact("system.img"));
+    const auto expected_resolved = artifacts.front().resolved;
+    const auto expected_artifact = artifacts.front().artifact;
+    const auto* expected_sparse = expected_artifact->sparse_image();
+    CHECK(expected_sparse != nullptr);
+    auto prepared = make_package(
+        {}, {flash_task("system", "system.img", 116U)},
+        std::move(artifacts));
+
+    ScriptedUpdateDevice device;
+    auto result = execute_prepared_update(prepared, device);
+    CHECK(result);
+    CHECK(device.last_flash_resolved == expected_resolved);
+    CHECK(device.last_flash_artifact == expected_artifact);
+    CHECK(device.last_flash_sparse_image == expected_sparse);
 }
 
 void one_absolute_deadline_covers_getvar_prepare_and_execute() {
@@ -871,6 +1068,10 @@ int main() {
              invalid_task_enums_fail_before_device_preparation},
         Test{"dedicated super binding",
              prepared_super_binding_reaches_only_the_update_super_token},
+        Test{"update-super state contract",
+             update_super_states_fail_closed_before_device_queries},
+        Test{"immutable sparse artifact binding",
+             immutable_flash_artifact_and_sparse_identity_reach_the_token},
         Test{"absolute deadline propagation",
              one_absolute_deadline_covers_getvar_prepare_and_execute},
         Test{"TaskStarted cancellation and deadline",

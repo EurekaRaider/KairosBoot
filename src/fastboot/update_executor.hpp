@@ -49,28 +49,20 @@ struct UpdateOperationContext final {
     std::optional<std::chrono::steady_clock::time_point> deadline{};
 };
 
-// A fully bound ordinary flash input. The shared immutable source is retained
-// by the execute token, so execution never has to resolve or reopen the package.
+// A fully bound ordinary flash input. The execute token retains the complete
+// immutable preflight result, so execution cannot reopen the package, copy a
+// stale metadata view or reparse a sparse image.
 struct UpdateFlashArtifactInput final {
-    std::string logical_name;
-    std::shared_ptr<const image::IImageSource> source;
-    image::FlashArtifactMetadata metadata;
-    image::Sha256Digest sha256{};
-};
-
-// Reserved binding for a future dedicated super-image builder. It deliberately
-// lives outside PreparedUpdatePackage so package preflight remains transport-
-// and device-independent.
-struct UpdateSuperArtifactInput final {
-    std::string logical_name;
-    std::shared_ptr<const image::IImageSource> source;
-    image::Sha256Digest sha256{};
+    std::shared_ptr<const image::ResolvedArtifact> resolved;
+    std::shared_ptr<const image::FlashArtifact> artifact;
 };
 
 struct UpdateDeviceTaskInput final {
     PlannedUpdateTask task;
     std::optional<UpdateFlashArtifactInput> flash_artifact;
-    std::optional<UpdateSuperArtifactInput> super_artifact;
+    // Bound only for UpdateSuper tasks and shared directly from the immutable
+    // PreparedUpdatePackage snapshot.
+    std::shared_ptr<const PreparedSuperArtifact> super_artifact;
 };
 
 // Immutable execute capability returned only after the adapter has validated
@@ -143,9 +135,6 @@ struct UpdateExecutorOptions final {
     // One absolute package/job deadline, shared unchanged by validation,
     // getvar, preparation and execution. nullopt means no deadline.
     std::optional<std::chrono::steady_clock::time_point> deadline;
-    // Optional prebuilt super input. Adapters that require it reject
-    // update-super during preparation when it is absent.
-    std::optional<UpdateSuperArtifactInput> super_artifact;
     UpdateExecutionObserver observer;
 };
 
