@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <expected>
 #include <limits>
+#include <memory>
 #include <stop_token>
 #include <string>
 
@@ -19,6 +20,23 @@ inline constexpr std::uint64_t kSha256MaxInputSize =
     std::numeric_limits<std::uint64_t>::max() / 8U;
 
 using Sha256Digest = std::array<std::byte, kSha256DigestSize>;
+
+// Incremental SHA-256 state used by bounded streaming materializers. Callers
+// must invoke finish() exactly once after the final update().
+class Sha256Accumulator final {
+public:
+    Sha256Accumulator();
+    ~Sha256Accumulator();
+    Sha256Accumulator(const Sha256Accumulator&) = delete;
+    Sha256Accumulator& operator=(const Sha256Accumulator&) = delete;
+
+    void update(std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] Sha256Digest finish() noexcept;
+
+private:
+    struct Implementation;
+    std::unique_ptr<Implementation> implementation_;
+};
 
 enum class Sha256ErrorKind : std::uint8_t {
     InvalidSize,

@@ -185,6 +185,24 @@ private:
 
 }  // namespace
 
+struct Sha256Accumulator::Implementation final {
+    Sha256State state;
+};
+
+Sha256Accumulator::Sha256Accumulator()
+    : implementation_(std::make_unique<Implementation>()) {}
+
+Sha256Accumulator::~Sha256Accumulator() = default;
+
+void Sha256Accumulator::update(
+    const std::span<const std::byte> bytes) noexcept {
+    implementation_->state.update(bytes);
+}
+
+Sha256Digest Sha256Accumulator::finish() noexcept {
+    return implementation_->state.finish();
+}
+
 std::expected<Sha256Digest, Sha256Error> compute_sha256(
     const IImageSource& source,
     const std::stop_token cancellation) {
@@ -201,7 +219,7 @@ std::expected<Sha256Digest, Sha256Error> compute_sha256(
             "image source is too large for SHA-256"));
     }
 
-    Sha256State state;
+    Sha256Accumulator state;
     std::array<std::byte, kSha256SourceReadSize> buffer{};
     std::uint64_t offset = 0;
     while (offset < source_size) {

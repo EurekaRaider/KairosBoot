@@ -182,6 +182,7 @@ add_library(
   src/fastboot/primitive_service.cpp
   src/fastboot/update_plan.cpp
   src/fleet/controller_scheduler.cpp
+  src/image/artifact_source.cpp
   src/image/file_source.cpp
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
@@ -559,6 +560,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_file_source_tests)
   add_test(NAME file_source COMMAND kairosboot_file_source_tests)
   set_tests_properties(file_source PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_artifact_source_tests
+                 tests/image/artifact_source_tests.cpp)
+  target_compile_features(kairosboot_artifact_source_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_artifact_source_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_artifact_source_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_artifact_source_tests)
+  add_test(NAME artifact_source COMMAND kairosboot_artifact_source_tests)
+  set_tests_properties(artifact_source PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_sha256_tests tests/image/sha256_tests.cpp)
   target_compile_features(kairosboot_sha256_tests PRIVATE cxx_std_23)
