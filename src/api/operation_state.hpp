@@ -78,6 +78,12 @@ struct OperationOutcome final {
             .native_code = 0,
             .transfer_state = KB_TRANSFER_NOT_SENT,
             .device_identifier = {},
+            .device_message = {},
+            .command_messages = {},
+            .inbound_expected = std::nullopt,
+            .inbound_transferred = 0,
+            .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+            .session_poisoned = false,
         });
 };
 

@@ -198,6 +198,8 @@ parse_network(
     return DeviceSelector{
         .kind = kind,
         .value = std::string(endpoint),
+        .usb_bus = 0,
+        .usb_ports = {},
         .identifier = std::string(scheme) + ":" + std::string(endpoint),
     };
 }
@@ -209,6 +211,9 @@ std::expected<DeviceSelector, DeviceSelectorError> parse_device_selector(
     if (!text.has_value()) {
         return DeviceSelector{
             .kind = DeviceSelectorKind::UsbUnique,
+            .value = {},
+            .usb_bus = 0,
+            .usb_ports = {},
             .identifier = "usb:unique",
         };
     }
@@ -223,6 +228,8 @@ std::expected<DeviceSelector, DeviceSelectorError> parse_device_selector(
         return DeviceSelector{
             .kind = DeviceSelectorKind::UsbSerial,
             .value = std::move(*serial),
+            .usb_bus = 0,
+            .usb_ports = {},
             .identifier = std::string(*text),
         };
     }
@@ -255,6 +262,8 @@ std::expected<DeviceSelector, DeviceSelectorError> parse_device_selector(
     return DeviceSelector{
         .kind = DeviceSelectorKind::UsbSerial,
         .value = std::string(*text),
+        .usb_bus = 0,
+        .usb_ports = {},
         .identifier = std::string(*text),
     };
 }

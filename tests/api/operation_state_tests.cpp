@@ -99,6 +99,12 @@ void cancellation_is_idempotent_and_publishes_after_drain() {
             .native_code = 17,
             .transfer_state = KB_TRANSFER_PARTIAL_OR_UNKNOWN,
             .device_identifier = {},
+            .device_message = {},
+            .command_messages = {},
+            .inbound_expected = std::nullopt,
+            .inbound_transferred = 0,
+            .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+            .session_poisoned = false,
         });
     });
     operation_address = &operation;
@@ -176,6 +182,12 @@ void failure_payload_is_synchronized_and_immutable() {
         .native_code = -7,
         .transfer_state = KB_TRANSFER_PARTIAL_OR_UNKNOWN,
         .device_identifier = "usb:2-3",
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     };
     OperationState operation([&](OperationState::TaskContext&) {
         return OperationOutcome::failed(expected);
@@ -202,6 +214,8 @@ void successful_command_result_is_shared_and_immutable() {
                 CommandMessagePayload{CommandMessageKind::Info, "probing"},
                 CommandMessagePayload{CommandMessageKind::Text, "ready"},
             },
+            .data = {},
+            .device_identifier = {},
         });
     std::weak_ptr<const CommandResultPayload> weak = expected;
     OperationState operation(
