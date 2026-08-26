@@ -14,6 +14,10 @@ EXPORTS
     kb_context_release
     kb_continue_boot
     kb_continue_boot_async
+    kb_create_logical_partition
+    kb_create_logical_partition_async
+    kb_delete_logical_partition
+    kb_delete_logical_partition_async
     kb_device_list_count
     kb_device_list_product
     kb_device_list_release
@@ -41,9 +45,13 @@ EXPORTS
     kb_flash_file
     kb_flash_file_async
     kb_flash_options_init
+    kb_flashing
+    kb_flashing_async
     kb_get_version
     kb_getvar
     kb_getvar_async
+    kb_gsi
+    kb_gsi_async
     kb_oem
     kb_oem_async
     kb_operation_cancel
@@ -56,8 +64,12 @@ EXPORTS
     kb_raw_command_async
     kb_reboot
     kb_reboot_async
+    kb_resize_logical_partition
+    kb_resize_logical_partition_async
     kb_set_active
     kb_set_active_async
+    kb_snapshot_update
+    kb_snapshot_update_async
     kb_stage
     kb_stage_async
     kb_status_string

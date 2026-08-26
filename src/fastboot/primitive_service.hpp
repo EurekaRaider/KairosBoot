@@ -29,6 +29,12 @@ enum class PrimitiveOperation : std::uint8_t {
     ContinueBoot,
     Oem,
     RawCommand,
+    Flashing,
+    Gsi,
+    SnapshotUpdate,
+    CreateLogicalPartition,
+    DeleteLogicalPartition,
+    ResizeLogicalPartition,
 };
 
 enum class PrimitiveErrorCode : std::uint8_t {
@@ -50,6 +56,25 @@ enum class RebootTarget : std::uint8_t {
     Bootloader,
     Recovery,
     Fastboot,
+};
+
+enum class FlashingCommand : std::uint8_t {
+    Lock,
+    Unlock,
+    LockCritical,
+    UnlockCritical,
+    GetUnlockAbility,
+};
+
+enum class GsiCommand : std::uint8_t {
+    Wipe,
+    Disable,
+    Status,
+};
+
+enum class SnapshotUpdateCommand : std::uint8_t {
+    Cancel,
+    Merge,
 };
 
 struct PrimitiveReply final {
@@ -160,6 +185,18 @@ public:
         std::string_view partition);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> set_active(
         std::string_view slot);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> flashing(
+        FlashingCommand command);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> gsi(
+        GsiCommand command);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> snapshot_update(
+        SnapshotUpdateCommand command);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError>
+    create_logical_partition(std::string_view name, std::uint64_t size);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError>
+    delete_logical_partition(std::string_view name);
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError>
+    resize_logical_partition(std::string_view name, std::uint64_t size);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> reboot(
         RebootTarget target = RebootTarget::System);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> continue_boot();

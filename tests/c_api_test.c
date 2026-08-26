@@ -206,6 +206,55 @@ int main(void) {
         KB_E_INVALID_ARGUMENT);
   kb_error_release(error);
   error = NULL;
+  CHECK(kb_flashing_async(context, NULL, INT32_MAX, NULL, &operation,
+                          &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_gsi_async(context, NULL, INT32_MAX, NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_snapshot_update_async(context, NULL, INT32_MAX, NULL, &operation,
+                                 &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_create_logical_partition_async(context, NULL, "", 0, NULL,
+                                           &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_delete_logical_partition_async(context, NULL, "system:other",
+                                           NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(strstr(kb_error_message(error), "must not contain ':'") != NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_resize_logical_partition_async(context, NULL, "bad\nname", 1,
+                                           NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  {
+    char oversized_name[4097];
+    memset(oversized_name, 'x', sizeof(oversized_name) - 1U);
+    oversized_name[sizeof(oversized_name) - 1U] = '\0';
+    CHECK(kb_create_logical_partition_async(
+              context, NULL, oversized_name, UINT64_MAX, NULL, &operation,
+              &error) == KB_E_INVALID_ARGUMENT);
+    CHECK(operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+  }
+  CHECK(kb_flashing(context, NULL, KB_FLASHING_LOCK, NULL, NULL, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  kb_error_release(error);
+  error = NULL;
   CHECK(kb_oem_async(context, NULL, "", NULL, &operation, &error) ==
         KB_E_INVALID_ARGUMENT);
   kb_error_release(error);
