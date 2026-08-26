@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/primitive_service.hpp"
+#include "src/fastboot/slot_planner.hpp"
 
+#include <algorithm>
+#include <charconv>
 #include <limits>
+#include <system_error>
 #include <utility>
 
 namespace kairosboot::fastboot {
@@ -88,6 +92,104 @@ namespace {
             return PrimitiveErrorCode::ProtocolViolation;
     }
     return PrimitiveErrorCode::ProtocolViolation;
+}
+
+[[nodiscard]] SlotError slot_error(
+    const SlotErrorCode code,
+    std::string message) {
+    return {
+        .code = code,
+        .message = std::move(message),
+        .query_error = std::nullopt,
+    };
+}
+
+[[nodiscard]] SlotError slot_query_error(
+    std::string context,
+    PrimitiveError error) {
+    const auto unsupported = error.code == PrimitiveErrorCode::DeviceFail;
+    if (!error.device_message.empty()) {
+        context.append(": ");
+        context.append(error.device_message);
+    }
+    return {
+        .code = unsupported ? SlotErrorCode::Unsupported
+                            : SlotErrorCode::QueryFailed,
+        .message = std::move(context),
+        .query_error = std::move(error),
+    };
+}
+
+[[nodiscard]] bool is_valid_partition_name(
+    const std::string_view partition) noexcept {
+    if (partition.empty() ||
+        partition.size() > protocol::kDefaultMaxCommandBytes - 16U) {
+        return false;
+    }
+    return std::ranges::all_of(partition, [](const unsigned char character) {
+        const auto ascii_alphanumeric =
+            (character >= 'a' && character <= 'z') ||
+            (character >= 'A' && character <= 'Z') ||
+            (character >= '0' && character <= '9');
+        return ascii_alphanumeric || character == '_' || character == '-' ||
+            character == '.';
+    });
+}
+
+[[nodiscard]] std::expected<std::string, SlotError> normalize_slot_name(
+    std::string_view value,
+    const SlotErrorCode error_code,
+    std::string context) {
+    if (value.starts_with('_')) {
+        value.remove_prefix(1);
+    }
+    if (value.size() != 1 || value.front() < 'a' || value.front() > 'z') {
+        context.append(" must be one lowercase ASCII letter, optionally prefixed by '_'");
+        return std::unexpected(slot_error(error_code, std::move(context)));
+    }
+    return std::string(value);
+}
+
+[[nodiscard]] std::expected<std::vector<std::string>, SlotError>
+parse_legacy_slot_suffixes(const std::string_view payload) {
+    std::vector<std::string> slots;
+    std::size_t start = 0;
+    while (start <= payload.size()) {
+        const auto comma = payload.find(',', start);
+        const auto end = comma == std::string_view::npos ? payload.size() : comma;
+        const auto token = payload.substr(start, end - start);
+        auto normalized = normalize_slot_name(
+            token,
+            SlotErrorCode::InvalidDeviceResponse,
+            "Fastboot slot-suffixes entry");
+        if (!normalized) {
+            return std::unexpected(std::move(normalized.error()));
+        }
+        slots.push_back(std::move(*normalized));
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+
+    if (slots.size() < 2) {
+        return std::unexpected(slot_error(
+            SlotErrorCode::Unsupported,
+            "Fastboot slot-suffixes does not describe an A/B device"));
+    }
+    if (slots.size() > 26) {
+        return std::unexpected(slot_error(
+            SlotErrorCode::InvalidDeviceResponse,
+            "Fastboot slot-suffixes contains more than 26 slots"));
+    }
+
+    std::ranges::sort(slots);
+    if (std::adjacent_find(slots.begin(), slots.end()) != slots.end()) {
+        return std::unexpected(slot_error(
+            SlotErrorCode::Ambiguous,
+            "Fastboot slot-suffixes contains duplicate slot names"));
+    }
+    return slots;
 }
 
 }  // namespace
@@ -357,6 +459,270 @@ PrimitiveError PrimitiveService::device_fail(
             : result.outbound_certainty,
         .native_code = 0,
         .session_poisoned = false,
+    };
+}
+
+std::expected<SlotSelection, SlotError> parse_slot_selection(
+    const std::string_view value) {
+    if (value.empty()) {
+        return SlotSelection{
+            .kind = SlotSelectionKind::Current,
+            .name = {},
+        };
+    }
+    if (value == "other") {
+        return SlotSelection{
+            .kind = SlotSelectionKind::Other,
+            .name = {},
+        };
+    }
+    if (value == "all") {
+        return SlotSelection{
+            .kind = SlotSelectionKind::All,
+            .name = {},
+        };
+    }
+
+    auto normalized = normalize_slot_name(
+        value,
+        SlotErrorCode::InvalidArgument,
+        "Requested Fastboot slot");
+    if (!normalized) {
+        return std::unexpected(std::move(normalized.error()));
+    }
+    return SlotSelection{
+        .kind = SlotSelectionKind::Explicit,
+        .name = std::move(*normalized),
+    };
+}
+
+SlotPlanner::SlotPlanner(PrimitiveService& primitives) noexcept
+    : primitives_(primitives) {}
+
+std::expected<SlotTopology, SlotError> SlotPlanner::query_topology() {
+    auto count_reply = primitives_.getvar("slot-count");
+    if (count_reply) {
+        const auto& payload = count_reply->terminal.payload;
+        unsigned int count = 0;
+        const auto parsed = std::from_chars(
+            payload.data(), payload.data() + payload.size(), count, 10);
+        if (parsed.ec != std::errc{} || parsed.ptr != payload.data() + payload.size()) {
+            return std::unexpected(slot_error(
+                SlotErrorCode::InvalidDeviceResponse,
+                "Fastboot slot-count is not a decimal integer"));
+        }
+        if (count < 2) {
+            return std::unexpected(slot_error(
+                SlotErrorCode::Unsupported,
+                "Fastboot slot-count does not describe an A/B device"));
+        }
+        if (count > 26) {
+            return std::unexpected(slot_error(
+                SlotErrorCode::InvalidDeviceResponse,
+                "Fastboot slot-count exceeds the supported a-z namespace"));
+        }
+
+        std::vector<std::string> slots;
+        slots.reserve(count);
+        for (unsigned int index = 0; index < count; ++index) {
+            slots.emplace_back(1, static_cast<char>('a' + index));
+        }
+        return SlotTopology{
+            .slots = std::move(slots),
+            .source = SlotTopologySource::SlotCount,
+        };
+    }
+    if (count_reply.error().code != PrimitiveErrorCode::DeviceFail) {
+        return std::unexpected(slot_query_error(
+            "Failed to query Fastboot slot-count",
+            std::move(count_reply.error())));
+    }
+
+    // The frozen AOSP baseline (a3b721a32242006b59cb12bd62c9133632af3a2d)
+    // uses slot-suffixes only as a legacy fallback when the modern slot-count
+    // getvar is rejected. KairosBoot retains that query order, while rejecting
+    // malformed metadata instead of inventing a topology.
+    auto suffix_reply = primitives_.getvar("slot-suffixes");
+    if (!suffix_reply) {
+        return std::unexpected(slot_query_error(
+            "Device does not expose Fastboot slot-count or slot-suffixes",
+            std::move(suffix_reply.error())));
+    }
+    auto slots = parse_legacy_slot_suffixes(suffix_reply->terminal.payload);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
+    return SlotTopology{
+        .slots = std::move(*slots),
+        .source = SlotTopologySource::LegacySlotSuffixes,
+    };
+}
+
+std::expected<bool, SlotError> SlotPlanner::query_has_slot(
+    const std::string_view partition) {
+    std::string key("has-slot:");
+    key.append(partition);
+    auto reply = primitives_.getvar(key);
+    if (!reply) {
+        return std::unexpected(slot_query_error(
+            "Device does not expose Fastboot " + key,
+            std::move(reply.error())));
+    }
+    if (reply->terminal.payload == "yes") {
+        return true;
+    }
+    if (reply->terminal.payload == "no") {
+        return false;
+    }
+    return std::unexpected(slot_error(
+        SlotErrorCode::InvalidDeviceResponse,
+        "Fastboot " + key + " must return exactly 'yes' or 'no'"));
+}
+
+std::expected<std::string, SlotError> SlotPlanner::query_current_slot(
+    const SlotTopology& topology) {
+    auto reply = primitives_.getvar("current-slot");
+    if (!reply) {
+        return std::unexpected(slot_query_error(
+            "Device does not expose Fastboot current-slot",
+            std::move(reply.error())));
+    }
+    auto current = normalize_slot_name(
+        reply->terminal.payload,
+        SlotErrorCode::InvalidDeviceResponse,
+        "Fastboot current-slot");
+    if (!current) {
+        return std::unexpected(std::move(current.error()));
+    }
+    if (std::ranges::find(topology.slots, *current) == topology.slots.end()) {
+        return std::unexpected(slot_error(
+            SlotErrorCode::InvalidDeviceResponse,
+            "Fastboot current-slot is absent from the discovered slot topology"));
+    }
+    return current;
+}
+
+std::expected<std::vector<std::string>, SlotError> SlotPlanner::resolve_slots(
+    const SlotTopology& topology,
+    const SlotSelection& selection,
+    const bool allow_all) {
+    switch (selection.kind) {
+        case SlotSelectionKind::Explicit:
+            if (std::ranges::find(topology.slots, selection.name) ==
+                topology.slots.end()) {
+                return std::unexpected(slot_error(
+                    SlotErrorCode::InvalidArgument,
+                    "Requested Fastboot slot does not exist on the device"));
+            }
+            return std::vector<std::string>{selection.name};
+        case SlotSelectionKind::All:
+            if (!allow_all) {
+                return std::unexpected(slot_error(
+                    SlotErrorCode::InvalidArgument,
+                    "Fastboot slot 'all' is not valid for a single-slot operation"));
+            }
+            return topology.slots;
+        case SlotSelectionKind::Current: {
+            auto current = query_current_slot(topology);
+            if (!current) {
+                return std::unexpected(std::move(current.error()));
+            }
+            return std::vector<std::string>{std::move(*current)};
+        }
+        case SlotSelectionKind::Other: {
+            if (topology.slots.size() != 2) {
+                return std::unexpected(slot_error(
+                    SlotErrorCode::Ambiguous,
+                    "Fastboot slot 'other' is unambiguous only on a two-slot device"));
+            }
+            auto current = query_current_slot(topology);
+            if (!current) {
+                return std::unexpected(std::move(current.error()));
+            }
+            const auto other = topology.slots.front() == *current
+                ? topology.slots.back()
+                : topology.slots.front();
+            return std::vector<std::string>{other};
+        }
+    }
+    return std::unexpected(slot_error(
+        SlotErrorCode::InvalidArgument,
+        "Fastboot slot selection kind is invalid"));
+}
+
+std::expected<std::string, SlotError> SlotPlanner::resolve_active_slot(
+    const std::string_view requested_slot) {
+    auto selection = parse_slot_selection(requested_slot);
+    if (!selection) {
+        return std::unexpected(std::move(selection.error()));
+    }
+    if (selection->kind == SlotSelectionKind::All) {
+        return std::unexpected(slot_error(
+            SlotErrorCode::InvalidArgument,
+            "Fastboot set_active cannot target every slot"));
+    }
+    auto topology = query_topology();
+    if (!topology) {
+        return std::unexpected(std::move(topology.error()));
+    }
+    auto slots = resolve_slots(*topology, *selection, false);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
+    return std::move(slots->front());
+}
+
+std::expected<PartitionSlotPlan, SlotError> SlotPlanner::plan_partition(
+    const std::string_view partition,
+    const std::string_view requested_slot) {
+    if (!is_valid_partition_name(partition)) {
+        return std::unexpected(slot_error(
+            SlotErrorCode::InvalidArgument,
+            "Fastboot partition name must use ASCII letters, digits, '.', '-' or '_'"));
+    }
+    auto selection = parse_slot_selection(requested_slot);
+    if (!selection) {
+        return std::unexpected(std::move(selection.error()));
+    }
+
+    auto has_slot = query_has_slot(partition);
+    if (!has_slot) {
+        return std::unexpected(std::move(has_slot.error()));
+    }
+    if (!*has_slot) {
+        if (selection->kind != SlotSelectionKind::Current) {
+            return std::unexpected(slot_error(
+                SlotErrorCode::Unsupported,
+                "An explicit Fastboot slot was requested for a non-slotted partition"));
+        }
+        return PartitionSlotPlan{
+            .slotted = false,
+            .partition_names = {std::string(partition)},
+            .slots = {},
+        };
+    }
+
+    auto topology = query_topology();
+    if (!topology) {
+        return std::unexpected(std::move(topology.error()));
+    }
+    auto slots = resolve_slots(*topology, *selection, true);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
+
+    std::vector<std::string> names;
+    names.reserve(slots->size());
+    for (const auto& slot : *slots) {
+        std::string name(partition);
+        name.push_back('_');
+        name.append(slot);
+        names.push_back(std::move(name));
+    }
+    return PartitionSlotPlan{
+        .slotted = true,
+        .partition_names = std::move(names),
+        .slots = std::move(*slots),
     };
 }
 
