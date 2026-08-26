@@ -195,6 +195,17 @@ target_include_directories(
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(kairosboot PRIVATE kairosboot_internal kairosboot_libusb)
 kairosboot_enable_strict_warnings(kairosboot)
+if(WIN32)
+  # Keep the build-tree DLL and CLI directly runnable. The imported libusb
+  # target identifies its runtime DLL, but CMake does not copy imported
+  # runtimes beside consumers automatically.
+  add_custom_command(
+    TARGET kairosboot
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:kairosboot_libusb>" "$<TARGET_FILE_DIR:kairosboot>"
+    VERBATIM)
+endif()
 
 add_library(kairosboot_cxx INTERFACE)
 add_library(KairosBoot::Cxx ALIAS kairosboot_cxx)
@@ -341,6 +352,12 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_libusb_runtime_tests
                         PRIVATE kairosboot_internal kairosboot_libusb)
   kairosboot_enable_strict_warnings(kairosboot_libusb_runtime_tests)
+  if(WIN32)
+    # Building this test target in isolation must also stage libusb. Depending
+    # on kairosboot reuses its single app-local copy and avoids parallel copies
+    # racing into the shared Visual Studio runtime directory.
+    add_dependencies(kairosboot_libusb_runtime_tests kairosboot)
+  endif()
   add_test(NAME libusb_runtime COMMAND kairosboot_libusb_runtime_tests)
   set_tests_properties(libusb_runtime PROPERTIES TIMEOUT 15)
 
