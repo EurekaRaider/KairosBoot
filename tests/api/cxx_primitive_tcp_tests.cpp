@@ -188,9 +188,48 @@ private:
     clear_active();
   }
 
-  void serve_cancelled_getvar() {
+  void serve_management_commands() {
+    constexpr std::array<std::string_view, 13> commands{
+        "flashing lock",
+        "flashing unlock",
+        "flashing lock_critical",
+        "flashing unlock_critical",
+        "flashing get_unlock_ability",
+        "gsi:wipe",
+        "gsi:disable",
+        "gsi:status",
+        "snapshot-update:cancel",
+        "snapshot-update:merge",
+        "create-logical-partition:system_ext:0",
+        "delete-logical-partition:system_ext",
+        "resize-logical-partition:system_ext:18446744073709551615",
+    };
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+      auto socket = accept();
+      CHECK(as_string(read_frame(*socket)) == commands[index]);
+      if (index == 0) {
+        write_frame(*socket, binary_payload("INFO", {'i', 0, 0xff}));
+        write_frame(*socket, binary_payload("TEXT", {'t', 0, 0xfe}));
+        write_frame(*socket, binary_payload("OKAY", {'m', 0, 0xfd}));
+      } else {
+        write_frame(*socket, "OKAYdone");
+      }
+      clear_active();
+    }
+  }
+
+  void serve_management_fail() {
     auto socket = accept();
-    CHECK(as_string(read_frame(*socket)) == "getvar:cancel");
+    CHECK(as_string(read_frame(*socket)) == "gsi:status");
+    write_frame(*socket, binary_payload("INFO", {'w', 0, 0xfc}));
+    write_frame(*socket, binary_payload("TEXT", {'h', 0, 0xfb}));
+    write_frame(*socket, binary_payload("FAIL", {'e', 0, 0xfa}));
+    clear_active();
+  }
+
+  void serve_cancelled_management_command() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(*socket)) == "snapshot-update:merge");
     {
       std::scoped_lock lock(mutex_);
       cancel_ready_ = true;
@@ -215,7 +254,9 @@ private:
       serve_binary_getvar();
       serve_binary_fail();
       serve_partial_upload();
-      serve_cancelled_getvar();
+      serve_management_commands();
+      serve_management_fail();
+      serve_cancelled_management_command();
     } catch (...) {
       {
         std::scoped_lock lock(mutex_);
@@ -323,11 +364,83 @@ void partial_upload_diagnostics(kairosboot::Context &context,
   CHECK(error.session_poisoned());
 }
 
-void stop_token_cancels_and_drains(kairosboot::Context &context,
-                                   ScriptedTcpDevice &device,
-                                   const std::string &selector_text) {
+void management_commands_match_aosp_wire_trace(
+    kairosboot::Context &context, const std::string &selector_text) {
   const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
-  auto operation = context.getvar_async(selector, "cancel");
+  auto operation =
+      context.flashing_async(selector, kairosboot::FlashingCommand::Lock);
+  CHECK(operation.has_value());
+  auto first = operation->wait_result();
+  CHECK(first.has_value());
+  CHECK(first->device_identifier() == selector_text);
+  CHECK(bytes_equal(first->terminal_payload(), {'m', 0, 0xfd}));
+  CHECK(first->message_count() == 2U);
+  const auto info = first->message(0);
+  CHECK(info.has_value());
+  CHECK(info->kind == kairosboot::CommandMessageKind::Info);
+  CHECK(bytes_equal(info->payload, {'i', 0, 0xff}));
+  const auto text = first->message(1);
+  CHECK(text.has_value());
+  CHECK(text->kind == kairosboot::CommandMessageKind::Text);
+  CHECK(bytes_equal(text->payload, {'t', 0, 0xfe}));
+
+  const auto check_success = [&](auto result) {
+    CHECK(result.has_value());
+    CHECK(result->device_identifier() == selector_text);
+    CHECK(as_string(result->terminal_payload()) == "done");
+  };
+  check_success(
+      context.flashing(selector, kairosboot::FlashingCommand::Unlock));
+  check_success(
+      context.flashing(selector, kairosboot::FlashingCommand::LockCritical));
+  check_success(
+      context.flashing(selector, kairosboot::FlashingCommand::UnlockCritical));
+  check_success(context.flashing(
+      selector, kairosboot::FlashingCommand::GetUnlockAbility));
+  check_success(context.gsi(selector, kairosboot::GsiCommand::Wipe));
+  check_success(context.gsi(selector, kairosboot::GsiCommand::Disable));
+  check_success(context.gsi(selector, kairosboot::GsiCommand::Status));
+  check_success(context.snapshot_update(
+      selector, kairosboot::SnapshotUpdateCommand::Cancel));
+  check_success(context.snapshot_update(
+      selector, kairosboot::SnapshotUpdateCommand::Merge));
+  std::string logical_name{"system_ext"};
+  auto create_operation = context.create_logical_partition_async(
+      selector, std::string_view{logical_name}, 0);
+  CHECK(create_operation.has_value());
+  logical_name.assign("mutated-after-async-start");
+  check_success(create_operation->wait_result());
+  check_success(context.delete_logical_partition(selector, "system_ext"));
+  check_success(
+      context.resize_logical_partition(selector, "system_ext", UINT64_MAX));
+}
+
+void management_fail_preserves_binary_diagnostics(
+    kairosboot::Context &context, const std::string &selector_text) {
+  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
+  auto result = context.gsi(selector, kairosboot::GsiCommand::Status);
+  CHECK(!result.has_value());
+  const auto &error = result.error();
+  CHECK(error.status() == KB_E_DEVICE_FAIL);
+  CHECK(error.device_identifier() == selector_text);
+  CHECK(error.transfer_state() == KB_TRANSFER_FULLY_TRANSFERRED);
+  CHECK(bytes_equal(error.device_message(), {'e', 0, 0xfa}));
+  CHECK(error.command_messages().size() == 2U);
+  CHECK(error.command_messages()[0].kind ==
+        kairosboot::CommandMessageKind::Info);
+  CHECK(bytes_equal(error.command_messages()[0].payload, {'w', 0, 0xfc}));
+  CHECK(error.command_messages()[1].kind ==
+        kairosboot::CommandMessageKind::Text);
+  CHECK(bytes_equal(error.command_messages()[1].payload, {'h', 0, 0xfb}));
+  CHECK(!error.session_poisoned());
+}
+
+void stop_token_cancels_management_and_drains(
+    kairosboot::Context &context, ScriptedTcpDevice &device,
+    const std::string &selector_text) {
+  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
+  auto operation = context.snapshot_update_async(
+      selector, kairosboot::SnapshotUpdateCommand::Merge);
   CHECK(operation.has_value());
   device.wait_for_cancel_command();
 
@@ -352,7 +465,9 @@ void run_contract() {
   binary_result_and_selector_passthrough(*context, selector_text);
   device_fail_diagnostics(*context, selector_text);
   partial_upload_diagnostics(*context, selector_text);
-  stop_token_cancels_and_drains(*context, device, selector_text);
+  management_commands_match_aosp_wire_trace(*context, selector_text);
+  management_fail_preserves_binary_diagnostics(*context, selector_text);
+  stop_token_cancels_management_and_drains(*context, device, selector_text);
   device.finish();
 }
 

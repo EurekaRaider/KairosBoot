@@ -44,6 +44,17 @@ static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
+static_assert(!std::is_convertible_v<kairosboot::FlashingCommand, int>);
+static_assert(!std::is_convertible_v<kairosboot::GsiCommand, int>);
+static_assert(!std::is_convertible_v<kairosboot::SnapshotUpdateCommand, int>);
+static_assert(
+    std::is_same_v<std::underlying_type_t<kairosboot::FlashingCommand>,
+                   kb_flashing_command_t>);
+static_assert(std::is_same_v<std::underlying_type_t<kairosboot::GsiCommand>,
+                             kb_gsi_command_t>);
+static_assert(
+    std::is_same_v<std::underlying_type_t<kairosboot::SnapshotUpdateCommand>,
+                   kb_snapshot_update_command_t>);
 static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
                                                                nullptr)));
 
@@ -60,6 +71,35 @@ static_assert(requires(kairosboot::Context &context,
   context.erase(selector, "userdata", options);
   context.set_active_async(selector, "a", options);
   context.set_active(selector, "a", options);
+  context.flashing_async(selector, kairosboot::FlashingCommand::Unlock,
+                         options);
+  context.flashing(selector, kairosboot::FlashingCommand::Lock, options);
+  context.flashing_async(kairosboot::FlashingCommand::Lock, options);
+  context.flashing(kairosboot::FlashingCommand::Unlock, options);
+  context.gsi_async(selector, kairosboot::GsiCommand::Status, options);
+  context.gsi(selector, kairosboot::GsiCommand::Wipe, options);
+  context.gsi_async(kairosboot::GsiCommand::Disable, options);
+  context.gsi(kairosboot::GsiCommand::Status, options);
+  context.snapshot_update_async(
+      selector, kairosboot::SnapshotUpdateCommand::Cancel, options);
+  context.snapshot_update(selector, kairosboot::SnapshotUpdateCommand::Merge,
+                          options);
+  context.snapshot_update_async(kairosboot::SnapshotUpdateCommand::Merge,
+                                options);
+  context.snapshot_update(kairosboot::SnapshotUpdateCommand::Cancel, options);
+  context.create_logical_partition_async(selector, "system_ext", 0, options);
+  context.create_logical_partition(selector, "system_ext", 0, options);
+  context.create_logical_partition_async("system_ext", 0, options);
+  context.create_logical_partition("system_ext", 0, options);
+  context.delete_logical_partition_async(selector, "system_ext", options);
+  context.delete_logical_partition(selector, "system_ext", options);
+  context.delete_logical_partition_async("system_ext", options);
+  context.delete_logical_partition("system_ext", options);
+  context.resize_logical_partition_async(selector, "system_ext", UINT64_MAX,
+                                         options);
+  context.resize_logical_partition(selector, "system_ext", UINT64_MAX, options);
+  context.resize_logical_partition_async("system_ext", UINT64_MAX, options);
+  context.resize_logical_partition("system_ext", UINT64_MAX, options);
   context.reboot_async(selector, kairosboot::RebootTarget::Fastboot, options);
   context.reboot(selector, kairosboot::RebootTarget::Recovery, options);
   context.continue_boot_async(selector, options);
@@ -244,6 +284,38 @@ int main() {
   CHECK(!invalid_selector.has_value());
   CHECK(invalid_selector.error().status() == KB_E_INVALID_ARGUMENT);
   CHECK(invalid_selector.error().device_identifier() == "unknown:device");
+
+  const kairosboot::DeviceSelector invalid_target{"unknown:device"};
+  const auto invalid_flashing = context->flashing_async(
+      invalid_target, static_cast<kairosboot::FlashingCommand>(INT32_MAX));
+  CHECK(!invalid_flashing.has_value());
+  CHECK(invalid_flashing.error().status() == KB_E_INVALID_ARGUMENT);
+  const auto invalid_gsi = context->gsi_async(
+      invalid_target, static_cast<kairosboot::GsiCommand>(INT32_MAX));
+  CHECK(!invalid_gsi.has_value());
+  CHECK(invalid_gsi.error().status() == KB_E_INVALID_ARGUMENT);
+  const auto invalid_snapshot = context->snapshot_update_async(
+      invalid_target,
+      static_cast<kairosboot::SnapshotUpdateCommand>(INT32_MAX));
+  CHECK(!invalid_snapshot.has_value());
+  CHECK(invalid_snapshot.error().status() == KB_E_INVALID_ARGUMENT);
+
+  const auto empty_logical =
+      context->create_logical_partition_async(invalid_target, "", 0);
+  CHECK(!empty_logical.has_value());
+  CHECK(empty_logical.error().status() == KB_E_INVALID_ARGUMENT);
+  const auto injected_logical =
+      context->delete_logical_partition_async(invalid_target, "system:other");
+  CHECK(!injected_logical.has_value());
+  CHECK(injected_logical.error().status() == KB_E_INVALID_ARGUMENT);
+  const auto control_logical = context->resize_logical_partition_async(
+      invalid_target, std::string_view{"bad\nname", 8}, 1);
+  CHECK(!control_logical.has_value());
+  CHECK(control_logical.error().status() == KB_E_INVALID_ARGUMENT);
+  const auto oversized_logical = context->create_logical_partition_async(
+      invalid_target, std::string(4096, 'x'), UINT64_MAX);
+  CHECK(!oversized_logical.has_value());
+  CHECK(oversized_logical.error().status() == KB_E_INVALID_ARGUMENT);
 
   auto devices = context->devices();
   CHECK(devices.has_value());
