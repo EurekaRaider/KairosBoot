@@ -12,6 +12,41 @@ if(NOT VERSION_OUTPUT STREQUAL "KairosBoot ${EXPECTED_VERSION}")
 endif()
 
 execute_process(
+  COMMAND "${CLI}" --help
+  RESULT_VARIABLE HELP_RESULT
+  OUTPUT_VARIABLE HELP_OUTPUT
+  ERROR_VARIABLE HELP_ERROR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_STRIP_TRAILING_WHITESPACE)
+if(NOT HELP_RESULT EQUAL 0 OR NOT HELP_ERROR STREQUAL "")
+  message(FATAL_ERROR "--help failed: ${HELP_RESULT} ${HELP_ERROR}")
+endif()
+foreach(HELP_COMMAND IN ITEMS flashing gsi snapshot-update
+                              create-logical-partition
+                              delete-logical-partition
+                              resize-logical-partition)
+  string(FIND "${HELP_OUTPUT}" " ${HELP_COMMAND}" HELP_COMMAND_POSITION)
+  if(HELP_COMMAND_POSITION EQUAL -1)
+    message(FATAL_ERROR
+            "--help is missing ${HELP_COMMAND}: ${HELP_OUTPUT}")
+  endif()
+endforeach()
+
+execute_process(
+  COMMAND "${CLI}" --help --json
+  RESULT_VARIABLE JSON_HELP_RESULT
+  OUTPUT_VARIABLE JSON_HELP_OUTPUT
+  ERROR_VARIABLE JSON_HELP_ERROR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_STRIP_TRAILING_WHITESPACE)
+string(JSON JSON_HELP_OK GET "${JSON_HELP_OUTPUT}" ok)
+string(JSON JSON_HELP_COMMAND GET "${JSON_HELP_OUTPUT}" command)
+if(NOT JSON_HELP_RESULT EQUAL 0 OR NOT JSON_HELP_ERROR STREQUAL "" OR
+   NOT JSON_HELP_OK OR NOT JSON_HELP_COMMAND STREQUAL "help")
+  message(FATAL_ERROR "unexpected --help --json output: ${JSON_HELP_OUTPUT}")
+endif()
+
+execute_process(
   COMMAND "${CLI}" --version --json
   RESULT_VARIABLE JSON_VERSION_RESULT
   OUTPUT_VARIABLE JSON_VERSION_OUTPUT
@@ -271,6 +306,48 @@ expect_json_parse_error(
 expect_json_parse_error(
   upload_arity "upload requires exactly <output>" upload)
 expect_json_parse_error(
+  flashing_arity
+  "flashing requires exactly <lock|unlock|lock-critical|unlock-critical|get-unlock-ability>"
+  flashing)
+expect_json_parse_error(
+  flashing_command
+  "flashing command must be lock, unlock, lock-critical, unlock-critical, or get-unlock-ability"
+  flashing sideways)
+expect_json_parse_error(
+  gsi_arity "gsi requires exactly <wipe|disable|status>" gsi)
+expect_json_parse_error(
+  gsi_command "gsi command must be wipe, disable, or status" gsi enable)
+expect_json_parse_error(
+  snapshot_update_arity
+  "snapshot-update requires exactly <cancel|merge>" snapshot-update)
+expect_json_parse_error(
+  snapshot_update_command
+  "snapshot-update command must be cancel or merge" snapshot-update pause)
+expect_json_parse_error(
+  create_logical_arity
+  "create-logical-partition requires exactly <partition> and <size-bytes>"
+  create-logical-partition system_ext)
+expect_json_parse_error(
+  create_logical_negative_size
+  "create-logical-partition size-bytes requires an integer in [0, 18446744073709551615]"
+  create-logical-partition system_ext -1)
+expect_json_parse_error(
+  create_logical_overflow_size
+  "create-logical-partition size-bytes requires an integer in [0, 18446744073709551615]"
+  create-logical-partition system_ext 18446744073709551616)
+expect_json_parse_error(
+  delete_logical_arity
+  "delete-logical-partition requires exactly <partition>"
+  delete-logical-partition)
+expect_json_parse_error(
+  resize_logical_arity
+  "resize-logical-partition requires exactly <partition> and <size-bytes>"
+  resize-logical-partition system_ext)
+expect_json_parse_error(
+  resize_logical_bad_size
+  "resize-logical-partition size-bytes requires an integer in [0, 18446744073709551615]"
+  resize-logical-partition system_ext 12x)
+expect_json_parse_error(
   fetch_arity "fetch requires <partition> and <output>" fetch vendor)
 expect_json_parse_error(
   fetch_size_without_offset "fetch --size requires --offset" fetch vendor
@@ -340,6 +417,23 @@ expect_json_runtime(upload_runtime --max-receive-bytes 16 upload
                     "${CLI_UPLOAD_FILE}")
 expect_json_runtime(fetch_runtime --max-receive-bytes 16 fetch vendor
                     "${CLI_FETCH_FILE}" --offset 2 --size 3)
+foreach(FLASHING_ACTION IN ITEMS lock unlock lock-critical unlock-critical
+                                 get-unlock-ability)
+  expect_json_runtime(flashing_${FLASHING_ACTION}_runtime flashing
+                      ${FLASHING_ACTION})
+endforeach()
+foreach(GSI_ACTION IN ITEMS wipe disable status)
+  expect_json_runtime(gsi_${GSI_ACTION}_runtime gsi ${GSI_ACTION})
+endforeach()
+foreach(SNAPSHOT_ACTION IN ITEMS cancel merge)
+  expect_json_runtime(snapshot_${SNAPSHOT_ACTION}_runtime snapshot-update
+                      ${SNAPSHOT_ACTION})
+endforeach()
+expect_json_runtime(create_logical_runtime create-logical-partition system_ext
+                    0)
+expect_json_runtime(delete_logical_runtime delete-logical-partition system_ext)
+expect_json_runtime(resize_logical_runtime resize-logical-partition system_ext
+                    18446744073709551615)
 
 execute_process(
   COMMAND "${CLI}" --device tcp:127.0.0.1:1 --json stage
