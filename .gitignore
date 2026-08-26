@@ -1,0 +1,13 @@
+.DS_Store
+/.cache/
+/.idea/
+/.vscode/
+/build/
+/build-*/
+/out/
+/artifacts/
+/TestResults/
+/packages/
+*.user
+*.suo
+*.swp
