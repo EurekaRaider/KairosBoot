@@ -158,6 +158,10 @@ class ReleaseToolTests(unittest.TestCase):
             packages["libusb"]["checksums"][0]["checksumValue"],
             hashlib.sha256(b"libusb").hexdigest(),
         )
+        self.assertEqual(
+            packages["Microsoft Visual C++ Runtime"]["supplier"],
+            "Organization: Microsoft Corporation",
+        )
 
     def test_provenance_excludes_its_own_output(self) -> None:
         assets = self.root / "assets"

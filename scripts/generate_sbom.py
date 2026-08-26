@@ -59,11 +59,23 @@ def main() -> None:
                 "licenseConcluded": "LGPL-2.1-or-later",
                 "licenseDeclared": "LGPL-2.1-or-later",
                 "copyrightText": "NOASSERTION"
+            },
+            {
+                "name": "Microsoft Visual C++ Runtime",
+                "SPDXID": "SPDXRef-Package-MSVC-Runtime",
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "supplier": "Organization: Microsoft Corporation",
+                "copyrightText": "NOASSERTION",
+                "comment": "Bundled app-local only in Windows native and NuGet assets."
             }
         ],
         "relationships": [
             {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-KairosBoot"},
-            {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-libusb"}
+            {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-libusb"},
+            {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-MSVC-Runtime", "comment": "Windows distributions only."}
         ]
     }
     args.output.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
