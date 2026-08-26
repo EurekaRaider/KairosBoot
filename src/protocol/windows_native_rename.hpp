@@ -32,11 +32,12 @@ enum class WindowsNativeRenameAction : std::uint8_t {
 
 // FileRenameInformationEx may fall back only when the operating system or
 // filesystem explicitly reports that the information class or feature is not
-// implemented. All namespace, access, sharing and integrity errors are final.
+// implemented. Only exact STATUS_SUCCESS proves publication; pending,
+// informational, namespace, access, sharing and integrity statuses are final.
 [[nodiscard]] constexpr WindowsNativeRenameAction
 classify_windows_native_rename_status(
     const WindowsNtStatus status) noexcept {
-    if (status >= 0) {
+    if (status == 0) {
         return WindowsNativeRenameAction::Succeeded;
     }
     switch (status) {
