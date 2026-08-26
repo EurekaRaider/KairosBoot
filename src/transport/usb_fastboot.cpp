@@ -153,6 +153,7 @@ private:
             .certainty = watermark == 0
                 ? protocol::TransferCertainty::NotTransferred
                 : protocol::TransferCertainty::PartialOrUnknown,
+            .truncated = false,
             .detail = std::string(fallback_detail),
         };
     }
@@ -160,6 +161,7 @@ private:
         .status = transport_status(error->kind),
         .transferred = transferred,
         .certainty = transfer_certainty(error->certainty),
+        .truncated = false,
         .detail = std::string(transfer_error_detail(error->kind)),
     };
 }
@@ -270,21 +272,28 @@ protocol::TransferResult UsbFastbootTransport::write(
     if (!open_.load(std::memory_order_acquire)) {
         return {
             .status = protocol::TransportStatus::Disconnected,
+            .transferred = 0,
             .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
             .detail = "Fastboot USB transport is closed",
         };
     }
     if (bytes.empty()) {
         return {
             .status = protocol::TransportStatus::Ok,
+            .transferred = 0,
             .certainty = protocol::TransferCertainty::FullyTransferred,
+            .truncated = false,
+            .detail = {},
         };
     }
     const auto deadline = deadline_after(timeout);
     if (Clock::now() >= deadline) {
         auto failure = protocol::TransferResult{
             .status = protocol::TransportStatus::Timeout,
+            .transferred = 0,
             .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
             .detail = "USB bulk OUT deadline expired before submission",
         };
         poison_and_stop();
@@ -358,14 +367,18 @@ protocol::TransferResult UsbFastbootTransport::write(
             .status = protocol::TransportStatus::Ok,
             .transferred = bytes.size(),
             .certainty = protocol::TransferCertainty::FullyTransferred,
+            .truncated = false,
+            .detail = {},
         };
     } catch (const std::bad_alloc&) {
         poison_and_stop();
         return {
             .status = protocol::TransportStatus::IoError,
+            .transferred = 0,
             .certainty = submission_could_have_been_accepted
                 ? protocol::TransferCertainty::PartialOrUnknown
                 : protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
             .detail = "USB bulk OUT exhausted host resources",
         };
     }
@@ -378,7 +391,9 @@ protocol::TransferResult UsbFastbootTransport::read(
     if (!open_.load(std::memory_order_acquire)) {
         return {
             .status = protocol::TransportStatus::Disconnected,
+            .transferred = 0,
             .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
             .detail = "Fastboot USB transport is closed",
         };
     }

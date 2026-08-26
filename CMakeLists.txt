@@ -26,6 +26,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(WIN32)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 option(KAIROSBOOT_RELEASE_SYMBOLS
        "Generate external debug symbols without disabling Release optimization"
        OFF)
