@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ enum class SparseErrorKind : std::uint8_t {
     Unsupported,
     Source,
     InvalidArgument,
+    Cancelled,
 };
 
 struct SparseError {
@@ -89,7 +91,8 @@ struct SparseHeader {
 class SparseImage final {
 public:
     [[nodiscard]] static std::expected<SparseImage, SparseError> open(
-        std::shared_ptr<const IImageSource> source);
+        std::shared_ptr<const IImageSource> source,
+        std::stop_token cancellation = {});
 
     [[nodiscard]] const SparseHeader& header() const noexcept;
     [[nodiscard]] std::span<const SparseChunk> chunks() const noexcept;
