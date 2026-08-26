@@ -1670,26 +1670,34 @@ void current_slot_must_belong_to_discovered_topology() {
 }
 
 void sparse_flash_parts_use_independent_canonical_downloads() {
-    std::vector<std::byte> raw(2 * 4096);
+    std::vector<std::byte> raw(3 * 4096);
     for (std::size_t index = 0; index < raw.size(); ++index) {
-        raw[index] = std::byte{static_cast<unsigned char>(index / 4096 + 1)};
+        raw[index] = std::byte{
+            static_cast<unsigned char>((index * 17 + 3) % 251)};
     }
     auto artifact = FlashArtifact::inspect(
         std::make_shared<MemoryImageSource>(std::move(raw)));
     CHECK(artifact.has_value());
     auto plan = SparseFlashPlan::create(*artifact, 4200);
     CHECK(plan.has_value());
-    CHECK(plan->parts().size() == 2);
+    CHECK(plan->parts().size() == 3);
 
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
     std::vector<std::vector<std::byte>> encoded_parts;
     encoded_parts.reserve(plan->parts().size());
-    for (const auto& part : plan->parts()) {
-        CHECK(part.source->size() == 4148);
+    constexpr std::array expected_sizes{
+        std::uint64_t{4148}, std::uint64_t{4160}, std::uint64_t{4148}};
+    constexpr std::array<std::string_view, 3> expected_downloads{
+        "download:00001034", "download:00001040", "download:00001034"};
+    for (std::size_t index = 0; index < plan->parts().size(); ++index) {
+        const auto& part = plan->parts()[index];
+        CHECK(part.source->size() == expected_sizes[index]);
         encoded_parts.push_back(read_image(part.source));
-        script->expect_write("download:00001034");
-        script->respond("DATA00001034");
+        script->expect_write(expected_downloads[index]);
+        script->respond(
+            std::string{"DATA"} +
+            std::string{expected_downloads[index].substr(9)});
         script->expect_source_write(
             encoded_parts.back(),
             {{.offset = 0,
