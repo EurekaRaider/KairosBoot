@@ -6,14 +6,19 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <stop_token>
@@ -22,6 +27,22 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -32,6 +53,21 @@ using kairosboot::image::ArtifactSourceResolver;
 using kairosboot::image::IImageSource;
 using kairosboot::image::preflight_flash_artifact;
 using kairosboot::image::sha256_hex;
+
+#if !defined(_WIN32)
+std::filesystem::path executable_path;
+
+[[nodiscard]] std::set<int> open_descriptors() {
+    std::set<int> descriptors;
+    for (int descriptor = 3; descriptor < 1'024; ++descriptor) {
+        errno = 0;
+        if (::fcntl(descriptor, F_GETFD) >= 0 || errno != EBADF) {
+            descriptors.insert(descriptor);
+        }
+    }
+    return descriptors;
+}
+#endif
 
 class CheckFailure final : public std::runtime_error {
     public:
@@ -108,6 +144,8 @@ struct ZipFixtureEntry final {
     std::optional<std::string> local_name;
     std::optional<std::uint32_t> declared_crc;
     std::optional<std::uint32_t> declared_uncompressed_size;
+    std::optional<std::uint64_t> zip64_uncompressed_size;
+    bool entry_zip64{};
     std::uint16_t method{};
     std::uint16_t flags{};
     std::uint16_t version_made_by{static_cast<std::uint16_t>((3U << 8U) | 20U)};
@@ -144,6 +182,8 @@ make_zip(const std::span<const ZipFixtureEntry> entries, const bool zip64 = fals
         const auto declared_size = entry.declared_uncompressed_size.value_or(
             static_cast<std::uint32_t>(entry.payload.size()));
         const auto local_name = entry.local_name.value_or(entry.name);
+        const auto entry_zip64_size = entry.zip64_uncompressed_size.value_or(
+            static_cast<std::uint64_t>(declared_size));
 
         central.push_back(CentralRecord{
             .entry = &entry,
@@ -153,17 +193,25 @@ make_zip(const std::span<const ZipFixtureEntry> entries, const bool zip64 = fals
             .uncompressed_size = declared_size,
         });
         append_u32(output, 0x04034b50U);
-        append_u16(output, 20U);
+        append_u16(output, entry.entry_zip64 ? 45U : 20U);
         append_u16(output, entry.flags);
         append_u16(output, entry.method);
         append_u16(output, 0U);
         append_u16(output, 0U);
         append_u32(output, declared_crc);
-        append_u32(output, static_cast<std::uint32_t>(compressed.size()));
-        append_u32(output, declared_size);
+        append_u32(output, entry.entry_zip64
+                               ? UINT32_MAX
+                               : static_cast<std::uint32_t>(compressed.size()));
+        append_u32(output, entry.entry_zip64 ? UINT32_MAX : declared_size);
         append_u16(output, static_cast<std::uint16_t>(local_name.size()));
-        append_u16(output, 0U);
+        append_u16(output, entry.entry_zip64 ? 20U : 0U);
         append_string(output, local_name);
+        if (entry.entry_zip64) {
+            append_u16(output, 0x0001U);
+            append_u16(output, 16U);
+            append_u64(output, entry_zip64_size);
+            append_u64(output, compressed.size());
+        }
         output.insert(output.end(), compressed.begin(), compressed.end());
     }
 
@@ -173,22 +221,30 @@ make_zip(const std::span<const ZipFixtureEntry> entries, const bool zip64 = fals
         const auto& entry = *record.entry;
         append_u32(output, 0x02014b50U);
         append_u16(output, entry.version_made_by);
-        append_u16(output, 20U);
+        append_u16(output, entry.entry_zip64 ? 45U : 20U);
         append_u16(output, entry.flags);
         append_u16(output, entry.method);
         append_u16(output, 0U);
         append_u16(output, 0U);
         append_u32(output, record.crc);
-        append_u32(output, record.compressed_size);
-        append_u32(output, record.uncompressed_size);
+        append_u32(output, entry.entry_zip64 ? UINT32_MAX : record.compressed_size);
+        append_u32(output, entry.entry_zip64 ? UINT32_MAX : record.uncompressed_size);
         append_u16(output, static_cast<std::uint16_t>(entry.name.size()));
-        append_u16(output, 0U);
+        append_u16(output, entry.entry_zip64 ? 28U : 0U);
         append_u16(output, 0U);
         append_u16(output, 0U);
         append_u16(output, 0U);
         append_u32(output, entry.external_attributes);
-        append_u32(output, record.local_offset);
+        append_u32(output, entry.entry_zip64 ? UINT32_MAX : record.local_offset);
         append_string(output, entry.name);
+        if (entry.entry_zip64) {
+            append_u16(output, 0x0001U);
+            append_u16(output, 24U);
+            append_u64(output, entry.zip64_uncompressed_size.value_or(
+                                     record.uncompressed_size));
+            append_u64(output, record.compressed_size);
+            append_u64(output, record.local_offset);
+        }
     }
     CHECK(output.size() - central_offset <= UINT32_MAX);
     const auto central_size =
@@ -237,6 +293,14 @@ void write_bytes(const std::filesystem::path& path,
 void write_text(const std::filesystem::path& path, const std::string_view text) {
     const auto bytes = as_bytes(text);
     write_bytes(path, bytes);
+}
+
+[[nodiscard]] std::filesystem::path with_embedded_nul(
+    const std::filesystem::path& prefix) {
+    auto native = prefix.native();
+    native.push_back(std::filesystem::path::value_type{});
+    native.push_back(static_cast<std::filesystem::path::value_type>('x'));
+    return std::filesystem::path(std::move(native));
 }
 
 [[nodiscard]] std::string read_source(const IImageSource& source) {
@@ -329,6 +393,40 @@ void deflate_and_zip64_entries_are_supported() {
     CHECK(read_source(*(*resolved)->source) == payload);
 }
 
+void per_entry_zip64_with_classic_eocd_is_supported_and_validated() {
+    TemporaryDirectory valid_temporary;
+    const std::array valid_entries{
+        ZipFixtureEntry{
+            .name = "system.img",
+            .payload = "hybrid-zip64-payload",
+            .entry_zip64 = true,
+        },
+    };
+    const auto valid_archive = write_zip(valid_temporary, valid_entries, false);
+    ArtifactSourceResolver valid_resolver;
+    const auto valid = valid_resolver.resolve(valid_archive, "system.img");
+    CHECK(valid);
+    CHECK(read_source(*(*valid)->source) == "hybrid-zip64-payload");
+
+    TemporaryDirectory inconsistent_temporary;
+    const std::array inconsistent_entries{
+        ZipFixtureEntry{
+            .name = "system.img",
+            .payload = "payload",
+            .zip64_uncompressed_size = 8U,
+            .entry_zip64 = true,
+        },
+    };
+    const auto inconsistent_archive =
+        write_zip(inconsistent_temporary, inconsistent_entries, false);
+    ArtifactSourceResolver inconsistent_resolver;
+    const auto inconsistent =
+        inconsistent_resolver.resolve(inconsistent_archive, "system.img");
+    CHECK(!inconsistent);
+    CHECK(inconsistent.error().kind == ArtifactSourceErrorKind::InvalidArchive ||
+          inconsistent.error().kind == ArtifactSourceErrorKind::Integrity);
+}
+
 void crc_corruption_and_truncation_fail_closed() {
     TemporaryDirectory temporary;
     const std::array corrupt_entries{
@@ -412,6 +510,56 @@ void unsafe_duplicate_and_conflicting_paths_fail_closed() {
         conflict_resolver.resolve(conflict, "images/system.img");
     CHECK(!conflict_result);
     CHECK(conflict_result.error().kind == ArtifactSourceErrorKind::UnsafePath);
+}
+
+void source_paths_reject_nul_and_win32_aliases_before_cache_keys() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "boot.img";
+    write_text(image, "payload");
+
+    ArtifactSourceResolver container_resolver;
+    const auto nul_container =
+        container_resolver.resolve(with_embedded_nul(image));
+    CHECK(!nul_container);
+    CHECK(nul_container.error().kind == ArtifactSourceErrorKind::UnsafePath);
+
+    ArtifactSourceLimits temporary_limits;
+    temporary_limits.temporary_directory =
+        with_embedded_nul(temporary.path());
+    ArtifactSourceResolver temporary_resolver(temporary_limits);
+    const auto nul_temporary = temporary_resolver.resolve(image);
+    CHECK(!nul_temporary);
+    CHECK(nul_temporary.error().kind == ArtifactSourceErrorKind::UnsafePath);
+
+    const auto directory = temporary.path() / "images";
+    std::filesystem::create_directory(directory);
+    write_text(directory / "system.img", "system");
+
+    const std::string nul_entry{"system.img\0alias", 16U};
+    ArtifactSourceResolver entry_resolver;
+    const auto embedded = entry_resolver.resolve(directory, nul_entry);
+    CHECK(!embedded);
+    CHECK(embedded.error().kind == ArtifactSourceErrorKind::UnsafePath);
+
+    ArtifactSourceLimits short_name_limits;
+    short_name_limits.max_name_bytes = 4U;
+    ArtifactSourceResolver short_name_resolver(short_name_limits);
+    const auto oversized = short_name_resolver.resolve(directory, "12345");
+    CHECK(!oversized);
+    CHECK(oversized.error().kind == ArtifactSourceErrorKind::LimitExceeded);
+
+    constexpr std::array win32_aliases{
+        std::string_view{"system.img."}, std::string_view{"system.img "},
+        std::string_view{"NUL.img"}, std::string_view{"con"},
+        std::string_view{"CONOUT$.txt"},
+        std::string_view{"system.img:stream"},
+    };
+    for (const auto alias : win32_aliases) {
+        ArtifactSourceResolver alias_resolver;
+        const auto result = alias_resolver.resolve(directory, alias);
+        CHECK(!result);
+        CHECK(result.error().kind == ArtifactSourceErrorKind::UnsafePath);
+    }
 }
 
 void metadata_features_and_local_name_mismatch_fail_closed() {
@@ -634,6 +782,342 @@ void concurrent_resolves_publish_one_shared_snapshot() {
     }
 }
 
+void cancelled_and_timed_out_owners_do_not_poison_waiters() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "super.img";
+    write_text(image, std::string(256U * 1024U, 'k'));
+
+    std::mutex gate_mutex;
+    std::condition_variable gate_ready;
+    bool first_provider_entered = false;
+    bool release_first_provider = false;
+    std::atomic<std::uint32_t> provider_calls{};
+    ArtifactSourceLimits cancellation_limits;
+    cancellation_limits.max_spool_bytes = 256U * 1024U;
+    cancellation_limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        const auto call = provider_calls.fetch_add(1U, std::memory_order_relaxed);
+        if (call == 0U) {
+            std::unique_lock lock(gate_mutex);
+            first_provider_entered = true;
+            gate_ready.notify_all();
+            gate_ready.wait(lock, [&] { return release_first_provider; });
+        }
+        return 256U * 1024U;
+    };
+    ArtifactSourceResolver cancellation_resolver(cancellation_limits);
+    std::stop_source cancellation;
+    using ResolveResult = std::expected<
+        std::shared_ptr<const kairosboot::image::ResolvedArtifact>,
+        kairosboot::image::ArtifactSourceError>;
+    std::optional<ResolveResult> owner_result;
+    std::optional<ResolveResult> waiter_result;
+    std::thread owner([&] {
+        owner_result.emplace(
+            cancellation_resolver.resolve(image, {}, cancellation.get_token()));
+    });
+    {
+        std::unique_lock lock(gate_mutex);
+        gate_ready.wait(lock, [&] { return first_provider_entered; });
+    }
+    std::atomic<bool> waiter_started{};
+    std::thread waiter([&] {
+        waiter_started.store(true, std::memory_order_release);
+        waiter_result.emplace(cancellation_resolver.resolve(image));
+    });
+    while (!waiter_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    cancellation.request_stop();
+    {
+        std::lock_guard lock(gate_mutex);
+        release_first_provider = true;
+    }
+    gate_ready.notify_all();
+    owner.join();
+    waiter.join();
+    CHECK(owner_result && !*owner_result);
+    CHECK(owner_result->error().kind == ArtifactSourceErrorKind::Cancelled);
+    CHECK(waiter_result && *waiter_result);
+    CHECK(provider_calls.load(std::memory_order_relaxed) == 2U);
+
+    std::atomic<std::uint32_t> timeout_provider_calls{};
+    ArtifactSourceLimits timeout_limits;
+    timeout_limits.max_elapsed = std::chrono::milliseconds(50);
+    timeout_limits.max_spool_bytes = 256U * 1024U;
+    timeout_limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        const auto call =
+            timeout_provider_calls.fetch_add(1U, std::memory_order_relaxed);
+        if (call == 0U) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return 256U * 1024U;
+    };
+    ArtifactSourceResolver timeout_resolver(timeout_limits);
+    const auto timed_out = timeout_resolver.resolve(image);
+    CHECK(!timed_out);
+    CHECK(timed_out.error().kind == ArtifactSourceErrorKind::TimedOut);
+    const auto retried = timeout_resolver.resolve(image);
+    CHECK(retried);
+    CHECK(timeout_provider_calls.load(std::memory_order_relaxed) == 2U);
+}
+
+void different_keys_share_one_batch_disk_reservation() {
+    TemporaryDirectory temporary;
+    const auto first_path = temporary.path() / "first.img";
+    const auto second_path = temporary.path() / "second.img";
+    write_text(first_path, "12345678");
+    write_text(second_path, "abcdefgh");
+
+    std::atomic<std::uint32_t> space_calls{};
+    ArtifactSourceLimits limits;
+    limits.minimum_free_space_bytes = 5U;
+    limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        space_calls.fetch_add(1U, std::memory_order_relaxed);
+        return 20U;
+    };
+    ArtifactSourceResolver resolver(limits);
+    using ResolveResult = std::expected<
+        std::shared_ptr<const kairosboot::image::ResolvedArtifact>,
+        kairosboot::image::ArtifactSourceError>;
+    std::array<std::optional<ResolveResult>, 2> results;
+    std::atomic<std::uint32_t> ready{};
+    std::atomic<bool> go{};
+    std::array<std::thread, 2> workers{
+        std::thread([&] {
+            ready.fetch_add(1U, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            results[0].emplace(resolver.resolve(first_path));
+        }),
+        std::thread([&] {
+            ready.fetch_add(1U, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            results[1].emplace(resolver.resolve(second_path));
+        }),
+    };
+    while (ready.load(std::memory_order_acquire) != workers.size()) {
+        std::this_thread::yield();
+    }
+    go.store(true, std::memory_order_release);
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    CHECK(results[0] && results[1]);
+    const auto first_succeeded = static_cast<bool>(*results[0]);
+    const auto second_succeeded = static_cast<bool>(*results[1]);
+    CHECK(first_succeeded != second_succeeded);
+    const auto& rejected = first_succeeded ? *results[1] : *results[0];
+    CHECK(rejected.error().kind == ArtifactSourceErrorKind::LimitExceeded);
+    CHECK(space_calls.load(std::memory_order_relaxed) == 2U);
+
+    const auto cached = resolver.resolve(first_succeeded ? first_path : second_path);
+    CHECK(cached);
+    const auto cached_rejection =
+        resolver.resolve(first_succeeded ? second_path : first_path);
+    CHECK(!cached_rejection);
+    CHECK(cached_rejection.error().kind == ArtifactSourceErrorKind::LimitExceeded);
+    CHECK(space_calls.load(std::memory_order_relaxed) == 2U);
+}
+
+void different_zip_keys_share_one_metadata_concurrency_ceiling() {
+    TemporaryDirectory first_temporary;
+    TemporaryDirectory second_temporary;
+    const std::array first_entries{
+        ZipFixtureEntry{.name = "system.img", .payload = "first"},
+    };
+    const std::array second_entries{
+        ZipFixtureEntry{.name = "vendor.img", .payload = "second"},
+    };
+    const auto first_archive = write_zip(first_temporary, first_entries);
+    const auto second_archive = write_zip(second_temporary, second_entries);
+
+    std::mutex observer_mutex;
+    std::condition_variable observer_changed;
+    std::uint32_t observer_calls = 0U;
+    bool release_first = false;
+    ArtifactSourceLimits limits;
+    limits.archive_reader_observer = [&] {
+        std::unique_lock lock(observer_mutex);
+        ++observer_calls;
+        observer_changed.notify_all();
+        if (observer_calls == 1U) {
+            observer_changed.wait(lock, [&] { return release_first; });
+        }
+    };
+    ArtifactSourceResolver resolver(limits);
+    using ResolveResult = std::expected<
+        std::shared_ptr<const kairosboot::image::ResolvedArtifact>,
+        kairosboot::image::ArtifactSourceError>;
+    std::optional<ResolveResult> first_result;
+    std::optional<ResolveResult> second_result;
+    std::thread first([&] {
+        first_result.emplace(resolver.resolve(first_archive, "system.img"));
+    });
+    {
+        std::unique_lock lock(observer_mutex);
+        observer_changed.wait(lock, [&] { return observer_calls == 1U; });
+    }
+    std::atomic<bool> second_started{};
+    std::thread second([&] {
+        second_started.store(true, std::memory_order_release);
+        second_result.emplace(resolver.resolve(second_archive, "vendor.img"));
+    });
+    while (!second_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    bool concurrent_reader = false;
+    {
+        std::unique_lock lock(observer_mutex);
+        concurrent_reader = observer_changed.wait_for(
+            lock, std::chrono::milliseconds(50),
+            [&] { return observer_calls > 1U; });
+        release_first = true;
+    }
+    observer_changed.notify_all();
+    first.join();
+    second.join();
+    CHECK(!concurrent_reader);
+    CHECK(first_result && *first_result);
+    CHECK(second_result && *second_result);
+    CHECK(observer_calls == 2U);
+}
+
+void allocation_failure_publishes_one_complete_cached_error() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "vendor.img";
+    write_text(image, "payload");
+    std::atomic<std::uint32_t> provider_calls{};
+    ArtifactSourceLimits limits;
+    limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        provider_calls.fetch_add(1U, std::memory_order_relaxed);
+        throw std::bad_alloc();
+    };
+    ArtifactSourceResolver resolver(limits);
+    constexpr std::size_t thread_count = 8U;
+    std::array<std::optional<kairosboot::image::ArtifactSourceError>, thread_count>
+        errors;
+    std::array<std::thread, thread_count> workers;
+    for (std::size_t index = 0; index < workers.size(); ++index) {
+        workers[index] = std::thread([&, index] {
+            const auto result = resolver.resolve(image);
+            if (!result) {
+                errors[index] = result.error();
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    CHECK(provider_calls.load(std::memory_order_relaxed) == 1U);
+    for (const auto& error : errors) {
+        CHECK(error);
+        CHECK(error->kind == ArtifactSourceErrorKind::Io);
+        CHECK(!error->message.empty());
+        CHECK(error->message == errors.front()->message);
+    }
+}
+
+#if !defined(_WIN32)
+void spool_descriptor_is_closed_across_exec() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "boot.img";
+    write_text(image, "payload");
+    const auto before = open_descriptors();
+    ArtifactSourceResolver resolver;
+    const auto resolved = resolver.resolve(image);
+    CHECK(resolved);
+    const auto after = open_descriptors();
+
+    std::vector<int> candidates;
+    std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                        std::back_inserter(candidates));
+    CHECK(candidates.size() == 1U);
+    const int descriptor = candidates.front();
+    const int flags = ::fcntl(descriptor, F_GETFD);
+    CHECK(flags >= 0);
+    CHECK((flags & FD_CLOEXEC) != 0);
+    struct stat identity {};
+    CHECK(::fstat(descriptor, &identity) == 0);
+
+    const auto descriptor_text = std::to_string(descriptor);
+    const auto device_text =
+        std::to_string(static_cast<std::uint64_t>(identity.st_dev));
+    const auto inode_text =
+        std::to_string(static_cast<std::uint64_t>(identity.st_ino));
+    const auto child = ::fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        const auto executable = executable_path.native();
+        ::execl(executable.c_str(), executable.c_str(), "--probe-closed-fd",
+                descriptor_text.c_str(), device_text.c_str(), inode_text.c_str(),
+                static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    int status = 0;
+    while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+}
+#else
+void windows_spools_use_unpredictable_private_create_new_files() {
+    TemporaryDirectory temporary;
+    const auto first = temporary.path() / "boot.img";
+    const auto second = temporary.path() / "vendor.img";
+    write_text(first, "first");
+    write_text(second, "second");
+    ArtifactSourceLimits limits;
+    limits.temporary_directory = temporary.path();
+    ArtifactSourceResolver resolver(limits);
+    CHECK(resolver.resolve(first));
+    CHECK(resolver.resolve(second));
+
+    const auto pattern = temporary.path() / L"kairosboot-spool-*.tmp";
+    WIN32_FIND_DATAW data{};
+    const auto search = ::FindFirstFileW(pattern.c_str(), &data);
+    CHECK(search != INVALID_HANDLE_VALUE);
+    std::set<std::wstring> names;
+    constexpr std::wstring_view prefix = L"kairosboot-spool-";
+    constexpr std::wstring_view suffix = L".tmp";
+    do {
+        const std::wstring_view name(data.cFileName);
+        CHECK(name.starts_with(prefix));
+        CHECK(name.ends_with(suffix));
+        const auto random = name.substr(
+            prefix.size(), name.size() - prefix.size() - suffix.size());
+        CHECK(random.size() == 32U);
+        CHECK(std::ranges::all_of(random, [](const wchar_t character) {
+            return (character >= L'0' && character <= L'9') ||
+                   (character >= L'a' && character <= L'f');
+        }));
+        names.emplace(name);
+
+        const auto candidate = temporary.path() / name;
+        const auto bypass = ::CreateFileW(
+            candidate.c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        CHECK(bypass == INVALID_HANDLE_VALUE);
+        CHECK(::GetLastError() == ERROR_SHARING_VIOLATION ||
+              ::GetLastError() == ERROR_ACCESS_DENIED ||
+              ::GetLastError() == ERROR_FILE_NOT_FOUND);
+    } while (::FindNextFileW(search, &data) != FALSE);
+    (void)::FindClose(search);
+    CHECK(names.size() == 2U);
+}
+#endif
+
 void preflight_inspection_is_transport_free_and_rejects_invalid_sparse() {
     TemporaryDirectory temporary;
     const auto invalid_sparse = temporary.path() / "invalid-sparse.img";
@@ -650,7 +1134,27 @@ using Test = std::pair<std::string_view, void (*)()>;
 
 }  // namespace
 
-int main() {
+int main(const int argument_count, char** arguments) {
+#if !defined(_WIN32)
+    if (argument_count == 5 &&
+        std::string_view(arguments[1]) == "--probe-closed-fd") {
+        const int descriptor = static_cast<int>(std::strtol(arguments[2], nullptr, 10));
+        const auto expected_device = std::strtoull(arguments[3], nullptr, 10);
+        const auto expected_inode = std::strtoull(arguments[4], nullptr, 10);
+        struct stat identity {};
+        if (::fstat(descriptor, &identity) != 0) {
+            return errno == EBADF ? 0 : 2;
+        }
+        const bool inherited_same_spool =
+            static_cast<std::uint64_t>(identity.st_dev) == expected_device &&
+            static_cast<std::uint64_t>(identity.st_ino) == expected_inode;
+        return inherited_same_spool ? 3 : 0;
+    }
+    executable_path = std::filesystem::absolute(arguments[0]);
+#else
+    (void)argument_count;
+    (void)arguments;
+#endif
     const std::array tests{
         Test{"direct_and_directory_sources_are_immutable_snapshots",
              direct_and_directory_sources_are_immutable_snapshots},
@@ -658,10 +1162,14 @@ int main() {
              stored_non_first_entry_is_materialized_and_hashed},
         Test{"deflate_and_zip64_entries_are_supported",
              deflate_and_zip64_entries_are_supported},
+        Test{"per_entry_zip64_with_classic_eocd_is_supported_and_validated",
+             per_entry_zip64_with_classic_eocd_is_supported_and_validated},
         Test{"crc_corruption_and_truncation_fail_closed",
              crc_corruption_and_truncation_fail_closed},
         Test{"unsafe_duplicate_and_conflicting_paths_fail_closed",
              unsafe_duplicate_and_conflicting_paths_fail_closed},
+        Test{"source_paths_reject_nul_and_win32_aliases_before_cache_keys",
+             source_paths_reject_nul_and_win32_aliases_before_cache_keys},
         Test{"metadata_features_and_local_name_mismatch_fail_closed",
              metadata_features_and_local_name_mismatch_fail_closed},
         Test{"entry_ratio_aggregate_disk_and_name_limits_are_enforced",
@@ -670,6 +1178,21 @@ int main() {
              cancellation_timeout_and_symlink_checks_precede_publication},
         Test{"concurrent_resolves_publish_one_shared_snapshot",
              concurrent_resolves_publish_one_shared_snapshot},
+        Test{"cancelled_and_timed_out_owners_do_not_poison_waiters",
+             cancelled_and_timed_out_owners_do_not_poison_waiters},
+        Test{"different_keys_share_one_batch_disk_reservation",
+             different_keys_share_one_batch_disk_reservation},
+        Test{"different_zip_keys_share_one_metadata_concurrency_ceiling",
+             different_zip_keys_share_one_metadata_concurrency_ceiling},
+        Test{"allocation_failure_publishes_one_complete_cached_error",
+             allocation_failure_publishes_one_complete_cached_error},
+#if !defined(_WIN32)
+        Test{"spool_descriptor_is_closed_across_exec",
+             spool_descriptor_is_closed_across_exec},
+#else
+        Test{"Windows spools use unpredictable private create-new files",
+             windows_spools_use_unpredictable_private_create_new_files},
+#endif
         Test{"preflight_inspection_is_transport_free_and_rejects_invalid_sparse",
              preflight_inspection_is_transport_free_and_rejects_invalid_sparse},
     };

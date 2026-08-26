@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -17,6 +18,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace kairosboot::image {
 
@@ -41,6 +43,9 @@ struct ArtifactSourceError final {
 };
 
 struct ArtifactSourceLimits final {
+    using SpaceProvider = std::function<std::expected<std::uint64_t, std::error_code>(
+        const std::filesystem::path&)>;
+
     std::uint64_t max_archive_size{32ULL * 1024ULL * 1024ULL * 1024ULL};
     std::uint64_t max_central_directory_size{256ULL * 1024ULL * 1024ULL};
     std::uint32_t max_entry_count{32'768U};
@@ -52,6 +57,12 @@ struct ArtifactSourceLimits final {
     std::uint64_t minimum_free_space_bytes{0U};
     std::chrono::milliseconds max_elapsed{std::chrono::minutes(30)};
     std::filesystem::path temporary_directory{};
+    // Internal seam for deterministic disk-reservation tests. An empty provider
+    // queries std::filesystem::space().
+    SpaceProvider available_space_provider{};
+    // Internal observation seam used to prove the per-resolver archive-reader
+    // concurrency ceiling without exposing miniz state.
+    std::function<void()> archive_reader_observer{};
 };
 
 enum class ArtifactSourceOrigin : std::uint8_t {
@@ -88,14 +99,27 @@ class ArtifactSourceResolver final {
 
     struct CacheEntry final {
         bool done{};
+        bool retryable_failure{};
         std::shared_ptr<const ResolvedArtifact> result;
-        std::optional<ArtifactSourceError> error;
+        ArtifactSourceError error{
+            .kind = ArtifactSourceErrorKind::Io,
+            .native_code = 0,
+            .message = "artifact resolution failed before publication",
+        };
         std::condition_variable ready;
+        std::uint64_t reserved_spool_bytes{};
     };
 
     ArtifactSourceLimits limits_;
     std::mutex cache_mutex_;
     std::map<CacheKey, std::shared_ptr<CacheEntry>> cache_;
+    std::uint64_t reserved_spool_bytes_{};
+    std::uint64_t completed_spool_bytes_{};
+    std::optional<std::uint64_t> observed_spool_capacity_;
+    // Miniz retains one archive central directory for the reader lifetime.
+    // Serialize readers so adversarial different-key archives cannot multiply
+    // the configured metadata ceiling within one batch.
+    std::timed_mutex archive_mutex_;
 };
 
 struct PreflightFlashArtifact final {
