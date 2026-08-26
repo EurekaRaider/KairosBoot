@@ -17,6 +17,19 @@ replacement of the dynamically linked library.
 Android Platform-Tools binaries are test oracles only and are not redistributed
 as part of KairosBoot.
 
+## Boost 1.92.0
+
+- Project: https://github.com/boostorg/boost
+- Version: 1.92.0
+- Component: Boost.Asio and its Boost header dependencies
+- License: Boost Software License 1.0
+- CMake source archive: https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz
+
+KairosBoot fetches the immutable Boost CMake release archive at configure time
+and verifies its SHA-256 digest. Boost.Asio is used as an internal networking
+implementation dependency; it is not exposed by the installed C or C++ API.
+Binary and SDK distributions include `LICENSE_1_0.txt`.
+
 ## Microsoft Visual C++ Runtime
 
 Windows binary distributions include the architecture-matching, app-local

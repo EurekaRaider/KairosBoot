@@ -325,6 +325,9 @@ jobs:
             mkdir -p "$destination"
             cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/libusb/COPYING" "$destination/"
             cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/libusb/kairosboot-libusb.json" "$destination/"
+            boost_destination="$runtime_root/$rid/native/licenses/boost"
+            mkdir -p "$boost_destination"
+            cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/boost/LICENSE_1_0.txt" "$boost_destination/"
           done
 
       - name: Pack the real native NuGet package
@@ -334,6 +337,7 @@ jobs:
           package_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"])')
           mkdir -p "${RUNNER_TEMP}/nuget"
           dotnet msbuild bindings/dotnet/KairosBoot/KairosBoot.csproj \
+            /restore \
             /t:Pack \
             /p:Configuration=Release \
             "/p:PackageOutputPath=${RUNNER_TEMP}/nuget" \

@@ -68,6 +68,12 @@ def check_workflows() -> None:
             "managed assembly Release version": '/p:Version="$VERSION"',
             "Linux split debug symbols": "objcopy --only-keep-debug",
             "libusb split debug symbols": "libusb-1.0.debug",
+            "locked Boost source archive": "boost-1.92.0-cmake.tar.xz",
+            "Boost release archive digest": (
+                "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d"
+            ),
+            "Boost license release asset": "Boost-1.92.0-LICENSE_1_0.txt",
+            "Boost SBOM source input": "--boost-source",
             "macOS split debug symbols": "dsymutil",
             "Windows dedicated symbol staging": "--symbols-root build/symbols/Release",
             "macOS stripped libusb runtime": (
@@ -137,6 +143,63 @@ def check_compatibility_baseline() -> None:
         url = libusb.get(field, "")
         if "v1.0.30" not in url or "1.0.30" not in url or "latest" in url:
             fail(f"libusb {field} URL is not immutable")
+    boost = lock.get("boost", {})
+    boost_url = (
+        "https://github.com/boostorg/boost/releases/download/boost-1.92.0/"
+        "boost-1.92.0-cmake.tar.xz"
+    )
+    boost_sha256 = "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d"
+    expected_boost = {
+        "requiredVersion": "1.92.0",
+        "sourceTag": "boost-1.92.0",
+        "sourceCommit": "afdfa32505af73e3d208144b3f623f0096cb62b6",
+        "cmakeArchive": boost_url,
+        "cmakeArchiveSha256": boost_sha256,
+        "license": "BSL-1.0",
+    }
+    if boost != expected_boost:
+        fail("Boost baseline must exactly match the validated stable 1.92.0 release")
+
+    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    boost_contract = {
+        "FetchContent module": "include(FetchContent)",
+        "Boost declaration": "FetchContent_Declare(\n    Boost",
+        "Boost population": "FetchContent_MakeAvailable(Boost)",
+        "Boost digest verification": 'URL_HASH "SHA256=${KAIROSBOOT_BOOST_SHA256}"',
+        "Boost.Asio target": "Boost::asio_core",
+        "Boost.Asio Windows 10 API baseline": "_WIN32_WINNT=0x0A00 WINVER=0x0A00",
+    }
+    for contract, marker in boost_contract.items():
+        if marker not in cmake:
+            fail(f"root CMake is missing {contract}: {marker}")
+
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    for contract, marker in {
+        "locked Boost release URL": boost_url,
+        "locked Boost release digest": boost_sha256,
+        "Boost license asset": "Boost-1.92.0-LICENSE_1_0.txt",
+        "Boost SBOM input": "--boost-source",
+    }.items():
+        if marker not in release:
+            fail(f"release workflow is missing {contract}: {marker}")
+
+    distribution_contracts = {
+        "third-party notice": (ROOT / "THIRD_PARTY_NOTICES.md", "Boost 1.92.0"),
+        "SPDX package": (ROOT / "scripts" / "generate_sbom.py", '"name": "Boost"'),
+        "NuGet Boost license": (
+            ROOT / "bindings" / "dotnet" / "KairosBoot" / "KairosBoot.csproj",
+            "licenses/boost/LICENSE_1_0.txt",
+        ),
+        "CI Boost license staging": (
+            ROOT / ".github" / "workflows" / "ci.yml",
+            "share/kairosboot/boost/LICENSE_1_0.txt",
+        ),
+    }
+    for contract, (path, marker) in distribution_contracts.items():
+        if marker not in path.read_text(encoding="utf-8"):
+            fail(f"Boost distribution contract is missing {contract}: {marker}")
 
 
 def main() -> None:

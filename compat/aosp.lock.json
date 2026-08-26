@@ -37,6 +37,14 @@
     "windowsBinaryArchive": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.7z",
     "windowsBinaryArchiveSha256": "7fb1dfec805b97983763d7d0ae244320da12add1003d4249c96cc4d586398c79"
   },
+  "boost": {
+    "requiredVersion": "1.92.0",
+    "sourceTag": "boost-1.92.0",
+    "sourceCommit": "afdfa32505af73e3d208144b3f623f0096cb62b6",
+    "cmakeArchive": "https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz",
+    "cmakeArchiveSha256": "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d",
+    "license": "BSL-1.0"
+  },
   "remainingCompatibilityGates": [
     "generate the complete CLI and image inventory",
     "run differential traces against every platform binary",

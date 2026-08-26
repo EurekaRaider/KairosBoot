@@ -60,6 +60,12 @@
       <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/licenses/libusb/kairosboot-libusb.json" />
       <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/licenses/libusb/kairosboot-libusb.json" />
       <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/licenses/libusb/kairosboot-libusb.json" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-x64/native/licenses/boost/LICENSE_1_0.txt" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/win-arm64/native/licenses/boost/LICENSE_1_0.txt" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-x64/native/licenses/boost/LICENSE_1_0.txt" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/linux-arm64/native/licenses/boost/LICENSE_1_0.txt" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-x64/native/licenses/boost/LICENSE_1_0.txt" />
+      <_PlaceholderAsset Include="$(CompleteRuntimeRoot)/osx-arm64/native/licenses/boost/LICENSE_1_0.txt" />
     </ItemGroup>
 
     <MakeDir Directories="@(_PlaceholderAsset->'%(RootDir)%(Directory)')" />
@@ -70,7 +76,7 @@
 
   <Target Name="BuildManaged" DependsOnTargets="Prepare">
     <MSBuild Projects="$(PackageProject)"
-             Targets="Build"
+             Targets="Restore;Build"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)" />
   </Target>
@@ -156,6 +162,7 @@
       <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/linux-arm64.json" />
       <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/osx-x64.json" />
       <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/libusb/manifests/osx-arm64.json" />
+      <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/boost/LICENSE_1_0.txt" />
       <_ExpectedPackageAsset Include="$(CompleteExtract)/licenses/microsoft-vc-runtime/NOTICE.txt" />
       <_ExpectedPackageAsset Include="$(CompleteExtract)/build/net48/KairosBoot.targets" />
       <_ExpectedPackageAsset Include="$(CompleteExtract)/buildTransitive/net48/KairosBoot.targets" />

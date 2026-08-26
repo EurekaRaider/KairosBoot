@@ -206,6 +206,85 @@ struct ReceivedDatagram {
     return true;
 }
 
+[[nodiscard]] bool exercise_native_socket_contract(
+    const SocketHandle server,
+    const std::uint16_t port,
+    std::string& error) {
+    auto connection = connect_native_udp_socket(
+        UdpEndpoint{.host = "127.0.0.1", .port = port}, 2s);
+    if (!connection) {
+        error = "creating Boost.Asio UDP socket failed: " +
+                connection.error().message;
+        return false;
+    }
+
+    const auto probe = bytes("probe");
+    const auto sent = connection->socket->send_datagram(
+        probe, connection->peer, 2s, {});
+    if (sent.status != DatagramIoStatus::Ok ||
+        sent.transferred != probe.size()) {
+        error = "Boost.Asio UDP probe send failed: " + sent.detail;
+        return false;
+    }
+    ReceivedDatagram client;
+    if (!expect_datagram(server, probe, client, error)) {
+        return false;
+    }
+
+    const std::vector<std::byte> oversized(64, std::byte{0x5A});
+    if (!send_datagram(server, oversized, client, error)) {
+        return false;
+    }
+    std::array<std::byte, 8> receive_buffer{};
+    const auto truncated = connection->socket->receive_datagram(
+        receive_buffer, 2s, {});
+    if (truncated.status != DatagramIoStatus::Truncated ||
+        truncated.transferred != receive_buffer.size() ||
+        truncated.peer != connection->peer) {
+        error = "Boost.Asio UDP receive did not preserve truncation and peer identity";
+        return false;
+    }
+
+    const auto timed_out = connection->socket->receive_datagram(
+        receive_buffer, 80ms, {});
+    if (timed_out.status != DatagramIoStatus::Timeout) {
+        error = "Boost.Asio UDP receive did not preserve deadline semantics";
+        return false;
+    }
+
+    std::stop_source cancellation;
+    std::jthread cancel_thread([&cancellation] {
+        std::this_thread::sleep_for(80ms);
+        cancellation.request_stop();
+    });
+    const auto cancelled = connection->socket->receive_datagram(
+        receive_buffer,
+        2s,
+        UdpCancellationSignal{.external = cancellation.get_token()});
+    cancel_thread.join();
+    if (cancelled.status != DatagramIoStatus::Cancelled) {
+        error = "Boost.Asio UDP receive did not preserve cancellation semantics";
+        return false;
+    }
+
+    const auto reusable = bytes("reuse");
+    if (!send_datagram(server, reusable, client, error)) {
+        return false;
+    }
+    const auto received = connection->socket->receive_datagram(
+        receive_buffer, 2s, {});
+    if (received.status != DatagramIoStatus::Ok ||
+        received.transferred != reusable.size() ||
+        received.peer != connection->peer ||
+        !std::ranges::equal(
+            std::span(receive_buffer).first(received.transferred), reusable)) {
+        error = "Boost.Asio UDP socket was not reusable after cancellation";
+        return false;
+    }
+    connection->socket->close();
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -277,6 +356,10 @@ int main() {
     }
     const auto port = ntohs(actual_address.sin_port);
     std::string server_error;
+    if (!exercise_native_socket_contract(server.get(), port, server_error)) {
+        std::cerr << server_error << '\n';
+        return 1;
+    }
     std::thread server_thread([&] {
         ReceivedDatagram client;
         const auto query = packet(UdpPacketId::Query, 0);
@@ -371,8 +454,8 @@ int main() {
         return 1;
     }
 
-    // The peer is now closed. A bounded failure proves the POSIX send path
-    // returns normally instead of delivering a process-wide signal.
+    // The peer is now closed. A bounded failure proves the Boost.Asio path
+    // returns normally and poisons an unacknowledged session.
     const auto after_peer_exit = (*transport)->write(bytes("continue"), 700ms);
     if (after_peer_exit.status == kairosboot::protocol::TransportStatus::Ok ||
         !(*transport)->is_poisoned()) {
@@ -380,6 +463,6 @@ int main() {
         return 1;
     }
 
-    std::cout << "UDP native loopback and closed-peer regression passed\n";
+    std::cout << "UDP Boost.Asio loopback and closed-peer regression passed\n";
     return 0;
 }

@@ -17,6 +17,7 @@ project(
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
+include(FetchContent)
 include(cmake/KairosBootLibusb.cmake)
 
 set(CMAKE_C_STANDARD 11)
@@ -46,6 +47,58 @@ endif()
 
 kairosboot_configure_libusb()
 find_package(Threads REQUIRED)
+
+# Boost.Asio is an internal, header-only transport dependency. The default is
+# the newest stable Boost release validated by this source revision. Version,
+# URL, and digest come from the committed dependency lock so every configure of
+# the same source revision resolves the same verified archive.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/compat/aosp.lock.json"
+     KAIROSBOOT_DEPENDENCY_LOCK_JSON)
+string(JSON KAIROSBOOT_LOCKED_BOOST_VERSION GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" boost requiredVersion)
+string(JSON KAIROSBOOT_LOCKED_BOOST_URL GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" boost cmakeArchive)
+string(JSON KAIROSBOOT_LOCKED_BOOST_SHA256 GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" boost cmakeArchiveSha256)
+set(KAIROSBOOT_BOOST_VERSION "${KAIROSBOOT_LOCKED_BOOST_VERSION}")
+set(KAIROSBOOT_BOOST_URL "${KAIROSBOOT_LOCKED_BOOST_URL}")
+set(KAIROSBOOT_BOOST_SHA256 "${KAIROSBOOT_LOCKED_BOOST_SHA256}")
+string(LENGTH "${KAIROSBOOT_BOOST_SHA256}" KAIROSBOOT_BOOST_SHA256_LENGTH)
+if(NOT KAIROSBOOT_BOOST_SHA256_LENGTH EQUAL 64
+   OR NOT KAIROSBOOT_BOOST_SHA256 MATCHES "^[0-9a-fA-F]+$")
+  message(FATAL_ERROR "KAIROSBOOT_BOOST_SHA256 must be a SHA-256 digest")
+endif()
+
+set(BOOST_INCLUDE_LIBRARIES asio)
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+  FetchContent_Declare(
+    Boost
+    URL "${KAIROSBOOT_BOOST_URL}"
+    URL_HASH "SHA256=${KAIROSBOOT_BOOST_SHA256}"
+    EXCLUDE_FROM_ALL)
+  FetchContent_MakeAvailable(Boost)
+else()
+  FetchContent_Declare(
+    Boost
+    URL "${KAIROSBOOT_BOOST_URL}"
+    URL_HASH "SHA256=${KAIROSBOOT_BOOST_SHA256}")
+  FetchContent_GetProperties(Boost)
+  if(NOT boost_POPULATED)
+    FetchContent_Populate(Boost)
+    add_subdirectory("${boost_SOURCE_DIR}" "${boost_BINARY_DIR}"
+                     EXCLUDE_FROM_ALL)
+  endif()
+endif()
+if(NOT TARGET Boost::asio_core)
+  message(FATAL_ERROR
+          "Boost ${KAIROSBOOT_BOOST_VERSION} did not provide Boost::asio_core")
+endif()
+if(NOT EXISTS "${boost_SOURCE_DIR}/LICENSE_1_0.txt")
+  message(FATAL_ERROR "Boost release is missing LICENSE_1_0.txt")
+endif()
 
 if(MSVC)
   set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
@@ -92,9 +145,13 @@ set_target_properties(
 target_compile_features(kairosboot_internal PUBLIC cxx_std_23)
 target_include_directories(kairosboot_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(kairosboot_internal
-                      PRIVATE kairosboot_libusb Threads::Threads
+                      PRIVATE kairosboot_libusb Boost::asio_core Threads::Threads
                               ${CMAKE_DL_LIBS})
 if(WIN32)
+  # Boost.Asio still uses the operating system's Winsock implementation. Keep
+  # the platform link dependency explicit for every supported Windows toolchain.
+  target_compile_definitions(kairosboot_internal
+                             PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
   target_link_libraries(kairosboot_internal PRIVATE ws2_32)
 endif()
 kairosboot_enable_strict_warnings(kairosboot_internal)
@@ -138,11 +195,25 @@ target_include_directories(
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(kairosboot PRIVATE kairosboot_internal kairosboot_libusb)
 kairosboot_enable_strict_warnings(kairosboot)
+if(WIN32)
+  # Keep the build-tree DLL and CLI directly runnable. The imported libusb
+  # target identifies its runtime DLL, but CMake does not copy imported
+  # runtimes beside consumers automatically.
+  add_custom_command(
+    TARGET kairosboot
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:kairosboot_libusb>" "$<TARGET_FILE_DIR:kairosboot>"
+    VERBATIM)
+endif()
 
 add_library(kairosboot_cxx INTERFACE)
 add_library(KairosBoot::Cxx ALIAS kairosboot_cxx)
 set_target_properties(kairosboot_cxx PROPERTIES EXPORT_NAME Cxx)
 target_compile_features(kairosboot_cxx INTERFACE cxx_std_23)
+target_compile_options(
+  kairosboot_cxx
+  INTERFACE "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:__cplusplus>")
 target_include_directories(
   kairosboot_cxx
   INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -284,6 +355,12 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_libusb_runtime_tests
                         PRIVATE kairosboot_internal kairosboot_libusb)
   kairosboot_enable_strict_warnings(kairosboot_libusb_runtime_tests)
+  if(WIN32)
+    # Building this test target in isolation must also stage libusb. Depending
+    # on kairosboot reuses its single app-local copy and avoids parallel copies
+    # racing into the shared Visual Studio runtime directory.
+    add_dependencies(kairosboot_libusb_runtime_tests kairosboot)
+  endif()
   add_test(NAME libusb_runtime COMMAND kairosboot_libusb_runtime_tests)
   set_tests_properties(libusb_runtime PROPERTIES TIMEOUT 15)
 
@@ -331,6 +408,8 @@ install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(
   FILES LICENSE THIRD_PARTY_NOTICES.md UNSIGNED.txt signing-status.json
   DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot")
+install(FILES "${boost_SOURCE_DIR}/LICENSE_1_0.txt"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/boost")
 
 configure_package_config_file(
   cmake/KairosBootConfig.cmake.in
