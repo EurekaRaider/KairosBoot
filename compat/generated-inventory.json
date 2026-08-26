@@ -51,6 +51,63 @@
     "boot-image", "vendor-boot", "vbmeta-avb", "super-image",
     "dynamic-partitions", "a-b-slots", "fastbootd-reenumeration"
   ],
-  "intentionalDeviations": [],
+  "implementedPlanSlices": [
+    {
+      "id": "update-manifest-parser",
+      "status": "implemented-core",
+      "scope": "offline-manifest-parse-only",
+      "evidence": [
+        "tests/fastboot/update_plan_tests.cpp",
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "excluded": [
+        "ZIP extraction",
+        "hardcoded image-list fallback",
+        "device requirement evaluation",
+        "slot discovery",
+        "dynamic partition classification",
+        "resize task insertion",
+        "optimized super rewriting",
+        "task execution"
+      ]
+    }
+  ],
+  "intentionalDeviations": [
+    {
+      "id": "update-plan-malformed-android-info",
+      "scope": "update-manifest-parser",
+      "description": "malformed android-info lines are fatal instead of warnings"
+    },
+    {
+      "id": "update-plan-inactive-if-wipe-validation",
+      "scope": "update-manifest-parser",
+      "description": "inactive if-wipe bodies are validated before condition expansion"
+    },
+    {
+      "id": "update-plan-embedded-nul",
+      "scope": "update-manifest-parser",
+      "description": "embedded NUL bytes are rejected"
+    },
+    {
+      "id": "update-plan-artifact-paths",
+      "scope": "update-manifest-parser",
+      "description": "artifact absolute paths, backslashes, empty components, dot components, and parent traversal are rejected"
+    },
+    {
+      "id": "update-plan-duplicates",
+      "scope": "update-manifest-parser",
+      "description": "duplicate version declarations, duplicate flash flags, and duplicate symbolic flash targets are rejected"
+    },
+    {
+      "id": "update-plan-reboot-targets",
+      "scope": "update-manifest-parser",
+      "description": "unknown reboot targets are rejected during planning instead of during execution"
+    },
+    {
+      "id": "update-plan-bounds",
+      "scope": "update-manifest-parser",
+      "description": "all input, line, field, token, option, requirement, and task counts are bounded"
+    }
+  ],
   "completionRule": "claimCompatibility may become true only when every required entry has differential trace evidence and no unknown inventory entries remain"
 }
