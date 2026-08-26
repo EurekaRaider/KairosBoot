@@ -136,10 +136,6 @@ function(kairosboot_configure_libusb)
     if(WIN32)
       install(FILES "${_runtime_real}" DESTINATION "${CMAKE_INSTALL_BINDIR}"
               RENAME "${_runtime_install_name}")
-      if(EXISTS "${_root}/symbols/libusb-1.0.pdb")
-        install(FILES "${_root}/symbols/libusb-1.0.pdb"
-                DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/libusb/symbols")
-      endif()
     else()
       install(FILES "${_runtime_real}" DESTINATION "${CMAKE_INSTALL_LIBDIR}"
               RENAME "${_runtime_install_name}")

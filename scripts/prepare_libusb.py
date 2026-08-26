@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_API_VERSION = "0x0100010C"
+UNIX_RELEASE_CFLAGS = "-O3 -DNDEBUG -g"
 PE_MACHINES = {"x64": 0x8664, "arm64": 0xAA64}
 WINDOWS_LAYOUTS = {
     "x64": Path("VS2022/MS64/dll"),
@@ -147,6 +148,7 @@ def prepare_windows(binary_archive: Path, source_root: Path, prefix: Path, archi
 
 def prepare_unix(source_root: Path, prefix: Path, jobs: int, platform: str) -> None:
     environment = dict(os.environ)
+    environment["CFLAGS"] = UNIX_RELEASE_CFLAGS
     subprocess.run(
         [
             str(source_root / "configure"),
@@ -172,6 +174,17 @@ def prepare_unix(source_root: Path, prefix: Path, jobs: int, platform: str) -> N
                 "-id",
                 "@rpath/libusb-1.0.0.dylib",
                 str(macos_library),
+            ],
+            check=True,
+        )
+        symbols = prefix / "symbols"
+        symbols.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "dsymutil",
+                str(macos_library),
+                "-o",
+                str(symbols / "libusb-1.0.dSYM"),
             ],
             check=True,
         )

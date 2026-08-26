@@ -65,6 +65,9 @@ class PrepareLibusbTests(unittest.TestCase):
             PREPARER.ensure_empty_prefix(prefix)
         self.assertEqual((prefix / "owned-by-user").read_text(encoding="utf-8"), "keep")
 
+    def test_unix_dependency_build_is_release_optimized_with_split_symbols(self) -> None:
+        self.assertEqual(PREPARER.UNIX_RELEASE_CFLAGS, "-O3 -DNDEBUG -g")
+
 
 if __name__ == "__main__":
     unittest.main()

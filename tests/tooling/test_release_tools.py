@@ -59,6 +59,10 @@ class ReleaseToolTests(unittest.TestCase):
         dwarf.mkdir(parents=True)
         (dwarf / "kairosboot").write_bytes(b"symbols")
         (symbols / "libkairosboot.debug").write_bytes(b"debug")
+        (symbols / "libusb-1.0.debug").write_bytes(b"dependency debug")
+        (symbols / "kairosboot.pdb").write_bytes(b"library pdb")
+        (symbols / "kairosboot-cli.pdb").write_bytes(b"cli pdb")
+        (symbols / "libusb-1.0.pdb").write_bytes(b"dependency pdb")
         return symbols
 
     def test_native_archives_have_expected_shape_and_modes(self) -> None:
@@ -103,9 +107,18 @@ class ReleaseToolTests(unittest.TestCase):
                 archive.getnames(),
             )
         with tarfile.open(symbol_archive, "r:gz") as archive:
-            names = archive.getnames()
-            self.assertTrue(any(name.endswith("libkairosboot.debug") for name in names))
-            self.assertTrue(any("kairosboot.dSYM/Contents/Resources/DWARF" in name for name in names))
+            prefix = "KairosBoot-v1.2.3-linux-x64-symbols"
+            names = set(archive.getnames())
+            self.assertIn(f"{prefix}/libkairosboot.debug", names)
+            self.assertIn(f"{prefix}/libusb-1.0.debug", names)
+            self.assertIn(f"{prefix}/kairosboot.pdb", names)
+            self.assertIn(f"{prefix}/kairosboot-cli.pdb", names)
+            self.assertIn(f"{prefix}/libusb-1.0.pdb", names)
+            self.assertIn(
+                f"{prefix}/kairosboot.dSYM/Contents/Resources/DWARF/kairosboot",
+                names,
+            )
+            self.assertFalse(any("/00-" in name or "/01-" in name for name in names))
 
     def test_windows_packages_are_zip_archives(self) -> None:
         install = self.create_install_tree()
@@ -129,6 +142,43 @@ class ReleaseToolTests(unittest.TestCase):
         for archive in archives:
             with zipfile.ZipFile(archive) as package:
                 self.assertIsNone(package.testzip())
+        symbols_archive = output / "KairosBoot-v1.2.3-windows-x64-symbols.zip"
+        with zipfile.ZipFile(symbols_archive) as package:
+            prefix = "KairosBoot-v1.2.3-windows-x64-symbols"
+            names = set(package.namelist())
+            self.assertIn(f"{prefix}/kairosboot.pdb", names)
+            self.assertIn(f"{prefix}/kairosboot-cli.pdb", names)
+            self.assertIn(f"{prefix}/libusb-1.0.pdb", names)
+
+    def test_duplicate_symbol_basenames_are_rejected(self) -> None:
+        install = self.create_install_tree()
+        symbols = self.root / "duplicate-symbols"
+        (symbols / "one").mkdir(parents=True)
+        (symbols / "two").mkdir(parents=True)
+        (symbols / "one" / "kairosboot.pdb").write_bytes(b"one")
+        (symbols / "two" / "kairosboot.pdb").write_bytes(b"two")
+        completed = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "package_native.py"),
+                "--install-root",
+                str(install),
+                "--output-dir",
+                str(self.root / "duplicate-dist"),
+                "--version",
+                "1.2.3",
+                "--platform",
+                "windows-x64",
+                "--symbols-root",
+                str(symbols),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("duplicate symbol basename: kairosboot.pdb", completed.stderr)
 
     def test_sbom_hashes_both_source_inputs(self) -> None:
         source = self.root / "source.tar.gz"

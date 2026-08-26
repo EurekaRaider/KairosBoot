@@ -16,6 +16,9 @@ jobs:
   verify:
     name: verify-release-contract
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
     outputs:
       version: ${{ steps.contract.outputs.version }}
       commit: ${{ steps.contract.outputs.commit }}
@@ -107,7 +110,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-            binutils ca-certificates cmake g++-12 git ninja-build python3
+            binutils ca-certificates cmake g++-12 git make ninja-build python3
 
       - name: Check out release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -115,12 +118,23 @@ jobs:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
 
+      - name: Prepare locked dynamic libusb
+        run: >-
+          python3 scripts/prepare_libusb.py
+          --prefix "${RUNNER_TEMP}/libusb"
+          --platform linux
+          --architecture "${{ matrix.id == 'linux-x64' && 'x64' || 'arm64' }}"
+
       - name: Build and test
         env:
           CC: gcc-12
           CXX: g++-12
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DKAIROSBOOT_RELEASE_SYMBOLS=ON \
+            "-DKAIROSBOOT_LIBUSB_ROOT=${RUNNER_TEMP}/libusb"
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
           cmake --install build --prefix "${RUNNER_TEMP}/install"
@@ -133,6 +147,20 @@ jobs:
           mkdir -p build/symbols dist
           objcopy --only-keep-debug "${RUNNER_TEMP}/install/bin/kairosboot" build/symbols/kairosboot.debug
           objcopy --only-keep-debug "${RUNNER_TEMP}/install/lib/libkairosboot.so.${VERSION}" build/symbols/libkairosboot.debug
+          objcopy --only-keep-debug "${RUNNER_TEMP}/install/lib/libusb-1.0.so.0" build/symbols/libusb-1.0.debug
+          objcopy --strip-debug "${RUNNER_TEMP}/install/bin/kairosboot"
+          objcopy --strip-debug "${RUNNER_TEMP}/install/lib/libkairosboot.so.${VERSION}"
+          objcopy --strip-debug "${RUNNER_TEMP}/install/lib/libusb-1.0.so.0"
+          objcopy --add-gnu-debuglink=build/symbols/kairosboot.debug "${RUNNER_TEMP}/install/bin/kairosboot"
+          objcopy --add-gnu-debuglink=build/symbols/libkairosboot.debug "${RUNNER_TEMP}/install/lib/libkairosboot.so.${VERSION}"
+          objcopy --add-gnu-debuglink=build/symbols/libusb-1.0.debug "${RUNNER_TEMP}/install/lib/libusb-1.0.so.0"
+          readelf --string-dump=.gnu_debuglink "${RUNNER_TEMP}/install/bin/kairosboot" | grep -F 'kairosboot.debug'
+          readelf --string-dump=.gnu_debuglink "${RUNNER_TEMP}/install/lib/libkairosboot.so.${VERSION}" | grep -F 'libkairosboot.debug'
+          readelf --string-dump=.gnu_debuglink "${RUNNER_TEMP}/install/lib/libusb-1.0.so.0" | grep -F 'libusb-1.0.debug'
+          if readelf -S "${RUNNER_TEMP}/install/lib/libusb-1.0.so.0" | grep -q '\.debug_'; then
+            echo "libusb debug sections leaked into the Release runtime"
+            exit 1
+          fi
           python3 scripts/package_native.py \
             --install-root "${RUNNER_TEMP}/install" \
             --output-dir dist \
@@ -166,18 +194,22 @@ jobs:
           - id: windows-x64
             runner: windows-2022
             architecture: x64
+            dependency-architecture: x64
             deployment-target: ""
           - id: windows-arm64
             runner: windows-11-arm
             architecture: ARM64
+            dependency-architecture: arm64
             deployment-target: ""
           - id: macos-x64
             runner: macos-15-intel
             architecture: ""
+            dependency-architecture: x64
             deployment-target: "14.0"
           - id: macos-arm64
             runner: macos-15
             architecture: ""
+            dependency-architecture: arm64
             deployment-target: "14.0"
     runs-on: ${{ matrix.runner }}
     env:
@@ -189,26 +221,62 @@ jobs:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
 
+      - name: Prepare locked dynamic libusb on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          python scripts/prepare_libusb.py
+          --prefix "$env:RUNNER_TEMP/libusb"
+          --platform windows
+          --architecture "${{ matrix.dependency-architecture }}"
+
+      - name: Prepare locked dynamic libusb on macOS
+        if: runner.os == 'macOS'
+        run: >-
+          python3 scripts/prepare_libusb.py
+          --prefix "${RUNNER_TEMP}/libusb"
+          --platform macos
+          --architecture "${{ matrix.dependency-architecture }}"
+
       - name: Configure Windows
         if: runner.os == 'Windows'
         run: >-
           cmake -S . -B build -G "Visual Studio 17 2022"
           -A ${{ matrix.architecture }}
           -DBUILD_TESTING=ON
+          -DKAIROSBOOT_RELEASE_SYMBOLS=ON
+          "-DKAIROSBOOT_LIBUSB_ROOT=$env:RUNNER_TEMP/libusb"
 
       - name: Build, test, and install Windows
         if: runner.os == 'Windows'
         run: |
-          cmake --build build --config RelWithDebInfo --parallel
-          ctest --test-dir build -C RelWithDebInfo --output-on-failure
-          cmake --install build --config RelWithDebInfo --prefix "${{ runner.temp }}/install"
+          cmake --build build --config Release --parallel
+          ctest --test-dir build -C Release --output-on-failure
+          cmake --install build --config Release --prefix "${{ runner.temp }}/install"
+
+      - name: Stage and validate Windows symbols
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $symbols = "build/symbols/Release"
+          Copy-Item "$env:RUNNER_TEMP/libusb/symbols/libusb-1.0.pdb" $symbols
+          $names = @(Get-ChildItem "$symbols/*.pdb" -File | ForEach-Object Name | Sort-Object)
+          $expected = @("kairosboot-cli.pdb", "kairosboot.pdb", "libusb-1.0.pdb")
+          $difference = @(Compare-Object -ReferenceObject $expected -DifferenceObject $names)
+          if ($difference.Count -ne 0) {
+            throw "Unexpected Release PDB set: $($names -join ', ')"
+          }
+          if (Test-Path "$env:RUNNER_TEMP/install/share/kairosboot/libusb/symbols/libusb-1.0.pdb") {
+            throw "libusb PDB leaked into the Release SDK install tree"
+          }
 
       - name: Configure macOS
         if: runner.os == 'macOS'
         run: >-
           cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=ON
+          -DKAIROSBOOT_RELEASE_SYMBOLS=ON
+          "-DKAIROSBOOT_LIBUSB_ROOT=${RUNNER_TEMP}/libusb"
 
       - name: Build, test, and install macOS
         if: runner.os == 'macOS'
@@ -225,6 +293,10 @@ jobs:
           mkdir -p build/symbols
           dsymutil "${RUNNER_TEMP}/install/bin/kairosboot" -o build/symbols/kairosboot.dSYM
           dsymutil "${RUNNER_TEMP}/install/lib/libkairosboot.${VERSION}.dylib" -o build/symbols/libkairosboot.dSYM
+          cp -R "${RUNNER_TEMP}/libusb/symbols/libusb-1.0.dSYM" build/symbols/
+          strip -S "${RUNNER_TEMP}/install/bin/kairosboot"
+          strip -S "${RUNNER_TEMP}/install/lib/libkairosboot.${VERSION}.dylib"
+          strip -S "${RUNNER_TEMP}/install/lib/libusb-1.0.0.dylib"
 
       - name: Package SDK, CLI, and symbols
         env:
@@ -236,7 +308,7 @@ jobs:
           --output-dir dist
           --version "$env:VERSION"
           --platform "$env:PLATFORM"
-          --symbols-root build
+          --symbols-root build/symbols/Release
         shell: pwsh
         if: runner.os == 'Windows'
 
@@ -286,7 +358,7 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.400
 
       - name: Download all native install trees
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -299,12 +371,29 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           mkdir -p bindings/dotnet/KairosBoot/runtimes/{win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64}/native
-          cp native/native-windows-x64/bin/kairosboot.dll bindings/dotnet/KairosBoot/runtimes/win-x64/native/
-          cp native/native-windows-arm64/bin/kairosboot.dll bindings/dotnet/KairosBoot/runtimes/win-arm64/native/
-          cp "native/native-linux-x64/lib/libkairosboot.so.${VERSION}" bindings/dotnet/KairosBoot/runtimes/linux-x64/native/libkairosboot.so
-          cp "native/native-linux-arm64/lib/libkairosboot.so.${VERSION}" bindings/dotnet/KairosBoot/runtimes/linux-arm64/native/libkairosboot.so
-          cp "native/native-macos-x64/lib/libkairosboot.${VERSION}.dylib" bindings/dotnet/KairosBoot/runtimes/osx-x64/native/libkairosboot.dylib
-          cp "native/native-macos-arm64/lib/libkairosboot.${VERSION}.dylib" bindings/dotnet/KairosBoot/runtimes/osx-arm64/native/libkairosboot.dylib
+          cp native/native-windows-x64/bin/*.dll bindings/dotnet/KairosBoot/runtimes/win-x64/native/
+          mv bindings/dotnet/KairosBoot/runtimes/win-x64/native/kairosboot.dll bindings/dotnet/KairosBoot/runtimes/win-x64/native/kairosboot_native.dll
+          cp native/native-windows-arm64/bin/*.dll bindings/dotnet/KairosBoot/runtimes/win-arm64/native/
+          mv bindings/dotnet/KairosBoot/runtimes/win-arm64/native/kairosboot.dll bindings/dotnet/KairosBoot/runtimes/win-arm64/native/kairosboot_native.dll
+          cp "native/native-linux-x64/lib/libkairosboot.so.${VERSION}" bindings/dotnet/KairosBoot/runtimes/linux-x64/native/libkairosboot_native.so
+          cp native/native-linux-x64/lib/libusb-1.0.so.0 bindings/dotnet/KairosBoot/runtimes/linux-x64/native/
+          cp "native/native-linux-arm64/lib/libkairosboot.so.${VERSION}" bindings/dotnet/KairosBoot/runtimes/linux-arm64/native/libkairosboot_native.so
+          cp native/native-linux-arm64/lib/libusb-1.0.so.0 bindings/dotnet/KairosBoot/runtimes/linux-arm64/native/
+          cp "native/native-macos-x64/lib/libkairosboot.${VERSION}.dylib" bindings/dotnet/KairosBoot/runtimes/osx-x64/native/libkairosboot_native.dylib
+          cp native/native-macos-x64/lib/libusb-1.0.0.dylib bindings/dotnet/KairosBoot/runtimes/osx-x64/native/
+          cp "native/native-macos-arm64/lib/libkairosboot.${VERSION}.dylib" bindings/dotnet/KairosBoot/runtimes/osx-arm64/native/libkairosboot_native.dylib
+          cp native/native-macos-arm64/lib/libusb-1.0.0.dylib bindings/dotnet/KairosBoot/runtimes/osx-arm64/native/
+          for mapping in \
+            win-x64:native-windows-x64 win-arm64:native-windows-arm64 \
+            linux-x64:native-linux-x64 linux-arm64:native-linux-arm64 \
+            osx-x64:native-macos-x64 osx-arm64:native-macos-arm64; do
+            rid=${mapping%%:*}
+            artifact=${mapping#*:}
+            destination="bindings/dotnet/KairosBoot/runtimes/${rid}/native/licenses/libusb"
+            mkdir -p "$destination"
+            cp "native/${artifact}/share/kairosboot/libusb/COPYING" "$destination/"
+            cp "native/${artifact}/share/kairosboot/libusb/kairosboot-libusb.json" "$destination/"
+          done
 
       - name: Pack managed SDK with native runtimes and symbols
         env:
@@ -316,10 +405,21 @@ jobs:
             /p:PackageOutputPath="$PWD/nuget" \
             /p:PackageVersion="$VERSION" \
             /p:IncludeNativeRuntimes=true \
+            /p:NativeRuntimeRoot="$PWD/bindings/dotnet/KairosBoot/runtimes" \
             /p:IncludeSymbols=true \
             /p:SymbolPackageFormat=snupkg \
             /m:1 \
             /nr:false
+
+      - name: Smoke the exact Release NuGet package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: >-
+          python3 bindings/dotnet/tests/run_package_smoke.py
+          --package "$PWD/nuget/KairosBoot.${VERSION}.nupkg"
+          --framework net10.0
+          --rid linux-x64
+          --expected-native-version "$VERSION"
 
       - name: Upload NuGet assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

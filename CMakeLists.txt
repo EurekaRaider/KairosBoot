@@ -26,6 +26,20 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(KAIROSBOOT_RELEASE_SYMBOLS
+       "Generate external debug symbols without disabling Release optimization"
+       OFF)
+if(KAIROSBOOT_RELEASE_SYMBOLS)
+  if(MSVC)
+    add_compile_options("$<$<CONFIG:Release>:/Zi>")
+    add_link_options("$<$<CONFIG:Release>:/DEBUG:FULL>"
+                     "$<$<CONFIG:Release>:/OPT:REF>"
+                     "$<$<CONFIG:Release>:/OPT:ICF>")
+  else()
+    add_compile_options("$<$<CONFIG:Release>:-g>")
+  endif()
+endif()
+
 kairosboot_configure_libusb()
 find_package(Threads REQUIRED)
 
@@ -63,7 +77,9 @@ add_library(
   src/transport/buffer_budget.cpp
   src/transport/libusb_runtime.cpp
   src/transport/tcp_fastboot.cpp
-  src/transport/transfer_ring.cpp)
+  src/transport/transfer_ring.cpp
+  src/transport/udp_fastboot.cpp
+  src/transport/usb_fastboot.cpp)
 set_target_properties(
   kairosboot_internal
   PROPERTIES POSITION_INDEPENDENT_CODE ON
@@ -92,6 +108,12 @@ set_target_properties(
              SOVERSION "${PROJECT_VERSION_MAJOR}"
              CXX_VISIBILITY_PRESET hidden
              VISIBILITY_INLINES_HIDDEN YES)
+if(MSVC)
+  set_target_properties(
+    kairosboot
+    PROPERTIES PDB_NAME kairosboot
+               PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols/$<CONFIG>")
+endif()
 if(APPLE)
   set_target_properties(kairosboot PROPERTIES INSTALL_RPATH "@loader_path")
 elseif(UNIX)
@@ -125,6 +147,12 @@ target_link_libraries(kairosboot_cxx INTERFACE KairosBoot::C)
 
 add_executable(kairosboot_cli cli/main.cpp)
 set_target_properties(kairosboot_cli PROPERTIES OUTPUT_NAME kairosboot)
+if(MSVC)
+  set_target_properties(
+    kairosboot_cli
+    PROPERTIES PDB_NAME kairosboot-cli
+               PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols/$<CONFIG>")
+endif()
 if(APPLE)
   set_target_properties(
     kairosboot_cli
@@ -208,6 +236,27 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_tcp_tests)
   add_test(NAME tcp_fastboot COMMAND kairosboot_tcp_tests)
   set_tests_properties(tcp_fastboot PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_udp_tests tests/udp/udp_fastboot_tests.cpp
+                                      tests/udp/scripted_datagram.cpp)
+  target_compile_features(kairosboot_udp_tests PRIVATE cxx_std_23)
+  target_include_directories(
+    kairosboot_udp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/udp"
+                                 "${CMAKE_CURRENT_SOURCE_DIR}/src/transport")
+  target_link_libraries(kairosboot_udp_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_udp_tests)
+  add_test(NAME udp_fastboot COMMAND kairosboot_udp_tests)
+  set_tests_properties(udp_fastboot PROPERTIES TIMEOUT 15)
+
+  add_executable(kairosboot_udp_loopback tests/udp/udp_loopback_smoke.cpp)
+  target_compile_features(kairosboot_udp_loopback PRIVATE cxx_std_23)
+  target_include_directories(
+    kairosboot_udp_loopback
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/transport")
+  target_link_libraries(kairosboot_udp_loopback PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_udp_loopback)
+  add_test(NAME udp_loopback COMMAND kairosboot_udp_loopback)
+  set_tests_properties(udp_loopback PROPERTIES TIMEOUT 15)
 
   if(NOT WIN32)
     add_executable(kairosboot_tcp_sigpipe_regression

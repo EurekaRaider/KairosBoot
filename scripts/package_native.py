@@ -61,19 +61,20 @@ def main() -> None:
         make_archive(cli_root, args.output_dir / f"{base}-cli{suffix}", f"{base}-cli", use_zip)
 
     if args.symbols_root is not None:
+        symbols_root = args.symbols_root.resolve()
         with tempfile.TemporaryDirectory(prefix="kairosboot-symbols-") as temporary:
             symbols = Path(temporary)
             matches = []
-            for path in sorted(args.symbols_root.rglob("*")):
+            for path in sorted(symbols_root.rglob("*")):
                 name = path.name.lower()
-                if "kairosboot" not in name:
-                    continue
                 if path.is_file() and (name.endswith(".pdb") or name.endswith(".debug")):
                     matches.append(path)
                 elif path.is_dir() and name.endswith(".dsym"):
                     matches.append(path)
-            for index, source in enumerate(matches):
-                destination = symbols / f"{index:02d}-{source.name}"
+            for source in matches:
+                destination = symbols / source.name
+                if destination.exists():
+                    raise SystemExit(f"duplicate symbol basename: {source.name}")
                 if source.is_dir():
                     shutil.copytree(source, destination, symlinks=True)
                 else:

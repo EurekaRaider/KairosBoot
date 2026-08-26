@@ -53,6 +53,30 @@ def check_workflows() -> None:
             if FULL_SHA.fullmatch(ref) is None:
                 fail(f"{workflow.relative_to(ROOT)} must pin actions by full SHA: {value}")
 
+    release_workflow = workflow_dir / "release.yml"
+    if release_workflow.is_file():
+        release = release_workflow.read_text(encoding="utf-8")
+        if "RelWithDebInfo" in release or "CMAKE_BUILD_TYPE=Debug" in release:
+            fail("release workflow must build optimized CMake Release artifacts")
+        release_requirements = {
+            "single-config CMake Release": "-DCMAKE_BUILD_TYPE=Release",
+            "multi-config Release build": "cmake --build build --config Release",
+            "multi-config Release test": "ctest --test-dir build -C Release",
+            "multi-config Release install": "cmake --install build --config Release",
+            "external Release symbols": "-DKAIROSBOOT_RELEASE_SYMBOLS=ON",
+            "managed Release package": "/p:Configuration=Release",
+            "Linux split debug symbols": "objcopy --only-keep-debug",
+            "libusb split debug symbols": "libusb-1.0.debug",
+            "macOS split debug symbols": "dsymutil",
+            "Windows dedicated symbol staging": "--symbols-root build/symbols/Release",
+            "macOS stripped libusb runtime": (
+                'strip -S "${RUNNER_TEMP}/install/lib/libusb-1.0.0.dylib"'
+            ),
+        }
+        for contract, marker in release_requirements.items():
+            if marker not in release:
+                fail(f"release workflow is missing {contract}: {marker}")
+
 
 def check_required_files() -> None:
     for name in ("LICENSE", "README.md", "SECURITY.md", "CONTRIBUTING.md"):
