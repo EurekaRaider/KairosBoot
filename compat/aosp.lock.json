@@ -33,7 +33,9 @@
     "sourceTag": "v1.0.30",
     "sourceCommit": "87a55632db62c9bdc58cd31d3ccfa673f1bb017f",
     "sourceArchive": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2",
-    "sourceArchiveSha256": "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
+    "sourceArchiveSha256": "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf",
+    "windowsBinaryArchive": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.7z",
+    "windowsBinaryArchiveSha256": "7fb1dfec805b97983763d7d0ae244320da12add1003d4249c96cc4d586398c79"
   },
   "remainingCompatibilityGates": [
     "generate the complete CLI and image inventory",

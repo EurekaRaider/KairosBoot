@@ -174,6 +174,10 @@ if(BUILD_TESTING)
     NAME release_tooling
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_release_tools.py")
+  add_test(
+    NAME libusb_dependency_tooling
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_prepare_libusb.py")
   if(WIN32)
     add_test(
       NAME abi_symbols

@@ -85,6 +85,12 @@ def check_compatibility_baseline() -> None:
         fail("libusb baseline must remain fixed at 1.0.30")
     if SHA256.fullmatch(libusb.get("sourceArchiveSha256", "")) is None:
         fail("libusb source archive hash is not SHA-256")
+    if SHA256.fullmatch(libusb.get("windowsBinaryArchiveSha256", "")) is None:
+        fail("libusb Windows archive hash is not SHA-256")
+    for field in ("sourceArchive", "windowsBinaryArchive"):
+        url = libusb.get(field, "")
+        if "v1.0.30" not in url or "1.0.30" not in url or "latest" in url:
+            fail(f"libusb {field} URL is not immutable")
 
 
 def main() -> None:
