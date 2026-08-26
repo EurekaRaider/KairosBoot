@@ -2,6 +2,9 @@
 
 #include "src/transport/transfer_ring.hpp"
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#endif
 #include <libusb.h>
 
 #include <atomic>
