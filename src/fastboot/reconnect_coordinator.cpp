@@ -15,6 +15,7 @@ struct AttemptState final {
     std::size_t discovery_attempts{};
     std::size_t open_attempts{};
     ReconnectObservation last_observation{ReconnectObservation::None};
+    std::optional<ReconnectCandidate> observed_candidate;
     std::optional<ReconnectDeviceIdentity> observed_identity;
     std::optional<ReconnectDiscoveryError> discovery_error;
     std::optional<ReconnectOpenError> open_error;
@@ -37,6 +38,18 @@ struct AttemptState final {
     return std::ranges::none_of(text, [](const unsigned char value) {
         return value < 0x20U || value == 0x7FU;
     });
+}
+
+[[nodiscard]] bool valid_optional_identity_text(
+    const std::optional<std::string>& text) noexcept {
+    return !text.has_value() || valid_identity_text(*text);
+}
+
+[[nodiscard]] bool valid_usb_fingerprint(
+    const ReconnectUsbFingerprint& fingerprint) noexcept {
+    return fingerprint.vendor_id != 0 && fingerprint.interface_class == 0xFFU &&
+        fingerprint.interface_subclass == 0x42U &&
+        fingerprint.interface_protocol == 0x03U;
 }
 
 [[nodiscard]] bool valid_certainty(
@@ -75,6 +88,7 @@ struct AttemptState final {
     error.discovery_attempts = state.discovery_attempts;
     error.open_attempts = state.open_attempts;
     error.last_observation = state.last_observation;
+    error.observed_candidate = state.observed_candidate;
     error.observed_identity = state.observed_identity;
     error.discovery_error = state.discovery_error;
     error.open_error = state.open_error;
@@ -111,12 +125,9 @@ struct AttemptState final {
     return std::min(maximum, current + current);
 }
 
-[[nodiscard]] bool same_required_identity(
-    const ReconnectDeviceIdentity& observed,
-    const ReconnectTarget& target) noexcept {
-    return observed.physical_port == target.physical_port &&
-        observed.serial == target.serial && observed.product == target.product &&
-        observed.mode == target.required_mode;
+void clear_dependency_failures(AttemptState& state) noexcept {
+    state.discovery_error.reset();
+    state.open_error.reset();
 }
 
 [[nodiscard]] std::string deadline_message(
@@ -124,8 +135,12 @@ struct AttemptState final {
     switch (observation) {
         case ReconnectObservation::None:
             return "Fastboot reconnect deadline expired before a usable discovery result";
+        case ReconnectObservation::DiscoveryUnavailable:
+            return "Fastboot reconnect deadline expired while passive USB discovery was unavailable";
         case ReconnectObservation::DeviceAbsent:
             return "Fastboot reconnect deadline expired while the physical port was absent";
+        case ReconnectObservation::CandidatePresent:
+            return "Fastboot reconnect deadline expired while opening the passive USB candidate";
         case ReconnectObservation::PreviousModePresent:
             return "Fastboot reconnect deadline expired before the device changed mode";
         case ReconnectObservation::RequiredModePresent:
@@ -204,12 +219,13 @@ ReconnectCoordinator::reconnect(
             target,
             state));
     }
-    if (!valid_identity_text(target.serial) ||
-        !valid_identity_text(target.product)) {
+    if (!valid_optional_identity_text(target.serial) ||
+        !valid_identity_text(target.product) ||
+        !valid_usb_fingerprint(target.usb_fingerprint)) {
         return std::unexpected(make_error(
             ReconnectErrorCode::InvalidArgument,
             ReconnectStage::Validation,
-            "Fastboot reconnect requires non-empty serial and product identity",
+            "Fastboot reconnect requires a valid optional serial, USB fingerprint, and product identity",
             target,
             state));
     }
@@ -225,7 +241,9 @@ ReconnectCoordinator::reconnect(
     }
     if (options.initial_backoff <= std::chrono::milliseconds::zero() ||
         options.maximum_backoff < options.initial_backoff ||
-        options.maximum_discovered_devices == 0) {
+        options.maximum_discovered_devices == 0 ||
+        options.maximum_discovery_attempts == 0 ||
+        options.maximum_open_attempts == 0) {
         return std::unexpected(make_error(
             ReconnectErrorCode::InvalidArgument,
             ReconnectStage::Validation,
@@ -284,20 +302,67 @@ ReconnectCoordinator::reconnect(
                 certainty));
         }
 
+        if (state.discovery_attempts >= options.maximum_discovery_attempts) {
+            clear_dependency_failures(state);
+            return std::unexpected(make_error(
+                ReconnectErrorCode::AttemptLimitExceeded,
+                ReconnectStage::Discovery,
+                "Fastboot reconnect reached its discovery attempt limit",
+                target,
+                state));
+        }
         ++state.discovery_attempts;
-        auto discovered = discovery_.discover(cancellation);
+        clear_dependency_failures(state);
+        state.last_observation = ReconnectObservation::None;
+        state.observed_candidate.reset();
+        state.observed_identity.reset();
+        auto discovered = discovery_.discover(deadline, cancellation);
+        if (!discovered.has_value()) {
+            state.discovery_error = discovered.error();
+            state.last_observation = ReconnectObservation::DiscoveryUnavailable;
+            state.observed_candidate.reset();
+            state.observed_identity.reset();
+        }
+
+        const auto after_discovery = waiter_.now();
+        if (after_discovery < last_time) {
+            return std::unexpected(make_error(
+                ReconnectErrorCode::ClockContractViolation,
+                ReconnectStage::Discovery,
+                "Fastboot reconnect clock moved backwards during discovery",
+                target,
+                state,
+                state.discovery_error.has_value()
+                    ? state.discovery_error->native_code
+                    : 0));
+        }
+        last_time = after_discovery;
         if (cancellation.stop_requested()) {
             return std::unexpected(make_error(
                 ReconnectErrorCode::Cancelled,
                 ReconnectStage::Discovery,
                 "Fastboot reconnect was cancelled during discovery",
                 target,
-                state));
+                state,
+                state.discovery_error.has_value()
+                    ? state.discovery_error->native_code
+                    : 0));
+        }
+        if (after_discovery >= deadline) {
+            return std::unexpected(make_error(
+                ReconnectErrorCode::DeadlineExceeded,
+                ReconnectStage::Discovery,
+                "Fastboot reconnect deadline expired during discovery",
+                target,
+                state,
+                state.discovery_error.has_value()
+                    ? state.discovery_error->native_code
+                    : 0));
         }
 
         bool retry = false;
+        auto retry_certainty = protocol::TransferCertainty::NotTransferred;
         if (!discovered.has_value()) {
-            state.discovery_error = discovered.error();
             if (!discovered.error().retryable) {
                 return std::unexpected(make_error(
                     ReconnectErrorCode::DiscoveryFailed,
@@ -310,7 +375,6 @@ ReconnectCoordinator::reconnect(
             }
             retry = true;
         } else {
-            state.discovery_error.reset();
             if (discovered->size() > options.maximum_discovered_devices) {
                 return std::unexpected(make_error(
                     ReconnectErrorCode::DiscoveryContractViolation,
@@ -320,13 +384,13 @@ ReconnectCoordinator::reconnect(
                     state));
             }
 
-            const ReconnectDeviceIdentity* candidate = nullptr;
+            const ReconnectCandidate* candidate = nullptr;
             for (const auto& device : *discovered) {
                 if (device.physical_port != target.physical_port) {
                     continue;
                 }
                 if (candidate != nullptr) {
-                    state.observed_identity = device;
+                    state.observed_candidate = device;
                     return std::unexpected(make_error(
                         ReconnectErrorCode::AmbiguousPhysicalPort,
                         ReconnectStage::Selection,
@@ -339,22 +403,33 @@ ReconnectCoordinator::reconnect(
 
             if (candidate == nullptr) {
                 state.last_observation = ReconnectObservation::DeviceAbsent;
+                state.observed_candidate.reset();
                 state.observed_identity.reset();
                 retry = true;
             } else {
-                state.observed_identity = *candidate;
+                state.last_observation = ReconnectObservation::CandidatePresent;
+                state.observed_candidate = *candidate;
+                state.observed_identity.reset();
                 if (!valid_physical_port(candidate->physical_port) ||
-                    !valid_identity_text(candidate->serial) ||
-                    !valid_identity_text(candidate->product) ||
-                    !valid_mode(candidate->mode)) {
+                    !valid_optional_identity_text(candidate->serial) ||
+                    !valid_usb_fingerprint(candidate->usb_fingerprint)) {
                     return std::unexpected(make_error(
                         ReconnectErrorCode::DiscoveryContractViolation,
                         ReconnectStage::Discovery,
-                        "Fastboot reconnect discovery returned an invalid identity",
+                        "Fastboot reconnect discovery returned an invalid passive USB candidate",
                         target,
                         state));
                 }
-                if (candidate->serial != target.serial) {
+                if (candidate->usb_fingerprint != target.usb_fingerprint) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::UsbFingerprintMismatch,
+                        ReconnectStage::Selection,
+                        "Fastboot reconnect physical port has a different USB fingerprint",
+                        target,
+                        state));
+                }
+                if (target.serial.has_value() && candidate->serial.has_value() &&
+                    candidate->serial != target.serial) {
                     return std::unexpected(make_error(
                         ReconnectErrorCode::PortOccupiedByDifferentDevice,
                         ReconnectStage::Selection,
@@ -362,95 +437,247 @@ ReconnectCoordinator::reconnect(
                         target,
                         state));
                 }
-                if (candidate->product != target.product) {
+
+                if (state.open_attempts >= options.maximum_open_attempts) {
+                    clear_dependency_failures(state);
                     return std::unexpected(make_error(
-                        ReconnectErrorCode::ProductMismatch,
-                        ReconnectStage::Selection,
-                        "Fastboot reconnect product does not match the original device",
+                        ReconnectErrorCode::AttemptLimitExceeded,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect reached its open attempt limit",
                         target,
                         state));
                 }
-                if (candidate->mode == target.previous_mode &&
-                    target.previous_mode != target.required_mode) {
-                    state.last_observation =
-                        ReconnectObservation::PreviousModePresent;
-                    retry = true;
-                } else if (candidate->mode != target.required_mode) {
+
+                const auto before_open = waiter_.now();
+                if (before_open < last_time) {
                     return std::unexpected(make_error(
-                        ReconnectErrorCode::DiscoveryContractViolation,
-                        ReconnectStage::Selection,
-                        "Fastboot reconnect discovery returned an unexpected mode",
+                        ReconnectErrorCode::ClockContractViolation,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect clock moved backwards before open",
                         target,
                         state));
+                }
+                last_time = before_open;
+                if (cancellation.stop_requested()) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::Cancelled,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect was cancelled before open",
+                        target,
+                        state));
+                }
+                if (before_open >= deadline) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::DeadlineExceeded,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect deadline expired before open",
+                        target,
+                        state));
+                }
+
+                ++state.open_attempts;
+                auto opened = opener_.open(*candidate, deadline, cancellation);
+                const auto certainty = opened.has_value()
+                    ? opened->outbound_certainty
+                    : opened.error().outbound_certainty;
+                const auto native_code = opened.has_value()
+                    ? 0
+                    : opened.error().native_code;
+                state.discovery_error.reset();
+                if (!opened.has_value()) {
+                    state.open_error = opened.error();
                 } else {
-                    state.last_observation =
-                        ReconnectObservation::RequiredModePresent;
-                    ++state.open_attempts;
-                    auto opened = opener_.open(*candidate, cancellation);
-                    if (cancellation.stop_requested()) {
+                    state.open_error.reset();
+                }
+                if (!valid_certainty(certainty)) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::OpenContractViolation,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect opener returned an invalid aggregate transfer certainty",
+                        target,
+                        state,
+                        native_code));
+                }
+                retry_certainty = certainty;
+
+                const auto after_open = waiter_.now();
+                if (after_open < last_time) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::ClockContractViolation,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect clock moved backwards during open",
+                        target,
+                        state,
+                        native_code,
+                        certainty));
+                }
+                last_time = after_open;
+                if (cancellation.stop_requested()) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::Cancelled,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect was cancelled while opening the replacement session",
+                        target,
+                        state,
+                        native_code,
+                        certainty));
+                }
+                if (after_open >= deadline) {
+                    return std::unexpected(make_error(
+                        ReconnectErrorCode::DeadlineExceeded,
+                        ReconnectStage::Opening,
+                        "Fastboot reconnect deadline expired during open",
+                        target,
+                        state,
+                        native_code,
+                        certainty));
+                }
+
+                if (!opened.has_value()) {
+                    if (certainty !=
+                        protocol::TransferCertainty::NotTransferred) {
                         return std::unexpected(make_error(
-                            ReconnectErrorCode::Cancelled,
+                            ReconnectErrorCode::OpenOutcomeUncertain,
                             ReconnectStage::Opening,
-                            "Fastboot reconnect was cancelled while opening the replacement session",
+                            "Fastboot reconnect opener emitted protocol bytes; the result will not be retried or resumed",
                             target,
-                            state));
+                            state,
+                            opened.error().native_code,
+                            certainty));
                     }
-                    if (!opened.has_value()) {
-                        state.open_error = opened.error();
-                        const auto certainty = opened.error().outbound_certainty;
-                        if (!valid_certainty(certainty)) {
+                    if (!opened.error().retryable) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenFailed,
+                            ReconnectStage::Opening,
+                            "Fastboot reconnect could not open the replacement session: " +
+                                opened.error().message,
+                            target,
+                            state,
+                            opened.error().native_code));
+                    }
+                    retry = true;
+                } else {
+                    if (certainty ==
+                        protocol::TransferCertainty::PartialOrUnknown) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenOutcomeUncertain,
+                            ReconnectStage::Opening,
+                            "Fastboot reconnect opener reported a successful session with an uncertain aggregate transfer outcome",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    }
+                    if (opened->session == nullptr) {
+                        state.observed_identity = opened->verified_identity;
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenContractViolation,
+                            ReconnectStage::Opening,
+                            "Fastboot reconnect opener returned a null session",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    }
+                    const auto& verified = opened->verified_identity;
+                    state.observed_identity = verified;
+                    if (!valid_physical_port(verified.physical_port) ||
+                        !valid_optional_identity_text(verified.serial) ||
+                        !valid_usb_fingerprint(verified.usb_fingerprint) ||
+                        !valid_identity_text(verified.product) ||
+                        !valid_mode(verified.mode)) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenContractViolation,
+                            ReconnectStage::Verification,
+                            "Fastboot reconnect opener returned an invalid verified identity",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    }
+                    if (verified.physical_port != target.physical_port ||
+                        verified.usb_fingerprint != target.usb_fingerprint ||
+                        (target.serial.has_value() &&
+                         verified.serial != target.serial) ||
+                        (candidate->serial.has_value() &&
+                         verified.serial != candidate->serial)) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::DeviceChangedDuringOpen,
+                            ReconnectStage::Verification,
+                            "Fastboot device identity changed between discovery and exclusive open",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    }
+                    if (verified.product != target.product) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::ProductMismatch,
+                            ReconnectStage::Verification,
+                            "Fastboot reconnect product does not match the original device",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    }
+                    if (verified.mode == target.previous_mode &&
+                        target.previous_mode != target.required_mode) {
+                        state.last_observation =
+                            ReconnectObservation::PreviousModePresent;
+                        retry = true;
+                    } else if (verified.mode != target.required_mode) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenContractViolation,
+                            ReconnectStage::Verification,
+                            "Fastboot reconnect opener returned an unexpected verified mode",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    } else if (opened->session->state() !=
+                               protocol::SessionState::Ready) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenContractViolation,
+                            ReconnectStage::Verification,
+                            "Fastboot reconnect opener returned a session that is not ready",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    } else {
+                        state.last_observation =
+                            ReconnectObservation::RequiredModePresent;
+                        const auto before_publish = waiter_.now();
+                        if (before_publish < last_time) {
                             return std::unexpected(make_error(
-                                ReconnectErrorCode::OpenContractViolation,
-                                ReconnectStage::Opening,
-                                "Fastboot reconnect opener returned an invalid transfer certainty",
+                                ReconnectErrorCode::ClockContractViolation,
+                                ReconnectStage::Verification,
+                                "Fastboot reconnect clock moved backwards before publishing the session",
                                 target,
                                 state,
-                                opened.error().native_code));
-                        }
-                        if (certainty !=
-                            protocol::TransferCertainty::NotTransferred) {
-                            return std::unexpected(make_error(
-                                ReconnectErrorCode::OpenOutcomeUncertain,
-                                ReconnectStage::Opening,
-                                "Fastboot reconnect opener emitted protocol bytes; the result will not be retried or resumed",
-                                target,
-                                state,
-                                opened.error().native_code,
+                                0,
                                 certainty));
                         }
-                        if (!opened.error().retryable) {
+                        last_time = before_publish;
+                        if (cancellation.stop_requested()) {
                             return std::unexpected(make_error(
-                                ReconnectErrorCode::OpenFailed,
-                                ReconnectStage::Opening,
-                                "Fastboot reconnect could not open the replacement session: " +
-                                    opened.error().message,
+                                ReconnectErrorCode::Cancelled,
+                                ReconnectStage::Verification,
+                                "Fastboot reconnect was cancelled before publishing the session",
                                 target,
                                 state,
-                                opened.error().native_code));
+                                0,
+                                certainty));
                         }
-                        retry = true;
-                    } else {
-                        state.open_error.reset();
-                        if (opened->session == nullptr) {
-                            state.observed_identity =
-                                opened->verified_identity;
+                        if (before_publish >= deadline) {
                             return std::unexpected(make_error(
-                                ReconnectErrorCode::OpenContractViolation,
-                                ReconnectStage::Opening,
-                                "Fastboot reconnect opener returned a null session",
-                                target,
-                                state));
-                        }
-                        if (!same_required_identity(
-                                opened->verified_identity, target)) {
-                            state.observed_identity =
-                                opened->verified_identity;
-                            return std::unexpected(make_error(
-                                ReconnectErrorCode::DeviceChangedDuringOpen,
+                                ReconnectErrorCode::DeadlineExceeded,
                                 ReconnectStage::Verification,
-                                "Fastboot device identity changed between discovery and exclusive open",
+                                "Fastboot reconnect deadline expired before publishing the session",
                                 target,
-                                state));
+                                state,
+                                0,
+                                certainty));
                         }
                         return ReconnectedSession{
                             .identity = std::move(opened->verified_identity),
@@ -478,7 +705,9 @@ ReconnectCoordinator::reconnect(
                 ReconnectStage::Backoff,
                 "Fastboot reconnect was cancelled before backoff",
                 target,
-                state));
+                state,
+                0,
+                retry_certainty));
         }
         const auto before_wait = waiter_.now();
         if (before_wait < last_time) {
@@ -487,12 +716,21 @@ ReconnectCoordinator::reconnect(
                 ReconnectStage::Backoff,
                 "Fastboot reconnect clock moved backwards before backoff",
                 target,
-                state));
+                state,
+                0,
+                retry_certainty));
         }
         last_time = before_wait;
         const auto remaining = remaining_time(before_wait, deadline);
         if (remaining <= std::chrono::milliseconds::zero()) {
-            continue;
+            return std::unexpected(make_error(
+                ReconnectErrorCode::DeadlineExceeded,
+                ReconnectStage::Backoff,
+                deadline_message(state.last_observation),
+                target,
+                state,
+                0,
+                retry_certainty));
         }
         const auto delay = std::min(backoff, remaining);
         const auto wait_result = waiter_.wait_for(delay, cancellation);
@@ -506,7 +744,8 @@ ReconnectCoordinator::reconnect(
                     : wait_result.message,
                 target,
                 state,
-                wait_result.native_code));
+                wait_result.native_code,
+                retry_certainty));
         }
         if (wait_result.status == ReconnectWaitStatus::Failed) {
             return std::unexpected(make_error(
@@ -517,7 +756,8 @@ ReconnectCoordinator::reconnect(
                     : wait_result.message,
                 target,
                 state,
-                wait_result.native_code));
+                wait_result.native_code,
+                retry_certainty));
         }
         if (wait_result.status != ReconnectWaitStatus::Elapsed) {
             return std::unexpected(make_error(
@@ -526,7 +766,8 @@ ReconnectCoordinator::reconnect(
                 "Fastboot reconnect waiter returned an invalid status",
                 target,
                 state,
-                wait_result.native_code));
+                wait_result.native_code,
+                retry_certainty));
         }
         const auto after_wait = waiter_.now();
         if (after_wait <= before_wait) {
@@ -535,9 +776,21 @@ ReconnectCoordinator::reconnect(
                 ReconnectStage::Backoff,
                 "Fastboot reconnect waiter elapsed without advancing its clock",
                 target,
-                state));
+                state,
+                0,
+                retry_certainty));
         }
         last_time = after_wait;
+        if (after_wait >= deadline) {
+            return std::unexpected(make_error(
+                ReconnectErrorCode::DeadlineExceeded,
+                ReconnectStage::Backoff,
+                deadline_message(state.last_observation),
+                target,
+                state,
+                0,
+                retry_certainty));
+        }
         backoff = next_backoff(backoff, options.maximum_backoff);
     }
 }
