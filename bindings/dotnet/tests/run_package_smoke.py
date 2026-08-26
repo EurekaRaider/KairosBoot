@@ -53,6 +53,19 @@ def package_version(package: Path) -> str:
     return version
 
 
+def assert_package_licenses(package: Path) -> None:
+    with zipfile.ZipFile(package) as archive:
+        names = set(archive.namelist())
+    required = {
+        "licenses/boost/LICENSE_1_0.txt",
+        "licenses/libusb/COPYING",
+        "licenses/microsoft-vc-runtime/NOTICE.txt",
+    }
+    missing = sorted(required - names)
+    if missing:
+        raise SystemExit(f"package is missing dependency license files: {', '.join(missing)}")
+
+
 def assert_runtime_output(output: Path, rid: str) -> None:
     missing = [name for name in NATIVE_FILES[rid] if not (output / name).is_file()]
     if missing:
@@ -60,7 +73,8 @@ def assert_runtime_output(output: Path, rid: str) -> None:
     polluted = [
         path
         for path in output.rglob("*")
-        if path.is_file() and path.name in {"COPYING", "kairosboot-libusb.json"}
+        if path.is_file()
+        and path.name in {"COPYING", "LICENSE_1_0.txt", "kairosboot-libusb.json"}
     ]
     if polluted:
         raise SystemExit(f"license metadata leaked into application output: {polluted}")
@@ -223,6 +237,7 @@ def main() -> None:
     package = args.package.resolve()
     if not package.is_file() or package.suffix != ".nupkg":
         raise SystemExit(f"NuGet package does not exist: {package}")
+    assert_package_licenses(package)
     if args.framework == "net48" and args.rid != "win-x64":
         raise SystemExit("net48 package smoke supports only win-x64")
     if args.framework == "net48" and os.name != "nt":

@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--version", required=True)
     parser.add_argument("--source-archive", type=Path, required=True)
     parser.add_argument("--libusb-source", type=Path, required=True)
+    parser.add_argument("--boost-source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -61,6 +62,18 @@ def main() -> None:
                 "copyrightText": "NOASSERTION"
             },
             {
+                "name": "Boost",
+                "SPDXID": "SPDXRef-Package-Boost",
+                "versionInfo": "1.92.0",
+                "downloadLocation": "https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz",
+                "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": sha256(args.boost_source)}],
+                "licenseConcluded": "BSL-1.0",
+                "licenseDeclared": "BSL-1.0",
+                "copyrightText": "NOASSERTION",
+                "comment": "Boost.Asio and its transitive Boost header dependencies are fetched at configure time."
+            },
+            {
                 "name": "Microsoft Visual C++ Runtime",
                 "SPDXID": "SPDXRef-Package-MSVC-Runtime",
                 "downloadLocation": "NOASSERTION",
@@ -75,6 +88,7 @@ def main() -> None:
         "relationships": [
             {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-KairosBoot"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-libusb"},
+            {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-Boost"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-MSVC-Runtime", "comment": "Windows distributions only."}
         ]
     }

@@ -180,12 +180,14 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("duplicate symbol basename: kairosboot.pdb", completed.stderr)
 
-    def test_sbom_hashes_both_source_inputs(self) -> None:
+    def test_sbom_hashes_all_source_inputs(self) -> None:
         source = self.root / "source.tar.gz"
         libusb = self.root / "libusb.tar.bz2"
+        boost = self.root / "boost.tar.xz"
         output = self.root / "KairosBoot.spdx.json"
         source.write_bytes(b"source")
         libusb.write_bytes(b"libusb")
+        boost.write_bytes(b"boost")
         run_script(
             "generate_sbom.py",
             "--version",
@@ -194,6 +196,8 @@ class ReleaseToolTests(unittest.TestCase):
             source,
             "--libusb-source",
             libusb,
+            "--boost-source",
+            boost,
             "--output",
             output,
         )
@@ -208,6 +212,11 @@ class ReleaseToolTests(unittest.TestCase):
             packages["libusb"]["checksums"][0]["checksumValue"],
             hashlib.sha256(b"libusb").hexdigest(),
         )
+        self.assertEqual(
+            packages["Boost"]["checksums"][0]["checksumValue"],
+            hashlib.sha256(b"boost").hexdigest(),
+        )
+        self.assertEqual(packages["Boost"]["licenseDeclared"], "BSL-1.0")
         self.assertEqual(
             packages["Microsoft Visual C++ Runtime"]["supplier"],
             "Organization: Microsoft Corporation",

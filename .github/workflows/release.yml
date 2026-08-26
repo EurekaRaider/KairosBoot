@@ -398,6 +398,9 @@ jobs:
             mkdir -p "$destination"
             cp "native/${artifact}/share/kairosboot/libusb/COPYING" "$destination/"
             cp "native/${artifact}/share/kairosboot/libusb/kairosboot-libusb.json" "$destination/"
+            boost_destination="bindings/dotnet/KairosBoot/runtimes/${rid}/native/licenses/boost"
+            mkdir -p "$boost_destination"
+            cp "native/${artifact}/share/kairosboot/boost/LICENSE_1_0.txt" "$boost_destination/"
           done
 
       - name: Pack managed SDK with native runtimes and symbols
@@ -463,7 +466,7 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Assemble source, notices, libusb source, SBOM, and provenance
+      - name: Assemble source, notices, dependency sources, SBOM, and provenance
         env:
           VERSION: ${{ needs.verify.outputs.version }}
           COMMIT: ${{ needs.verify.outputs.commit }}
@@ -477,6 +480,15 @@ jobs:
           printf '%s  %s\n' \
             'fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf' \
             'release-assets/libusb-1.0.30.tar.bz2' | sha256sum --check
+          curl --fail --silent --show-error --location \
+            --output release-assets/boost-1.92.0-cmake.tar.xz \
+            https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz
+          printf '%s  %s\n' \
+            '9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d' \
+            'release-assets/boost-1.92.0-cmake.tar.xz' | sha256sum --check
+          tar -xOf release-assets/boost-1.92.0-cmake.tar.xz \
+            boost-1.92.0/LICENSE_1_0.txt \
+            >release-assets/Boost-1.92.0-LICENSE_1_0.txt
           cp LICENSE "release-assets/KairosBoot-v${VERSION}-LICENSE.txt"
           cp THIRD_PARTY_NOTICES.md "release-assets/KairosBoot-v${VERSION}-THIRD_PARTY_NOTICES.md"
           cp UNSIGNED.txt "release-assets/KairosBoot-v${VERSION}-UNSIGNED.txt"
@@ -485,6 +497,7 @@ jobs:
             --version "$VERSION" \
             --source-archive "release-assets/KairosBoot-v${VERSION}-source.tar.gz" \
             --libusb-source release-assets/libusb-1.0.30.tar.bz2 \
+            --boost-source release-assets/boost-1.92.0-cmake.tar.xz \
             --output release-assets/KairosBoot.spdx.json
           python3 scripts/generate_provenance.py \
             --assets release-assets \

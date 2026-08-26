@@ -52,6 +52,7 @@ runtimes/osx-arm64/native/libkairosboot_native.dylib
 runtimes/osx-arm64/native/libusb-1.0.0.dylib
 runtimes/<rid>/native/licenses/libusb/COPYING
 runtimes/<rid>/native/licenses/libusb/kairosboot-libusb.json
+runtimes/<rid>/native/licenses/boost/LICENSE_1_0.txt
 ```
 
 `kairosboot_native` is an internal NuGet/P/Invoke filename. It prevents the
@@ -65,9 +66,9 @@ that app-local CRT directory may be staged and are included automatically.
 
 Then pack with both release properties. The pack fails before producing a
 package if any native dependency or redistribution record is missing. Runtime
-DLLs remain under `runtimes/<rid>/native`; the pack moves the libusb license and
-per-RID manifests to package-root `licenses/libusb/` so they are not flattened
-into a consuming application's output directory.
+DLLs remain under `runtimes/<rid>/native`; the pack moves the libusb license,
+per-RID manifests, and Boost license to package-root `licenses/` so they are not
+flattened into a consuming application's output directory.
 
 ```sh
 dotnet pack bindings/dotnet/KairosBoot/KairosBoot.csproj -c Release \

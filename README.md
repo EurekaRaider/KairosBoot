@@ -198,6 +198,7 @@ KairosBoot requires:
 - Python 3 and `make` for the locked dependency preparation step
 - A C11 compiler and a compiler with C++23 support
 - Ninja or another supported CMake generator
+- Network access on the first configure so CMake `FetchContent` can download the locked Boost archive
 
 Release builds use exactly libusb 1.0.30 as a dynamically linked dependency.
 Prepare it from the repository's locked, hash-verified source archives before
@@ -217,6 +218,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+The root `CMakeLists.txt` fetches Boost 1.92.0, the latest stable release locked
+for this source revision, from its official CMake archive and verifies the
+committed SHA-256 digest. Boost.Asio is an internal transport dependency; Boost
+types are not exposed by the installed C, C++, or C# APIs.
+
 For a multi-configuration generator such as Visual Studio, build and test the
 explicit Release configuration:
 
@@ -231,10 +237,10 @@ Install the native SDK and CLI with:
 cmake --install build --prefix "$PWD/install"
 ```
 
-The install contains the matching libusb runtime, LGPL license, and dependency
-manifest. Release automation builds with the CMake `Release` configuration;
-when `KAIROSBOOT_RELEASE_SYMBOLS=ON`, debug symbols are published separately
-without disabling optimization.
+The install contains the matching libusb runtime, LGPL license and dependency
+manifest, plus the Boost Software License. Release automation builds with the
+CMake `Release` configuration; when `KAIROSBOOT_RELEASE_SYMBOLS=ON`, debug
+symbols are published separately without disabling optimization.
 
 ## Testing
 
@@ -293,6 +299,6 @@ security issues through [SECURITY.md](SECURITY.md).
 ## License
 
 KairosBoot original source code is licensed under the [MIT License](LICENSE).
-libusb is dynamically linked and retains its LGPL license. Other third-party
-components retain their own terms; see
+libusb is dynamically linked and retains its LGPL license. Boost retains the
+Boost Software License 1.0. Other third-party components retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
