@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,6 +34,8 @@ using kairosboot::image::SparseErrorKind;
 using kairosboot::image::SparseFlashPlanError;
 using kairosboot::image::SparseFlashPlanErrorKind;
 using kairosboot::protocol::TransferCertainty;
+using kairosboot::protocol::Response;
+using kairosboot::protocol::ResponseKind;
 using kairosboot::transport::LibusbRuntimeError;
 using kairosboot::transport::LibusbRuntimeErrorKind;
 
@@ -226,8 +229,8 @@ void primitive_kinds_have_stable_public_status() {
         Case{PrimitiveErrorCode::Timeout, KB_E_TIMEOUT},
         Case{PrimitiveErrorCode::Disconnected, KB_E_NO_DEVICE},
         Case{PrimitiveErrorCode::TransportIo, KB_E_IO},
-        Case{PrimitiveErrorCode::ProtocolViolation, KB_E_IO},
-        Case{PrimitiveErrorCode::DeviceFail, KB_E_IO},
+        Case{PrimitiveErrorCode::ProtocolViolation, KB_E_PROTOCOL},
+        Case{PrimitiveErrorCode::DeviceFail, KB_E_DEVICE_FAIL},
     };
 
     for (const auto& test : cases) {
@@ -278,7 +281,11 @@ void multipart_flash_certainty_includes_downloaded_current_part() {
                                  const std::uint64_t current,
                                  const std::uint64_t total) {
         OperationErrorPayload payload{
-            KB_E_IO, "failed", 0, initial, "SERIAL-M"};
+            .status = KB_E_IO,
+            .message = "failed",
+            .native_code = 0,
+            .transfer_state = initial,
+            .device_identifier = "SERIAL-M"};
         accumulate_flash_transfer_state(
             payload, failed_operation, completed, current, total);
         return payload.transfer_state;
@@ -314,12 +321,42 @@ void device_fail_message_retains_target_payload() {
 
     check_common(
         result,
-        KB_E_IO,
+        KB_E_DEVICE_FAIL,
         0,
         KB_TRANSFER_FULLY_TRANSFERRED,
         "设备-三");
-    CHECK(result.message ==
-          "Fastboot device rejected the command: partition is locked");
+    CHECK(result.message == "Fastboot device rejected the command");
+    CHECK(result.device_message == "partition is locked");
+}
+
+void primitive_error_retains_binary_safe_diagnostics() {
+    PrimitiveError error{};
+    error.code = PrimitiveErrorCode::ProtocolViolation;
+    error.message = "malformed response";
+    error.device_message = std::string("bad\0payload", 11);
+    error.informational = {
+        Response{ResponseKind::Info, std::string("one\0two", 7), std::nullopt},
+        Response{ResponseKind::Text, "human text", std::nullopt},
+    };
+    error.outbound_certainty = TransferCertainty::FullyTransferred;
+    error.inbound_expected = 16;
+    error.inbound_transferred = 7;
+    error.inbound_certainty = TransferCertainty::PartialOrUnknown;
+    error.session_poisoned = true;
+
+    const auto result = normalize_public_error(error, "tcp:host:5554");
+    CHECK(result.status == KB_E_PROTOCOL);
+    CHECK(result.device_message == std::string("bad\0payload", 11));
+    CHECK(result.command_messages.size() == 2);
+    CHECK(result.command_messages[0].kind ==
+          kairosboot::api::CommandMessageKind::Info);
+    CHECK(result.command_messages[0].text == std::string("one\0two", 7));
+    CHECK(result.command_messages[1].kind ==
+          kairosboot::api::CommandMessageKind::Text);
+    CHECK(result.inbound_expected == 16);
+    CHECK(result.inbound_transferred == 7);
+    CHECK(result.inbound_transfer_state == KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+    CHECK(result.session_poisoned);
 }
 
 }  // namespace
@@ -347,6 +384,8 @@ int main() {
          multipart_flash_certainty_includes_downloaded_current_part},
         {"primitive device FAIL message",
          device_fail_message_retains_target_payload},
+        {"primitive binary diagnostics",
+         primitive_error_retains_binary_safe_diagnostics},
     };
 
     std::size_t failures = 0;

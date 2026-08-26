@@ -94,11 +94,11 @@ void cancellation_is_idempotent_and_publishes_after_drain() {
         }
         release_task_future.wait();
         return OperationOutcome::cancelled({
-            KB_E_CANCELLED,
-            "cancelled after transport drain",
-            17,
-            KB_TRANSFER_PARTIAL_OR_UNKNOWN,
-            {},
+            .status = KB_E_CANCELLED,
+            .message = "cancelled after transport drain",
+            .native_code = 17,
+            .transfer_state = KB_TRANSFER_PARTIAL_OR_UNKNOWN,
+            .device_identifier = {},
         });
     });
     operation_address = &operation;
@@ -171,11 +171,11 @@ void cancel_before_start_is_terminal_and_skips_task() {
 
 void failure_payload_is_synchronized_and_immutable() {
     const OperationErrorPayload expected{
-        KB_E_IO,
-        "short USB transfer",
-        -7,
-        KB_TRANSFER_PARTIAL_OR_UNKNOWN,
-        "usb:2-3",
+        .status = KB_E_IO,
+        .message = "short USB transfer",
+        .native_code = -7,
+        .transfer_state = KB_TRANSFER_PARTIAL_OR_UNKNOWN,
+        .device_identifier = "usb:2-3",
     };
     OperationState operation([&](OperationState::TaskContext&) {
         return OperationOutcome::failed(expected);

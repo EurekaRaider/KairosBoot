@@ -26,16 +26,6 @@ enum class OperationPhase : std::uint8_t {
     Cancelled,
 };
 
-struct OperationErrorPayload final {
-    kb_status_t status{KB_E_INTERNAL};
-    std::string message;
-    std::int32_t native_code{0};
-    kb_transfer_state_t transfer_state{KB_TRANSFER_NOT_SENT};
-    std::string device_identifier;
-
-    [[nodiscard]] bool operator==(const OperationErrorPayload&) const = default;
-};
-
 enum class CommandMessageKind : std::uint8_t {
     Info,
     Text,
@@ -48,9 +38,27 @@ struct CommandMessagePayload final {
     [[nodiscard]] bool operator==(const CommandMessagePayload&) const = default;
 };
 
+struct OperationErrorPayload final {
+    kb_status_t status{KB_E_INTERNAL};
+    std::string message;
+    std::int32_t native_code{0};
+    kb_transfer_state_t transfer_state{KB_TRANSFER_NOT_SENT};
+    std::string device_identifier;
+    std::string device_message;
+    std::vector<CommandMessagePayload> command_messages;
+    std::optional<std::uint64_t> inbound_expected;
+    std::uint64_t inbound_transferred{0};
+    kb_transfer_state_t inbound_transfer_state{KB_TRANSFER_NOT_SENT};
+    bool session_poisoned{false};
+
+    [[nodiscard]] bool operator==(const OperationErrorPayload&) const = default;
+};
+
 struct CommandResultPayload final {
     std::string terminal_payload;
     std::vector<CommandMessagePayload> messages;
+    std::vector<std::byte> data;
+    std::string device_identifier;
 
     [[nodiscard]] bool operator==(const CommandResultPayload&) const = default;
 };
@@ -65,11 +73,11 @@ struct OperationOutcome final {
     [[nodiscard]] static OperationOutcome failed(OperationErrorPayload error);
     [[nodiscard]] static OperationOutcome cancelled(
         OperationErrorPayload error = {
-            KB_E_CANCELLED,
-            "operation cancelled",
-            0,
-            KB_TRANSFER_NOT_SENT,
-            {},
+            .status = KB_E_CANCELLED,
+            .message = "operation cancelled",
+            .native_code = 0,
+            .transfer_state = KB_TRANSFER_NOT_SENT,
+            .device_identifier = {},
         });
 };
 
