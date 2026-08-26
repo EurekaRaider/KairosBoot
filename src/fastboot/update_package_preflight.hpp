@@ -45,9 +45,44 @@ struct PreparedUpdateArtifact final {
     image::FlashArtifact artifact;
 };
 
+enum class UpdateSuperPreparationState : std::uint8_t {
+    NotRequired,
+    SkippedNotFound,
+    Prepared,
+};
+
+// The prepared dynamic-partition metadata is immutable and package-scoped.
+// Execution adapters must consume this snapshot instead of reopening the
+// directory or ZIP after preflight.
+class PreparedSuperArtifact final {
+public:
+    PreparedSuperArtifact(
+        std::shared_ptr<const image::ResolvedArtifact> resolved,
+        std::shared_ptr<const image::FlashArtifact> artifact) noexcept;
+
+    [[nodiscard]] const std::shared_ptr<const image::ResolvedArtifact>& resolved()
+        const noexcept;
+    [[nodiscard]] const std::shared_ptr<const image::FlashArtifact>& artifact()
+        const noexcept;
+
+private:
+    std::shared_ptr<const image::ResolvedArtifact> resolved_;
+    std::shared_ptr<const image::FlashArtifact> artifact_;
+};
+
 struct PreparedUpdatePackage final {
     DeterministicUpdatePlan plan;
     std::vector<PreparedUpdateArtifact> artifacts;
+
+    // Invariants:
+    //  * NotRequired: no update-super task and no prepared_super_artifact.
+    //  * SkippedNotFound: AOSP-compatible no-op; update-super tasks were
+    //    removed before execution and no prepared_super_artifact exists.
+    //  * Prepared: update-super tasks remain and prepared_super_artifact is a
+    //    fully materialized, validated super_empty.img snapshot.
+    UpdateSuperPreparationState update_super_state{
+        UpdateSuperPreparationState::NotRequired};
+    std::shared_ptr<const PreparedSuperArtifact> prepared_super_artifact{};
 
     // Requirements are intentionally not queried during transport-free
     // preflight. The execution layer must validate them against one uniquely
@@ -55,9 +90,12 @@ struct PreparedUpdatePackage final {
     bool requires_device_validation{};
 };
 
-// Resolves both manifests, parses the frozen AOSP grammar, applies the wipe
-// condition, and materializes every artifact referenced by the resulting plan.
-// It has no transport dependency and returns no partial plan on failure.
+// Resolves android-info.txt and, when present, fastboot-info.txt. A missing
+// fastboot-info.txt selects the frozen Platform-Tools 37.0.1 image inventory;
+// a present empty file intentionally remains an empty plan. The function
+// applies the wipe condition and materializes every referenced flash artifact,
+// including super_empty.img when update-super needs it. It has no transport
+// dependency and returns no partial plan on failure.
 [[nodiscard]] std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
 preflight_update_package(image::ArtifactSourceResolver& resolver,
                          const std::filesystem::path& package_directory_or_zip,

@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/update_package_preflight.hpp"
 #include "src/image/sha256.hpp"
+#include "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -11,22 +14,29 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
 
 using kairosboot::fastboot::preflight_update_package;
+using kairosboot::fastboot::PlannedSlot;
+using kairosboot::fastboot::PreparedUpdatePackage;
 using kairosboot::fastboot::UpdatePackagePreflightErrorKind;
 using kairosboot::fastboot::UpdatePackagePreflightLimits;
+using kairosboot::fastboot::UpdateSuperPreparationState;
 using kairosboot::fastboot::UpdateTaskKind;
 using kairosboot::image::ArtifactSourceErrorKind;
+using kairosboot::image::ArtifactSourceLimits;
 using kairosboot::image::ArtifactSourceResolver;
+using kairosboot::image::FlashArtifactKind;
 using kairosboot::image::sha256_hex;
 
 class CheckFailure final : public std::runtime_error {
@@ -208,6 +218,322 @@ void create_directory_package(
     }
 }
 
+[[nodiscard]] std::vector<std::byte> valid_empty_sparse_image() {
+    std::vector<std::byte> bytes;
+    append_u32(bytes, kairosboot::image::kAndroidSparseMagic);
+    append_u16(bytes, kairosboot::image::kAndroidSparseMajorVersion);
+    append_u16(bytes, 0U);
+    append_u16(bytes, 28U);
+    append_u16(bytes, 12U);
+    append_u32(bytes, 4096U);
+    append_u32(bytes, 0U);
+    append_u32(bytes, 0U);
+    append_u32(bytes, 0U);
+    CHECK(bytes.size() == 28U);
+    return bytes;
+}
+
+[[nodiscard]] std::string binary_string(
+    const std::span<const std::byte> bytes) {
+    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+[[nodiscard]] std::string hardcoded_payload(const std::string_view image_name) {
+    return "frozen-aosp-37.0.1:" + std::string(image_name);
+}
+
+[[nodiscard]] bool selected_hardcoded_image(
+    const kairosboot::test::aosp_37_0_1::Image& image,
+    const bool include_optional) noexcept {
+    return image.type != kairosboot::test::aosp_37_0_1::ImageType::Extra &&
+           (!image.optional_if_missing || include_optional);
+}
+
+void write_hardcoded_images(const std::filesystem::path& package,
+                            const bool include_optional,
+                            const bool include_extra = true) {
+    for (const auto& image : kairosboot::test::aosp_37_0_1::kImages) {
+        if ((!image.optional_if_missing || include_optional) &&
+            (include_extra ||
+             image.type != kairosboot::test::aosp_37_0_1::ImageType::Extra)) {
+            write_text(package / image.image_name,
+                       hardcoded_payload(image.image_name));
+        }
+    }
+}
+
+[[nodiscard]] std::vector<ZipEntry> hardcoded_zip_entries(
+    const std::string_view android_info,
+    const bool include_optional,
+    const bool include_extra = true) {
+    std::vector<ZipEntry> entries;
+    entries.push_back(
+        ZipEntry{.name = "android-info.txt", .payload = std::string(android_info)});
+    for (const auto& image : kairosboot::test::aosp_37_0_1::kImages) {
+        if ((!image.optional_if_missing || include_optional) &&
+            (include_extra ||
+             image.type != kairosboot::test::aosp_37_0_1::ImageType::Extra)) {
+            entries.push_back(ZipEntry{
+                .name = std::string(image.image_name),
+                .payload = hardcoded_payload(image.image_name),
+            });
+        }
+    }
+    return entries;
+}
+
+[[nodiscard]] bool expected_apply_vbmeta(
+    const std::string_view partition) noexcept {
+    return partition == "vbmeta" || partition == "vbmeta_system" ||
+           partition == "vbmeta_vendor";
+}
+
+void check_hardcoded_plan(const PreparedUpdatePackage& prepared,
+                          const bool include_optional,
+                          const bool includes_update_super) {
+    std::vector<const kairosboot::test::aosp_37_0_1::Image*> boot;
+    std::vector<const kairosboot::test::aosp_37_0_1::Image*> normal;
+    for (const auto& image : kairosboot::test::aosp_37_0_1::kImages) {
+        if (!selected_hardcoded_image(image, include_optional)) {
+            continue;
+        }
+        (image.type == kairosboot::test::aosp_37_0_1::ImageType::BootCritical
+             ? boot
+             : normal)
+            .push_back(&image);
+    }
+
+    CHECK(prepared.plan.tasks.size() ==
+          boot.size() + (includes_update_super ? 1U : 0U) + normal.size());
+    CHECK(prepared.artifacts.size() == boot.size() + normal.size());
+    std::size_t task_index = 0;
+    std::size_t artifact_index = 0;
+    const auto check_images = [&](const auto& images) {
+        for (const auto* image : images) {
+            const auto& task = prepared.plan.tasks[task_index++];
+            CHECK(task.kind == UpdateTaskKind::Flash);
+            CHECK(task.partition == image->partition);
+            CHECK(task.artifact == image->image_name);
+            CHECK(task.slot == (image->nickname.empty() ? PlannedSlot::Other
+                                                        : PlannedSlot::Default));
+            CHECK(task.apply_vbmeta == expected_apply_vbmeta(image->partition));
+            CHECK(prepared.artifacts[artifact_index++].name == image->image_name);
+        }
+    };
+    check_images(boot);
+    if (includes_update_super) {
+        CHECK(prepared.plan.tasks[task_index++].kind ==
+              UpdateTaskKind::UpdateSuper);
+    }
+    check_images(normal);
+    CHECK(task_index == prepared.plan.tasks.size());
+    CHECK(artifact_index == prepared.artifacts.size());
+
+    std::set<std::string_view> materialized;
+    for (const auto& artifact : prepared.artifacts) {
+        materialized.insert(artifact.name);
+    }
+    for (const auto& image : kairosboot::test::aosp_37_0_1::kImages) {
+        if (image.type == kairosboot::test::aosp_37_0_1::ImageType::Extra) {
+            CHECK(!materialized.contains(image.image_name));
+        }
+    }
+}
+
+void hardcoded_fallback_directory_and_zip_follow_frozen_inventory() {
+    TemporaryDirectory temporary;
+    constexpr std::string_view android_info = "require product=atlas|boreal\n";
+    const auto super_empty = valid_empty_sparse_image();
+
+    const auto directory = temporary.path() / "fallback-directory";
+    create_directory_package(directory, android_info);
+    write_hardcoded_images(directory, true);
+    write_bytes(directory / "super_empty.img", super_empty);
+
+    auto zip_entries = hardcoded_zip_entries(android_info, true);
+    zip_entries.push_back(ZipEntry{
+        .name = "super_empty.img",
+        .payload = binary_string(super_empty),
+    });
+    const auto archive = write_zip(temporary, zip_entries, "fallback.zip");
+
+    ArtifactSourceResolver directory_resolver;
+    ArtifactSourceResolver zip_resolver;
+    auto from_directory =
+        preflight_update_package(directory_resolver, directory, false);
+    auto from_zip = preflight_update_package(zip_resolver, archive, false);
+    CHECK(from_directory);
+    CHECK(from_zip);
+    check_hardcoded_plan(*from_directory, true, true);
+    check_hardcoded_plan(*from_zip, true, true);
+    CHECK(from_directory->requires_device_validation);
+    CHECK(from_zip->requires_device_validation);
+    CHECK(from_directory->plan.requirements.size() == 1U);
+    CHECK(from_directory->plan.requirements.front().variable == "product");
+    CHECK(from_directory->plan.requirements.front().options ==
+          from_zip->plan.requirements.front().options);
+    CHECK(from_directory->update_super_state ==
+          UpdateSuperPreparationState::Prepared);
+    CHECK(from_zip->update_super_state == UpdateSuperPreparationState::Prepared);
+    CHECK(from_directory->prepared_super_artifact);
+    CHECK(from_zip->prepared_super_artifact);
+    CHECK(from_directory->prepared_super_artifact->resolved()->logical_name ==
+          "super_empty.img");
+    CHECK(from_directory->prepared_super_artifact->artifact()->metadata().kind ==
+          FlashArtifactKind::AndroidSparse);
+    CHECK(from_directory->prepared_super_artifact->artifact()->transfer_source() ==
+          from_directory->prepared_super_artifact->resolved()->source);
+    CHECK(from_directory->prepared_super_artifact->resolved()->sha256 ==
+          from_zip->prepared_super_artifact->resolved()->sha256);
+}
+
+void missing_fallback_and_present_empty_manifest_remain_distinct() {
+    TemporaryDirectory temporary;
+
+    const auto missing_manifest = temporary.path() / "missing-fastboot-info";
+    create_directory_package(missing_manifest, "");
+    ArtifactSourceResolver missing_resolver;
+    auto missing =
+        preflight_update_package(missing_resolver, missing_manifest, false);
+    CHECK(!missing);
+    CHECK(missing.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(missing.error().artifact == "boot.img");
+    CHECK(missing.error().artifact_error.has_value());
+    CHECK(missing.error().artifact_error->kind == ArtifactSourceErrorKind::NotFound);
+
+    const auto explicit_empty = temporary.path() / "present-empty-fastboot-info";
+    create_directory_package(explicit_empty, "product=atlas\n", "");
+    write_text(explicit_empty / "super_empty.img", "not inspected");
+    ArtifactSourceResolver explicit_resolver;
+    auto empty = preflight_update_package(explicit_resolver, explicit_empty, false);
+    CHECK(empty);
+    CHECK(empty->plan.tasks.empty());
+    CHECK(empty->artifacts.empty());
+    CHECK(empty->update_super_state ==
+          UpdateSuperPreparationState::NotRequired);
+    CHECK(!empty->prepared_super_artifact);
+    CHECK(empty->requires_device_validation);
+}
+
+void hardcoded_required_optional_and_bounds_fail_closed() {
+    TemporaryDirectory temporary;
+    const auto minimal = temporary.path() / "fallback-minimal";
+    create_directory_package(minimal, "product=atlas\n");
+    write_hardcoded_images(minimal, false, false);
+
+    ArtifactSourceResolver minimal_resolver;
+    auto prepared = preflight_update_package(minimal_resolver, minimal, false);
+    CHECK(prepared);
+    check_hardcoded_plan(*prepared, false, false);
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::SkippedNotFound);
+    CHECK(!prepared->prepared_super_artifact);
+
+    const auto missing_system = temporary.path() / "fallback-missing-system";
+    create_directory_package(missing_system, "");
+    write_text(missing_system / "boot.img", hardcoded_payload("boot.img"));
+    ArtifactSourceResolver missing_system_resolver;
+    auto without_system = preflight_update_package(
+        missing_system_resolver, missing_system, false);
+    CHECK(!without_system);
+    CHECK(without_system.error().artifact == "system.img");
+    CHECK(without_system.error().artifact_error.has_value());
+    CHECK(without_system.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::NotFound);
+
+    const auto invalid_optional = temporary.path() / "fallback-invalid-optional";
+    create_directory_package(invalid_optional, "");
+    write_hardcoded_images(invalid_optional, false, false);
+    const std::array malformed_sparse{
+        std::byte{0x3a}, std::byte{0xff}, std::byte{0x26}, std::byte{0xed}};
+    write_bytes(invalid_optional / "vendor.img", malformed_sparse);
+    ArtifactSourceResolver invalid_optional_resolver;
+    auto invalid = preflight_update_package(
+        invalid_optional_resolver, invalid_optional, false);
+    CHECK(!invalid);
+    CHECK(invalid.error().artifact == "vendor.img");
+    CHECK(invalid.error().artifact_error.has_value());
+    CHECK(invalid.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::InvalidImage);
+
+    UpdatePackagePreflightLimits task_limits;
+    task_limits.manifest.maximum_tasks = 1U;
+    ArtifactSourceResolver task_resolver;
+    auto too_many_tasks = preflight_update_package(
+        task_resolver, minimal, false, task_limits);
+    CHECK(!too_many_tasks);
+    CHECK(too_many_tasks.error().kind ==
+          UpdatePackagePreflightErrorKind::LimitExceeded);
+
+    UpdatePackagePreflightLimits artifact_limits;
+    artifact_limits.maximum_unique_artifacts = 1U;
+    ArtifactSourceResolver artifact_resolver;
+    auto too_many_artifacts = preflight_update_package(
+        artifact_resolver, minimal, false, artifact_limits);
+    CHECK(!too_many_artifacts);
+    CHECK(too_many_artifacts.error().kind ==
+          UpdatePackagePreflightErrorKind::LimitExceeded);
+}
+
+void update_super_three_state_contract_and_unique_mapping() {
+    TemporaryDirectory temporary;
+
+    const auto absent = temporary.path() / "super-absent";
+    create_directory_package(absent, "", "update-super\n");
+    ArtifactSourceResolver absent_resolver;
+    auto skipped = preflight_update_package(absent_resolver, absent, false);
+    CHECK(skipped);
+    CHECK(skipped->plan.tasks.empty());
+    CHECK(skipped->update_super_state ==
+          UpdateSuperPreparationState::SkippedNotFound);
+    CHECK(!skipped->prepared_super_artifact);
+
+    const auto super_empty = valid_empty_sparse_image();
+    const auto present = temporary.path() / "super-present";
+    create_directory_package(
+        present, "", "flash metadata super_empty.img\nupdate-super\n");
+    write_bytes(present / "super_empty.img", super_empty);
+    UpdatePackagePreflightLimits exact_limits;
+    exact_limits.maximum_unique_artifacts = 1U;
+    exact_limits.maximum_total_artifact_bytes = super_empty.size();
+    ArtifactSourceResolver present_resolver;
+    auto prepared = preflight_update_package(
+        present_resolver, present, false, exact_limits);
+    CHECK(prepared);
+    CHECK(prepared->plan.tasks.size() == 2U);
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::Prepared);
+    CHECK(prepared->prepared_super_artifact);
+    CHECK(prepared->artifacts.size() == 1U);
+    CHECK(prepared->artifacts.front().name == "super_empty.img");
+    CHECK(prepared->artifacts.front().resolved ==
+          prepared->prepared_super_artifact->resolved());
+    CHECK(prepared->prepared_super_artifact->artifact()->metadata().transfer_size ==
+          super_empty.size());
+
+    UpdatePackagePreflightLimits no_unique_artifact;
+    no_unique_artifact.maximum_unique_artifacts = 0U;
+    ArtifactSourceResolver unique_resolver;
+    auto unique_failure = preflight_update_package(
+        unique_resolver, present, false, no_unique_artifact);
+    CHECK(!unique_failure);
+    CHECK(unique_failure.error().kind ==
+          UpdatePackagePreflightErrorKind::LimitExceeded);
+
+    const auto super_only = temporary.path() / "super-present-only";
+    create_directory_package(super_only, "", "update-super\n");
+    write_bytes(super_only / "super_empty.img", super_empty);
+    UpdatePackagePreflightLimits byte_limit;
+    byte_limit.maximum_total_artifact_bytes = super_empty.size() - 1U;
+    ArtifactSourceResolver byte_resolver;
+    auto byte_failure = preflight_update_package(
+        byte_resolver, super_only, false, byte_limit);
+    CHECK(!byte_failure);
+    CHECK(byte_failure.error().kind ==
+          UpdatePackagePreflightErrorKind::LimitExceeded);
+    CHECK(byte_failure.error().artifact == "super_empty.img");
+}
+
 void required_manifest_missing_duplicate_and_bounds_fail_closed() {
     TemporaryDirectory temporary;
     const auto missing = temporary.path() / "missing";
@@ -223,9 +549,10 @@ void required_manifest_missing_duplicate_and_bounds_fail_closed() {
     ArtifactSourceResolver android_only_resolver;
     auto without_optional_manifest =
         preflight_update_package(android_only_resolver, android_only, false);
-    CHECK(without_optional_manifest);
-    CHECK(without_optional_manifest->plan.tasks.empty());
-    CHECK(without_optional_manifest->artifacts.empty());
+    CHECK(!without_optional_manifest);
+    CHECK(without_optional_manifest.error().kind ==
+          UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(without_optional_manifest.error().artifact == "boot.img");
 
     const std::array duplicate_entries{
         ZipEntry{.name = "android-info.txt", .payload = ""},
@@ -325,8 +652,11 @@ void transport_free_tasks_and_device_requirements_remain_explicit() {
     ArtifactSourceResolver resolver;
     auto prepared = preflight_update_package(resolver, package, false);
     CHECK(prepared);
-    CHECK(prepared->plan.tasks.size() == 3U);
+    CHECK(prepared->plan.tasks.size() == 2U);
     CHECK(prepared->artifacts.empty());
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::SkippedNotFound);
+    CHECK(!prepared->prepared_super_artifact);
     CHECK(prepared->requires_device_validation);
     CHECK(prepared->plan.requirements.size() == 1U);
 }
@@ -366,6 +696,123 @@ void directory_and_zip_packages_produce_equivalent_prepared_plans() {
     CHECK(from_directory->plan.tasks[1].kind == UpdateTaskKind::Reboot);
     CHECK(from_directory->artifacts[0].resolved->sha256 ==
           from_zip->artifacts[0].resolved->sha256);
+}
+
+void update_super_present_failures_abort_the_complete_preflight() {
+    TemporaryDirectory temporary;
+    const auto super_empty = valid_empty_sparse_image();
+    const std::array corrupt_entries{
+        ZipEntry{.name = "android-info.txt", .payload = ""},
+        ZipEntry{.name = "fastboot-info.txt", .payload = "update-super\n"},
+        ZipEntry{
+            .name = "super_empty.img",
+            .payload = binary_string(super_empty),
+            .declared_crc = 0x12345678U,
+        },
+    };
+    const auto corrupt =
+        write_zip(temporary, corrupt_entries, "corrupt-super.zip");
+    ArtifactSourceResolver crc_resolver;
+    auto crc = preflight_update_package(crc_resolver, corrupt, false);
+    CHECK(!crc);
+    CHECK(crc.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(crc.error().artifact == "super_empty.img");
+    CHECK(crc.error().artifact_error.has_value());
+    CHECK(crc.error().artifact_error->kind == ArtifactSourceErrorKind::Integrity ||
+          crc.error().artifact_error->kind ==
+              ArtifactSourceErrorKind::InvalidArchive);
+
+    const auto malformed = temporary.path() / "malformed-super";
+    create_directory_package(malformed, "", "update-super\n");
+    const std::array malformed_sparse{
+        std::byte{0x3a}, std::byte{0xff}, std::byte{0x26}, std::byte{0xed}};
+    write_bytes(malformed / "super_empty.img", malformed_sparse);
+    ArtifactSourceResolver malformed_resolver;
+    auto parse = preflight_update_package(malformed_resolver, malformed, false);
+    CHECK(!parse);
+    CHECK(parse.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(parse.error().artifact == "super_empty.img");
+    CHECK(parse.error().artifact_error.has_value());
+    CHECK(parse.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::InvalidImage);
+
+#if !defined(_WIN32)
+    const auto unreadable = temporary.path() / "unreadable-super";
+    create_directory_package(unreadable, "", "update-super\n");
+    write_bytes(unreadable / "super_empty.img", super_empty);
+    std::error_code permission_error;
+    std::filesystem::permissions(
+        unreadable / "super_empty.img", std::filesystem::perms::none,
+        std::filesystem::perm_options::replace, permission_error);
+    CHECK(!permission_error);
+    ArtifactSourceResolver unreadable_resolver;
+    auto io = preflight_update_package(unreadable_resolver, unreadable, false);
+    std::filesystem::permissions(
+        unreadable / "super_empty.img",
+        std::filesystem::perms::owner_read |
+            std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace, permission_error);
+    CHECK(!permission_error);
+    CHECK(!io);
+    CHECK(io.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(io.error().artifact == "super_empty.img");
+    CHECK(io.error().artifact_error.has_value());
+    CHECK(io.error().artifact_error->kind == ArtifactSourceErrorKind::Io);
+#endif
+
+    const auto cancelled_package = temporary.path() / "cancelled-super";
+    create_directory_package(cancelled_package, "", "update-super\n");
+    write_bytes(cancelled_package / "super_empty.img", super_empty);
+    std::stop_source cancellation;
+    std::atomic<bool> cancel_materialization{};
+    ArtifactSourceLimits cancellation_limits;
+    cancellation_limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        if (cancel_materialization.load(std::memory_order_acquire)) {
+            cancellation.request_stop();
+        }
+        return 1ULL << 50U;
+    };
+    ArtifactSourceResolver cancellation_resolver(cancellation_limits);
+    CHECK(cancellation_resolver.resolve(cancelled_package, "android-info.txt"));
+    CHECK(cancellation_resolver.resolve(cancelled_package, "fastboot-info.txt"));
+    cancel_materialization.store(true, std::memory_order_release);
+    auto cancelled = preflight_update_package(
+        cancellation_resolver, cancelled_package, false, {},
+        cancellation.get_token());
+    CHECK(!cancelled);
+    CHECK(cancelled.error().kind == UpdatePackagePreflightErrorKind::Cancelled);
+    CHECK(cancelled.error().artifact == "super_empty.img");
+    CHECK(cancelled.error().artifact_error.has_value());
+    CHECK(cancelled.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::Cancelled);
+
+    const auto timed_package = temporary.path() / "timed-super";
+    create_directory_package(timed_package, "", "update-super\n");
+    write_bytes(timed_package / "super_empty.img", super_empty);
+    std::atomic<bool> delay_materialization{};
+    ArtifactSourceLimits timeout_limits;
+    timeout_limits.max_elapsed = std::chrono::milliseconds(500);
+    timeout_limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        if (delay_materialization.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(650));
+        }
+        return 1ULL << 50U;
+    };
+    ArtifactSourceResolver timeout_resolver(timeout_limits);
+    CHECK(timeout_resolver.resolve(timed_package, "android-info.txt"));
+    CHECK(timeout_resolver.resolve(timed_package, "fastboot-info.txt"));
+    delay_materialization.store(true, std::memory_order_release);
+    auto timed =
+        preflight_update_package(timeout_resolver, timed_package, false);
+    CHECK(!timed);
+    CHECK(timed.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(timed.error().artifact == "super_empty.img");
+    CHECK(timed.error().artifact_error.has_value());
+    CHECK(timed.error().artifact_error->kind == ArtifactSourceErrorKind::TimedOut);
 }
 
 void crc_missing_and_budget_failures_publish_no_prepared_plan() {
@@ -465,6 +912,14 @@ struct Test final {
 
 int main() {
     const std::array tests{
+        Test{"hardcoded fallback inventory",
+             hardcoded_fallback_directory_and_zip_follow_frozen_inventory},
+        Test{"missing and explicitly empty fastboot-info semantics",
+             missing_fallback_and_present_empty_manifest_remain_distinct},
+        Test{"hardcoded fallback required optional and bounds",
+             hardcoded_required_optional_and_bounds_fail_closed},
+        Test{"update-super three-state artifact contract",
+             update_super_three_state_contract_and_unique_mapping},
         Test{"required manifest validation",
              required_manifest_missing_duplicate_and_bounds_fail_closed},
         Test{"wipe path validation",
@@ -475,6 +930,8 @@ int main() {
              transport_free_tasks_and_device_requirements_remain_explicit},
         Test{"directory and ZIP parity",
              directory_and_zip_packages_produce_equivalent_prepared_plans},
+        Test{"update-super present failures",
+             update_super_present_failures_abort_the_complete_preflight},
         Test{"artifact and budget failures",
              crc_missing_and_budget_failures_publish_no_prepared_plan},
         Test{"preflight cancellation",
