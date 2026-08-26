@@ -10,9 +10,12 @@ namespace kairosboot::transport {
 namespace detail {
 
 struct BufferBudgetState final {
-    explicit BufferBudgetState(const std::size_t limit_bytes) : limit(limit_bytes) {}
+    BufferBudgetState(const std::size_t limit_bytes,
+                      BufferBudgetReleaseObserver* release_observer_value)
+        : limit(limit_bytes), release_observer(release_observer_value) {}
 
     const std::size_t limit;
+    BufferBudgetReleaseObserver* const release_observer;
     std::atomic<std::size_t> used{0};
     std::atomic<std::size_t> peak{0};
 };
@@ -23,6 +26,16 @@ struct BufferLeaseStorage final {
         : budget(std::move(budget_state)), buffer(bytes), reserved_bytes(bytes) {}
 
     ~BufferLeaseStorage() {
+        // A destructor body runs before member destruction. Release the vector
+        // explicitly so another thread cannot observe returned budget while
+        // the corresponding allocation is still live.
+        {
+            std::vector<std::byte> released;
+            released.swap(buffer);
+        }
+        if (budget->release_observer != nullptr) {
+            budget->release_observer->on_buffer_released();
+        }
         budget->used.fetch_sub(reserved_bytes, std::memory_order_acq_rel);
     }
 
@@ -68,8 +81,10 @@ std::shared_ptr<const void> BufferLease::lifetime_token() const noexcept {
     return storage_;
 }
 
-BufferBudget::BufferBudget(const std::size_t limit_bytes)
-    : state_(std::make_shared<detail::BufferBudgetState>(limit_bytes)) {}
+BufferBudget::BufferBudget(const std::size_t limit_bytes,
+                           BufferBudgetReleaseObserver* const release_observer)
+    : state_(std::make_shared<detail::BufferBudgetState>(limit_bytes,
+                                                         release_observer)) {}
 
 std::optional<BufferLease> BufferBudget::try_acquire(const std::size_t bytes) const {
     if (bytes == 0) {

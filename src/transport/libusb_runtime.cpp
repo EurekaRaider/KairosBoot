@@ -7,12 +7,17 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 
 namespace kairosboot::transport {
 
 namespace {
+
+inline constexpr auto kShutdownDrainGrace = std::chrono::milliseconds{250};
+inline constexpr auto kEventThreadExitGrace = std::chrono::milliseconds{250};
 
 [[nodiscard]] bool version_is_exact(const libusb_version* version) noexcept {
     return version != nullptr && version->major == kRequiredLibusbMajor &&
@@ -81,6 +86,118 @@ struct ConfigDescriptorGuard final {
         }
     }
 };
+
+struct ProcessLifetimeQuarantineRoot final {
+    std::mutex mutex;
+    std::shared_ptr<void>* runtime_slot{};
+};
+
+[[nodiscard]] ProcessLifetimeQuarantineRoot& process_lifetime_quarantine_root() {
+    static ProcessLifetimeQuarantineRoot root;
+    return root;
+}
+
+[[nodiscard]] bool interface_snapshot_matches(const LibusbFunctions& functions,
+                                              libusb_device* const candidate,
+                                              const UsbDeviceInfo& snapshot) {
+    libusb_config_descriptor* raw_config = nullptr;
+    auto result = functions.get_active_config_descriptor(candidate, &raw_config);
+    if (result != LIBUSB_SUCCESS) {
+        result = functions.get_config_descriptor(candidate, 0, &raw_config);
+    }
+    if (result != LIBUSB_SUCCESS || raw_config == nullptr) {
+        return false;
+    }
+    ConfigDescriptorGuard config_guard{&functions, raw_config};
+    if (raw_config->bNumInterfaces != 0 && raw_config->interface == nullptr) {
+        return false;
+    }
+
+    for (std::uint8_t interface_index = 0;
+         interface_index < raw_config->bNumInterfaces;
+         ++interface_index) {
+        const auto& interface = raw_config->interface[interface_index];
+        if (interface.num_altsetting <= 0 || interface.altsetting == nullptr) {
+            continue;
+        }
+        for (int alternate_index = 0;
+             alternate_index < interface.num_altsetting;
+             ++alternate_index) {
+            const auto& alternate = interface.altsetting[alternate_index];
+            if (alternate.bInterfaceNumber != snapshot.interface_number ||
+                alternate.bAlternateSetting != snapshot.alternate_setting ||
+                alternate.bInterfaceClass != snapshot.interface_class ||
+                alternate.bInterfaceSubClass != snapshot.interface_subclass ||
+                alternate.bInterfaceProtocol != snapshot.interface_protocol ||
+                (alternate.bNumEndpoints != 0 && alternate.endpoint == nullptr)) {
+                continue;
+            }
+            for (std::uint8_t endpoint_index = 0;
+                 endpoint_index < alternate.bNumEndpoints;
+                 ++endpoint_index) {
+                const auto& endpoint = alternate.endpoint[endpoint_index];
+                const auto type = endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK;
+                const auto maximum_packet_size =
+                    static_cast<std::uint16_t>(endpoint.wMaxPacketSize & 0x07FFU);
+                if (type == LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK &&
+                    (endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN) ==
+                        LIBUSB_ENDPOINT_OUT &&
+                    endpoint.bEndpointAddress == snapshot.bulk_out_endpoint &&
+                    maximum_packet_size == snapshot.bulk_out_max_packet_size) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool open_snapshot_matches(const LibusbFunctions& functions,
+                                         libusb_device* const candidate,
+                                         const UsbDeviceInfo& snapshot) {
+    libusb_device_descriptor descriptor{};
+    if (functions.get_device_descriptor(candidate, &descriptor) != LIBUSB_SUCCESS ||
+        descriptor.idVendor != snapshot.vendor_id ||
+        descriptor.idProduct != snapshot.product_id ||
+        functions.get_bus_number(candidate) != snapshot.bus_number) {
+        return false;
+    }
+
+    std::array<std::uint8_t, 16> candidate_ports{};
+    const auto port_count = functions.get_port_numbers(
+        candidate, candidate_ports.data(), static_cast<int>(candidate_ports.size()));
+    if (port_count <= 0 ||
+        static_cast<std::size_t>(port_count) != snapshot.port_path.size() ||
+        !std::equal(snapshot.port_path.begin(),
+                    snapshot.port_path.end(),
+                    candidate_ports.begin())) {
+        return false;
+    }
+
+    // An empty serial snapshot means the device did not expose a readable
+    // serial during enumeration. A non-empty snapshot is a mandatory secondary
+    // identity check and cannot be replaced by the transient USB address.
+    if (!snapshot.serial_utf8.empty()) {
+        std::array<char, LIBUSB_DEVICE_STRING_BYTES_MAX> serial_buffer{};
+        const auto serial_result = functions.get_device_string(
+            candidate,
+            LIBUSB_DEVICE_STRING_SERIAL_NUMBER,
+            serial_buffer.data(),
+            static_cast<int>(serial_buffer.size()));
+        if (serial_result <= 0) {
+            return false;
+        }
+        const auto serial_end =
+            std::find(serial_buffer.begin(), serial_buffer.end(), '\0');
+        if (std::string_view(serial_buffer.data(),
+                             static_cast<std::size_t>(serial_end - serial_buffer.begin())) !=
+            snapshot.serial_utf8) {
+            return false;
+        }
+    }
+
+    return interface_snapshot_matches(functions, candidate, snapshot);
+}
 
 }  // namespace
 
@@ -174,14 +291,25 @@ bool LibusbFunctions::complete() const noexcept {
 }
 
 struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::State> {
-    explicit State(LibusbFunctions table, libusb_context* initialized_context)
-        : functions(std::move(table)), context(initialized_context) {}
+    State(LibusbFunctions table,
+          libusb_context* initialized_context,
+          ProcessLifetimeQuarantineRoot* quarantine_root_value,
+          std::unique_ptr<std::shared_ptr<void>> quarantine_slot_value)
+        : functions(std::move(table)),
+          context(initialized_context),
+          quarantine_root(quarantine_root_value),
+          quarantine_slot(std::move(quarantine_slot_value)) {}
 
     LibusbFunctions functions;
     libusb_context* context{};
+    ProcessLifetimeQuarantineRoot* quarantine_root{};
+    std::unique_ptr<std::shared_ptr<void>> quarantine_slot;
     std::atomic<bool> running{false};
     std::atomic<bool> accepting{false};
     std::atomic<bool> stop_events{false};
+    std::atomic<bool> event_terminal{false};
+    std::atomic<bool> event_exited{false};
+    std::atomic<bool> quarantined{false};
     std::atomic<int> event_error{0};
     std::atomic<std::uint64_t> next_event_epoch{1};
     std::atomic<std::uint64_t> active_event_epoch{0};
@@ -189,16 +317,24 @@ struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::
     std::thread event_thread;
     mutable std::mutex event_identity_mutex;
     std::thread::id event_identity;
+    std::mutex event_exit_mutex;
+    std::condition_variable event_exit_cv;
     mutable std::mutex stop_mutex;
     std::mutex completion_mutex;
     std::condition_variable completion_cv;
     std::mutex backends_mutex;
     std::vector<std::weak_ptr<LibusbBulkOutBackend::State>> backends;
+    std::shared_ptr<LibusbBulkOutBackend::State> quarantined_backend_head;
 
     void event_loop() noexcept;
     void register_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend);
     void stop_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept;
     void stop_all() noexcept;
+    void quarantine_backend(
+        const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept;
+    void activate_process_lifetime_quarantine() noexcept;
+    [[nodiscard]] bool wait_for_event_exit(
+        std::chrono::steady_clock::time_point deadline) noexcept;
 };
 
 struct LibusbBulkOutBackend::State final {
@@ -262,11 +398,13 @@ struct LibusbBulkOutBackend::State final {
     mutable std::mutex mutex;
     bool accepting{true};
     bool closed{false};
+    std::atomic<bool> quarantined{false};
     std::unordered_map<TransferId, std::unique_ptr<Pending>> pending;
     std::atomic<Pending*> completion_head{nullptr};
     Pending* completion_fifo_head{};
     Pending* ready_head{};
     Pending* ready_tail{};
+    std::shared_ptr<State> quarantine_next;
 
     static void LIBUSB_CALL on_transfer(libusb_transfer* transfer) noexcept {
         auto* pending_transfer = static_cast<Pending*>(transfer->user_data);
@@ -290,7 +428,7 @@ struct LibusbBulkOutBackend::State final {
         runtime->completion_cv.notify_all();
     }
 
-    [[nodiscard]] SubmitResult submit(const TransferSubmission& submission);
+    [[nodiscard]] SubmitResult submit(const TransferSubmission& submission) noexcept;
     void cancel(TransferId id) noexcept;
     void request_stop() noexcept;
     void service_raw(bool shutting_down);
@@ -322,15 +460,30 @@ void LibusbRuntime::State::event_loop() noexcept {
         timeout.tv_sec = 0;
         timeout.tv_usec = 100'000;
         int completed = 0;
-        const auto result = functions.handle_events(context, &timeout, &completed);
+        int result = LIBUSB_ERROR_OTHER;
+        try {
+            result = functions.handle_events(context, &timeout, &completed);
+        } catch (...) {
+            result = LIBUSB_ERROR_OTHER;
+        }
         completed_event_epoch.store(epoch, std::memory_order_release);
         completion_cv.notify_all();
 
         if (result < 0 && result != LIBUSB_ERROR_INTERRUPTED) {
-            event_error.store(result, std::memory_order_release);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            int no_error = 0;
+            static_cast<void>(event_error.compare_exchange_strong(no_error,
+                                                                   result,
+                                                                   std::memory_order_acq_rel,
+                                                                   std::memory_order_acquire));
+            accepting.store(false, std::memory_order_release);
+            event_terminal.store(true, std::memory_order_release);
+            break;
         }
     }
+
+    event_exited.store(true, std::memory_order_release);
+    event_exit_cv.notify_all();
+    completion_cv.notify_all();
 }
 
 void LibusbRuntime::State::register_backend(
@@ -346,10 +499,20 @@ void LibusbRuntime::State::register_backend(
 void LibusbRuntime::State::stop_backend(
     const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept {
     std::unique_lock lifecycle(stop_mutex);
+    if (backend->quarantined.load(std::memory_order_acquire)) {
+        return;
+    }
     backend->request_stop();
-    while (!backend->service_shutdown()) {
+    const auto deadline = std::chrono::steady_clock::now() + kShutdownDrainGrace;
+    while (!backend->service_shutdown() &&
+           !event_terminal.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
         std::unique_lock completion(completion_mutex);
-        completion_cv.wait_for(completion, std::chrono::milliseconds(10));
+        completion_cv.wait_until(completion, deadline);
+    }
+    if (!backend->service_shutdown()) {
+        accepting.store(false, std::memory_order_release);
+        quarantine_backend(backend);
     }
 }
 
@@ -369,8 +532,11 @@ void LibusbRuntime::State::stop_all() noexcept {
         }
     }
 
+    const auto drain_deadline =
+        std::chrono::steady_clock::now() + kShutdownDrainGrace;
+    bool drained = false;
     for (;;) {
-        bool drained = true;
+        drained = true;
         {
             std::lock_guard lock(backends_mutex);
             for (const auto& entry : backends) {
@@ -382,21 +548,117 @@ void LibusbRuntime::State::stop_all() noexcept {
         if (drained) {
             break;
         }
+        if (event_terminal.load(std::memory_order_acquire) ||
+            std::chrono::steady_clock::now() >= drain_deadline) {
+            break;
+        }
         std::unique_lock completion(completion_mutex);
-        completion_cv.wait_for(completion, std::chrono::milliseconds(10));
+        completion_cv.wait_until(completion, drain_deadline);
+    }
+
+    if (!drained) {
+        bool requires_quarantine = false;
+        std::lock_guard lock(backends_mutex);
+        for (const auto& entry : backends) {
+            if (const auto backend = entry.lock();
+                backend != nullptr && !backend->service_shutdown()) {
+                requires_quarantine = true;
+                const auto was_quarantined =
+                    backend->quarantined.exchange(true, std::memory_order_acq_rel);
+                if (!was_quarantined) {
+                    {
+                        std::lock_guard backend_lock(backend->mutex);
+                        backend->accepting = false;
+                    }
+                    backend->quarantine_next = std::move(quarantined_backend_head);
+                    quarantined_backend_head = backend;
+                }
+            }
+        }
+        if (requires_quarantine) {
+            activate_process_lifetime_quarantine();
+        }
     }
 
     stop_events.store(true, std::memory_order_release);
     functions.interrupt_events(context);
-    if (event_thread.joinable()) {
-        event_thread.join();
+    const auto event_exit_deadline =
+        std::chrono::steady_clock::now() + kEventThreadExitGrace;
+    const auto event_stopped = wait_for_event_exit(event_exit_deadline);
+    bool event_thread_reaped = !event_thread.joinable();
+    if (event_thread.joinable() && event_stopped) {
+        try {
+            event_thread.join();
+            event_thread_reaped = true;
+        } catch (const std::system_error&) {
+            activate_process_lifetime_quarantine();
+        }
+    } else if (event_thread.joinable()) {
+        activate_process_lifetime_quarantine();
+        try {
+            event_thread.detach();
+            event_thread_reaped = true;
+        } catch (const std::system_error&) {
+            // The process-lifetime root keeps the still-joinable thread object,
+            // context, and callback owners alive. Never destroy them unsafely.
+        }
     }
-    functions.exit(context);
-    context = nullptr;
+
+    if (event_thread_reaped && !quarantined.load(std::memory_order_acquire)) {
+        functions.exit(context);
+        context = nullptr;
+    } else {
+        activate_process_lifetime_quarantine();
+    }
     running.store(false, std::memory_order_release);
+    completion_cv.notify_all();
 }
 
-SubmitResult LibusbBulkOutBackend::State::submit(const TransferSubmission& submission) {
+void LibusbRuntime::State::quarantine_backend(
+    const std::shared_ptr<LibusbBulkOutBackend::State>& backend) noexcept {
+    const auto was_quarantined =
+        backend->quarantined.exchange(true, std::memory_order_acq_rel);
+    if (!was_quarantined) {
+        {
+            std::lock_guard backend_lock(backend->mutex);
+            backend->accepting = false;
+        }
+        std::lock_guard registry_lock(backends_mutex);
+        backend->quarantine_next = std::move(quarantined_backend_head);
+        quarantined_backend_head = backend;
+    }
+    activate_process_lifetime_quarantine();
+}
+
+void LibusbRuntime::State::activate_process_lifetime_quarantine() noexcept {
+    quarantined.store(true, std::memory_order_release);
+    if (quarantine_slot == nullptr) {
+        return;
+    }
+    auto self = weak_from_this().lock();
+    if (self == nullptr) {
+        return;
+    }
+    std::lock_guard lock(quarantine_root->mutex);
+    *quarantine_slot = std::move(self);
+    // The raw slot is intentionally process-live. Normal runtimes retain slot
+    // ownership and free it; only an unsafe-to-destroy runtime relinquishes it.
+    quarantine_root->runtime_slot = quarantine_slot.release();
+}
+
+bool LibusbRuntime::State::wait_for_event_exit(
+    const std::chrono::steady_clock::time_point deadline) noexcept {
+    if (event_exited.load(std::memory_order_acquire)) {
+        return true;
+    }
+    std::unique_lock lock(event_exit_mutex);
+    return event_exit_cv.wait_until(lock, deadline, [this] {
+        return event_exited.load(std::memory_order_acquire);
+    });
+}
+
+SubmitResult LibusbBulkOutBackend::State::submit(
+    const TransferSubmission& submission) noexcept {
     if (submission.payload.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         return SubmitResult::io_error;
     }
@@ -407,13 +669,17 @@ SubmitResult LibusbBulkOutBackend::State::submit(const TransferSubmission& submi
         return SubmitResult::io_error;
     }
 
-    auto* transfer = runtime->functions.alloc_transfer(0);
-    if (transfer == nullptr) {
-        return SubmitResult::resource_exhausted;
-    }
-
+    libusb_transfer* transfer = nullptr;
     std::unique_ptr<Pending> pending_transfer;
     try {
+        transfer = runtime->functions.alloc_transfer(0);
+        if (transfer == nullptr) {
+            return SubmitResult::resource_exhausted;
+        }
+        if (runtime->functions.submit_allocation_fault) {
+            runtime->functions.submit_allocation_fault(
+                LibusbSubmitFaultPoint::pending_allocation);
+        }
         pending_transfer = std::make_unique<Pending>();
         pending_transfer->owner = this;
         pending_transfer->id = submission.id;
@@ -421,22 +687,41 @@ SubmitResult LibusbBulkOutBackend::State::submit(const TransferSubmission& submi
         pending_transfer->requested_bytes = submission.payload.size();
         pending_transfer->payload_lifetime = submission.payload_lifetime;
         if (pending_transfer->payload_lifetime == nullptr && !submission.payload.empty()) {
+            if (runtime->functions.submit_allocation_fault) {
+                runtime->functions.submit_allocation_fault(
+                    LibusbSubmitFaultPoint::fallback_payload_allocation);
+            }
             pending_transfer->fallback_payload.assign(submission.payload.begin(),
                                                       submission.payload.end());
         }
-    } catch (const std::bad_alloc&) {
-        runtime->functions.free_transfer(transfer);
-        return SubmitResult::resource_exhausted;
-    }
 
-    configure_data_transfer(*pending_transfer, submission);
-    const auto id = pending_transfer->id;
-    auto [entry, inserted] = pending.emplace(id, std::move(pending_transfer));
-    if (!inserted) {
-        runtime->functions.free_transfer(transfer);
+        configure_data_transfer(*pending_transfer, submission);
+        if (runtime->functions.submit_allocation_fault) {
+            runtime->functions.submit_allocation_fault(
+                LibusbSubmitFaultPoint::registry_allocation);
+        }
+        // Allocate the registry node before moving ownership. If allocation
+        // fails, pending_transfer still owns its metadata and transfer cleanup
+        // remains deterministic.
+        auto [entry, inserted] = pending.try_emplace(submission.id);
+        if (!inserted) {
+            runtime->functions.free_transfer(transfer);
+            return SubmitResult::io_error;
+        }
+        entry->second = std::move(pending_transfer);
+    } catch (const std::bad_alloc&) {
+        if (transfer != nullptr) {
+            runtime->functions.free_transfer(transfer);
+        }
+        return SubmitResult::resource_exhausted;
+    } catch (...) {
+        if (transfer != nullptr) {
+            runtime->functions.free_transfer(transfer);
+        }
         return SubmitResult::io_error;
     }
 
+    const auto entry = pending.find(submission.id);
     const auto result = runtime->functions.submit_transfer(transfer);
     if (result != LIBUSB_SUCCESS) {
         auto rejected = std::move(entry->second);
@@ -467,7 +752,9 @@ void LibusbBulkOutBackend::State::configure_data_transfer(
     transfer->buffer = reinterpret_cast<unsigned char*>(
         const_cast<std::byte*>(payload.data()));
     pending_transfer.needs_zero_packet =
-        options.zero_packet == ZeroPacketPolicy::when_packet_aligned &&
+        options.zero_packet ==
+            ZeroPacketPolicy::when_logical_message_end_packet_aligned &&
+        submission.logical_message_end &&
         maximum_packet_size != 0 && !payload.empty() &&
         payload.size() % maximum_packet_size == 0;
 }
@@ -654,8 +941,19 @@ std::expected<std::shared_ptr<LibusbRuntime>, LibusbRuntimeError> LibusbRuntime:
     static std::weak_ptr<State> active_runtime;
     std::lock_guard singleton(singleton_mutex);
     if (const auto active = active_runtime.lock();
-        active != nullptr && active->running.load(std::memory_order_acquire)) {
+        active != nullptr &&
+        (active->running.load(std::memory_order_acquire) ||
+         active->quarantined.load(std::memory_order_acquire))) {
         return std::unexpected(LibusbRuntimeError{LibusbRuntimeErrorKind::already_running});
+    }
+
+    auto* const quarantine_root = &process_lifetime_quarantine_root();
+    std::unique_ptr<std::shared_ptr<void>> quarantine_slot;
+    try {
+        quarantine_slot = std::make_unique<std::shared_ptr<void>>();
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(LibusbRuntimeError{LibusbRuntimeErrorKind::init_failed,
+                                                  LIBUSB_ERROR_NO_MEM});
     }
 
     libusb_context* context = nullptr;
@@ -671,7 +969,10 @@ std::expected<std::shared_ptr<LibusbRuntime>, LibusbRuntimeError> LibusbRuntime:
     const auto exit_on_allocation_failure = functions.exit;
     std::shared_ptr<State> state;
     try {
-        state = std::make_shared<State>(std::move(functions), context);
+        state = std::make_shared<State>(std::move(functions),
+                                        context,
+                                        quarantine_root,
+                                        std::move(quarantine_slot));
     } catch (const std::bad_alloc&) {
         exit_on_allocation_failure(context);
         return std::unexpected(LibusbRuntimeError{LibusbRuntimeErrorKind::init_failed,
@@ -689,9 +990,11 @@ std::expected<std::shared_ptr<LibusbRuntime>, LibusbRuntimeError> LibusbRuntime:
             LibusbRuntimeError{LibusbRuntimeErrorKind::event_thread_failed});
     }
 
+    // Publish the context before allocating the wrapper so even an allocation
+    // failure followed by a quarantined shutdown cannot admit a second context.
+    active_runtime = state;
     try {
         auto runtime = std::shared_ptr<LibusbRuntime>(new LibusbRuntime(state));
-        active_runtime = state;
         return runtime;
     } catch (const std::bad_alloc&) {
         state->stop_all();
@@ -836,7 +1139,8 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
             LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
     }
     if ((device.bulk_out_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_OUT ||
-        device.bulk_out_max_packet_size == 0) {
+        device.bulk_out_max_packet_size == 0 || device.port_path.empty() ||
+        device.port_path.size() > 16) {
         return std::unexpected(
             LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
     }
@@ -853,11 +1157,10 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
     libusb_device_handle* handle = nullptr;
     for (ssize_t index = 0; index < count; ++index) {
         auto* candidate = list[index];
-        libusb_device_descriptor descriptor{};
-        if (state_->functions.get_device_descriptor(candidate, &descriptor) != LIBUSB_SUCCESS ||
-            descriptor.idVendor != device.vendor_id || descriptor.idProduct != device.product_id ||
-            state_->functions.get_bus_number(candidate) != device.bus_number ||
-            state_->functions.get_device_address(candidate) != device.device_address) {
+        // USB addresses can be reused across re-enumeration. The stable key is
+        // bus + physical port path, with serial (when present) and the complete
+        // interface/endpoint snapshot revalidated immediately before open.
+        if (!open_snapshot_matches(state_->functions, candidate, device)) {
             continue;
         }
         const auto open_result = state_->functions.open(candidate, &handle);
@@ -928,12 +1231,17 @@ std::thread::id LibusbRuntime::event_thread_id() const noexcept {
     return state_->event_identity;
 }
 
+bool LibusbRuntime::shutdown_quarantined() const noexcept {
+    return state_ != nullptr && state_->quarantined.load(std::memory_order_acquire);
+}
+
 LibusbBulkOutBackend::LibusbBulkOutBackend(std::shared_ptr<State> state)
     : state_(std::move(state)) {}
 
 LibusbBulkOutBackend::~LibusbBulkOutBackend() { stop(); }
 
-SubmitResult LibusbBulkOutBackend::submit(const TransferSubmission& submission) {
+SubmitResult LibusbBulkOutBackend::submit(
+    const TransferSubmission& submission) noexcept {
     return state_->submit(submission);
 }
 
@@ -945,6 +1253,10 @@ bool LibusbBulkOutBackend::try_pop_completion(TransferCompletion& completion) {
 
 std::size_t LibusbBulkOutBackend::in_flight() const noexcept {
     return state_->in_flight();
+}
+
+bool LibusbBulkOutBackend::shutdown_quarantined() const noexcept {
+    return state_ != nullptr && state_->quarantined.load(std::memory_order_acquire);
 }
 
 void LibusbBulkOutBackend::stop() noexcept {

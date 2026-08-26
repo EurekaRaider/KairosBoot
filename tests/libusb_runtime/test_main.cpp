@@ -1,6 +1,7 @@
 #include "src/transport/libusb_runtime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -12,6 +13,7 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -32,9 +34,11 @@ using kairosboot::transport::LibusbBulkOutBackend;
 using kairosboot::transport::LibusbFunctions;
 using kairosboot::transport::LibusbRuntime;
 using kairosboot::transport::LibusbRuntimeErrorKind;
+using kairosboot::transport::LibusbSubmitFaultPoint;
 using kairosboot::transport::MemoryTransferSource;
 using kairosboot::transport::SubmitResult;
 using kairosboot::transport::TransferCompletion;
+using kairosboot::transport::TransferId;
 using kairosboot::transport::TransferRing;
 using kairosboot::transport::TransferRingConfig;
 using kairosboot::transport::TransferRingState;
@@ -230,6 +234,9 @@ public:
                 return LIBUSB_ERROR_NOT_FOUND;
             }
             self->cancel_queued_.insert(transfer);
+            if (self->suppress_cancel_completion) {
+                return LIBUSB_SUCCESS;
+            }
             self->events_.push_back(
                 Event{transfer, LIBUSB_TRANSFER_CANCELLED, self->cancel_actual_length});
             self->event_cv_.notify_all();
@@ -245,6 +252,12 @@ public:
     void queue_submit_result(const int result) {
         std::lock_guard lock(mutex_);
         submit_results_.push_back(result);
+    }
+
+    void queue_event_result(const int result) {
+        std::lock_guard lock(mutex_);
+        event_results_.push_back(result);
+        event_cv_.notify_all();
     }
 
     void complete_submission(const std::size_t index,
@@ -279,6 +292,9 @@ public:
     int alternate_result{LIBUSB_SUCCESS};
     int cancel_actual_length{};
     bool fail_allocation{false};
+    bool suppress_cancel_completion{false};
+    std::chrono::milliseconds block_handle_events_for{};
+    std::atomic<bool> blocked_event_completed{false};
     std::atomic<int> init_calls{0};
     std::atomic<int> exit_calls{0};
     std::atomic<int> handle_event_calls{0};
@@ -306,17 +322,28 @@ private:
 
     int handle_one_event(timeval* timeout) {
         ++handle_event_calls;
+        if (block_handle_events_for.count() > 0 &&
+            !block_started_.exchange(true, std::memory_order_acq_rel)) {
+            std::this_thread::sleep_for(block_handle_events_for);
+            blocked_event_completed.store(true, std::memory_order_release);
+            return LIBUSB_SUCCESS;
+        }
         std::unique_lock lock(mutex_);
         const auto wait_duration = timeout == nullptr
                                        ? std::chrono::milliseconds(100)
                                        : std::chrono::seconds(timeout->tv_sec) +
                                              std::chrono::microseconds(timeout->tv_usec);
         event_cv_.wait_for(lock, wait_duration, [this] {
-            return interrupted_ || !events_.empty();
+            return interrupted_ || !events_.empty() || !event_results_.empty();
         });
         if (interrupted_) {
             interrupted_ = false;
             return LIBUSB_ERROR_INTERRUPTED;
+        }
+        if (!event_results_.empty()) {
+            const auto result = event_results_.front();
+            event_results_.pop_front();
+            return result;
         }
         if (events_.empty()) {
             return LIBUSB_SUCCESS;
@@ -348,7 +375,9 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable event_cv_;
     bool interrupted_{false};
+    std::atomic<bool> block_started_{false};
     std::deque<Event> events_;
+    std::deque<int> event_results_;
     std::deque<int> submit_results_;
     std::vector<libusb_transfer*> submissions_;
     std::unordered_set<libusb_transfer*> active_;
@@ -356,11 +385,17 @@ private:
 };
 
 [[nodiscard]] std::shared_ptr<LibusbRuntime> create_runtime(
-    const std::shared_ptr<FakeLibusb>& fake) {
-    auto runtime = LibusbRuntime::create(fake->functions());
+    const std::shared_ptr<FakeLibusb>& fake,
+    LibusbFunctions functions) {
+    auto runtime = LibusbRuntime::create(std::move(functions));
     KB_CHECK(runtime.has_value());
     fake->wait_for_event_loop();
     return *runtime;
+}
+
+[[nodiscard]] std::shared_ptr<LibusbRuntime> create_runtime(
+    const std::shared_ptr<FakeLibusb>& fake) {
+    return create_runtime(fake, fake->functions());
 }
 
 [[nodiscard]] UsbDeviceInfo matching_device(const std::shared_ptr<LibusbRuntime>& runtime) {
@@ -462,6 +497,171 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     runtime->stop();
 }
 
+void test_open_revalidates_physical_identity_and_address_reuse() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto table = fake->functions();
+    auto base_open = table.open;
+    std::array<std::byte, 3> device_storage{};
+    std::array<libusb_device*, 2> enumeration_list{
+        reinterpret_cast<libusb_device*>(&device_storage[0]), nullptr};
+    std::array<libusb_device*, 4> reopen_list{
+        reinterpret_cast<libusb_device*>(&device_storage[0]),
+        reinterpret_cast<libusb_device*>(&device_storage[1]),
+        reinterpret_cast<libusb_device*>(&device_storage[2]),
+        nullptr};
+    std::array<libusb_device*, 2> empty_serial_list{
+        reinterpret_cast<libusb_device*>(&device_storage[1]), nullptr};
+    bool reopening = false;
+    bool testing_empty_serial_rule = false;
+    std::size_t opened_index = std::numeric_limits<std::size_t>::max();
+
+    const auto index_of = [&](libusb_device* candidate) {
+        for (std::size_t index = 0; index < device_storage.size(); ++index) {
+            if (candidate == reinterpret_cast<libusb_device*>(&device_storage[index])) {
+                return index;
+            }
+        }
+        throw TestFailure("unknown fake device");
+    };
+    table.get_device_list = [&](libusb_context*, libusb_device*** list) -> ssize_t {
+        if (testing_empty_serial_rule) {
+            *list = empty_serial_list.data();
+            return 1;
+        }
+        if (reopening) {
+            *list = reopen_list.data();
+            return 3;
+        }
+        *list = enumeration_list.data();
+        return 1;
+    };
+    table.get_bus_number = [](libusb_device*) { return std::uint8_t{2}; };
+    table.get_device_address = [&](libusb_device* candidate) {
+        constexpr std::array<std::uint8_t, 3> addresses{5, 5, 8};
+        return addresses[index_of(candidate)];
+    };
+    table.get_port_numbers = [&](libusb_device* candidate,
+                                 std::uint8_t* path,
+                                 int length) -> int {
+        KB_CHECK(length >= 2);
+        const auto index = index_of(candidate);
+        if (reopening && index == 0) {
+            path[0] = 9;
+            path[1] = 9;
+        } else {
+            path[0] = 3;
+            path[1] = 4;
+        }
+        return 2;
+    };
+    table.get_device_string = [&](libusb_device* candidate,
+                                  libusb_device_string_type,
+                                  char* output,
+                                  int length) -> int {
+        const auto index = index_of(candidate);
+        const std::string_view serial = reopening && index == 1
+                                            ? std::string_view{"wrong-serial"}
+                                            : std::string_view{"serial-\xCE\xB1"};
+        KB_CHECK(length > static_cast<int>(serial.size()));
+        std::memcpy(output, serial.data(), serial.size());
+        output[serial.size()] = '\0';
+        return static_cast<int>(serial.size() + 1U);
+    };
+    table.open = [&](libusb_device* candidate, libusb_device_handle** handle) {
+        opened_index = index_of(candidate);
+        return base_open(candidate, handle);
+    };
+
+    auto runtime = create_runtime(fake, std::move(table));
+    const auto snapshot = matching_device(runtime);
+    KB_CHECK(snapshot.device_address == 5);
+    reopening = true;
+
+    auto backend_result = runtime->open_bulk_out(snapshot);
+    KB_CHECK(backend_result.has_value());
+    auto backend = std::move(*backend_result);
+    KB_CHECK(opened_index == 2);
+    KB_CHECK(fake->open_calls == 1);
+
+    backend->stop();
+    auto serial_unavailable_snapshot = snapshot;
+    serial_unavailable_snapshot.serial_utf8.clear();
+    testing_empty_serial_rule = true;
+    opened_index = std::numeric_limits<std::size_t>::max();
+    auto empty_serial_backend_result =
+        runtime->open_bulk_out(serial_unavailable_snapshot);
+    KB_CHECK(empty_serial_backend_result.has_value());
+    auto empty_serial_backend = std::move(*empty_serial_backend_result);
+    KB_CHECK(opened_index == 1);
+    empty_serial_backend->stop();
+
+    auto invalid_snapshot = snapshot;
+    invalid_snapshot.port_path.clear();
+    const auto invalid = runtime->open_bulk_out(invalid_snapshot);
+    KB_CHECK(!invalid.has_value());
+    KB_CHECK(invalid.error().kind == LibusbRuntimeErrorKind::invalid_device);
+
+    runtime->stop();
+}
+
+void test_open_rejects_changed_interface_snapshot() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto table = fake->functions();
+    auto base_active_config = table.get_active_config_descriptor;
+    auto base_config = table.get_config_descriptor;
+    bool interface_changed = false;
+
+    libusb_endpoint_descriptor changed_endpoints[2]{};
+    changed_endpoints[0].bEndpointAddress = 0x01;
+    changed_endpoints[0].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
+    changed_endpoints[0].wMaxPacketSize = 8;
+    changed_endpoints[1].bEndpointAddress = 0x81;
+    changed_endpoints[1].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
+    changed_endpoints[1].wMaxPacketSize = 4;
+    libusb_interface_descriptor changed_alternate{};
+    changed_alternate.bInterfaceNumber = 7;
+    changed_alternate.bAlternateSetting = 0;
+    changed_alternate.bNumEndpoints = 2;
+    changed_alternate.bInterfaceClass = 0xFF;
+    changed_alternate.bInterfaceSubClass = 0x42;
+    changed_alternate.bInterfaceProtocol = 0x03;
+    changed_alternate.endpoint = changed_endpoints;
+    libusb_interface changed_interface{};
+    changed_interface.altsetting = &changed_alternate;
+    changed_interface.num_altsetting = 1;
+    libusb_config_descriptor changed_config{};
+    changed_config.bNumInterfaces = 1;
+    changed_config.interface = &changed_interface;
+
+    table.get_active_config_descriptor =
+        [&](libusb_device* candidate, libusb_config_descriptor** config) -> int {
+            if (interface_changed) {
+                *config = &changed_config;
+                return LIBUSB_SUCCESS;
+            }
+            return base_active_config(candidate, config);
+        };
+    table.get_config_descriptor =
+        [&](libusb_device* candidate,
+            std::uint8_t index,
+            libusb_config_descriptor** config) -> int {
+            if (interface_changed) {
+                *config = &changed_config;
+                return LIBUSB_SUCCESS;
+            }
+            return base_config(candidate, index, config);
+        };
+
+    auto runtime = create_runtime(fake, std::move(table));
+    const auto snapshot = matching_device(runtime);
+    interface_changed = true;
+    const auto backend = runtime->open_bulk_out(snapshot);
+    KB_CHECK(!backend.has_value());
+    KB_CHECK(backend.error().kind == LibusbRuntimeErrorKind::device_not_found);
+    KB_CHECK(fake->open_calls == 0);
+    runtime->stop();
+}
+
 void test_out_of_order_completion_and_payload_lifetime() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -546,10 +746,60 @@ void test_submit_and_completion_error_classification() {
     runtime->stop();
 }
 
+void test_submit_allocation_failures_do_not_throw_or_leak() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto table = fake->functions();
+    std::optional<LibusbSubmitFaultPoint> injected_fault;
+    table.submit_allocation_fault = [&](const LibusbSubmitFaultPoint point) {
+        if (injected_fault == point) {
+            throw std::bad_alloc{};
+        }
+    };
+    auto runtime = create_runtime(fake, std::move(table));
+    auto backend_result = runtime->open_bulk_out(matching_device(runtime));
+    KB_CHECK(backend_result.has_value());
+    auto backend = std::move(*backend_result);
+    const std::vector<std::byte> transient(4, std::byte{0x5A});
+
+    constexpr std::array fault_points{
+        LibusbSubmitFaultPoint::pending_allocation,
+        LibusbSubmitFaultPoint::fallback_payload_allocation,
+        LibusbSubmitFaultPoint::registry_allocation,
+    };
+    TransferId id = 100;
+    for (const auto point : fault_points) {
+        injected_fault = point;
+        const auto freed_before = fake->free_transfer_calls.load();
+        KB_CHECK(backend->submit(TransferSubmission{id++, 0, transient, {}}) ==
+                 SubmitResult::resource_exhausted);
+        KB_CHECK(fake->free_transfer_calls == freed_before + 1);
+        KB_CHECK(backend->in_flight() == 0);
+        KB_CHECK(fake->submission_count() == 0);
+    }
+
+    injected_fault.reset();
+    fake->fail_allocation = true;
+    const auto freed_before_null = fake->free_transfer_calls.load();
+    KB_CHECK(backend->submit(TransferSubmission{id++, 0, transient, {}}) ==
+             SubmitResult::resource_exhausted);
+    KB_CHECK(fake->free_transfer_calls == freed_before_null);
+    fake->fail_allocation = false;
+
+    KB_CHECK(backend->submit(TransferSubmission{id, 0, transient, {}}) ==
+             SubmitResult::accepted);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    KB_CHECK(wait_for_completion(*backend).id == id);
+    backend->stop();
+    runtime->stop();
+}
+
 void test_transfer_ring_adapter_lifetime_and_completion_flow() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
-    auto backend_result = runtime->open_bulk_out(matching_device(runtime));
+    const BulkOutOptions explicit_message_end_zlp{
+        0, ZeroPacketPolicy::when_logical_message_end_packet_aligned};
+    auto backend_result =
+        runtime->open_bulk_out(matching_device(runtime), explicit_message_end_zlp);
     KB_CHECK(backend_result.has_value());
     auto backend = std::move(*backend_result);
     const auto budget = std::make_shared<BufferBudget>(8);
@@ -573,6 +823,7 @@ void test_transfer_ring_adapter_lifetime_and_completion_flow() {
     KB_CHECK(ring.state() == TransferRingState::completed);
     KB_CHECK(ring.completion_watermark() == 8);
     KB_CHECK(budget->used() == 0);
+    KB_CHECK(fake->submission_count() == 2);
 
     backend->stop();
     runtime->stop();
@@ -611,64 +862,152 @@ void test_runtime_stop_cancels_and_drains_idempotently() {
     backend->stop();
 }
 
+void test_terminal_event_error_poisons_accepting() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    fake->queue_event_result(LIBUSB_ERROR_IO);
+    wait_until([&] {
+        return runtime->last_event_error() == std::optional<int>{LIBUSB_ERROR_IO};
+    });
+
+    const auto enumeration = runtime->enumerate(UsbInterfaceFilter{});
+    KB_CHECK(!enumeration.has_value());
+    KB_CHECK(enumeration.error().kind == LibusbRuntimeErrorKind::runtime_stopped);
+    runtime->stop();
+    KB_CHECK(!runtime->running());
+    KB_CHECK(!runtime->shutdown_quarantined());
+    KB_CHECK(fake->exit_calls == 1);
+}
+
 void test_explicit_zero_packet_contract() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
-    const BulkOutOptions options{0, ZeroPacketPolicy::when_packet_aligned};
-    auto backend_result = runtime->open_bulk_out(matching_device(runtime), options);
+    const auto snapshot = matching_device(runtime);
+
+    auto default_backend_result = runtime->open_bulk_out(snapshot);
+    KB_CHECK(default_backend_result.has_value());
+    auto default_backend = std::move(*default_backend_result);
+    auto default_aligned = payload(8);
+    KB_CHECK(default_backend->submit(
+                 TransferSubmission{19, 0, *default_aligned, default_aligned, true}) ==
+             SubmitResult::accepted);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 8);
+    KB_CHECK(wait_for_completion(*default_backend).id == 19);
+    KB_CHECK(fake->submission_count() == 1);
+    default_backend->stop();
+
+    const BulkOutOptions options{
+        0, ZeroPacketPolicy::when_logical_message_end_packet_aligned};
+    auto backend_result = runtime->open_bulk_out(snapshot, options);
     KB_CHECK(backend_result.has_value());
     auto backend = std::move(*backend_result);
 
-    auto aligned = payload(8);
-    KB_CHECK(backend->submit(TransferSubmission{20, 0, *aligned, aligned}) ==
+    // A packet-aligned ring chunk is not a logical-message boundary and must
+    // complete without an added ZLP even under the opt-in policy.
+    auto ring_chunk = payload(8);
+    KB_CHECK(backend->submit(TransferSubmission{20, 0, *ring_chunk, ring_chunk}) ==
              SubmitResult::accepted);
-    KB_CHECK(fake->submission_count() == 1);
-    const auto data_submission = fake->submission(0);
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 8);
+    KB_CHECK(wait_for_completion(*backend).id == 20);
+    KB_CHECK(fake->submission_count() == 2);
+
+    auto aligned = payload(8);
+    KB_CHECK(backend->submit(TransferSubmission{21, 0, *aligned, aligned, true}) ==
+             SubmitResult::accepted);
+    KB_CHECK(fake->submission_count() == 3);
+    const auto data_submission = fake->submission(2);
     KB_CHECK(data_submission.length == 8);
     KB_CHECK((data_submission.flags & LIBUSB_TRANSFER_ADD_ZERO_PACKET) == 0);
 
-    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 8);
+    fake->complete_submission(2, LIBUSB_TRANSFER_COMPLETED, 8);
     TransferCompletion unexpected;
     wait_until([&] {
         KB_CHECK(!backend->try_pop_completion(unexpected));
-        return fake->submission_count() == 2;
+        return fake->submission_count() == 4;
     });
-    const auto zero_packet = fake->submission(1);
+    const auto zero_packet = fake->submission(3);
     KB_CHECK(zero_packet.length == 0);
     KB_CHECK(zero_packet.buffer == nullptr);
 
-    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 0);
+    fake->complete_submission(3, LIBUSB_TRANSFER_COMPLETED, 0);
     const auto aligned_completion = wait_for_completion(*backend);
-    KB_CHECK(aligned_completion.id == 20);
+    KB_CHECK(aligned_completion.id == 21);
     KB_CHECK(aligned_completion.code == CompletionCode::success);
     KB_CHECK(aligned_completion.transferred_bytes == 8);
 
     auto unaligned = payload(6);
-    KB_CHECK(backend->submit(TransferSubmission{21, 0, *unaligned, unaligned}) ==
+    KB_CHECK(backend->submit(TransferSubmission{22, 0, *unaligned, unaligned, true}) ==
              SubmitResult::accepted);
-    KB_CHECK(fake->submission_count() == 3);
-    fake->complete_submission(2, LIBUSB_TRANSFER_COMPLETED, 6);
+    KB_CHECK(fake->submission_count() == 5);
+    fake->complete_submission(4, LIBUSB_TRANSFER_COMPLETED, 6);
     const auto unaligned_completion = wait_for_completion(*backend);
-    KB_CHECK(unaligned_completion.id == 21);
+    KB_CHECK(unaligned_completion.id == 22);
     KB_CHECK(unaligned_completion.code == CompletionCode::success);
-    KB_CHECK(fake->submission_count() == 3);
+    KB_CHECK(fake->submission_count() == 5);
 
     auto invalid_zero_packet = payload(4);
     KB_CHECK(backend->submit(
-                 TransferSubmission{22, 0, *invalid_zero_packet, invalid_zero_packet}) ==
+                 TransferSubmission{23,
+                                    0,
+                                    *invalid_zero_packet,
+                                    invalid_zero_packet,
+                                    true}) ==
              SubmitResult::accepted);
-    fake->complete_submission(3, LIBUSB_TRANSFER_COMPLETED, 4);
+    fake->complete_submission(5, LIBUSB_TRANSFER_COMPLETED, 4);
     wait_until([&] {
         KB_CHECK(!backend->try_pop_completion(unexpected));
-        return fake->submission_count() == 5;
+        return fake->submission_count() == 7;
     });
-    fake->complete_submission(4, LIBUSB_TRANSFER_COMPLETED, 1);
+    fake->complete_submission(6, LIBUSB_TRANSFER_COMPLETED, 1);
     const auto invalid_completion = wait_for_completion(*backend);
-    KB_CHECK(invalid_completion.id == 22);
+    KB_CHECK(invalid_completion.id == 23);
     KB_CHECK(invalid_completion.code == CompletionCode::io_error);
 
     backend->stop();
     runtime->stop();
+}
+
+void test_bounded_stop_quarantines_undrainable_transfer_and_event_thread() {
+    auto fake = std::make_shared<FakeLibusb>();
+    fake->suppress_cancel_completion = true;
+    fake->block_handle_events_for = std::chrono::seconds(1);
+    auto runtime = create_runtime(fake);
+    auto backend_result = runtime->open_bulk_out(matching_device(runtime));
+    KB_CHECK(backend_result.has_value());
+    auto backend = std::move(*backend_result);
+    auto bytes = payload(4);
+    KB_CHECK(backend->submit(TransferSubmission{30, 0, *bytes, bytes}) ==
+             SubmitResult::accepted);
+
+    const auto started = std::chrono::steady_clock::now();
+    runtime->stop();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    KB_CHECK(elapsed < std::chrono::milliseconds(800));
+    KB_CHECK(!runtime->running());
+    KB_CHECK(runtime->shutdown_quarantined());
+    KB_CHECK(backend->shutdown_quarantined());
+    KB_CHECK(backend->in_flight() == 1);
+    KB_CHECK(fake->cancel_calls >= 1);
+    KB_CHECK(fake->free_transfer_calls == 0);
+    KB_CHECK(fake->release_calls == 0);
+    KB_CHECK(fake->close_calls == 0);
+    KB_CHECK(fake->exit_calls == 0);
+
+    wait_until([&] {
+        return fake->blocked_event_completed.load(std::memory_order_acquire);
+    });
+    const auto second_stop_started = std::chrono::steady_clock::now();
+    runtime->stop();
+    backend->stop();
+    KB_CHECK(std::chrono::steady_clock::now() - second_stop_started <
+             std::chrono::milliseconds(100));
+    KB_CHECK(fake->free_transfer_calls == 0);
+
+    auto replacement_fake = std::make_shared<FakeLibusb>();
+    const auto replacement = LibusbRuntime::create(replacement_fake->functions());
+    KB_CHECK(!replacement.has_value());
+    KB_CHECK(replacement.error().kind == LibusbRuntimeErrorKind::already_running);
+    KB_CHECK(replacement_fake->init_calls == 0);
 }
 
 struct TestCase final {
@@ -682,11 +1021,16 @@ int main() {
     const std::vector<TestCase> tests{
         {"init failure, version, and singleton", test_init_failure_version_and_singleton},
         {"event loop and filtered UTF-8 enumeration", test_event_loop_and_filtered_utf8_enumeration},
+        {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
+        {"open rejects changed interface snapshot", test_open_rejects_changed_interface_snapshot},
         {"out-of-order completion and payload lifetime", test_out_of_order_completion_and_payload_lifetime},
         {"submit and completion error classification", test_submit_and_completion_error_classification},
+        {"submit allocation failures", test_submit_allocation_failures_do_not_throw_or_leak},
         {"transfer ring adapter flow", test_transfer_ring_adapter_lifetime_and_completion_flow},
         {"runtime stop cancel and drain", test_runtime_stop_cancels_and_drains_idempotently},
+        {"terminal event error poisons accepting", test_terminal_event_error_poisons_accepting},
         {"explicit zero packet contract", test_explicit_zero_packet_contract},
+        {"bounded quarantine shutdown", test_bounded_stop_quarantines_undrainable_transfer_and_event_thread},
     };
 
     std::size_t failures = 0;

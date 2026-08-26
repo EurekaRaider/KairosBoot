@@ -70,6 +70,10 @@ struct TransferSubmission final {
     // Keeps payload storage alive through backend completion. Backends must
     // take their own copy when this token is empty.
     std::shared_ptr<const void> payload_lifetime;
+    // True only when this transfer ends one complete protocol-level message.
+    // Transfer-ring chunks deliberately leave this false: chunk boundaries
+    // are not USB message boundaries and must never trigger per-chunk ZLPs.
+    bool logical_message_end{false};
 };
 
 struct TransferCompletion final {

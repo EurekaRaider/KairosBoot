@@ -12,6 +12,15 @@ struct BufferBudgetState;
 struct BufferLeaseStorage;
 }
 
+// Internal observability seam used to verify that storage is released before
+// its accounting charge becomes available to another thread. The observer
+// must outlive the budget and every lease acquired from it.
+class BufferBudgetReleaseObserver {
+public:
+    virtual ~BufferBudgetReleaseObserver() = default;
+    virtual void on_buffer_released() noexcept = 0;
+};
+
 // A move-only reservation whose storage and budget charge have the same lifetime.
 class BufferLease final {
 public:
@@ -39,7 +48,8 @@ private:
 // Thread-safe accounting shared by transfer rings and fleet dispatchers.
 class BufferBudget final {
 public:
-    explicit BufferBudget(std::size_t limit_bytes);
+    explicit BufferBudget(std::size_t limit_bytes,
+                          BufferBudgetReleaseObserver* release_observer = nullptr);
 
     [[nodiscard]] std::optional<BufferLease> try_acquire(std::size_t bytes) const;
     [[nodiscard]] std::size_t limit() const noexcept;

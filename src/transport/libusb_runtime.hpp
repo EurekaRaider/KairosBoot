@@ -21,6 +21,12 @@ inline constexpr std::uint16_t kRequiredLibusbMajor = 1;
 inline constexpr std::uint16_t kRequiredLibusbMinor = 0;
 inline constexpr std::uint16_t kRequiredLibusbMicro = 30;
 
+enum class LibusbSubmitFaultPoint : std::uint8_t {
+    pending_allocation,
+    fallback_payload_allocation,
+    registry_allocation,
+};
+
 // Injectable libusb surface. Production uses system(); deterministic tests
 // replace every entry without requiring USB hardware.
 struct LibusbFunctions final {
@@ -53,6 +59,10 @@ struct LibusbFunctions final {
     std::function<int(libusb_transfer*)> submit_transfer;
     std::function<int(libusb_transfer*)> cancel_transfer;
     std::function<void(libusb_transfer*)> free_transfer;
+
+    // Optional deterministic allocation-fault seam for transport tests. The
+    // production function table leaves it empty.
+    std::function<void(LibusbSubmitFaultPoint)> submit_allocation_fault;
 
     [[nodiscard]] static LibusbFunctions system();
     [[nodiscard]] bool complete() const noexcept;
@@ -108,11 +118,15 @@ struct UsbDeviceInfo final {
 
 enum class ZeroPacketPolicy : std::uint8_t {
     never,
-    when_packet_aligned,
+    when_logical_message_end_packet_aligned,
 };
 
 struct BulkOutOptions final {
     std::uint32_t timeout_ms{};
+    // Fastboot data rings must retain the default. The opt-in policy is only
+    // evaluated for TransferSubmission::logical_message_end and emits one
+    // explicit zero-length transfer after that complete logical message.
+    // This contract has not yet been validated on real Windows/Linux/macOS USB hardware.
     ZeroPacketPolicy zero_packet{ZeroPacketPolicy::never};
 };
 
@@ -137,6 +151,7 @@ public:
 
     [[nodiscard]] std::optional<int> last_event_error() const noexcept;
     [[nodiscard]] std::thread::id event_thread_id() const noexcept;
+    [[nodiscard]] bool shutdown_quarantined() const noexcept;
 
 private:
     friend class LibusbBulkOutBackend;
@@ -152,11 +167,12 @@ public:
     LibusbBulkOutBackend& operator=(const LibusbBulkOutBackend&) = delete;
     ~LibusbBulkOutBackend() override;
 
-    [[nodiscard]] SubmitResult submit(const TransferSubmission& submission) override;
+    [[nodiscard]] SubmitResult submit(const TransferSubmission& submission) noexcept override;
     void cancel(TransferId id) noexcept override;
 
     [[nodiscard]] bool try_pop_completion(TransferCompletion& completion);
     [[nodiscard]] std::size_t in_flight() const noexcept;
+    [[nodiscard]] bool shutdown_quarantined() const noexcept;
     void stop() noexcept;
 
 private:

@@ -4,6 +4,7 @@
 #include "src/transport/transfer_ring.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -27,6 +29,7 @@ using kairosboot::fleet::DeviceFlowSpec;
 using kairosboot::fleet::WeightedControllerScheduler;
 using kairosboot::transport::AdaptiveTransferTuner;
 using kairosboot::transport::BufferBudget;
+using kairosboot::transport::BufferBudgetReleaseObserver;
 using kairosboot::transport::CompletionCode;
 using kairosboot::transport::DeliveryCertainty;
 using kairosboot::transport::MemoryTransferSource;
@@ -138,6 +141,41 @@ void test_buffer_lease_lifetime_and_limit() {
     lifetime.reset();
     KB_CHECK(budget->used() == 0);
     KB_CHECK(budget->peak_used() == 10);
+}
+
+class ReleaseObserver final : public BufferBudgetReleaseObserver {
+public:
+    void on_buffer_released() noexcept override {
+        releases.fetch_add(1, std::memory_order_release);
+    }
+
+    std::atomic<std::size_t> releases{0};
+};
+
+void test_buffer_release_precedes_concurrent_budget_reuse() {
+    ReleaseObserver observer;
+    BufferBudget budget(1024, &observer);
+    for (std::size_t iteration = 0; iteration < 64; ++iteration) {
+        auto lease = budget.try_acquire(1024);
+        KB_CHECK(lease.has_value());
+        const auto expected_release = observer.releases.load(std::memory_order_acquire) + 1;
+        std::atomic<bool> watcher_started{false};
+        bool release_visible_when_charge_returned = false;
+        std::thread watcher([&] {
+            watcher_started.store(true, std::memory_order_release);
+            while (budget.used() != 0) {
+                std::this_thread::yield();
+            }
+            release_visible_when_charge_returned =
+                observer.releases.load(std::memory_order_acquire) >= expected_release;
+        });
+        while (!watcher_started.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        lease.reset();
+        watcher.join();
+        KB_CHECK(release_visible_when_charge_returned);
+    }
 }
 
 void test_transfer_ring_out_of_order_watermark() {
@@ -430,6 +468,7 @@ struct TestCase final {
 int main() {
     const std::vector<TestCase> tests{
         {"buffer lease lifetime and limit", test_buffer_lease_lifetime_and_limit},
+        {"buffer release before concurrent budget reuse", test_buffer_release_precedes_concurrent_budget_reuse},
         {"out-of-order completion watermark", test_transfer_ring_out_of_order_watermark},
         {"transfer ring shared budget", test_transfer_ring_respects_shared_budget},
         {"partial transfer cancel and drain", test_transfer_ring_partial_failure_cancels_and_drains},
