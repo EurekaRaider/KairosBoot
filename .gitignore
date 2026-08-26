@@ -8,6 +8,7 @@
 /artifacts/
 /TestResults/
 /packages/
+/install*/
 *.user
 *.suo
 *.swp
