@@ -86,6 +86,14 @@ public:
         int actual_length{};
     };
 
+    struct SubmissionSnapshot final {
+        std::uint8_t endpoint{};
+        const unsigned char* buffer{};
+        int length{};
+        unsigned int timeout{};
+        std::uint8_t flags{};
+    };
+
     FakeLibusb() {
         version_.major = 1;
         version_.minor = 0;
@@ -332,9 +340,16 @@ public:
         return submissions_.size();
     }
 
-    [[nodiscard]] libusb_transfer submission(const std::size_t index) const {
+    [[nodiscard]] SubmissionSnapshot submission(const std::size_t index) const {
         std::lock_guard lock(mutex_);
-        return *submissions_.at(index);
+        const auto* transfer = submissions_.at(index);
+        return SubmissionSnapshot{
+            transfer->endpoint,
+            transfer->buffer,
+            transfer->length,
+            transfer->timeout,
+            transfer->flags,
+        };
     }
 
     void wait_for_event_loop() {
