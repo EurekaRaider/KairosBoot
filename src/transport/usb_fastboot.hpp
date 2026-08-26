@@ -21,6 +21,21 @@ struct UsbFastbootTransportOptions final {
 using TransferProgressAction = protocol::TransferProgressAction;
 using TransferProgressObserver = protocol::TransferProgressObserver;
 
+namespace detail {
+
+[[nodiscard]] inline protocol::TransferCertainty observer_cancel_certainty(
+    const TransferRing& ring) noexcept {
+    if (ring.total_bytes() != 0 &&
+        ring.completion_watermark() == ring.total_bytes()) {
+        return protocol::TransferCertainty::FullyTransferred;
+    }
+    return ring.submitted_bytes() == 0
+        ? protocol::TransferCertainty::NotTransferred
+        : protocol::TransferCertainty::PartialOrUnknown;
+}
+
+}  // namespace detail
+
 // Internal protocol adapter. One instance exclusively owns one claimed USB
 // interface. write()/read() are serialized; request_cancel()/close() may run
 // from a different thread and use the runtime's bounded drain/quarantine path.

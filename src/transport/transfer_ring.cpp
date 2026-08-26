@@ -226,13 +226,8 @@ void TransferRing::begin_failure(const TransferErrorKind kind) noexcept {
 }
 
 void TransferRing::cancel_outstanding() noexcept {
-    std::vector<TransferId> ids;
-    ids.reserve(in_flight_.size());
     for (const auto& [id, ignored] : in_flight_) {
         static_cast<void>(ignored);
-        ids.push_back(id);
-    }
-    for (const auto id : ids) {
         backend_.cancel(id);
     }
 }
