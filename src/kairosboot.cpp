@@ -4,8 +4,10 @@
 #include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
 #include "src/fastboot/primitive_service.hpp"
+#include "src/fastboot/variable_parser.hpp"
 #include "src/image/file_source.hpp"
 #include "src/image/flash_artifact.hpp"
+#include "src/image/sparse_flash_plan.hpp"
 #include "src/protocol/fastboot_protocol.hpp"
 #include "src/transport/image_transfer_source.hpp"
 #include "src/transport/libusb_runtime.hpp"
@@ -655,27 +657,6 @@ kb_status_t KB_CALL kb_flash_file_async(
                              file_source.error(), requested_identifier));
     }
 
-    auto artifact = kairosboot::image::FlashArtifact::inspect(*file_source);
-    if (!artifact) {
-      return fail(error, kairosboot::api::normalize_public_error(
-                             artifact.error(), requested_identifier));
-    }
-
-    if (auto valid_size = kairosboot::fastboot::validate_download_size(
-            artifact->metadata().transfer_size);
-        !valid_size) {
-      return fail(error, kairosboot::api::normalize_public_error(
-                             valid_size.error(), requested_identifier));
-    }
-
-    auto transfer_source =
-        kairosboot::transport::ImageTransferSource::create(
-            artifact->transfer_source());
-    if (!transfer_source) {
-      return fail(error, kairosboot::api::normalize_public_error(
-                             transfer_source.error(), requested_identifier));
-    }
-
     if (context->usb_runtime == nullptr) {
       return fail(error, KB_E_INTERNAL, "context has no USB runtime",
                   serial_or_null);
@@ -698,26 +679,35 @@ kb_status_t KB_CALL kb_flash_file_async(
       flash_options = *options_or_null;
     }
 
-    std::shared_ptr<kairosboot::protocol::ITransferSource> source =
-        std::move(*transfer_source);
+    std::shared_ptr<const kairosboot::image::IImageSource> image_source =
+        std::move(*file_source);
     auto runtime = context->usb_runtime;
     auto device = std::move(*selected);
     auto selected_identifier = device_identifier(device);
     std::string partition_copy{partition_view};
-    const uint64_t image_size = source->size();
 
     auto task = [runtime = std::move(runtime), device = std::move(device),
-                 source = std::move(source),
+                 image_source = std::move(image_source),
                  partition_copy = std::move(partition_copy), flash_options,
-                 selected_identifier = std::move(selected_identifier),
-                 image_size](kairosboot::api::OperationState::TaskContext
-                                 &task_context) mutable
+                 selected_identifier = std::move(selected_identifier)](
+                    kairosboot::api::OperationState::TaskContext
+                        &task_context) mutable
         -> kairosboot::api::OperationOutcome {
-      if (task_context.cancel_requested() ||
-          !report_progress(flash_options, 0, image_size, "download",
-                           selected_identifier)) {
+      if (task_context.cancel_requested()) {
         return cancelled_operation(selected_identifier,
                                    KB_TRANSFER_NOT_SENT);
+      }
+
+      auto artifact = kairosboot::image::FlashArtifact::inspect(
+          image_source, task_context.cancellation_token());
+      if (!artifact) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            artifact.error(), selected_identifier));
+      }
+      if (artifact->metadata().transfer_size == 0) {
+        auto valid_size = kairosboot::fastboot::validate_download_size(0);
+        return operation_failure(kairosboot::api::normalize_public_error(
+            valid_size.error(), selected_identifier));
       }
 
       kairosboot::transport::UsbFastbootTransportOptions transport_options;
@@ -740,28 +730,88 @@ kb_status_t KB_CALL kb_flash_file_async(
       auto cancellation = task_context.register_cancellation_hook(
           [&service] { service.request_cancel(); });
 
-      const kairosboot::protocol::TransferProgressObserver observer =
-          [&task_context, &flash_options,
-           &selected_identifier](const uint64_t completed,
-                                 const uint64_t total) {
-            if (task_context.cancel_requested() ||
-                !report_progress(flash_options, completed, total, "download",
-                                 selected_identifier)) {
-              return kairosboot::protocol::TransferProgressAction::cancel;
-            }
-            return kairosboot::protocol::TransferProgressAction::
-                continue_transfer;
-          };
-
-      auto flashed = service.download_and_flash_source(
-          partition_copy, source, observer);
-      if (!flashed) {
+      std::uint64_t target_max_download_size = 0;
+      auto maximum = service.getvar("max-download-size");
+      if (maximum) {
+        target_max_download_size =
+            kairosboot::fastboot::parse_unsigned_variable(
+                maximum->terminal.payload)
+                .value_or(0);
+      } else if (maximum.error().code !=
+                 kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
         return operation_failure(kairosboot::api::normalize_public_error(
-            flashed.error(), selected_identifier));
+            maximum.error(), selected_identifier));
+      }
+
+      auto plan = kairosboot::image::SparseFlashPlan::create(
+          *artifact, target_max_download_size,
+          kairosboot::image::kDefaultResparseLimitBytes,
+          task_context.cancellation_token());
+      if (!plan) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            plan.error(), selected_identifier));
+      }
+
+      std::vector<std::shared_ptr<kairosboot::protocol::ITransferSource>>
+          transfer_sources;
+      transfer_sources.reserve(plan->parts().size());
+      for (const auto& part : plan->parts()) {
+        auto source = kairosboot::transport::ImageTransferSource::create(
+            part.source);
+        if (!source) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              source.error(), selected_identifier));
+        }
+        if (auto valid_size = kairosboot::fastboot::validate_download_size(
+                (*source)->size());
+            !valid_size) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              valid_size.error(), selected_identifier));
+        }
+        transfer_sources.push_back(std::move(*source));
+      }
+
+      const auto total_transfer_size = plan->transfer_size();
+      if (task_context.cancel_requested() ||
+          !report_progress(flash_options, 0, total_transfer_size, "download",
+                           selected_identifier)) {
+        return cancelled_operation(selected_identifier,
+                                   KB_TRANSFER_NOT_SENT);
+      }
+
+      std::uint64_t completed_before_part = 0;
+      for (const auto& source : transfer_sources) {
+        const kairosboot::protocol::TransferProgressObserver observer =
+            [&task_context, &flash_options, &selected_identifier,
+             completed_before_part,
+             total_transfer_size](const std::uint64_t completed,
+                                  const std::uint64_t) {
+              if (task_context.cancel_requested() ||
+                  !report_progress(
+                      flash_options, completed_before_part + completed,
+                      total_transfer_size, "download", selected_identifier)) {
+                return kairosboot::protocol::TransferProgressAction::cancel;
+              }
+              return kairosboot::protocol::TransferProgressAction::
+                  continue_transfer;
+            };
+
+        auto flashed = service.download_and_flash_source(
+            partition_copy, source, observer);
+        if (!flashed) {
+          auto payload = kairosboot::api::normalize_public_error(
+              flashed.error(), selected_identifier);
+          kairosboot::api::accumulate_flash_transfer_state(
+              payload, flashed.error().operation, completed_before_part,
+              source->size(), total_transfer_size);
+          return operation_failure(std::move(payload));
+        }
+        completed_before_part += source->size();
       }
 
       if (task_context.cancel_requested() ||
-          !report_progress(flash_options, image_size, image_size, "complete",
+          !report_progress(flash_options, total_transfer_size,
+                           total_transfer_size, "complete",
                            selected_identifier)) {
         return cancelled_operation(
             selected_identifier, KB_TRANSFER_FULLY_TRANSFERRED,

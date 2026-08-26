@@ -13,8 +13,8 @@
 #include <limits>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <stop_token>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -527,6 +527,22 @@ void sparse_flash_plan_rejects_unsafe_split_inputs() {
     }
 }
 
+void sparse_flash_plan_honors_pre_requested_cancellation() {
+    auto source = std::make_shared<MemorySource>(
+        std::vector<std::byte>(4096, std::byte{0x2A}));
+    auto artifact = FlashArtifact::inspect(source);
+    CHECK(artifact.has_value());
+
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    auto plan = SparseFlashPlan::create(
+        *artifact, 4096, kairosboot::image::kDefaultResparseLimitBytes,
+        cancellation.get_token());
+    CHECK(!plan);
+    CHECK(plan.error().kind == SparseFlashPlanErrorKind::Cancelled);
+    CHECK(plan.error().output_offset == 0);
+}
+
 void flash_artifact_classifies_raw_without_materializing_it() {
     auto short_source = std::make_shared<ObservingSource>(
         std::vector<std::byte>{std::byte{0x01}, std::byte{0x02}});
@@ -940,6 +956,8 @@ int main() {
         {"raw sparse split", raw_images_are_split_without_materializing_their_expansion},
         {"sparse repacking", sparse_chunks_are_repacked_with_partition_offsets_preserved},
         {"sparse split rejection", sparse_flash_plan_rejects_unsafe_split_inputs},
+        {"sparse split cancellation",
+         sparse_flash_plan_honors_pre_requested_cancellation},
         {"flash artifact raw classification",
          flash_artifact_classifies_raw_without_materializing_it},
         {"flash artifact sparse classification",

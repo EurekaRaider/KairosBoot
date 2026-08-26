@@ -76,52 +76,67 @@ struct Fragment final {
            fragment.block_count;
 }
 
+[[nodiscard]] constexpr std::uint64_t empty_encoded_size(
+    const std::uint32_t total_blocks) noexcept {
+    return kSparseHeaderBytes +
+           (total_blocks == 0 ? 0 : kChunkHeaderBytes);
+}
+
+// current_size is the exact encoded size including its synthetic trailing
+// DONT_CARE chunk. Replacing that tail and appending one fragment is O(1), so
+// planning remains linear even for highly fragmented sparse inputs.
 [[nodiscard]] std::expected<std::uint64_t, SparseFlashPlanError>
-encoded_size(const std::span<const Fragment> fragments,
-             const std::uint32_t total_blocks,
-             const std::uint32_t block_size) {
-    std::uint64_t size = kSparseHeaderBytes;
-    std::uint64_t cursor = 0;
-    for (const auto& fragment : fragments) {
-        if (fragment.start_block > cursor &&
-            !checked_add(size, kChunkHeaderBytes, size)) {
-            return std::unexpected(plan_error(
-                SparseFlashPlanErrorKind::ArithmeticOverflow,
-                cursor * block_size,
-                "sparse part metadata size overflows"));
-        }
-        if (!checked_add(size, kChunkHeaderBytes, size)) {
-            return std::unexpected(plan_error(
-                SparseFlashPlanErrorKind::ArithmeticOverflow,
-                static_cast<std::uint64_t>(fragment.start_block) * block_size,
-                "sparse part metadata size overflows"));
-        }
-        if (fragment.kind == SparseChunkKind::Raw) {
-            std::uint64_t payload = 0;
-            if (!checked_multiply(fragment.block_count, block_size, payload) ||
-                !checked_add(size, payload, size)) {
-                return std::unexpected(plan_error(
-                    SparseFlashPlanErrorKind::ArithmeticOverflow,
-                    static_cast<std::uint64_t>(fragment.start_block) *
-                        block_size,
-                    "sparse RAW payload size overflows"));
-            }
-        } else if (fragment.kind == SparseChunkKind::Fill) {
-            if (!checked_add(size, 4, size)) {
-                return std::unexpected(plan_error(
-                    SparseFlashPlanErrorKind::ArithmeticOverflow,
-                    static_cast<std::uint64_t>(fragment.start_block) *
-                        block_size,
-                    "sparse FILL payload size overflows"));
-            }
-        }
-        cursor = fragment_end_block(fragment);
+encoded_size_after_append(const std::uint64_t current_size,
+                          const std::uint64_t cursor_block,
+                          const Fragment& fragment,
+                          const std::uint32_t total_blocks,
+                          const std::uint32_t block_size) {
+    if (fragment.start_block < cursor_block ||
+        fragment_end_block(fragment) > total_blocks) {
+        return std::unexpected(plan_error(
+            SparseFlashPlanErrorKind::InvalidArgument,
+            static_cast<std::uint64_t>(fragment.start_block) * block_size,
+            "sparse fragments are not ordered within the declared image"));
     }
-    if (cursor < total_blocks &&
+
+    std::uint64_t size = current_size;
+    if (cursor_block < total_blocks) {
+        size -= kChunkHeaderBytes;
+    }
+    if (fragment.start_block > cursor_block &&
         !checked_add(size, kChunkHeaderBytes, size)) {
         return std::unexpected(plan_error(
             SparseFlashPlanErrorKind::ArithmeticOverflow,
-            cursor * block_size,
+            cursor_block * block_size,
+            "sparse gap metadata size overflows"));
+    }
+    if (!checked_add(size, kChunkHeaderBytes, size)) {
+        return std::unexpected(plan_error(
+            SparseFlashPlanErrorKind::ArithmeticOverflow,
+            static_cast<std::uint64_t>(fragment.start_block) * block_size,
+            "sparse part metadata size overflows"));
+    }
+    if (fragment.kind == SparseChunkKind::Raw) {
+        std::uint64_t payload = 0;
+        if (!checked_multiply(fragment.block_count, block_size, payload) ||
+            !checked_add(size, payload, size)) {
+            return std::unexpected(plan_error(
+                SparseFlashPlanErrorKind::ArithmeticOverflow,
+                static_cast<std::uint64_t>(fragment.start_block) * block_size,
+                "sparse RAW payload size overflows"));
+        }
+    } else if (fragment.kind == SparseChunkKind::Fill &&
+               !checked_add(size, 4, size)) {
+        return std::unexpected(plan_error(
+            SparseFlashPlanErrorKind::ArithmeticOverflow,
+            static_cast<std::uint64_t>(fragment.start_block) * block_size,
+            "sparse FILL payload size overflows"));
+    }
+    if (fragment_end_block(fragment) < total_blocks &&
+        !checked_add(size, kChunkHeaderBytes, size)) {
+        return std::unexpected(plan_error(
+            SparseFlashPlanErrorKind::ArithmeticOverflow,
+            fragment_end_block(fragment) * block_size,
             "sparse trailing metadata size overflows"));
     }
     return size;
@@ -129,10 +144,9 @@ encoded_size(const std::span<const Fragment> fragments,
 
 struct SourcePiece final {
     std::uint64_t logical_offset{};
-    std::vector<std::byte> literal;
-    std::shared_ptr<const IImageSource> source;
-    std::uint64_t source_offset{};
     std::uint64_t size{};
+    std::uint64_t backing_offset{};
+    bool source_backed{};
 };
 
 class SparsePartSource final : public IImageSource {
@@ -142,11 +156,13 @@ public:
     create(std::shared_ptr<const IImageSource> input,
            const std::uint32_t block_size,
            const std::uint32_t total_blocks,
-           const std::span<const Fragment> fragments) {
+           const std::span<const Fragment> fragments,
+           const std::stop_token stop_token) {
         try {
             auto result = std::shared_ptr<SparsePartSource>(
                 new SparsePartSource(std::move(input)));
-            auto built = result->build(block_size, total_blocks, fragments);
+            auto built = result->build(
+                block_size, total_blocks, fragments, stop_token);
             if (!built) {
                 return std::unexpected(std::move(built.error()));
             }
@@ -198,17 +214,17 @@ public:
             const auto amount = static_cast<std::size_t>(
                 std::min<std::uint64_t>(piece->size - within,
                                         requested - completed));
-            if (!piece->literal.empty()) {
+            if (!piece->source_backed) {
                 std::ranges::copy_n(
-                    piece->literal.begin() +
-                        static_cast<std::ptrdiff_t>(within),
+                    literals_.begin() + static_cast<std::ptrdiff_t>(
+                                            piece->backing_offset + within),
                     amount,
                     destination.begin() +
                         static_cast<std::ptrdiff_t>(completed));
                 completed += amount;
             } else {
-                auto read = piece->source->read_at(
-                    piece->source_offset + within,
+                auto read = input_->read_at(
+                    piece->backing_offset + within,
                     destination.subspan(completed, amount));
                 if (!read) {
                     return std::unexpected(std::move(read.error()));
@@ -235,14 +251,15 @@ private:
     explicit SparsePartSource(std::shared_ptr<const IImageSource> input)
         : input_(std::move(input)) {}
 
-    void append_literal(std::vector<std::byte> bytes) {
+    void append_literal(const std::span<const std::byte> bytes) {
         const auto piece_size = static_cast<std::uint64_t>(bytes.size());
+        const auto literal_offset = static_cast<std::uint64_t>(literals_.size());
+        literals_.insert(literals_.end(), bytes.begin(), bytes.end());
         pieces_.push_back(SourcePiece{
             .logical_offset = size_,
-            .literal = std::move(bytes),
-            .source = {},
-            .source_offset = 0,
             .size = piece_size,
+            .backing_offset = literal_offset,
+            .source_backed = false,
         });
         size_ += piece_size;
     }
@@ -251,10 +268,9 @@ private:
                        const std::uint64_t bytes) {
         pieces_.push_back(SourcePiece{
             .logical_offset = size_,
-            .literal = {},
-            .source = input_,
-            .source_offset = source_offset,
             .size = bytes,
+            .backing_offset = source_offset,
+            .source_backed = true,
         });
         size_ += bytes;
     }
@@ -270,25 +286,45 @@ private:
         append_u32(bytes,
                    static_cast<std::uint32_t>(kChunkHeaderBytes) +
                        payload_bytes);
-        append_literal(std::move(bytes));
+        append_literal(bytes);
     }
 
     [[nodiscard]] std::expected<void, SparseFlashPlanError> build(
         const std::uint32_t block_size,
         const std::uint32_t total_blocks,
-        const std::span<const Fragment> fragments) {
+        const std::span<const Fragment> fragments,
+        const std::stop_token stop_token) {
         std::uint32_t chunk_count = 0;
+        std::size_t fill_count = 0;
         std::uint64_t cursor = 0;
         for (const auto& fragment : fragments) {
+            if (stop_token.stop_requested()) {
+                return std::unexpected(plan_error(
+                    SparseFlashPlanErrorKind::Cancelled,
+                    cursor * block_size,
+                    "sparse flash planning was cancelled"));
+            }
             if (fragment.start_block > cursor) {
                 ++chunk_count;
             }
             ++chunk_count;
+            if (fragment.kind == SparseChunkKind::Fill) {
+                ++fill_count;
+            }
             cursor = fragment_end_block(fragment);
         }
         if (cursor < total_blocks) {
             ++chunk_count;
         }
+
+        const auto piece_capacity = static_cast<std::size_t>(1) +
+            static_cast<std::size_t>(chunk_count) * 2;
+        const auto literal_capacity = static_cast<std::size_t>(
+            kSparseHeaderBytes +
+            static_cast<std::uint64_t>(chunk_count) * kChunkHeaderBytes +
+            static_cast<std::uint64_t>(fill_count) * 4);
+        pieces_.reserve(piece_capacity);
+        literals_.reserve(literal_capacity);
 
         std::vector<std::byte> header;
         header.reserve(kSparseHeaderBytes);
@@ -301,10 +337,16 @@ private:
         append_u32(header, total_blocks);
         append_u32(header, chunk_count);
         append_u32(header, 0);
-        append_literal(std::move(header));
+        append_literal(header);
 
         cursor = 0;
         for (const auto& fragment : fragments) {
+            if (stop_token.stop_requested()) {
+                return std::unexpected(plan_error(
+                    SparseFlashPlanErrorKind::Cancelled,
+                    cursor * block_size,
+                    "sparse flash planning was cancelled"));
+            }
             if (fragment.start_block > cursor) {
                 append_chunk_header(
                     kSparseChunkDontCare,
@@ -332,7 +374,7 @@ private:
                 std::vector<std::byte> fill;
                 fill.reserve(4);
                 append_u32(fill, fragment.fill_value.value_or(0));
-                append_literal(std::move(fill));
+                append_literal(fill);
             }
             cursor = fragment_end_block(fragment);
         }
@@ -347,13 +389,15 @@ private:
 
     std::shared_ptr<const IImageSource> input_;
     std::vector<SourcePiece> pieces_;
+    std::vector<std::byte> literals_;
     std::uint64_t size_{};
 };
 
 [[nodiscard]] std::expected<std::vector<Fragment>, SparseFlashPlanError>
 artifact_fragments(const FlashArtifact& artifact,
                    std::uint32_t& block_size,
-                   std::uint32_t& total_blocks) {
+                   std::uint32_t& total_blocks,
+                   const std::stop_token stop_token) {
     std::vector<Fragment> result;
     if (artifact.metadata().kind == FlashArtifactKind::Raw) {
         block_size = kRawResparseBlockSize;
@@ -394,6 +438,12 @@ artifact_fragments(const FlashArtifact& artifact,
     total_blocks = sparse->header().total_blocks;
     result.reserve(sparse->chunks().size());
     for (const auto& chunk : sparse->chunks()) {
+        if (stop_token.stop_requested()) {
+            return std::unexpected(plan_error(
+                SparseFlashPlanErrorKind::Cancelled,
+                chunk.output_offset,
+                "sparse flash planning was cancelled"));
+        }
         if (chunk.kind != SparseChunkKind::Raw &&
             chunk.kind != SparseChunkKind::Fill) {
             continue;
@@ -411,22 +461,21 @@ artifact_fragments(const FlashArtifact& artifact,
 }
 
 [[nodiscard]] std::expected<std::uint32_t, SparseFlashPlanError>
-largest_raw_prefix(const std::span<const Fragment> current,
+largest_raw_prefix(const std::uint64_t current_size,
+                   const std::uint64_t cursor_block,
                    const Fragment& remainder,
                    const std::uint32_t total_blocks,
                    const std::uint32_t block_size,
                    const std::uint64_t limit) {
     std::uint32_t low = 0;
     std::uint32_t high = remainder.block_count;
-    std::vector<Fragment> candidate(current.begin(), current.end());
     while (low < high) {
         const auto middle = static_cast<std::uint32_t>(
             low + (static_cast<std::uint64_t>(high) - low + 1) / 2);
-        candidate.resize(current.size());
         auto prefix = remainder;
         prefix.block_count = middle;
-        candidate.push_back(prefix);
-        auto size = encoded_size(candidate, total_blocks, block_size);
+        auto size = encoded_size_after_append(
+            current_size, cursor_block, prefix, total_blocks, block_size);
         if (!size) {
             return std::unexpected(std::move(size.error()));
         }
@@ -443,9 +492,10 @@ largest_raw_prefix(const std::span<const Fragment> current,
 build_part(const std::shared_ptr<const IImageSource>& input,
            const std::span<const Fragment> fragments,
            const std::uint32_t block_size,
-           const std::uint32_t total_blocks) {
+           const std::uint32_t total_blocks,
+           const std::stop_token stop_token) {
     auto source = SparsePartSource::create(
-        input, block_size, total_blocks, fragments);
+        input, block_size, total_blocks, fragments, stop_token);
     if (!source) {
         return std::unexpected(std::move(source.error()));
     }
@@ -468,7 +518,14 @@ build_part(const std::shared_ptr<const IImageSource>& input,
 std::expected<SparseFlashPlan, SparseFlashPlanError> SparseFlashPlan::create(
     const FlashArtifact& artifact,
     const std::uint64_t target_max_download_size,
-    const std::uint64_t host_resparse_limit) {
+    const std::uint64_t host_resparse_limit,
+    const std::stop_token stop_token) {
+    if (stop_token.stop_requested()) {
+        return std::unexpected(plan_error(
+            SparseFlashPlanErrorKind::Cancelled,
+            0,
+            "sparse flash planning was cancelled"));
+    }
     const auto protocol_limit = static_cast<std::uint64_t>(
         std::numeric_limits<std::uint32_t>::max());
     const auto target_limit = target_max_download_size == 0
@@ -495,20 +552,25 @@ std::expected<SparseFlashPlan, SparseFlashPlanError> SparseFlashPlan::create(
 
     std::uint32_t block_size = 0;
     std::uint32_t total_blocks = 0;
-    auto fragments = artifact_fragments(artifact, block_size, total_blocks);
+    auto fragments = artifact_fragments(
+        artifact, block_size, total_blocks, stop_token);
     if (!fragments) {
         return std::unexpected(std::move(fragments.error()));
     }
 
     std::vector<SparseFlashPart> parts;
     std::vector<Fragment> current;
+    current.reserve(fragments->size());
+    std::uint64_t current_size = empty_encoded_size(total_blocks);
+    std::uint64_t current_cursor = 0;
     std::uint64_t total_transfer_size = 0;
     const auto flush = [&]() -> std::expected<void, SparseFlashPlanError> {
         if (current.empty()) {
             return {};
         }
-        auto part = build_part(artifact.transfer_source(), current, block_size,
-                               total_blocks);
+        auto part = build_part(
+            artifact.transfer_source(), current, block_size, total_blocks,
+            stop_token);
         if (!part) {
             return std::unexpected(std::move(part.error()));
         }
@@ -527,35 +589,53 @@ std::expected<SparseFlashPlan, SparseFlashPlanError> SparseFlashPlan::create(
         }
         parts.push_back(std::move(*part));
         current.clear();
+        current_size = empty_encoded_size(total_blocks);
+        current_cursor = 0;
         return {};
     };
 
     for (auto fragment : *fragments) {
+        if (stop_token.stop_requested()) {
+            return std::unexpected(plan_error(
+                SparseFlashPlanErrorKind::Cancelled,
+                static_cast<std::uint64_t>(fragment.start_block) * block_size,
+                "sparse flash planning was cancelled"));
+        }
         while (fragment.block_count != 0) {
-            std::vector<Fragment> candidate = current;
-            candidate.push_back(fragment);
-            auto candidate_size =
-                encoded_size(candidate, total_blocks, block_size);
+            auto candidate_size = encoded_size_after_append(
+                current_size, current_cursor, fragment, total_blocks,
+                block_size);
             if (!candidate_size) {
                 return std::unexpected(std::move(candidate_size.error()));
             }
             if (*candidate_size <= effective_limit) {
                 current.push_back(fragment);
+                current_size = *candidate_size;
+                current_cursor = fragment_end_block(fragment);
                 fragment.block_count = 0;
                 continue;
             }
 
             if (fragment.kind == SparseChunkKind::Raw) {
                 auto prefix_blocks = largest_raw_prefix(
-                    current, fragment, total_blocks, block_size,
-                    effective_limit);
+                    current_size, current_cursor, fragment, total_blocks,
+                    block_size, effective_limit);
                 if (!prefix_blocks) {
                     return std::unexpected(std::move(prefix_blocks.error()));
                 }
                 if (*prefix_blocks != 0) {
                     auto prefix = fragment;
                     prefix.block_count = *prefix_blocks;
+                    auto prefix_size = encoded_size_after_append(
+                        current_size, current_cursor, prefix, total_blocks,
+                        block_size);
+                    if (!prefix_size) {
+                        return std::unexpected(
+                            std::move(prefix_size.error()));
+                    }
                     current.push_back(prefix);
+                    current_size = *prefix_size;
+                    current_cursor = fragment_end_block(prefix);
                     fragment.start_block += *prefix_blocks;
                     fragment.block_count -= *prefix_blocks;
                     fragment.source_offset +=
@@ -579,7 +659,8 @@ std::expected<SparseFlashPlan, SparseFlashPlanError> SparseFlashPlan::create(
 
     if (current.empty() && parts.empty()) {
         auto empty = build_part(
-            artifact.transfer_source(), {}, block_size, total_blocks);
+            artifact.transfer_source(), {}, block_size, total_blocks,
+            stop_token);
         if (!empty) {
             return std::unexpected(std::move(empty.error()));
         }
