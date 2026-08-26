@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-native:
+    name: native-${{ matrix.id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            runner: ubuntu-24.04
+          - id: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    steps:
+      - name: Install fixed build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            ca-certificates cmake g++-12 git ninja-build python3
+
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Configure
+        env:
+          CC: gcc-12
+          CXX: g++-12
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install
+        run: cmake --install build --prefix "${RUNNER_TEMP}/kairosboot-install"
+
+      - name: Upload install tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kairosboot-${{ matrix.id }}
+          path: ${{ runner.temp }}/kairosboot-install
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop-native:
+    name: native-${{ matrix.id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            runner: windows-2025
+            deployment-target: ""
+          - id: windows-arm64
+            runner: windows-11-arm
+            deployment-target: ""
+          - id: macos-x64
+            runner: macos-15-intel
+            deployment-target: "14.0"
+          - id: macos-arm64
+            runner: macos-15
+            deployment-target: "14.0"
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment-target }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install
+        run: cmake --install build --prefix "${{ runner.temp }}/kairosboot-install"
+
+      - name: Upload install tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kairosboot-${{ matrix.id }}
+          path: ${{ runner.temp }}/kairosboot-install
+          if-no-files-found: error
+          retention-days: 7
+
+  debian-smoke:
+    name: debian12-${{ matrix.arch }}-consumer
+    needs: linux-native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: debian:12
+    steps:
+      - name: Install consumer prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            ca-certificates cmake g++ git ninja-build python3
+
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Download Ubuntu 22.04 SDK
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: kairosboot-linux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/kairosboot-install
+
+      - name: Build installed C11 and C++23 consumers
+        run: >-
+          cmake -S tests/package_consumer -B consumer-build -G Ninja
+          "-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/kairosboot-install"
+
+      - name: Run installed consumers and CLI
+        run: |
+          cmake --build consumer-build --parallel
+          ./consumer-build/c_consumer
+          ./consumer-build/cxx_consumer
+          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+
+  ci-required:
+    name: ci-required
+    if: always()
+    needs:
+      - linux-native
+      - desktop-native
+      - debian-smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every native and consumer job
+        env:
+          LINUX_RESULT: ${{ needs.linux-native.result }}
+          DESKTOP_RESULT: ${{ needs.desktop-native.result }}
+          DEBIAN_RESULT: ${{ needs.debian-smoke.result }}
+        run: |
+          if [ "$LINUX_RESULT" != "success" ] || \
+             [ "$DESKTOP_RESULT" != "success" ] || \
+             [ "$DEBIAN_RESULT" != "success" ]; then
+            echo "linux native result: $LINUX_RESULT"
+            echo "desktop native result: $DESKTOP_RESULT"
+            echo "Debian consumer result: $DEBIAN_RESULT"
+            exit 1
+          fi

@@ -1,0 +1,75 @@
+name: Policy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: policy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-policy:
+    name: repository-policy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate repository invariants
+        run: python3 scripts/check_repository_policy.py
+
+      - name: Validate patch whitespace
+        run: git diff --check
+
+  codeql:
+    name: codeql-cpp
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          languages: c-cpp
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DBUILD_TESTING=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+
+  policy:
+    name: policy
+    if: always()
+    needs:
+      - repository-policy
+      - codeql
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all policy jobs
+        env:
+          REPOSITORY_POLICY_RESULT: ${{ needs.repository-policy.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+        run: |
+          if [ "$REPOSITORY_POLICY_RESULT" != "success" ] || [ "$CODEQL_RESULT" != "success" ]; then
+            echo "repository policy result: $REPOSITORY_POLICY_RESULT"
+            echo "CodeQL result: $CODEQL_RESULT"
+            exit 1
+          fi

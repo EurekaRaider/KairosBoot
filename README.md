@@ -26,7 +26,7 @@ harness, and cross-platform build before enabling destructive device commands.
 
 ## Build the foundation milestone
 
-KairosBoot requires CMake 3.24 or newer and a compiler with C++23 support.
+KairosBoot requires CMake 3.22 or newer and a compiler with C++23 support.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

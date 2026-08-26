@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.22)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/version.json" KAIROSBOOT_VERSION_JSON)
 string(JSON KAIROSBOOT_VERSION_STRING GET "${KAIROSBOOT_VERSION_JSON}" version)
