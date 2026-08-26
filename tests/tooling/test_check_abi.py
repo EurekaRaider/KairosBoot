@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -55,6 +56,29 @@ Summary
                 "?cpp_export@@YAHXZ",
                 "forwarded_export",
             },
+        )
+
+    def test_link_exe_uses_dump_mode_for_pe_exports(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ordinal hint RVA      name\n", stderr=""
+        )
+        with mock.patch.object(
+            CHECK_ABI.subprocess, "run", return_value=completed
+        ) as invoked:
+            CHECK_ABI.run_symbols(
+                Path("kairosboot.dll"),
+                "windows",
+                Path("C:/toolchain/link.exe"),
+            )
+        self.assertEqual(
+            invoked.call_args.args[0],
+            [
+                "C:/toolchain/link.exe",
+                "/dump",
+                "/nologo",
+                "/exports",
+                "kairosboot.dll",
+            ],
         )
 
     def test_unexpected_rogue_export_is_rejected(self) -> None:
