@@ -30,3 +30,24 @@ endif()
 
 add_test(NAME tcp-fastboot COMMAND kairosboot_tcp_tests)
 set_tests_properties(tcp-fastboot PROPERTIES TIMEOUT 10)
+
+if(NOT WIN32)
+    add_executable(kairosboot_tcp_sigpipe_regression
+        sigpipe_regression.cpp
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/transport/tcp_fastboot.cpp"
+    )
+    target_include_directories(kairosboot_tcp_sigpipe_regression PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/transport"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/protocol"
+    )
+    target_compile_features(kairosboot_tcp_sigpipe_regression PRIVATE cxx_std_23)
+    set_target_properties(kairosboot_tcp_sigpipe_regression PROPERTIES
+        CXX_EXTENSIONS OFF
+    )
+    target_compile_options(kairosboot_tcp_sigpipe_regression PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+
+    add_test(NAME tcp-sigpipe-regression COMMAND kairosboot_tcp_sigpipe_regression)
+    set_tests_properties(tcp-sigpipe-regression PROPERTIES TIMEOUT 10)
+endif()

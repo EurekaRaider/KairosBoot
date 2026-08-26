@@ -432,12 +432,32 @@ private:
         if (ready > 0) {
 #ifdef _WIN32
             if (FD_ISSET(socket, &exceptions)) {
-                const auto native_error = last_socket_error();
-                return {
-                    .status = SocketIoStatus::Error,
-                    .native_error = native_error,
-                    .detail = native_error_message(native_error),
-                };
+                // A successful select() does not set WSAGetLastError(). Query
+                // SO_ERROR so failed non-blocking connects report the actual
+                // socket error rather than stale thread-local state.
+                int pending_error = 0;
+                int pending_error_size = sizeof(pending_error);
+                const auto option_result = getsockopt(
+                    socket,
+                    SOL_SOCKET,
+                    SO_ERROR,
+                    reinterpret_cast<char*>(&pending_error),
+                    &pending_error_size);
+                if (option_result != 0) {
+                    const auto native_error = last_socket_error();
+                    return {
+                        .status = SocketIoStatus::Error,
+                        .native_error = native_error,
+                        .detail = native_error_message(native_error),
+                    };
+                }
+                if (pending_error != 0) {
+                    return {
+                        .status = SocketIoStatus::Error,
+                        .native_error = pending_error,
+                        .detail = native_error_message(pending_error),
+                    };
+                }
             }
 #else
             if ((descriptor.revents & POLLNVAL) != 0) {
@@ -505,6 +525,8 @@ public:
             const auto amount = std::min<std::size_t>(
                 bytes.size(), static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
 #ifdef MSG_NOSIGNAL
+            // Linux otherwise delivers SIGPIPE to the whole host process when
+            // a peer closes between readiness and send().
             constexpr int send_flags = MSG_NOSIGNAL;
 #else
             constexpr int send_flags = 0;
