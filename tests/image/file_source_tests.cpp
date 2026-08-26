@@ -65,6 +65,14 @@ void write_bytes(const std::filesystem::path& path, const std::string_view bytes
     }
 }
 
+[[nodiscard]] std::filesystem::path with_embedded_nul(
+    const std::filesystem::path& prefix) {
+    auto native = prefix.native();
+    native.push_back(std::filesystem::path::value_type{});
+    native.push_back(static_cast<std::filesystem::path::value_type>('x'));
+    return std::filesystem::path(std::move(native));
+}
+
 [[nodiscard]] std::string as_string(const std::span<const std::byte> bytes) {
     std::string result;
     result.reserve(bytes.size());
@@ -90,6 +98,60 @@ void open_rejects_invalid_paths() {
     CHECK(directory.error().kind ==
           kairosboot::image::FileSourceErrorKind::NotRegularFile);
 }
+
+void filesystem_entrypoints_reject_embedded_nul() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "boot.img";
+    write_bytes(image, "payload");
+    const auto direct = kairosboot::image::FileImageSource::open(
+        with_embedded_nul(image));
+    CHECK(!direct);
+    CHECK(direct.error().kind ==
+          kairosboot::image::FileSourceErrorKind::UnsafePath);
+
+    const auto relative = kairosboot::image::FileImageSource::open_beneath(
+        temporary.path(), with_embedded_nul(std::filesystem::path{"boot.img"}));
+    CHECK(!relative);
+    CHECK(relative.error().kind ==
+          kairosboot::image::FileSourceErrorKind::UnsafePath);
+
+    const auto base = kairosboot::image::FileImageSource::open_beneath(
+        with_embedded_nul(temporary.path()), "boot.img");
+    CHECK(!base);
+    CHECK(base.error().kind ==
+          kairosboot::image::FileSourceErrorKind::UnsafePath);
+}
+
+#if defined(_WIN32)
+void windows_normalized_aliases_are_rejected_before_open() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "boot.img";
+    write_bytes(image, "payload");
+    const std::array aliases{
+        temporary.path() / "boot.img.", temporary.path() / "boot.img ",
+        temporary.path() / "NUL.img", temporary.path() / "CONOUT$.txt",
+        temporary.path() / "boot.img:stream",
+    };
+    for (const auto& alias : aliases) {
+        const auto opened = kairosboot::image::FileImageSource::open(alias);
+        CHECK(!opened);
+        CHECK(opened.error().kind ==
+              kairosboot::image::FileSourceErrorKind::UnsafePath);
+    }
+    const std::array relative_aliases{
+        std::filesystem::path{"boot.img."}, std::filesystem::path{"boot.img "},
+        std::filesystem::path{"CON"}, std::filesystem::path{"CONIN$.txt"},
+        std::filesystem::path{"boot.img:stream"},
+    };
+    for (const auto& alias : relative_aliases) {
+        const auto opened = kairosboot::image::FileImageSource::open_beneath(
+            temporary.path(), alias);
+        CHECK(!opened);
+        CHECK(opened.error().kind ==
+              kairosboot::image::FileSourceErrorKind::UnsafePath);
+    }
+}
+#endif
 
 void random_access_reads_are_bounded_by_the_open_size() {
     TemporaryDirectory temporary;
@@ -442,6 +504,12 @@ using Test = std::pair<std::string_view, void (*)()>;
 int main() {
     const std::array tests{
         Test{"open rejects invalid paths", open_rejects_invalid_paths},
+        Test{"filesystem entrypoints reject embedded NUL",
+             filesystem_entrypoints_reject_embedded_nul},
+#if defined(_WIN32)
+        Test{"Windows normalized aliases are rejected",
+             windows_normalized_aliases_are_rejected_before_open},
+#endif
         Test{"bounded random access", random_access_reads_are_bounded_by_the_open_size},
         Test{"EOF and out-of-bounds reads", eof_and_out_of_bounds_reads_are_empty},
         Test{"native Unicode paths", native_unicode_paths_are_supported},
