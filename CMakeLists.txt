@@ -34,6 +34,18 @@ function(kairosboot_enable_strict_warnings target)
   endif()
 endfunction()
 
+add_library(
+  kairosboot_internal STATIC
+  src/fleet/controller_scheduler.cpp
+  src/protocol/fastboot_protocol.cpp
+  src/transport/adaptive_tuner.cpp
+  src/transport/buffer_budget.cpp
+  src/transport/transfer_ring.cpp)
+set_target_properties(kairosboot_internal PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(kairosboot_internal PUBLIC cxx_std_23)
+target_include_directories(kairosboot_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+kairosboot_enable_strict_warnings(kairosboot_internal)
+
 add_library(kairosboot SHARED src/kairosboot.cpp)
 add_library(KairosBoot::C ALIAS kairosboot)
 set_target_properties(
@@ -55,7 +67,9 @@ target_compile_definitions(
 target_include_directories(
   kairosboot
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(kairosboot PRIVATE kairosboot_internal)
 kairosboot_enable_strict_warnings(kairosboot)
 
 add_library(kairosboot_cxx INTERFACE)
@@ -115,6 +129,24 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_cxx_api_test PRIVATE KairosBoot::Cxx)
   kairosboot_enable_strict_warnings(kairosboot_cxx_api_test)
   add_test(NAME cxx_api COMMAND kairosboot_cxx_api_test)
+
+  add_executable(kairosboot_protocol_tests tests/protocol/protocol_tests.cpp
+                                            tests/protocol/scripted_transport.cpp)
+  target_compile_features(kairosboot_protocol_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_protocol_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                     "${CMAKE_CURRENT_SOURCE_DIR}/src/protocol")
+  target_link_libraries(kairosboot_protocol_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_protocol_tests)
+  add_test(NAME protocol COMMAND kairosboot_protocol_tests)
+
+  add_executable(kairosboot_performance_tests tests/performance/test_main.cpp)
+  target_compile_features(kairosboot_performance_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_performance_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_performance_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_performance_tests)
+  add_test(NAME performance COMMAND kairosboot_performance_tests)
 
   add_test(
     NAME cli_contract

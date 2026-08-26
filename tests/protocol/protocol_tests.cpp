@@ -42,7 +42,9 @@ public:
         }                                                                                    \
     } while (false)
 
-[[nodiscard]] auto parse(const std::string_view packet, const std::size_t limit = 4096) {
+[[nodiscard]] auto parse(
+    const std::string_view packet,
+    const std::size_t limit = kairosboot::protocol::kDefaultMaxResponseBytes) {
     const auto bytes = to_bytes(packet);
     return parse_response(bytes, limit);
 }
