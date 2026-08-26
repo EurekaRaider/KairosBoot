@@ -17,6 +17,9 @@
 namespace {
 
 using namespace std::chrono_literals;
+using kairosboot::api::CommandMessageKind;
+using kairosboot::api::CommandMessagePayload;
+using kairosboot::api::CommandResultPayload;
 using kairosboot::api::OperationErrorPayload;
 using kairosboot::api::OperationOutcome;
 using kairosboot::api::OperationPhase;
@@ -188,6 +191,39 @@ void failure_payload_is_synchronized_and_immutable() {
     CHECK(*first == expected);
     CHECK(*second == expected);
     CHECK(operation.status() == KB_E_IO);
+    CHECK(!operation.command_result());
+}
+
+void successful_command_result_is_shared_and_immutable() {
+    auto expected = std::make_shared<const CommandResultPayload>(
+        CommandResultPayload{
+            .terminal_payload = "product_a",
+            .messages = {
+                CommandMessagePayload{CommandMessageKind::Info, "probing"},
+                CommandMessagePayload{CommandMessageKind::Text, "ready"},
+            },
+        });
+    std::weak_ptr<const CommandResultPayload> weak = expected;
+    OperationState operation(
+        [expected](OperationState::TaskContext&) {
+            return OperationOutcome::succeeded(expected);
+        });
+    expected.reset();
+
+    CHECK(operation.start());
+    operation.wait();
+    const auto first = operation.command_result();
+    const auto second = operation.command_result();
+    CHECK(first);
+    CHECK(second);
+    CHECK(first == second);
+    CHECK(first->terminal_payload == "product_a");
+    CHECK(first->messages.size() == 2);
+    const CommandMessagePayload expected_info{CommandMessageKind::Info, "probing"};
+    const CommandMessagePayload expected_text{CommandMessageKind::Text, "ready"};
+    CHECK(first->messages[0] == expected_info);
+    CHECK(first->messages[1] == expected_text);
+    CHECK(!weak.expired());
 }
 
 void successful_task_is_cancelled_when_cancel_wins_publication() {
@@ -209,6 +245,7 @@ void successful_task_is_cancelled_when_cancel_wins_publication() {
     CHECK(operation.phase() == OperationPhase::Cancelled);
     CHECK(operation.error()->status == KB_E_CANCELLED);
     CHECK(operation.error()->transfer_state == KB_TRANSFER_FULLY_TRANSFERRED);
+    CHECK(!operation.command_result());
 }
 
 void task_payload_outlives_initiating_reference() {
@@ -332,6 +369,8 @@ int main() {
          cancellation_is_idempotent_and_publishes_after_drain},
         {"cancel before start", cancel_before_start_is_terminal_and_skips_task},
         {"failure payload is immutable", failure_payload_is_synchronized_and_immutable},
+        {"successful command result is immutable",
+         successful_command_result_is_shared_and_immutable},
         {"cancel wins terminal publication",
          successful_task_is_cancelled_when_cancel_wins_publication},
         {"task payload lifetime", task_payload_outlives_initiating_reference},
