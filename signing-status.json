@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "mode": "off",
+  "authenticode": false,
+  "developerId": false,
+  "notarized": false,
+  "checksumSignature": false
+}

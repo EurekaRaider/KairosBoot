@@ -1,0 +1,5 @@
+KairosBoot native artifacts are currently unsigned.
+
+Authenticode, Apple Developer ID signing, and notarization are not configured.
+Verify release downloads against SHA256SUMS and GitHub artifact attestations.
+

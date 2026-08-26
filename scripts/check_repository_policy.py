@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def fail(message: str) -> None:
@@ -59,11 +60,39 @@ def check_required_files() -> None:
             fail(f"required repository file is missing: {name}")
 
 
+def check_compatibility_baseline() -> None:
+    lock = json.loads((ROOT / "compat" / "aosp.lock.json").read_text(encoding="utf-8"))
+    inventory = json.loads(
+        (ROOT / "compat" / "generated-inventory.json").read_text(encoding="utf-8")
+    )
+    if lock.get("baselineStatus") != "locked":
+        fail("AOSP compatibility baseline must be locked")
+    version = lock.get("aosp", {}).get("platformToolsVersion")
+    if inventory.get("baseline", {}).get("platformToolsVersion") != version:
+        fail("compatibility inventory and AOSP lock use different versions")
+    archives = lock.get("aosp", {}).get("officialArchives", {})
+    if set(archives) != {"linux", "windows", "darwin"}:
+        fail("AOSP lock must contain all three official host archives")
+    for platform, archive in archives.items():
+        url = archive.get("url", "")
+        if "latest" in url or version not in url:
+            fail(f"{platform} Platform-Tools URL is not immutable")
+        for field in ("sha256", "fastbootSha256"):
+            if SHA256.fullmatch(archive.get(field, "")) is None:
+                fail(f"{platform} Platform-Tools {field} is not SHA-256")
+    libusb = lock.get("libusb", {})
+    if libusb.get("requiredVersion") != "1.0.30":
+        fail("libusb baseline must remain fixed at 1.0.30")
+    if SHA256.fullmatch(libusb.get("sourceArchiveSha256", "")) is None:
+        fail("libusb source archive hash is not SHA-256")
+
+
 def main() -> None:
     check_required_files()
     check_codeowners()
     check_version()
     check_workflows()
+    check_compatibility_baseline()
     print("repository policy checks passed")
 
 

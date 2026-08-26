@@ -1,0 +1,56 @@
+{
+  "documentType": "kairosboot.fastboot-compatibility-inventory",
+  "schemaVersion": 1,
+  "inventoryStatus": "source-audited",
+  "claimCompatibility": false,
+  "baseline": {
+    "platformToolsVersion": "37.0.1",
+    "platformToolsBuild": "15733141",
+    "aospCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "sources": [
+      "fastboot --help",
+      "platform/system/core/fastboot/fastboot.cpp",
+      "platform/system/core/fastboot/README.md"
+    ]
+  },
+  "transports": [
+    { "id": "usb", "required": true, "status": "in-progress" },
+    { "id": "tcp", "required": true, "status": "planned" },
+    { "id": "udp", "required": true, "status": "planned" }
+  ],
+  "protocolCapabilities": [
+    { "id": "command", "required": true, "status": "implemented-core" },
+    { "id": "download", "required": true, "status": "implemented-core" },
+    { "id": "upload", "required": true, "status": "planned" },
+    { "id": "info-text-terminal-responses", "required": true, "status": "implemented-core" },
+    { "id": "poison-on-ambiguous-transfer", "required": true, "status": "implemented-core" }
+  ],
+  "commands": [
+    "devices", "getvar", "reboot", "reboot-bootloader", "reboot-recovery",
+    "reboot-fastboot", "continue", "boot", "flash", "flash:raw", "flashall",
+    "update", "erase", "format", "signature", "set_active", "stage",
+    "get_staged", "oem", "flashing lock", "flashing unlock",
+    "flashing lock_critical", "flashing unlock_critical",
+    "flashing get_unlock_ability", "create-logical-partition",
+    "delete-logical-partition", "resize-logical-partition", "gsi wipe",
+    "gsi disable", "gsi status", "wipe-super", "snapshot-update cancel",
+    "snapshot-update merge", "fetch"
+  ],
+  "options": [
+    "-a", "-h", "-l", "-s", "-S", "-v", "-w", "--base", "--cmdline",
+    "--disable-verification", "--disable-verity", "--disable-super-optimization",
+    "--exclude-dynamic-partitions", "--disable-fastboot-info", "--force",
+    "--fs-options", "--header-version", "--help", "--kernel-offset",
+    "--os-patch-level", "--os-version", "--page-size", "--ramdisk-offset",
+    "--set-active", "--skip-reboot", "--skip-secondary", "--slot",
+    "--tags-offset", "--dtb", "--dtb-offset", "--unbuffered", "--verbose",
+    "--version"
+  ],
+  "imageAndPlanCapabilities": [
+    "raw-image", "android-sparse", "update-zip", "fastboot-info",
+    "boot-image", "vendor-boot", "vbmeta-avb", "super-image",
+    "dynamic-partitions", "a-b-slots", "fastbootd-reenumeration"
+  ],
+  "intentionalDeviations": [],
+  "completionRule": "claimCompatibility may become true only when every required entry has differential trace evidence and no unknown inventory entries remain"
+}

@@ -1,10 +1,12 @@
 schemaVersion: 1
-baselineStatus: pending-release-owner-lock
+baselineStatus: locked
 claimCompatibility: false
 
 baseline:
   lockFile: compat/aosp.lock.json
-  immutable: false
+  inventoryFile: compat/generated-inventory.json
+  platformToolsVersion: 37.0.1
+  immutable: true
   owner: release-owner
 
 implementedSlices:
@@ -20,8 +22,6 @@ implementedSlices:
     evidence: tests/protocol/protocol_tests.cpp
 
 pendingInventories:
-  - cli-options
-  - host-commands
   - image-types
   - wire-golden-traces
   - intentional-deviations

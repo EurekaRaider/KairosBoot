@@ -1,22 +1,43 @@
 {
   "documentType": "kairosboot.aosp-baseline-lock",
   "schemaVersion": 1,
-  "baselineStatus": "pending-release-owner-lock",
+  "baselineStatus": "locked",
   "claimCompatibility": false,
+  "lockedAt": "2026-08-26",
   "aosp": {
-    "platformToolsVersion": null,
-    "sourceCommit": null,
+    "platformToolsVersion": "37.0.1",
+    "sourceCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "sourceCommitRole": "immutable main-source reference; binary behavior remains the release oracle",
     "sourceTree": "platform/system/core/fastboot",
-    "officialArchiveSha256": null
+    "releaseNotes": "https://developer.android.com/tools/releases/platform-tools",
+    "officialArchives": {
+      "linux": {
+        "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip",
+        "sha256": "d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1",
+        "fastbootSha256": "a686e2c7e8dc9cf4cba0cb8a2eef05f7b2bd682c925abd032fe203215d80b618"
+      },
+      "windows": {
+        "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip",
+        "sha256": "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99",
+        "fastbootSha256": "b2d9cbff4ce9ae7eb448cfc831bafc867935f50f5be38f8f81057fd7eb3b8d86"
+      },
+      "darwin": {
+        "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-darwin.zip",
+        "sha256": "ee39ad5967e95c2a07f04dbcbde96b1a0c916ba376096db5d2f498b7727a5d1d",
+        "fastbootSha256": "c97aa28970ba9a46023a8ca52a78dd6547c2c1c4133f9715d4fe551e1dfae152"
+      }
+    }
   },
   "libusb": {
     "requiredVersion": "1.0.30",
-    "sourceTag": null,
-    "sourceArchiveSha256": null
+    "sourceTag": "v1.0.30",
+    "sourceCommit": "87a55632db62c9bdc58cd31d3ccfa673f1bb017f",
+    "sourceArchive": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2",
+    "sourceArchiveSha256": "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
   },
-  "releaseOwnerActionRequired": [
-    "select the stable Android Platform-Tools baseline",
-    "record immutable source and archive hashes",
-    "verify the libusb tag and source archive hash"
+  "remainingCompatibilityGates": [
+    "generate the complete CLI and image inventory",
+    "run differential traces against every platform binary",
+    "set claimCompatibility only after the inventory has no unknown entries"
   ]
 }
