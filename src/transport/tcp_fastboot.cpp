@@ -1,33 +1,22 @@
 // SPDX-License-Identifier: MIT
 #include "tcp_fastboot.hpp"
 
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/error.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/system/error_code.hpp>
+
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
 #include <cctype>
-#include <cstring>
 #include <limits>
+#include <new>
 #include <string>
 #include <system_error>
 #include <utility>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <cerrno>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
 
 namespace kairosboot::transport {
 namespace {
@@ -270,231 +259,123 @@ struct ExactIoResult {
     return static_cast<std::uint16_t>(port);
 }
 
-#ifdef _WIN32
+using AsioErrorCode = boost::system::error_code;
+using AsioTcp = boost::asio::ip::tcp;
 
-using NativeSocketHandle = SOCKET;
-inline constexpr NativeSocketHandle kInvalidNativeSocket = INVALID_SOCKET;
-
-class WinsockRuntime {
-public:
-    WinsockRuntime() {
-        WSADATA data{};
-        error_ = WSAStartup(MAKEWORD(2, 2), &data);
-    }
-    ~WinsockRuntime() {
-        if (error_ == 0) {
-            WSACleanup();
-        }
-    }
-    [[nodiscard]] int error() const noexcept { return error_; }
-
-private:
-    int error_{0};
+struct AsioOperationResult {
+    AsioErrorCode error{};
+    std::size_t transferred{0};
+    bool completed{false};
 };
 
-[[nodiscard]] int last_socket_error() noexcept {
-    return WSAGetLastError();
+[[nodiscard]] SocketIoResult socket_error_result(
+    const AsioErrorCode& error,
+    const std::size_t transferred = 0) {
+    return {
+        .status = SocketIoStatus::Error,
+        .transferred = transferred,
+        .native_error = error.value(),
+        .detail = error.message(),
+    };
 }
 
-[[nodiscard]] bool socket_error_would_block(const int error) noexcept {
-    return error == WSAEWOULDBLOCK;
-}
-
-[[nodiscard]] bool socket_error_interrupted(const int error) noexcept {
-    return error == WSAEINTR;
-}
-
-[[nodiscard]] bool socket_error_connecting(const int error) noexcept {
-    return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS || error == WSAEINVAL;
-}
-
-void close_native_socket(const NativeSocketHandle socket) noexcept {
-    if (socket != kInvalidNativeSocket) {
-        closesocket(socket);
+void cancel_pending_operation(
+    boost::asio::io_context& context,
+    AsioTcp::socket& socket,
+    AsioOperationResult& operation) {
+    AsioErrorCode ignored;
+    socket.cancel(ignored);
+    if (ignored) {
+        socket.close(ignored);
+    }
+    if (context.stopped()) {
+        context.restart();
+    }
+    while (!operation.completed && context.run_one() != 0) {
     }
 }
 
-[[nodiscard]] bool set_nonblocking(const NativeSocketHandle socket) noexcept {
-    u_long enabled = 1;
-    return ioctlsocket(socket, FIONBIO, &enabled) == 0;
-}
-
-#else
-
-using NativeSocketHandle = int;
-inline constexpr NativeSocketHandle kInvalidNativeSocket = -1;
-
-[[nodiscard]] int last_socket_error() noexcept {
-    return errno;
-}
-
-[[nodiscard]] bool socket_error_would_block(const int error) noexcept {
-    return error == EAGAIN || error == EWOULDBLOCK;
-}
-
-[[nodiscard]] bool socket_error_interrupted(const int error) noexcept {
-    return error == EINTR;
-}
-
-[[nodiscard]] bool socket_error_connecting(const int error) noexcept {
-    return error == EINPROGRESS || error == EALREADY || socket_error_would_block(error);
-}
-
-void close_native_socket(const NativeSocketHandle socket) noexcept {
-    if (socket != kInvalidNativeSocket) {
-        ::close(socket);
-    }
-}
-
-[[nodiscard]] bool set_nonblocking(const NativeSocketHandle socket) noexcept {
-    const auto flags = fcntl(socket, F_GETFL, 0);
-    if (flags == -1 || fcntl(socket, F_SETFL, flags | O_NONBLOCK) == -1) {
-        return false;
-    }
-    const auto descriptor_flags = fcntl(socket, F_GETFD, 0);
-    return descriptor_flags != -1 &&
-           fcntl(socket, F_SETFD, descriptor_flags | FD_CLOEXEC) != -1;
-}
-
-#endif
-
-class NativeSocketGuard {
-public:
-    explicit NativeSocketGuard(const NativeSocketHandle socket) noexcept
-        : socket_(socket) {}
-
-    ~NativeSocketGuard() noexcept {
-        close_native_socket(socket_);
-    }
-
-    NativeSocketGuard(const NativeSocketGuard&) = delete;
-    NativeSocketGuard& operator=(const NativeSocketGuard&) = delete;
-
-    [[nodiscard]] NativeSocketHandle get() const noexcept {
-        return socket_;
-    }
-
-    [[nodiscard]] NativeSocketHandle release() noexcept {
-        return std::exchange(socket_, kInvalidNativeSocket);
-    }
-
-private:
-    NativeSocketHandle socket_{kInvalidNativeSocket};
-};
-
-[[nodiscard]] std::string native_error_message(const int error) {
-    return std::system_category().message(error);
-}
-
-[[nodiscard]] SocketIoResult wait_for_socket(
-    const NativeSocketHandle socket,
-    const bool writable,
+[[nodiscard]] SocketIoResult run_until_complete(
+    boost::asio::io_context& context,
+    AsioTcp::socket& socket,
+    AsioOperationResult& operation,
     Deadline& deadline,
     const CancellationSignal cancellation) {
     constexpr auto poll_slice = std::chrono::milliseconds(50);
-    for (;;) {
+    while (!operation.completed) {
         if (cancellation.stop_requested()) {
+            cancel_pending_operation(context, socket, operation);
             return {
                 .status = SocketIoStatus::Cancelled,
+                .transferred = operation.transferred,
                 .detail = "cancellation requested",
             };
         }
+
+        if (context.stopped()) {
+            context.restart();
+        }
+        static_cast<void>(context.poll_one());
+        if (operation.completed) {
+            break;
+        }
+
         const auto remaining = deadline.remaining();
+        if (remaining <= std::chrono::milliseconds::zero()) {
+            cancel_pending_operation(context, socket, operation);
+            return {
+                .status = SocketIoStatus::Timeout,
+                .transferred = operation.transferred,
+                .detail = "socket operation deadline expired",
+            };
+        }
         const auto slice = remaining == std::chrono::milliseconds::max()
             ? poll_slice
             : std::min(remaining, poll_slice);
-
-#ifdef _WIN32
-        fd_set requested;
-        FD_ZERO(&requested);
-        FD_SET(socket, &requested);
-        fd_set exceptions;
-        FD_ZERO(&exceptions);
-        FD_SET(socket, &exceptions);
-        timeval wait_time{
-            .tv_sec = static_cast<long>(slice.count() / 1000),
-            .tv_usec = static_cast<long>((slice.count() % 1000) * 1000),
-        };
-        const auto ready = select(
-            0,
-            writable ? nullptr : &requested,
-            writable ? &requested : nullptr,
-            &exceptions,
-            &wait_time);
-#else
-        pollfd descriptor{
-            .fd = socket,
-            .events = static_cast<short>(writable ? POLLOUT : POLLIN),
-            .revents = 0,
-        };
-        const auto ready = poll(&descriptor, 1, static_cast<int>(slice.count()));
-#endif
-        if (ready > 0) {
-#ifdef _WIN32
-            if (FD_ISSET(socket, &exceptions)) {
-                // A successful select() does not set WSAGetLastError(). Query
-                // SO_ERROR so failed non-blocking connects report the actual
-                // socket error rather than stale thread-local state.
-                int pending_error = 0;
-                int pending_error_size = sizeof(pending_error);
-                const auto option_result = getsockopt(
-                    socket,
-                    SOL_SOCKET,
-                    SO_ERROR,
-                    reinterpret_cast<char*>(&pending_error),
-                    &pending_error_size);
-                if (option_result != 0) {
-                    const auto native_error = last_socket_error();
-                    return {
-                        .status = SocketIoStatus::Error,
-                        .native_error = native_error,
-                        .detail = native_error_message(native_error),
-                    };
-                }
-                if (pending_error != 0) {
-                    return {
-                        .status = SocketIoStatus::Error,
-                        .native_error = pending_error,
-                        .detail = native_error_message(pending_error),
-                    };
-                }
-            }
-#else
-            if ((descriptor.revents & POLLNVAL) != 0) {
-                return {
-                    .status = SocketIoStatus::Error,
-                    .detail = "poll reported an invalid socket",
-                };
-            }
-#endif
-            return {};
-        }
-        if (ready == 0) {
-            if (deadline.expired()) {
-                return {
-                    .status = SocketIoStatus::Timeout,
-                    .detail = "socket readiness deadline expired",
-                };
-            }
-            continue;
-        }
-
-        const auto native_error = last_socket_error();
-        if (socket_error_interrupted(native_error)) {
-            continue;
-        }
-        return {
-            .status = SocketIoStatus::Error,
-            .native_error = native_error,
-            .detail = native_error_message(native_error),
-        };
+        static_cast<void>(context.run_one_for(slice));
     }
+    return {};
 }
 
 class NativeTcpSocket final : public ITcpSocket {
 public:
-    explicit NativeTcpSocket(const NativeSocketHandle socket) : socket_(socket) {}
+    NativeTcpSocket() : socket_(context_) {}
     ~NativeTcpSocket() override { close(); }
+
+    [[nodiscard]] SocketIoResult connect(
+        const AsioTcp::endpoint& endpoint,
+        Deadline& deadline,
+        const std::stop_token cancellation) {
+        AsioErrorCode error;
+        socket_.open(endpoint.protocol(), error);
+        if (error) {
+            return socket_error_result(error);
+        }
+
+        AsioOperationResult operation;
+        context_.restart();
+        socket_.async_connect(
+            endpoint,
+            [&](const AsioErrorCode& connect_error) noexcept {
+                operation.error = connect_error;
+                operation.completed = true;
+            });
+        auto connect_result = run_until_complete(
+            context_,
+            socket_,
+            operation,
+            deadline,
+            CancellationSignal{.external = cancellation});
+        if (connect_result.status != SocketIoStatus::Ok) {
+            return connect_result;
+        }
+        if (operation.error) {
+            return socket_error_result(operation.error);
+        }
+        AsioErrorCode ignored;
+        socket_.set_option(AsioTcp::no_delay(true), ignored);
+        return {};
+    }
 
     [[nodiscard]] SocketIoResult send_some(
         const std::span<const std::byte> bytes,
@@ -503,7 +384,7 @@ public:
         if (bytes.empty()) {
             return {};
         }
-        if (socket_ == kInvalidNativeSocket) {
+        if (!socket_.is_open()) {
             return {
                 .status = SocketIoStatus::EndOfStream,
                 .detail = "socket is closed",
@@ -511,49 +392,34 @@ public:
         }
 
         Deadline deadline(timeout);
-        for (;;) {
-            auto ready = wait_for_socket(socket_, true, deadline, cancellation);
-            if (ready.status != SocketIoStatus::Ok) {
-                return ready;
-            }
-#ifdef _WIN32
-            const auto amount = static_cast<int>(std::min<std::size_t>(
-                bytes.size(), static_cast<std::size_t>(std::numeric_limits<int>::max())));
-            const auto sent = ::send(
-                socket_, reinterpret_cast<const char*>(bytes.data()), amount, 0);
-#else
-            const auto amount = std::min<std::size_t>(
-                bytes.size(), static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-#ifdef MSG_NOSIGNAL
-            // Linux otherwise delivers SIGPIPE to the whole host process when
-            // a peer closes between readiness and send().
-            constexpr int send_flags = MSG_NOSIGNAL;
-#else
-            constexpr int send_flags = 0;
-#endif
-            const auto sent = ::send(socket_, bytes.data(), amount, send_flags);
-#endif
-            if (sent > 0) {
-                return {
-                    .transferred = static_cast<std::size_t>(sent),
-                };
-            }
-            if (sent == 0) {
-                return {
-                    .status = SocketIoStatus::EndOfStream,
-                    .detail = "socket closed during send",
-                };
-            }
-            const auto native_error = last_socket_error();
-            if (socket_error_would_block(native_error) || socket_error_interrupted(native_error)) {
-                continue;
-            }
+        AsioOperationResult operation;
+        if (context_.stopped()) {
+            context_.restart();
+        }
+        socket_.async_send(
+            boost::asio::buffer(bytes.data(), bytes.size()),
+            [&](const AsioErrorCode& error, const std::size_t transferred) noexcept {
+                operation.error = error;
+                operation.transferred = transferred;
+                operation.completed = true;
+            });
+        auto send_result = run_until_complete(
+            context_, socket_, operation, deadline, cancellation);
+        if (send_result.status != SocketIoStatus::Ok) {
+            return send_result;
+        }
+        if (operation.error) {
+            return socket_error_result(operation.error, operation.transferred);
+        }
+        if (operation.transferred == 0) {
             return {
-                .status = SocketIoStatus::Error,
-                .native_error = native_error,
-                .detail = native_error_message(native_error),
+                .status = SocketIoStatus::EndOfStream,
+                .detail = "socket closed during send",
             };
         }
+        return {
+            .transferred = operation.transferred,
+        };
     }
 
     [[nodiscard]] SocketIoResult receive_some(
@@ -563,7 +429,7 @@ public:
         if (destination.empty()) {
             return {};
         }
-        if (socket_ == kInvalidNativeSocket) {
+        if (!socket_.is_open()) {
             return {
                 .status = SocketIoStatus::EndOfStream,
                 .detail = "socket is closed",
@@ -571,55 +437,55 @@ public:
         }
 
         Deadline deadline(timeout);
-        for (;;) {
-            auto ready = wait_for_socket(socket_, false, deadline, cancellation);
-            if (ready.status != SocketIoStatus::Ok) {
-                return ready;
-            }
-#ifdef _WIN32
-            const auto amount = static_cast<int>(std::min<std::size_t>(
-                destination.size(),
-                static_cast<std::size_t>(std::numeric_limits<int>::max())));
-            const auto received = ::recv(
-                socket_, reinterpret_cast<char*>(destination.data()), amount, 0);
-#else
-            const auto amount = std::min<std::size_t>(
-                destination.size(),
-                static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-            const auto received = ::recv(socket_, destination.data(), amount, 0);
-#endif
-            if (received > 0) {
-                return {
-                    .transferred = static_cast<std::size_t>(received),
-                };
-            }
-            if (received == 0) {
-                return {
-                    .status = SocketIoStatus::EndOfStream,
-                    .detail = "peer closed the TCP connection",
-                };
-            }
-            const auto native_error = last_socket_error();
-            if (socket_error_would_block(native_error) || socket_error_interrupted(native_error)) {
-                continue;
-            }
+        AsioOperationResult operation;
+        if (context_.stopped()) {
+            context_.restart();
+        }
+        socket_.async_receive(
+            boost::asio::buffer(destination.data(), destination.size()),
+            [&](const AsioErrorCode& error, const std::size_t transferred) noexcept {
+                operation.error = error;
+                operation.transferred = transferred;
+                operation.completed = true;
+            });
+        auto receive_result = run_until_complete(
+            context_, socket_, operation, deadline, cancellation);
+        if (receive_result.status != SocketIoStatus::Ok) {
+            return receive_result;
+        }
+        if (operation.error == boost::asio::error::eof) {
             return {
-                .status = SocketIoStatus::Error,
-                .native_error = native_error,
-                .detail = native_error_message(native_error),
+                .status = SocketIoStatus::EndOfStream,
+                .transferred = operation.transferred,
+                .detail = "peer closed the TCP connection",
             };
         }
+        if (operation.error) {
+            return socket_error_result(operation.error, operation.transferred);
+        }
+        if (operation.transferred == 0) {
+            return {
+                .status = SocketIoStatus::EndOfStream,
+                .detail = "peer closed the TCP connection",
+            };
+        }
+        return {
+            .transferred = operation.transferred,
+        };
     }
 
     void close() noexcept override {
-        if (socket_ != kInvalidNativeSocket) {
-            close_native_socket(socket_);
-            socket_ = kInvalidNativeSocket;
+        if (!socket_.is_open()) {
+            return;
         }
+        AsioErrorCode ignored;
+        socket_.cancel(ignored);
+        socket_.close(ignored);
     }
 
 private:
-    NativeSocketHandle socket_{kInvalidNativeSocket};
+    boost::asio::io_context context_;
+    AsioTcp::socket socket_;
 };
 
 }  // namespace
@@ -965,39 +831,35 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             .message = "native TCP endpoint is empty or has port zero",
         });
     }
-#ifdef _WIN32
-    static WinsockRuntime winsock;
-    if (winsock.error() != 0) {
-        return std::unexpected(TcpError{
-            .kind = TcpErrorKind::Io,
-            .native_error = winsock.error(),
-            .message = "Winsock 2.2 initialization failed",
-        });
-    }
-#endif
 
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-    addrinfo* addresses = nullptr;
+    boost::asio::io_context resolver_context;
+    AsioTcp::resolver resolver(resolver_context);
+    AsioTcp::resolver::results_type addresses;
     const auto service = std::to_string(endpoint.port);
     struct ResolveContext {
-        const char* host;
-        const char* service;
-        const addrinfo* hints;
-        addrinfo** addresses;
-        int result{0};
+        AsioTcp::resolver* resolver;
+        const std::string* host;
+        const std::string* service;
+        AsioTcp::resolver::results_type* addresses;
+        AsioErrorCode error{};
+        bool allocation_failed{false};
+        bool unexpected_failure{false};
     } resolve_context{
-        .host = endpoint.host.c_str(),
-        .service = service.c_str(),
-        .hints = &hints,
+        .resolver = &resolver,
+        .host = &endpoint.host,
+        .service = &service,
         .addresses = &addresses,
     };
     const auto resolve = [](void* const opaque) noexcept {
         auto& context = *static_cast<ResolveContext*>(opaque);
-        context.result = getaddrinfo(
-            context.host, context.service, context.hints, context.addresses);
+        try {
+            *context.addresses = context.resolver->resolve(
+                *context.host, *context.service, context.error);
+        } catch (const std::bad_alloc&) {
+            context.allocation_failed = true;
+        } catch (...) {
+            context.unexpected_failure = true;
+        }
     };
     const auto now = [](void*) noexcept {
         return Clock::now();
@@ -1009,8 +871,6 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
         &resolve_context,
         now,
         nullptr);
-    const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> address_list(
-        addresses, &freeaddrinfo);
     if (resolve_phase.cancelled) {
         return std::unexpected(TcpError{
             .kind = TcpErrorKind::Cancelled,
@@ -1025,20 +885,31 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             .message = "TCP connect deadline expired during name resolution",
         });
     }
-    const auto resolve_result = resolve_context.result;
-    if (resolve_result != 0) {
+    if (resolve_context.allocation_failed) {
+        return std::unexpected(TcpError{
+            .kind = TcpErrorKind::Io,
+            .message = "allocating TCP resolver results failed",
+        });
+    }
+    if (resolve_context.unexpected_failure) {
         return std::unexpected(TcpError{
             .kind = TcpErrorKind::ResolveFailed,
-            .native_error = resolve_result,
+            .message = "TCP resolver failed unexpectedly",
+        });
+    }
+    if (resolve_context.error) {
+        return std::unexpected(TcpError{
+            .kind = TcpErrorKind::ResolveFailed,
+            .native_error = resolve_context.error.value(),
             .message = "getaddrinfo failed for TCP endpoint with code " +
-                       std::to_string(resolve_result),
+                       std::to_string(resolve_context.error.value()),
         });
     }
 
     Deadline deadline(resolve_phase.deadline);
     int last_error = 0;
     std::string last_detail = "no address candidate connected";
-    for (auto* address = address_list.get(); address != nullptr; address = address->ai_next) {
+    for (const auto& address : addresses) {
         if (cancellation.stop_requested()) {
             return std::unexpected(TcpError{
                 .kind = TcpErrorKind::Cancelled,
@@ -1052,104 +923,26 @@ std::expected<std::unique_ptr<ITcpSocket>, TcpError> connect_native_tcp_socket(
             });
         }
 
-        NativeSocketGuard native_socket(::socket(
-            address->ai_family, address->ai_socktype, address->ai_protocol));
-        if (native_socket.get() == kInvalidNativeSocket) {
-            last_error = last_socket_error();
-            last_detail = native_error_message(last_error);
+        auto owned_socket = std::make_unique<NativeTcpSocket>();
+        const auto connected = owned_socket->connect(
+            address.endpoint(), deadline, cancellation);
+        if (connected.status == SocketIoStatus::Timeout) {
+            return std::unexpected(TcpError{
+                .kind = TcpErrorKind::Timeout,
+                .message = "TCP connect deadline expired",
+            });
+        }
+        if (connected.status == SocketIoStatus::Cancelled) {
+            return std::unexpected(TcpError{
+                .kind = TcpErrorKind::Cancelled,
+                .message = "TCP connect was cancelled",
+            });
+        }
+        if (connected.status != SocketIoStatus::Ok) {
+            last_error = connected.native_error;
+            last_detail = connected.detail;
             continue;
         }
-        if (!set_nonblocking(native_socket.get())) {
-            last_error = last_socket_error();
-            last_detail = native_error_message(last_error);
-            continue;
-        }
-
-#ifdef _WIN32
-        const auto connect_result = ::connect(
-            native_socket.get(),
-            address->ai_addr,
-            static_cast<int>(address->ai_addrlen));
-#else
-        const auto connect_result = ::connect(
-            native_socket.get(),
-            address->ai_addr,
-            static_cast<socklen_t>(address->ai_addrlen));
-#endif
-        if (connect_result != 0) {
-            const auto connect_error = last_socket_error();
-            if (!socket_error_connecting(connect_error)) {
-                last_error = connect_error;
-                last_detail = native_error_message(last_error);
-                continue;
-            }
-
-            auto ready = wait_for_socket(
-                native_socket.get(),
-                true,
-                deadline,
-                CancellationSignal{.external = cancellation});
-            if (ready.status == SocketIoStatus::Timeout) {
-                return std::unexpected(TcpError{
-                    .kind = TcpErrorKind::Timeout,
-                    .message = "TCP connect deadline expired",
-                });
-            }
-            if (ready.status == SocketIoStatus::Cancelled) {
-                return std::unexpected(TcpError{
-                    .kind = TcpErrorKind::Cancelled,
-                    .message = "TCP connect was cancelled",
-                });
-            }
-            if (ready.status != SocketIoStatus::Ok) {
-                last_error = ready.native_error;
-                last_detail = ready.detail;
-                continue;
-            }
-
-            int pending_error = 0;
-#ifdef _WIN32
-            int pending_error_size = sizeof(pending_error);
-            const auto option_result = getsockopt(
-                native_socket.get(),
-                SOL_SOCKET,
-                SO_ERROR,
-                reinterpret_cast<char*>(&pending_error),
-                &pending_error_size);
-#else
-            socklen_t pending_error_size = sizeof(pending_error);
-            const auto option_result = getsockopt(
-                native_socket.get(),
-                SOL_SOCKET,
-                SO_ERROR,
-                &pending_error,
-                &pending_error_size);
-#endif
-            if (option_result != 0 || pending_error != 0) {
-                last_error = option_result != 0 ? last_socket_error() : pending_error;
-                last_detail = native_error_message(last_error);
-                continue;
-            }
-        }
-
-        int enabled = 1;
-#ifdef _WIN32
-        setsockopt(
-            native_socket.get(),
-            IPPROTO_TCP,
-            TCP_NODELAY,
-            reinterpret_cast<const char*>(&enabled),
-            sizeof(enabled));
-#else
-        setsockopt(
-            native_socket.get(), IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled));
-#ifdef SO_NOSIGPIPE
-        setsockopt(
-            native_socket.get(), SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled));
-#endif
-#endif
-        auto owned_socket = std::make_unique<NativeTcpSocket>(native_socket.get());
-        static_cast<void>(native_socket.release());
         return std::unique_ptr<ITcpSocket>(std::move(owned_socket));
     }
 
