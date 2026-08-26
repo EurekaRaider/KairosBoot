@@ -181,6 +181,7 @@ struct ExactIoResult {
         case SocketIoStatus::EndOfStream:
             return protocol::TransportStatus::Disconnected;
         case SocketIoStatus::Cancelled:
+            return protocol::TransportStatus::Cancelled;
         case SocketIoStatus::Error:
         case SocketIoStatus::Ok:
             return protocol::TransportStatus::IoError;
@@ -229,6 +230,7 @@ struct ExactIoResult {
             : protocol::TransferCertainty::NotTransferred,
         .truncated = truncated,
         .detail = io_failure_detail(result, operation),
+        .native_code = result.native_error,
     };
 }
 
@@ -790,9 +792,11 @@ protocol::TransferResult TcpFastbootTransport::read(
     };
 }
 
-void TcpFastbootTransport::cancel() noexcept {
+void TcpFastbootTransport::request_cancel() noexcept {
     local_cancel_.request_stop();
 }
+
+void TcpFastbootTransport::cancel() noexcept { request_cancel(); }
 
 void TcpFastbootTransport::close() noexcept {
     std::scoped_lock lock(mutex_);

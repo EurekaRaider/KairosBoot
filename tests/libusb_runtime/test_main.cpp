@@ -44,6 +44,8 @@ using kairosboot::transport::TransferId;
 using kairosboot::transport::TransferRing;
 using kairosboot::transport::TransferRingConfig;
 using kairosboot::transport::TransferRingState;
+using kairosboot::transport::TransferProgressAction;
+using kairosboot::transport::TransferSource;
 using kairosboot::transport::TransferSubmission;
 using kairosboot::transport::UsbDeviceInfo;
 using kairosboot::transport::UsbFastbootTransport;
@@ -119,6 +121,7 @@ public:
         alternate_.endpoint = endpoints_;
         interface_.altsetting = &alternate_;
         interface_.num_altsetting = 1;
+        config_.bConfigurationValue = 1;
         config_.bNumInterfaces = 1;
         config_.interface = &interface_;
         device_list_[0] = device();
@@ -162,13 +165,21 @@ public:
             return LIBUSB_SUCCESS;
         };
         table.get_active_config_descriptor = [self](libusb_device*,
-                                                    libusb_config_descriptor** config) {
+                                                    libusb_config_descriptor** config) -> int {
+            if (self->active_config_result != LIBUSB_SUCCESS) {
+                *config = nullptr;
+                return self->active_config_result;
+            }
             *config = &self->config_;
             return LIBUSB_SUCCESS;
         };
         table.get_config_descriptor = [self](libusb_device*,
                                              std::uint8_t,
-                                             libusb_config_descriptor** config) {
+                                             libusb_config_descriptor** config) -> int {
+            if (self->config_result != LIBUSB_SUCCESS) {
+                *config = nullptr;
+                return self->config_result;
+            }
             *config = &self->config_;
             return LIBUSB_SUCCESS;
         };
@@ -208,7 +219,25 @@ public:
             return LIBUSB_SUCCESS;
         };
         table.close = [self](libusb_device_handle*) { ++self->close_calls; };
+        table.get_configuration = [self](libusb_device_handle*, int* configuration) {
+            self->get_configuration_order = ++self->open_sequence;
+            ++self->get_configuration_calls;
+            if (self->get_configuration_result == LIBUSB_SUCCESS) {
+                *configuration = self->current_configuration;
+            }
+            return self->get_configuration_result;
+        };
+        table.set_configuration = [self](libusb_device_handle*, int configuration) {
+            self->set_configuration_order = ++self->open_sequence;
+            ++self->set_configuration_calls;
+            self->last_set_configuration = configuration;
+            if (self->set_configuration_result == LIBUSB_SUCCESS) {
+                self->current_configuration = configuration;
+            }
+            return self->set_configuration_result;
+        };
         table.claim_interface = [self](libusb_device_handle*, int) {
+            self->claim_order = ++self->open_sequence;
             ++self->claim_calls;
             return self->claim_result;
         };
@@ -358,7 +387,13 @@ public:
 
     libusb_version version_{};
     int init_result{LIBUSB_SUCCESS};
+    int active_config_result{LIBUSB_SUCCESS};
+    int config_result{LIBUSB_SUCCESS};
     int open_result{LIBUSB_SUCCESS};
+    int get_configuration_result{LIBUSB_SUCCESS};
+    int set_configuration_result{LIBUSB_SUCCESS};
+    int current_configuration{1};
+    int last_set_configuration{-1};
     int claim_result{LIBUSB_SUCCESS};
     int alternate_result{LIBUSB_SUCCESS};
     int cancel_actual_length{};
@@ -376,6 +411,8 @@ public:
     std::atomic<int> serial_calls{0};
     std::atomic<int> open_calls{0};
     std::atomic<int> close_calls{0};
+    std::atomic<int> get_configuration_calls{0};
+    std::atomic<int> set_configuration_calls{0};
     std::atomic<int> claim_calls{0};
     std::atomic<int> release_calls{0};
     std::atomic<int> alternate_calls{0};
@@ -383,6 +420,10 @@ public:
     std::atomic<int> free_transfer_calls{0};
     std::atomic<int> pin_module_calls{0};
     std::atomic<int> pin_module_failure_calls{0};
+    std::atomic<int> open_sequence{0};
+    std::atomic<int> get_configuration_order{0};
+    std::atomic<int> set_configuration_order{0};
+    std::atomic<int> claim_order{0};
     std::thread::id callback_thread;
 
 private:
@@ -518,6 +559,53 @@ void wait_for_submissions(const FakeLibusb& fake, const std::size_t count) {
     wait_until([&] { return fake.submission_count() >= count; });
 }
 
+class PatternTransferSource final : public TransferSource {
+public:
+    struct Read final {
+        std::uint64_t offset{};
+        std::size_t bytes{};
+
+        [[nodiscard]] bool operator==(const Read&) const = default;
+    };
+
+    explicit PatternTransferSource(
+        const std::uint64_t size,
+        const std::uint64_t fail_offset = std::numeric_limits<std::uint64_t>::max())
+        : size_(size), fail_offset_(fail_offset) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return size_;
+    }
+
+    [[nodiscard]] bool read_exact(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) noexcept override {
+        if (read_count_ >= reads_.size()) {
+            return false;
+        }
+        reads_[read_count_++] = Read{offset, destination.size()};
+        if (offset == fail_offset_ || offset > size_ ||
+            destination.size() > size_ - offset) {
+            return false;
+        }
+        for (std::size_t index = 0; index < destination.size(); ++index) {
+            destination[index] = std::byte{static_cast<unsigned char>(
+                (offset + index) & 0xFFU)};
+        }
+        return true;
+    }
+
+    [[nodiscard]] std::span<const Read> reads() const noexcept {
+        return std::span<const Read>{reads_.data(), read_count_};
+    }
+
+private:
+    std::uint64_t size_{};
+    std::uint64_t fail_offset_{};
+    std::array<Read, 32> reads_{};
+    std::size_t read_count_{};
+};
+
 void test_init_failure_version_and_singleton() {
     const auto system_functions = LibusbFunctions::system();
     KB_CHECK(system_functions.complete());
@@ -584,6 +672,7 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     KB_CHECK(device.product_id == 0x4EE0);
     KB_CHECK(device.bus_number == 2);
     KB_CHECK(device.device_address == 5);
+    KB_CHECK(device.configuration_value == 1);
     KB_CHECK(device.port_path == std::vector<std::uint8_t>({3, 4}));
     KB_CHECK(device.serial_utf8 == "serial-\xCE\xB1");
     KB_CHECK(device.interface_number == 2);
@@ -728,6 +817,7 @@ void test_open_rejects_changed_interface_snapshot() {
     changed_interface.altsetting = &changed_alternate;
     changed_interface.num_altsetting = 1;
     libusb_config_descriptor changed_config{};
+    changed_config.bConfigurationValue = 1;
     changed_config.bNumInterfaces = 1;
     changed_config.interface = &changed_interface;
 
@@ -757,6 +847,104 @@ void test_open_rejects_changed_interface_snapshot() {
     KB_CHECK(!backend.has_value());
     KB_CHECK(backend.error().kind == LibusbRuntimeErrorKind::device_not_found);
     KB_CHECK(fake->open_calls == 0);
+    runtime->stop();
+}
+
+void test_open_configuration_is_verified_before_claim() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+
+    auto already_configured = runtime->open_bulk_out(snapshot);
+    KB_CHECK(already_configured.has_value());
+    KB_CHECK(fake->get_configuration_calls == 1);
+    KB_CHECK(fake->set_configuration_calls == 0);
+    KB_CHECK(fake->claim_calls == 1);
+    KB_CHECK(fake->get_configuration_order < fake->claim_order);
+    (*already_configured)->stop();
+
+    fake->current_configuration = 0;
+    fake->active_config_result = LIBUSB_ERROR_NOT_FOUND;
+    fake->open_sequence = 0;
+    fake->get_configuration_order = 0;
+    fake->set_configuration_order = 0;
+    fake->claim_order = 0;
+    auto configured_on_open = runtime->open_bulk_out(snapshot);
+    KB_CHECK(configured_on_open.has_value());
+    KB_CHECK(fake->get_configuration_calls == 2);
+    KB_CHECK(fake->set_configuration_calls == 1);
+    KB_CHECK(fake->last_set_configuration == snapshot.configuration_value);
+    KB_CHECK(fake->current_configuration == snapshot.configuration_value);
+    KB_CHECK(fake->get_configuration_order < fake->set_configuration_order);
+    KB_CHECK(fake->set_configuration_order < fake->claim_order);
+    (*configured_on_open)->stop();
+    runtime->stop();
+}
+
+void test_open_configuration_failures_release_reservation() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+
+    fake->get_configuration_result = LIBUSB_ERROR_IO;
+    const auto query_failure = runtime->open_bulk_out(snapshot);
+    KB_CHECK(!query_failure.has_value());
+    KB_CHECK(query_failure.error().kind ==
+             LibusbRuntimeErrorKind::configuration_failed);
+    KB_CHECK(query_failure.error().native_code == LIBUSB_ERROR_IO);
+    KB_CHECK(fake->claim_calls == 0);
+    KB_CHECK(fake->close_calls == 1);
+
+    fake->get_configuration_result = LIBUSB_SUCCESS;
+    fake->current_configuration = 0;
+    fake->set_configuration_result = LIBUSB_ERROR_ACCESS;
+    const auto set_failure = runtime->open_bulk_out(snapshot);
+    KB_CHECK(!set_failure.has_value());
+    KB_CHECK(set_failure.error().kind ==
+             LibusbRuntimeErrorKind::configuration_failed);
+    KB_CHECK(set_failure.error().native_code == LIBUSB_ERROR_ACCESS);
+    KB_CHECK(fake->claim_calls == 0);
+    KB_CHECK(fake->close_calls == 2);
+
+    fake->set_configuration_result = LIBUSB_SUCCESS;
+    auto reopened = runtime->open_bulk_out(snapshot);
+    KB_CHECK(reopened.has_value());
+    KB_CHECK(fake->claim_calls == 1);
+    (*reopened)->stop();
+    runtime->stop();
+}
+
+void test_runtime_reservation_and_claim_busy_contract() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+
+    auto first = runtime->open_bulk_out(snapshot);
+    KB_CHECK(first.has_value());
+    const auto open_calls_before_duplicate = fake->open_calls.load();
+    const auto claim_calls_before_duplicate = fake->claim_calls.load();
+    const auto duplicate = runtime->open_bulk_out(snapshot);
+    KB_CHECK(!duplicate.has_value());
+    KB_CHECK(duplicate.error().kind == LibusbRuntimeErrorKind::interface_busy);
+    KB_CHECK(duplicate.error().native_code == LIBUSB_ERROR_BUSY);
+    KB_CHECK(fake->open_calls == open_calls_before_duplicate);
+    KB_CHECK(fake->claim_calls == claim_calls_before_duplicate);
+
+    (*first)->stop();
+    auto reopened = runtime->open_bulk_out(snapshot);
+    KB_CHECK(reopened.has_value());
+    (*reopened)->stop();
+
+    fake->claim_result = LIBUSB_ERROR_BUSY;
+    const auto claim_busy = runtime->open_bulk_out(snapshot);
+    KB_CHECK(!claim_busy.has_value());
+    KB_CHECK(claim_busy.error().kind == LibusbRuntimeErrorKind::interface_busy);
+    KB_CHECK(claim_busy.error().native_code == LIBUSB_ERROR_BUSY);
+
+    fake->claim_result = LIBUSB_SUCCESS;
+    auto after_claim_busy = runtime->open_bulk_out(snapshot);
+    KB_CHECK(after_claim_busy.has_value());
+    (*after_claim_busy)->stop();
     runtime->stop();
 }
 
@@ -1184,14 +1372,17 @@ void test_usb_read_error_classification_timeout_disconnect_stall_and_cancel() {
     const auto timed_out = scripted_read(LIBUSB_TRANSFER_TIMED_OUT);
     KB_CHECK(timed_out.status == TransportStatus::Timeout);
     KB_CHECK(timed_out.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(timed_out.native_code == LIBUSB_ERROR_TIMEOUT);
 
     const auto disconnected = scripted_read(LIBUSB_TRANSFER_NO_DEVICE);
     KB_CHECK(disconnected.status == TransportStatus::Disconnected);
     KB_CHECK(disconnected.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(disconnected.native_code == LIBUSB_ERROR_NO_DEVICE);
 
     const auto stalled = scripted_read(LIBUSB_TRANSFER_STALL);
     KB_CHECK(stalled.status == TransportStatus::IoError);
     KB_CHECK(stalled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(stalled.native_code == LIBUSB_ERROR_PIPE);
 
     auto cancel_opened = UsbFastbootTransport::open(runtime, snapshot, options);
     KB_CHECK(cancel_opened.has_value());
@@ -1202,11 +1393,29 @@ void test_usb_read_error_classification_timeout_disconnect_stall_and_cancel() {
             cancelled_response, std::chrono::seconds(1));
     });
     wait_for_submissions(*fake, submission_index + 1U);
-    cancel_transport->cancel();
+    fake->suppress_in_cancel_completion = true;
+    cancel_transport->request_cancel();
+    KB_CHECK(fake->cancel_calls >= 1);
+    KB_CHECK(!runtime->shutdown_quarantined());
+    fake->complete_in_submission(
+        submission_index, LIBUSB_TRANSFER_CANCELLED, {});
+    ++submission_index;
     const auto cancelled = cancelled_read.get();
-    KB_CHECK(cancelled.status == TransportStatus::IoError);
+    KB_CHECK(cancelled.status == TransportStatus::Cancelled);
     KB_CHECK(cancelled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(cancelled.native_code == 0);
     KB_CHECK(!cancel_transport->is_open());
+    fake->suppress_in_cancel_completion = false;
+
+    auto pre_cancel_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(pre_cancel_opened.has_value());
+    auto pre_cancel_transport = std::move(*pre_cancel_opened);
+    pre_cancel_transport->request_cancel();
+    const auto pre_cancelled = pre_cancel_transport->write(
+        std::array{std::byte{1}}, std::chrono::seconds(1));
+    KB_CHECK(pre_cancelled.status == TransportStatus::Cancelled);
+    KB_CHECK(pre_cancelled.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(pre_cancelled.native_code == 0);
 
     runtime->stop();
 }
@@ -1287,7 +1496,252 @@ void test_usb_ring_writes_are_serial_and_report_partial_certainty() {
     runtime->stop();
 }
 
-void test_usb_backend_timeout_isolated_from_concurrent_session() {
+void test_usb_source_streams_beyond_ring_budget_with_ordered_progress() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    const auto budget = std::make_shared<BufferBudget>(8);
+    options.buffer_budget = budget;
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto source = std::make_shared<PatternTransferSource>(19);
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> progress;
+    std::atomic<std::size_t> progress_calls{0};
+    std::thread::id worker_thread;
+    std::thread::id observer_thread;
+
+    auto pending = std::async(std::launch::async, [&] {
+        worker_thread = std::this_thread::get_id();
+        return transport->write_source(
+            source,
+            std::chrono::seconds(1),
+            [&](const std::uint64_t watermark, const std::uint64_t total) {
+                observer_thread = std::this_thread::get_id();
+                progress.emplace_back(watermark, total);
+                progress_calls.fetch_add(1, std::memory_order_release);
+                return TransferProgressAction::continue_transfer;
+            });
+    });
+
+    wait_for_submissions(*fake, 2);
+    KB_CHECK(fake->submission(0).length == 4);
+    KB_CHECK(fake->submission(1).length == 4);
+
+    // Offset 4 completes first. The ring refills, but contiguous progress
+    // remains at zero until the offset-0 gap closes.
+    fake->complete_submission(1, LIBUSB_TRANSFER_COMPLETED, 4);
+    wait_for_submissions(*fake, 3);
+    KB_CHECK(progress_calls.load(std::memory_order_acquire) == 0);
+    KB_CHECK(fake->submission(2).length == 4);
+
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    wait_for_submissions(*fake, 4);
+    wait_until([&] {
+        return progress_calls.load(std::memory_order_acquire) == 1;
+    });
+
+    // Offset 12 now completes ahead of offset 8. The final irregular
+    // three-byte source read is submitted without exceeding the ring budget.
+    fake->complete_submission(3, LIBUSB_TRANSFER_COMPLETED, 4);
+    wait_for_submissions(*fake, 5);
+    KB_CHECK(progress_calls.load(std::memory_order_acquire) == 1);
+    KB_CHECK(fake->submission(4).length == 3);
+    fake->complete_submission(2, LIBUSB_TRANSFER_COMPLETED, 4);
+    wait_until([&] {
+        return progress_calls.load(std::memory_order_acquire) == 2;
+    });
+    fake->complete_submission(4, LIBUSB_TRANSFER_COMPLETED, 3);
+
+    const auto result = pending.get();
+    KB_CHECK(result.status == TransportStatus::Ok);
+    KB_CHECK(result.transferred == 19);
+    KB_CHECK(result.certainty == TransferCertainty::FullyTransferred);
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>> expected_progress{
+        {8, 19}, {16, 19}, {19, 19}};
+    KB_CHECK(progress == expected_progress);
+    const std::array expected_reads{
+        PatternTransferSource::Read{0, 4},
+        PatternTransferSource::Read{4, 4},
+        PatternTransferSource::Read{8, 4},
+        PatternTransferSource::Read{12, 4},
+        PatternTransferSource::Read{16, 3},
+    };
+    KB_CHECK(std::ranges::equal(source->reads(), expected_reads));
+    KB_CHECK(budget->peak_used() == 8);
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(observer_thread == worker_thread);
+    KB_CHECK(observer_thread != runtime->event_thread_id());
+    KB_CHECK(fake->callback_thread == runtime->event_thread_id());
+
+    transport->close();
+    runtime->stop();
+}
+
+void test_usb_source_read_failure_poison_and_certainty() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    const auto budget = std::make_shared<BufferBudget>(8);
+    options.buffer_budget = budget;
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto source = std::make_shared<PatternTransferSource>(12, 4);
+    auto pending = std::async(std::launch::async, [&] {
+        return transport->write_source(source, std::chrono::seconds(1));
+    });
+
+    wait_for_submissions(*fake, 1);
+    const auto result = pending.get();
+    KB_CHECK(result.status == TransportStatus::IoError);
+    KB_CHECK(result.transferred == 0);
+    KB_CHECK(result.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(result.detail.find("source") != std::string::npos);
+    const std::array expected_reads{
+        PatternTransferSource::Read{0, 4},
+        PatternTransferSource::Read{4, 4},
+    };
+    KB_CHECK(std::ranges::equal(source->reads(), expected_reads));
+    KB_CHECK(fake->cancel_calls >= 1);
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(!transport->is_open());
+
+    runtime->stop();
+}
+
+void test_usb_source_progress_cancel_runs_on_owner_and_drains() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    const auto budget = std::make_shared<BufferBudget>(8);
+    options.buffer_budget = budget;
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto source = std::make_shared<PatternTransferSource>(12);
+    std::thread::id worker_thread;
+    std::thread::id observer_thread;
+    std::uint64_t observed_watermark{};
+    std::uint64_t observed_total{};
+    std::atomic<std::size_t> observer_calls{0};
+    auto pending = std::async(std::launch::async, [&] {
+        worker_thread = std::this_thread::get_id();
+        return transport->write_source(
+            source,
+            std::chrono::seconds(1),
+            [&](const std::uint64_t watermark, const std::uint64_t total) {
+                observer_thread = std::this_thread::get_id();
+                observed_watermark = watermark;
+                observed_total = total;
+                observer_calls.fetch_add(1, std::memory_order_release);
+                return TransferProgressAction::cancel;
+            });
+    });
+
+    wait_for_submissions(*fake, 2);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto result = pending.get();
+    KB_CHECK(result.status == TransportStatus::Cancelled);
+    KB_CHECK(result.transferred == 4);
+    KB_CHECK(result.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(result.native_code == 0);
+    KB_CHECK(observer_calls.load(std::memory_order_acquire) == 1);
+    KB_CHECK(observed_watermark == 4);
+    KB_CHECK(observed_total == 12);
+    KB_CHECK(observer_thread == worker_thread);
+    KB_CHECK(observer_thread != runtime->event_thread_id());
+    KB_CHECK(fake->callback_thread == runtime->event_thread_id());
+    KB_CHECK(fake->cancel_calls >= 2);
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(!transport->is_open());
+
+    runtime->stop();
+}
+
+void test_usb_source_cross_thread_cancel_is_non_blocking_and_releases_resources() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    const auto budget = std::make_shared<BufferBudget>(8);
+    options.buffer_budget = budget;
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto source = std::make_shared<PatternTransferSource>(12);
+    auto write = std::async(std::launch::async, [&] {
+        return transport->write_source(source, std::chrono::seconds(5));
+    });
+
+    wait_for_submissions(*fake, 2);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    wait_for_submissions(*fake, 3);
+
+    // With native cancel callbacks suppressed, a cancel implementation that
+    // waits for drain would block here. request_cancel() must only signal the
+    // active backend and return independently of the serialized writer.
+    fake->suppress_cancel_completion = true;
+    std::promise<void> cancel_started;
+    auto cancel_started_signal = cancel_started.get_future();
+    auto cancel_call = std::async(std::launch::async, [&] {
+        cancel_started.set_value();
+        const auto started = std::chrono::steady_clock::now();
+        transport->request_cancel();
+        return std::chrono::steady_clock::now() - started;
+    });
+    cancel_started_signal.wait();
+    KB_CHECK(cancel_call.wait_for(std::chrono::milliseconds(100)) ==
+             std::future_status::ready);
+    KB_CHECK(cancel_call.get() < std::chrono::milliseconds(100));
+    KB_CHECK(write.wait_for(std::chrono::milliseconds::zero()) ==
+             std::future_status::timeout);
+    KB_CHECK(fake->cancel_calls >= 2);
+    KB_CHECK(!transport->is_open());
+    KB_CHECK(!runtime->shutdown_quarantined());
+
+    const auto drain_started = std::chrono::steady_clock::now();
+    fake->complete_submission(1, LIBUSB_TRANSFER_CANCELLED, 0);
+    fake->complete_submission(2, LIBUSB_TRANSFER_CANCELLED, 0);
+    KB_CHECK(write.wait_for(std::chrono::milliseconds(500)) ==
+             std::future_status::ready);
+    const auto result = write.get();
+    KB_CHECK(std::chrono::steady_clock::now() - drain_started <
+             std::chrono::milliseconds(500));
+    KB_CHECK(result.status == TransportStatus::Cancelled);
+    KB_CHECK(result.transferred == 4);
+    KB_CHECK(result.certainty == TransferCertainty::PartialOrUnknown);
+    KB_CHECK(result.native_code == 0);
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(fake->release_calls == 1);
+    KB_CHECK(fake->close_calls == 1);
+    KB_CHECK(!runtime->shutdown_quarantined());
+
+    // The drained backend has released the physical-interface reservation, so
+    // the same snapshot and shared budget can be safely opened again.
+    auto reopened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(reopened.has_value());
+    auto replacement = std::move(*reopened);
+    replacement->close();
+    KB_CHECK(budget->used() == 0);
+    KB_CHECK(fake->release_calls == 2);
+    KB_CHECK(fake->close_calls == 2);
+
+    runtime->stop();
+}
+
+void test_usb_backend_timeout_releases_reservation_and_preserves_runtime() {
     auto fake = std::make_shared<FakeLibusb>();
     fake->suppress_in_cancel_completion = true;
     auto runtime = create_runtime(fake);
@@ -1297,11 +1751,8 @@ void test_usb_backend_timeout_isolated_from_concurrent_session() {
     options.buffer_budget = std::make_shared<BufferBudget>(4);
 
     auto first_opened = UsbFastbootTransport::open(runtime, snapshot, options);
-    auto second_opened = UsbFastbootTransport::open(runtime, snapshot, options);
     KB_CHECK(first_opened.has_value());
-    KB_CHECK(second_opened.has_value());
     auto first = std::move(*first_opened);
-    auto second = std::move(*second_opened);
 
     std::array<std::byte, 16> first_response{};
     auto first_read = std::async(std::launch::async, [&] {
@@ -1310,9 +1761,20 @@ void test_usb_backend_timeout_isolated_from_concurrent_session() {
     wait_for_submissions(*fake, 1);
     wait_until([&] { return fake->cancel_calls.load() != 0; });
 
-    // The first backend is draining toward a local quarantine. The shared
-    // runtime remains accepting, so an already-open second device can submit
-    // and complete independently.
+    const auto first_result = first_read.get();
+    KB_CHECK(first_result.status == TransportStatus::Timeout);
+    KB_CHECK(first_result.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(!first->is_open());
+    KB_CHECK(runtime->running());
+    KB_CHECK(!runtime->shutdown_quarantined());
+    KB_CHECK(fake->pin_module_calls == 1);
+
+    // The terminal backend is now rooted in the local quarantine. Its runtime
+    // reservation is released only at that point, so a fresh session can open
+    // while a late callback remains safely owned by the quarantined backend.
+    auto second_opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(second_opened.has_value());
+    auto second = std::move(*second_opened);
     const auto second_payload = payload(4);
     auto second_write = std::async(std::launch::async, [&] {
         return second->write(*second_payload, std::chrono::seconds(1));
@@ -1322,24 +1784,19 @@ void test_usb_backend_timeout_isolated_from_concurrent_session() {
     const auto second_result = second_write.get();
     KB_CHECK(second_result.status == TransportStatus::Ok);
     KB_CHECK(second_result.certainty == TransferCertainty::FullyTransferred);
-
-    const auto first_result = first_read.get();
-    KB_CHECK(first_result.status == TransportStatus::Timeout);
-    KB_CHECK(first_result.certainty == TransferCertainty::NotTransferred);
-    KB_CHECK(!first->is_open());
     KB_CHECK(second->is_open());
-    KB_CHECK(runtime->running());
-    KB_CHECK(!runtime->shutdown_quarantined());
-    KB_CHECK(fake->pin_module_calls == 1);
 
-    // Once the local timeout has returned, opening another session also stays
-    // available. A late callback is drained at runtime shutdown without ever
-    // freeing the accepted transfer before that callback.
+    const auto duplicate = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(!duplicate.has_value());
+    KB_CHECK(duplicate.error().kind == LibusbRuntimeErrorKind::interface_busy);
+    second->close();
+
+    // A normal close releases the reservation and permits the next open. The
+    // late callback from the first backend is drained at runtime shutdown.
     auto third_opened = UsbFastbootTransport::open(runtime, snapshot, options);
     KB_CHECK(third_opened.has_value());
     auto third = std::move(*third_opened);
     third->close();
-    second->close();
     fake->complete_in_submission(0, LIBUSB_TRANSFER_CANCELLED, {});
     runtime->stop();
     KB_CHECK(!runtime->shutdown_quarantined());
@@ -1445,6 +1902,11 @@ int main() {
         {"event loop and filtered UTF-8 enumeration", test_event_loop_and_filtered_utf8_enumeration},
         {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
         {"open rejects changed interface snapshot", test_open_rejects_changed_interface_snapshot},
+        {"open configuration before claim", test_open_configuration_is_verified_before_claim},
+        {"configuration failure releases reservation",
+         test_open_configuration_failures_release_reservation},
+        {"runtime reservation and claim busy",
+         test_runtime_reservation_and_claim_busy_contract},
         {"out-of-order completion and payload lifetime", test_out_of_order_completion_and_payload_lifetime},
         {"submit and completion error classification", test_submit_and_completion_error_classification},
         {"submit allocation failures", test_submit_allocation_failures_do_not_throw_or_leak},
@@ -1458,8 +1920,16 @@ int main() {
          test_usb_read_error_classification_timeout_disconnect_stall_and_cancel},
         {"USB ring writes serialize and report certainty",
          test_usb_ring_writes_are_serial_and_report_partial_certainty},
-        {"USB backend timeout session isolation",
-         test_usb_backend_timeout_isolated_from_concurrent_session},
+        {"USB source streaming and ordered progress",
+         test_usb_source_streams_beyond_ring_budget_with_ordered_progress},
+        {"USB source read failure certainty",
+         test_usb_source_read_failure_poison_and_certainty},
+        {"USB source progress cancellation",
+         test_usb_source_progress_cancel_runs_on_owner_and_drains},
+        {"USB source cross-thread cancellation",
+         test_usb_source_cross_thread_cancel_is_non_blocking_and_releases_resources},
+        {"USB backend timeout reservation lifecycle",
+         test_usb_backend_timeout_releases_reservation_and_preserves_runtime},
         {"backend isolation and two-phase quarantine", test_backend_local_isolation_and_two_phase_global_quarantine},
     };
 

@@ -55,6 +55,8 @@ struct LibusbFunctions final {
 
     std::function<int(libusb_device*, libusb_device_handle**)> open;
     std::function<void(libusb_device_handle*)> close;
+    std::function<int(libusb_device_handle*, int*)> get_configuration;
+    std::function<int(libusb_device_handle*, int)> set_configuration;
     std::function<int(libusb_device_handle*, int)> claim_interface;
     std::function<int(libusb_device_handle*, int)> release_interface;
     std::function<int(libusb_device_handle*, int, int)> set_interface_alt_setting;
@@ -90,6 +92,8 @@ enum class LibusbRuntimeErrorKind : std::uint8_t {
     invalid_device,
     device_not_found,
     open_failed,
+    configuration_failed,
+    interface_busy,
     claim_failed,
     alternate_setting_failed,
 };
@@ -115,6 +119,7 @@ struct UsbDeviceInfo final {
     std::uint16_t product_id{};
     std::uint8_t bus_number{};
     std::uint8_t device_address{};
+    std::uint8_t configuration_value{};
     std::vector<std::uint8_t> port_path;
     std::string serial_utf8;
     std::uint8_t interface_number{};
@@ -224,6 +229,9 @@ public:
         std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     [[nodiscard]] bool shutdown_quarantined() const noexcept;
+    // Signals native transfers without waiting for their completion callbacks.
+    // stop() remains the owner of bounded drain and quarantine.
+    void request_stop() noexcept;
     void stop() noexcept;
 
 private:

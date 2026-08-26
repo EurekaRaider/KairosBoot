@@ -3,6 +3,7 @@
 
 #include "transport_session.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <deque>
 #include <optional>
@@ -16,7 +17,8 @@ namespace kairosboot::protocol::test {
 
 [[nodiscard]] std::vector<std::byte> to_bytes(std::string_view value);
 
-class ScriptedTransport final : public ITransportSession {
+class ScriptedTransport final : public ITransportSession,
+                                public IStreamingTransportSession {
 public:
     struct WriteStep {
         std::vector<std::byte> expected_call;
@@ -25,6 +27,7 @@ public:
         TransferCertainty certainty{TransferCertainty::FullyTransferred};
         bool truncated{false};
         std::string detail;
+        int native_code{0};
     };
 
     struct ReadStep {
@@ -34,26 +37,58 @@ public:
         TransferCertainty certainty{TransferCertainty::FullyTransferred};
         bool truncated{false};
         std::string detail;
+        int native_code{0};
+    };
+
+    struct SourceRead final {
+        std::uint64_t offset{0};
+        std::size_t size{0};
+        std::uint64_t progress_watermark{0};
+    };
+
+    struct SourceWriteStep final {
+        std::vector<std::byte> expected_payload;
+        std::vector<SourceRead> reads;
+        std::size_t reported_transferred{0};
+        TransportStatus status{TransportStatus::Ok};
+        TransferCertainty certainty{TransferCertainty::FullyTransferred};
+        std::string detail;
+        int native_code{0};
     };
 
     void expect_write(
         std::string_view expected_call,
         std::optional<std::size_t> reported_transferred = std::nullopt,
         TransportStatus status = TransportStatus::Ok,
-        TransferCertainty certainty = TransferCertainty::FullyTransferred);
+        TransferCertainty certainty = TransferCertainty::FullyTransferred,
+        int native_code = 0,
+        std::string detail = {});
 
     void expect_write(
         std::span<const std::byte> expected_call,
         std::optional<std::size_t> reported_transferred = std::nullopt,
         TransportStatus status = TransportStatus::Ok,
-        TransferCertainty certainty = TransferCertainty::FullyTransferred);
+        TransferCertainty certainty = TransferCertainty::FullyTransferred,
+        int native_code = 0,
+        std::string detail = {});
 
     void respond(
         std::string_view response,
         TransportStatus status = TransportStatus::Ok,
         TransferCertainty certainty = TransferCertainty::FullyTransferred,
         bool truncated = false,
-        std::optional<std::size_t> reported_transferred = std::nullopt);
+        std::optional<std::size_t> reported_transferred = std::nullopt,
+        int native_code = 0,
+        std::string detail = {});
+
+    void expect_source_write(
+        std::span<const std::byte> expected_payload,
+        std::vector<SourceRead> reads,
+        std::optional<std::size_t> reported_transferred = std::nullopt,
+        TransportStatus status = TransportStatus::Ok,
+        TransferCertainty certainty = TransferCertainty::FullyTransferred,
+        int native_code = 0,
+        std::string detail = {});
 
     [[nodiscard]] TransferResult write(
         std::span<const std::byte> bytes,
@@ -63,15 +98,22 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    [[nodiscard]] TransferResult write_source(
+        std::shared_ptr<ITransferSource> source,
+        std::chrono::milliseconds timeout,
+        const TransferProgressObserver& observer = {}) override;
+
+    void request_cancel() noexcept override;
     void close() noexcept override;
 
     [[nodiscard]] bool complete() const noexcept;
     [[nodiscard]] const std::string& failure() const noexcept;
     [[nodiscard]] const std::vector<std::byte>& accepted_bytes() const noexcept;
     [[nodiscard]] bool closed() const noexcept;
+    [[nodiscard]] bool cancellation_requested() const noexcept;
 
 private:
-    using Step = std::variant<WriteStep, ReadStep>;
+    using Step = std::variant<WriteStep, ReadStep, SourceWriteStep>;
 
     [[nodiscard]] TransferResult unexpected_call(std::string_view operation);
 
@@ -79,6 +121,7 @@ private:
     std::vector<std::byte> accepted_bytes_;
     std::string failure_;
     bool closed_{false};
+    std::atomic<bool> cancellation_requested_{false};
 };
 
 }  // namespace kairosboot::protocol::test

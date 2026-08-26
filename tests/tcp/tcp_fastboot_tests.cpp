@@ -589,9 +589,9 @@ void read_timeout_preserves_transfer_certainty() {
 void local_cancel_interrupts_the_next_operation() {
     auto script = script_with_handshake();
     auto transport = open_scripted_transport(script);
-    transport->cancel();
+    transport->request_cancel();
     const auto result = transport->write(to_bytes("abc"), 100ms);
-    CHECK(result.status == TransportStatus::IoError);
+    CHECK(result.status == TransportStatus::Cancelled);
     CHECK(result.certainty == TransferCertainty::NotTransferred);
     CHECK(result.detail.find("cancelled") != std::string::npos);
     CHECK(!transport->is_open());
@@ -615,11 +615,11 @@ void local_cancel_interrupts_an_in_flight_operation() {
         CHECK(state->changed.wait_for(
             lock, 1s, [&] { return state->operation_entered; }));
     }
-    transport->cancel();
+    transport->request_cancel();
     worker.join();
 
     CHECK(result.has_value());
-    CHECK(result->status == TransportStatus::IoError);
+    CHECK(result->status == TransportStatus::Cancelled);
     CHECK(result->certainty == TransferCertainty::NotTransferred);
     CHECK(result->detail.find("cancelled") != std::string::npos);
     CHECK(!transport->is_open());

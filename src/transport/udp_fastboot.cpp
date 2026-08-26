@@ -117,6 +117,7 @@ private:
         case DatagramIoStatus::Timeout:
             return protocol::TransportStatus::Timeout;
         case DatagramIoStatus::Cancelled:
+            return protocol::TransportStatus::Cancelled;
         case DatagramIoStatus::Truncated:
         case DatagramIoStatus::Error:
         case DatagramIoStatus::Ok:
@@ -129,6 +130,8 @@ private:
     switch (status) {
         case protocol::TransportStatus::Timeout:
             return UdpErrorKind::Timeout;
+        case protocol::TransportStatus::Cancelled:
+            return UdpErrorKind::Cancelled;
         case protocol::TransportStatus::Disconnected:
             return UdpErrorKind::Io;
         case protocol::TransportStatus::IoError:
@@ -848,7 +851,7 @@ UdpFastbootTransport::ExchangeOutcome UdpFastbootTransport::exchange_message(
         return outcome;
     }
     if (cancellation_signal().stop_requested()) {
-        outcome.status = protocol::TransportStatus::IoError;
+        outcome.status = protocol::TransportStatus::Cancelled;
         outcome.cancelled = true;
         outcome.poison = true;
         outcome.detail = "Fastboot UDP exchange was cancelled before transmission";
@@ -944,7 +947,7 @@ UdpFastbootTransport::ExchangeOutcome UdpFastbootTransport::exchange_message(
                 if (cancellation.stop_requested()) {
                     outcome.cancelled = true;
                     return fail(
-                        protocol::TransportStatus::IoError,
+                        protocol::TransportStatus::Cancelled,
                         "Fastboot UDP exchange was cancelled",
                         true);
                 }
@@ -1222,6 +1225,7 @@ protocol::TransferResult UdpFastbootTransport::write(
         .certainty = outcome.certainty,
         .truncated = outcome.truncated,
         .detail = std::move(outcome.detail),
+        .native_code = outcome.native_error,
     };
 }
 
@@ -1259,10 +1263,15 @@ protocol::TransferResult UdpFastbootTransport::read(
         .certainty = outcome.certainty,
         .truncated = outcome.truncated,
         .detail = std::move(outcome.detail),
+        .native_code = outcome.native_error,
     };
 }
 
-void UdpFastbootTransport::cancel() noexcept { local_cancel_.request_stop(); }
+void UdpFastbootTransport::request_cancel() noexcept {
+    local_cancel_.request_stop();
+}
+
+void UdpFastbootTransport::cancel() noexcept { request_cancel(); }
 
 void UdpFastbootTransport::close() noexcept {
     std::scoped_lock lock(mutex_);

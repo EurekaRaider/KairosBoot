@@ -3,6 +3,7 @@
 
 #include "transport_session.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -64,10 +65,12 @@ enum class SessionState : std::uint8_t {
 
 enum class ProtocolErrorCode : std::uint8_t {
     InvalidArgument,
+    StreamingUnsupported,
     Busy,
     Closed,
     Poisoned,
     TransportTimeout,
+    TransportCancelled,
     TransportDisconnected,
     TransportIo,
     TransportContractViolation,
@@ -78,16 +81,32 @@ enum class ProtocolErrorCode : std::uint8_t {
     TooManyInformationalResponses,
 };
 
+enum class ProtocolPhase : std::uint8_t {
+    Validation,
+    CommandWrite,
+    InitialResponse,
+    DataWrite,
+    FinalResponse,
+};
+
 struct ProtocolError {
     ProtocolErrorCode code;
     std::string message;
     TransportStatus transport_status{TransportStatus::Ok};
+    // Certainty reported by the individual transport call that failed.
     TransferCertainty transfer_certainty{TransferCertainty::FullyTransferred};
+    ProtocolPhase phase{ProtocolPhase::Validation};
+    // Certainty for the outbound unit preceding phase. During a response read,
+    // this is FullyTransferred even when no response bytes were received.
+    TransferCertainty outbound_certainty{TransferCertainty::NotTransferred};
+    int native_code{0};
 };
 
 struct CommandResult {
     Response terminal;
     std::vector<Response> informational;
+    ProtocolPhase phase{ProtocolPhase::FinalResponse};
+    TransferCertainty outbound_certainty{TransferCertainty::FullyTransferred};
 
     [[nodiscard]] bool succeeded() const noexcept {
         return terminal.kind == ResponseKind::Okay;
@@ -123,27 +142,50 @@ public:
     [[nodiscard]] std::expected<CommandResult, ProtocolError> download(
         std::span<const std::byte> bytes);
 
+    [[nodiscard]] std::expected<CommandResult, ProtocolError> download_source(
+        std::shared_ptr<ITransferSource> source,
+        const TransferProgressObserver& observer = {});
+
     [[nodiscard]] SessionState state() const noexcept;
     [[nodiscard]] std::optional<ProtocolError> poison_error() const;
+    void request_cancel() noexcept;
     void close() noexcept;
 
 private:
     [[nodiscard]] std::expected<void, ProtocolError> begin_locked(
         std::string_view command);
     [[nodiscard]] std::expected<void, ProtocolError> write_exact_locked(
-        std::span<const std::byte> bytes);
-    [[nodiscard]] std::expected<Response, ProtocolError> read_response_locked();
+        std::span<const std::byte> bytes,
+        ProtocolPhase phase);
+    [[nodiscard]] std::expected<void, ProtocolError> write_source_locked(
+        IStreamingTransportSession& streaming,
+        std::shared_ptr<ITransferSource> source,
+        std::uint32_t size,
+        const TransferProgressObserver& observer);
+    [[nodiscard]] std::expected<CommandResult, ProtocolError> download_locked(
+        std::uint32_t size,
+        std::span<const std::byte> bytes,
+        std::shared_ptr<ITransferSource> source,
+        const TransferProgressObserver& observer);
+    [[nodiscard]] std::expected<Response, ProtocolError> read_response_locked(
+        ProtocolPhase phase,
+        TransferCertainty outbound_certainty);
     [[nodiscard]] std::expected<CommandResult, ProtocolError> read_terminal_locked(
-        std::vector<Response> informational);
+        std::vector<Response> informational,
+        ProtocolPhase phase,
+        TransferCertainty outbound_certainty);
     [[nodiscard]] ProtocolError transport_error_locked(
         const TransferResult& result,
-        std::string_view operation);
+        std::string_view operation,
+        ProtocolPhase phase,
+        TransferCertainty outbound_certainty);
     [[nodiscard]] std::unexpected<ProtocolError> poison_locked(ProtocolError error);
     [[nodiscard]] ProtocolError unavailable_error_locked() const;
 
     std::unique_ptr<ITransportSession> transport_;
     SessionOptions options_;
     mutable std::mutex mutex_;
+    std::atomic<bool> cancellation_requested_{false};
     SessionState state_{SessionState::Ready};
     std::optional<ProtocolError> poison_error_;
 };

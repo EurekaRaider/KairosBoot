@@ -9,7 +9,7 @@ internal static partial class NativeMethods
     // case-insensitive filesystems.
     internal const string LibraryName = "kairosboot_native";
     internal const uint ApiVersion = 1;
-    internal const uint DefaultTimeoutMilliseconds = 30_000;
+    internal const uint DefaultTimeoutMilliseconds = uint.MaxValue;
     internal const uint WaitSliceMilliseconds = 50;
 }
 

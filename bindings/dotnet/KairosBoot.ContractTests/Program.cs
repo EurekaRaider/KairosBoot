@@ -75,7 +75,7 @@ internal static class Program
                     progress,
                     CancellationToken.None)).ConfigureAwait(false);
 
-            Check(exception.Status == KairosBootStatus.NotSupported, "flash status");
+            Check(exception.Status == KairosBootStatus.InvalidArgument, "flash status");
             Check(exception.TransferState == TransferState.NotSent, "transfer state");
             Check(exception.DeviceIdentifier == "设备-一", "UTF-8 serial");
             Check(reports == 0, "no fabricated progress");

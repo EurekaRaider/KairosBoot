@@ -35,16 +35,16 @@ int main() {
   }
 
   auto operation = context->flash_file_async(
-      "system", std::filesystem::path{"system.img"});
+      "system", std::filesystem::path{"kairosboot-test-does-not-exist.img"});
   CHECK(!operation.has_value());
-  CHECK(operation.error().status() == KB_E_NOT_SUPPORTED);
+  CHECK(operation.error().status() == KB_E_IO);
   CHECK(operation.error().transfer_state() == KB_TRANSFER_NOT_SENT);
 
   auto flash = context->flash_file(
       std::optional<std::string_view>{"ABC"}, "system",
-      std::filesystem::path{"system.img"});
+      std::filesystem::path{"kairosboot-test-does-not-exist.img"});
   CHECK(!flash.has_value());
-  CHECK(flash.error().status() == KB_E_NOT_SUPPORTED);
+  CHECK(flash.error().status() == KB_E_IO);
   CHECK(flash.error().device_identifier() == "ABC");
   return 0;
 }

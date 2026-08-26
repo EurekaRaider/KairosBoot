@@ -5,6 +5,7 @@
 #include "src/transport/libusb_runtime.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <mutex>
@@ -17,10 +18,14 @@ struct UsbFastbootTransportOptions final {
     std::shared_ptr<BufferBudget> buffer_budget;
 };
 
+using TransferProgressAction = protocol::TransferProgressAction;
+using TransferProgressObserver = protocol::TransferProgressObserver;
+
 // Internal protocol adapter. One instance exclusively owns one claimed USB
-// interface. write()/read() are serialized; cancel()/close() may run from a
-// different thread and use the runtime's bounded drain/quarantine path.
-class UsbFastbootTransport final : public protocol::ITransportSession {
+// interface. write()/read() are serialized; request_cancel()/close() may run
+// from a different thread and use the runtime's bounded drain/quarantine path.
+class UsbFastbootTransport final : public protocol::ITransportSession,
+                                   public protocol::IStreamingTransportSession {
 public:
     [[nodiscard]] static std::expected<std::unique_ptr<UsbFastbootTransport>,
                                        LibusbRuntimeError>
@@ -39,10 +44,19 @@ public:
         std::span<const std::byte> bytes,
         std::chrono::milliseconds timeout) override;
 
+    // Streams source chunks through the bounded transfer ring. Progress is
+    // observed synchronously by this call's owning thread after contiguous
+    // completions advance; libusb event callbacks never invoke the observer.
+    [[nodiscard]] protocol::TransferResult write_source(
+        std::shared_ptr<TransferSource> source,
+        std::chrono::milliseconds timeout,
+        const TransferProgressObserver& observer = {}) override;
+
     [[nodiscard]] protocol::TransferResult read(
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    void request_cancel() noexcept override;
     void cancel() noexcept;
     void close() noexcept override;
     [[nodiscard]] bool is_open() const noexcept;
@@ -57,6 +71,7 @@ private:
     std::unique_ptr<LibusbBulkOutBackend> backend_;
     UsbFastbootTransportOptions options_;
     std::shared_ptr<BufferBudget> budget_;
+    std::atomic<bool> cancellation_requested_{false};
     std::atomic<bool> open_{true};
     std::mutex operation_mutex_;
 };

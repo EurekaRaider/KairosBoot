@@ -19,22 +19,33 @@ void ScriptedTransport::expect_write(
     const std::string_view expected_call,
     const std::optional<std::size_t> reported_transferred,
     const TransportStatus status,
-    const TransferCertainty certainty) {
+    const TransferCertainty certainty,
+    const int native_code,
+    std::string detail) {
     const auto bytes = to_bytes(expected_call);
-    expect_write(bytes, reported_transferred, status, certainty);
+    expect_write(
+        bytes,
+        reported_transferred,
+        status,
+        certainty,
+        native_code,
+        std::move(detail));
 }
 
 void ScriptedTransport::expect_write(
     const std::span<const std::byte> expected_call,
     const std::optional<std::size_t> reported_transferred,
     const TransportStatus status,
-    const TransferCertainty certainty) {
+    const TransferCertainty certainty,
+    const int native_code,
+    std::string detail) {
     steps_.push_back(WriteStep{
         .expected_call = {expected_call.begin(), expected_call.end()},
         .reported_transferred = reported_transferred.value_or(expected_call.size()),
         .status = status,
         .certainty = certainty,
-        .detail = {},
+        .detail = std::move(detail),
+        .native_code = native_code,
     });
 }
 
@@ -43,14 +54,37 @@ void ScriptedTransport::respond(
     const TransportStatus status,
     const TransferCertainty certainty,
     const bool truncated,
-    const std::optional<std::size_t> reported_transferred) {
+    const std::optional<std::size_t> reported_transferred,
+    const int native_code,
+    std::string detail) {
     steps_.push_back(ReadStep{
         .response = to_bytes(response),
         .reported_transferred = reported_transferred,
         .status = status,
         .certainty = certainty,
         .truncated = truncated,
-        .detail = {},
+        .detail = std::move(detail),
+        .native_code = native_code,
+    });
+}
+
+void ScriptedTransport::expect_source_write(
+    const std::span<const std::byte> expected_payload,
+    std::vector<SourceRead> reads,
+    const std::optional<std::size_t> reported_transferred,
+    const TransportStatus status,
+    const TransferCertainty certainty,
+    const int native_code,
+    std::string detail) {
+    steps_.push_back(SourceWriteStep{
+        .expected_payload = {expected_payload.begin(), expected_payload.end()},
+        .reads = std::move(reads),
+        .reported_transferred = reported_transferred.value_or(
+            expected_payload.size()),
+        .status = status,
+        .certainty = certainty,
+        .detail = std::move(detail),
+        .native_code = native_code,
     });
 }
 
@@ -76,6 +110,7 @@ TransferResult ScriptedTransport::write(
         .certainty = step.certainty,
         .truncated = step.truncated,
         .detail = std::move(step.detail),
+        .native_code = step.native_code,
     };
 }
 
@@ -97,7 +132,147 @@ TransferResult ScriptedTransport::read(
         .certainty = step.certainty,
         .truncated = step.truncated || step.response.size() > destination.size(),
         .detail = std::move(step.detail),
+        .native_code = step.native_code,
     };
+}
+
+TransferResult ScriptedTransport::write_source(
+    const std::shared_ptr<ITransferSource> source,
+    std::chrono::milliseconds /*timeout*/,
+    const TransferProgressObserver& observer) {
+    if (steps_.empty() ||
+        !std::holds_alternative<SourceWriteStep>(steps_.front())) {
+        return unexpected_call("source write");
+    }
+
+    auto step = std::get<SourceWriteStep>(std::move(steps_.front()));
+    steps_.pop_front();
+    const auto configured_result = [&] {
+        return TransferResult{
+            .status = step.status,
+            .transferred = step.reported_transferred,
+            .certainty = step.certainty,
+            .detail = step.detail,
+            .native_code = step.native_code,
+        };
+    };
+    if (source == nullptr || source->size() != step.expected_payload.size()) {
+        if (failure_.empty()) {
+            failure_ = "source write size did not match the script";
+        }
+        return {
+            .status = TransportStatus::IoError,
+            .certainty = TransferCertainty::NotTransferred,
+            .detail = failure_,
+        };
+    }
+
+    std::vector<std::byte> observed(step.expected_payload.size());
+    std::vector<unsigned char> covered(step.expected_payload.size(), 0);
+    std::uint64_t last_progress = 0;
+    for (const auto& read : step.reads) {
+        if (read.offset > step.expected_payload.size() ||
+            read.size > step.expected_payload.size() -
+                static_cast<std::size_t>(read.offset) ||
+            read.progress_watermark < last_progress ||
+            read.progress_watermark > step.expected_payload.size()) {
+            if (failure_.empty()) {
+                failure_ = "source write read plan is invalid";
+            }
+            return {
+                .status = TransportStatus::IoError,
+                .certainty = TransferCertainty::NotTransferred,
+                .detail = failure_,
+            };
+        }
+
+        std::vector<std::byte> buffer(read.size);
+        if (!source->read_exact(read.offset, buffer)) {
+            if (step.status == TransportStatus::Ok && failure_.empty()) {
+                failure_ = "source read failed unexpectedly";
+            }
+            if (step.status != TransportStatus::Ok) {
+                return configured_result();
+            }
+            return {
+                .status = TransportStatus::IoError,
+                .certainty = TransferCertainty::NotTransferred,
+                .detail = failure_,
+            };
+        }
+
+        const auto offset = static_cast<std::size_t>(read.offset);
+        std::ranges::copy(buffer, observed.begin() +
+                                     static_cast<std::ptrdiff_t>(offset));
+        std::fill_n(
+            covered.begin() + static_cast<std::ptrdiff_t>(offset),
+            read.size,
+            static_cast<unsigned char>(1));
+
+        if (read.progress_watermark > last_progress) {
+            auto action = TransferProgressAction::continue_transfer;
+            if (observer) {
+                try {
+                    action = observer(
+                        read.progress_watermark, step.expected_payload.size());
+                } catch (...) {
+                    return {
+                        .status = TransportStatus::IoError,
+                        .transferred = static_cast<std::size_t>(last_progress),
+                        .certainty = last_progress == 0
+                            ? TransferCertainty::NotTransferred
+                            : TransferCertainty::PartialOrUnknown,
+                        .detail = "scripted progress observer failed",
+                    };
+                }
+            }
+            last_progress = read.progress_watermark;
+            if (action == TransferProgressAction::cancel) {
+                const auto accepted = static_cast<std::size_t>(last_progress);
+                accepted_bytes_.insert(
+                    accepted_bytes_.end(),
+                    step.expected_payload.begin(),
+                    step.expected_payload.begin() +
+                        static_cast<std::ptrdiff_t>(accepted));
+                return {
+                    .status = TransportStatus::Cancelled,
+                    .transferred = accepted,
+                    .certainty = accepted == 0
+                        ? TransferCertainty::NotTransferred
+                        : accepted == step.expected_payload.size()
+                            ? TransferCertainty::FullyTransferred
+                            : TransferCertainty::PartialOrUnknown,
+                    .detail = "scripted source write was cancelled by progress observer",
+                    .native_code = step.native_code,
+                };
+            }
+        }
+    }
+
+    if (!std::ranges::all_of(covered, [](const unsigned char value) {
+            return value != 0;
+        }) || observed != step.expected_payload) {
+        if (failure_.empty()) {
+            failure_ = "source write payload did not match the script";
+        }
+        return {
+            .status = TransportStatus::IoError,
+            .certainty = TransferCertainty::NotTransferred,
+            .detail = failure_,
+        };
+    }
+
+    const auto accepted = std::min(
+        step.reported_transferred, step.expected_payload.size());
+    accepted_bytes_.insert(
+        accepted_bytes_.end(),
+        step.expected_payload.begin(),
+        step.expected_payload.begin() + static_cast<std::ptrdiff_t>(accepted));
+    return configured_result();
+}
+
+void ScriptedTransport::request_cancel() noexcept {
+    cancellation_requested_.store(true, std::memory_order_release);
 }
 
 void ScriptedTransport::close() noexcept {
@@ -118,6 +293,10 @@ const std::vector<std::byte>& ScriptedTransport::accepted_bytes() const noexcept
 
 bool ScriptedTransport::closed() const noexcept {
     return closed_;
+}
+
+bool ScriptedTransport::cancellation_requested() const noexcept {
+    return cancellation_requested_.load(std::memory_order_acquire);
 }
 
 TransferResult ScriptedTransport::unexpected_call(const std::string_view operation) {

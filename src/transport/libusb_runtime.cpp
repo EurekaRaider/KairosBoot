@@ -20,6 +20,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <set>
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
@@ -208,6 +209,35 @@ struct ConfigDescriptorGuard final {
     }
 };
 
+struct UsbInterfaceReservationKey final {
+    std::uint8_t bus_number{};
+    std::vector<std::uint8_t> port_path;
+    std::uint8_t interface_number{};
+};
+
+[[nodiscard]] bool operator<(const UsbInterfaceReservationKey& left,
+                             const UsbInterfaceReservationKey& right) noexcept {
+    if (left.bus_number != right.bus_number) {
+        return left.bus_number < right.bus_number;
+    }
+    if (left.port_path != right.port_path) {
+        return std::lexicographical_compare(left.port_path.begin(),
+                                            left.port_path.end(),
+                                            right.port_path.begin(),
+                                            right.port_path.end());
+    }
+    return left.interface_number < right.interface_number;
+}
+
+[[nodiscard]] UsbInterfaceReservationKey reservation_key(
+    const UsbDeviceInfo& device) {
+    return UsbInterfaceReservationKey{
+        device.bus_number,
+        device.port_path,
+        device.interface_number,
+    };
+}
+
 struct ProcessLifetimeQuarantineRoot final {
     std::mutex mutex;
     std::shared_ptr<void>* runtime_slot{};
@@ -230,6 +260,9 @@ struct ProcessLifetimeQuarantineRoot final {
         return false;
     }
     ConfigDescriptorGuard config_guard{&functions, raw_config};
+    if (raw_config->bConfigurationValue != snapshot.configuration_value) {
+        return false;
+    }
     if (raw_config->bNumInterfaces != 0 && raw_config->interface == nullptr) {
         return false;
     }
@@ -387,6 +420,12 @@ LibusbFunctions LibusbFunctions::system() {
         return libusb_open(device, handle);
     };
     functions.close = [](libusb_device_handle* handle) { libusb_close(handle); };
+    functions.get_configuration = [](libusb_device_handle* handle, int* configuration) {
+        return libusb_get_configuration(handle, configuration);
+    };
+    functions.set_configuration = [](libusb_device_handle* handle, const int configuration) {
+        return libusb_set_configuration(handle, configuration);
+    };
     functions.claim_interface = [](libusb_device_handle* handle, const int interface_number) {
         return libusb_claim_interface(handle, interface_number);
     };
@@ -419,7 +458,8 @@ bool LibusbFunctions::complete() const noexcept {
            get_device_list && free_device_list && get_device_descriptor &&
            get_active_config_descriptor && get_config_descriptor && free_config_descriptor &&
            get_bus_number && get_device_address && get_port_numbers && get_device_string &&
-           open && close && claim_interface && release_interface &&
+           open && close && get_configuration && set_configuration && claim_interface &&
+           release_interface &&
            set_interface_alt_setting && alloc_transfer && submit_transfer &&
            cancel_transfer && free_transfer && pin_current_module &&
            module_pin_failure;
@@ -462,6 +502,8 @@ struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::
     std::mutex backends_mutex;
     std::vector<std::weak_ptr<LibusbBulkOutBackend::State>> backends;
     std::shared_ptr<LibusbBulkOutBackend::State> quarantined_backend_head;
+    std::mutex reservations_mutex;
+    std::set<UsbInterfaceReservationKey> reserved_interfaces;
 
     void event_loop() noexcept;
     void register_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend);
@@ -469,6 +511,10 @@ struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::
     void stop_all() noexcept;
     void quarantine_backend(const std::shared_ptr<LibusbBulkOutBackend::State>& backend,
                             bool global_runtime_quarantine) noexcept;
+    [[nodiscard]] std::expected<UsbInterfaceReservationKey, LibusbRuntimeError>
+    reserve_interface(const UsbDeviceInfo& device);
+    void release_interface_reservation(
+        const UsbInterfaceReservationKey& key) noexcept;
     void root_process_lifetime_quarantine(bool global_runtime_quarantine) noexcept;
     [[nodiscard]] bool wait_for_event_exit(
         std::chrono::steady_clock::time_point deadline) noexcept;
@@ -527,14 +573,16 @@ struct LibusbBulkOutBackend::State final {
     State(std::shared_ptr<LibusbRuntime::State> owning_runtime,
           libusb_device_handle* opened_handle,
           const UsbDeviceInfo& device,
-          const BulkOutOptions backend_options)
+          const BulkOutOptions backend_options,
+          UsbInterfaceReservationKey interface_reservation)
         : runtime(std::move(owning_runtime)),
           handle(opened_handle),
           interface_number(device.interface_number),
           endpoint(device.bulk_out_endpoint),
           inbound_endpoint(device.bulk_in_endpoint),
           maximum_packet_size(device.bulk_out_max_packet_size),
-          options(backend_options) {}
+          options(backend_options),
+          reservation(std::move(interface_reservation)) {}
 
     ~State() {
         while (ready_head != nullptr) {
@@ -545,6 +593,7 @@ struct LibusbBulkOutBackend::State final {
         if (!closed && pending.empty() && read_pending == nullptr) {
             static_cast<void>(runtime->functions.release_interface(handle, interface_number));
             runtime->functions.close(handle);
+            release_reservation_locked();
         }
     }
 
@@ -567,6 +616,7 @@ struct LibusbBulkOutBackend::State final {
     std::unique_ptr<ReadPending> read_pending;
     std::optional<ReadyRead> ready_read;
     std::shared_ptr<State> quarantine_next;
+    std::optional<UsbInterfaceReservationKey> reservation;
 
     static void LIBUSB_CALL on_transfer(libusb_transfer* transfer) noexcept {
         auto* pending_transfer = static_cast<Pending*>(transfer->user_data);
@@ -615,6 +665,7 @@ struct LibusbBulkOutBackend::State final {
         std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     void close_if_drained() noexcept;
+    void release_reservation_locked() noexcept;
 
 private:
     [[nodiscard]] bool process_one_raw(bool shutting_down);
@@ -679,6 +730,37 @@ void LibusbRuntime::State::register_backend(
                                   [](const auto& entry) { return entry.expired(); }),
                    backends.end());
     backends.emplace_back(backend);
+}
+
+std::expected<UsbInterfaceReservationKey, LibusbRuntimeError>
+LibusbRuntime::State::reserve_interface(const UsbDeviceInfo& device) {
+    try {
+        auto key = reservation_key(device);
+        std::lock_guard lock(reservations_mutex);
+        const auto [ignored, inserted] = reserved_interfaces.insert(key);
+        static_cast<void>(ignored);
+        if (!inserted) {
+            return std::unexpected(LibusbRuntimeError{
+                LibusbRuntimeErrorKind::interface_busy,
+                LIBUSB_ERROR_BUSY,
+            });
+        }
+        return std::expected<UsbInterfaceReservationKey, LibusbRuntimeError>{
+            std::in_place,
+            std::move(key),
+        };
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(LibusbRuntimeError{
+            LibusbRuntimeErrorKind::open_failed,
+            LIBUSB_ERROR_NO_MEM,
+        });
+    }
+}
+
+void LibusbRuntime::State::release_interface_reservation(
+    const UsbInterfaceReservationKey& key) noexcept {
+    std::lock_guard lock(reservations_mutex);
+    reserved_interfaces.erase(key);
 }
 
 void LibusbRuntime::State::stop_backend(
@@ -754,6 +836,7 @@ void LibusbRuntime::State::stop_all() noexcept {
                     {
                         std::lock_guard backend_lock(backend->mutex);
                         backend->accepting = false;
+                        backend->release_reservation_locked();
                     }
                     backend->quarantine_next = std::move(quarantined_backend_head);
                     quarantined_backend_head = backend;
@@ -808,6 +891,7 @@ void LibusbRuntime::State::quarantine_backend(
         {
             std::lock_guard backend_lock(backend->mutex);
             backend->accepting = false;
+            backend->release_reservation_locked();
         }
         std::lock_guard registry_lock(backends_mutex);
         backend->quarantine_next = std::move(quarantined_backend_head);
@@ -1226,7 +1310,16 @@ void LibusbBulkOutBackend::State::close_if_drained() noexcept {
         runtime->functions.close(handle);
         handle = nullptr;
         closed = true;
+        release_reservation_locked();
     }
+}
+
+void LibusbBulkOutBackend::State::release_reservation_locked() noexcept {
+    if (!reservation.has_value()) {
+        return;
+    }
+    runtime->release_interface_reservation(*reservation);
+    reservation.reset();
 }
 
 bool LibusbBulkOutBackend::State::try_pop(TransferCompletion& completion) {
@@ -1541,6 +1634,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             continue;
         }
         ConfigDescriptorGuard config_guard{&state_->functions, raw_config};
+        if (raw_config->bConfigurationValue == 0) {
+            continue;
+        }
 
         std::optional<std::vector<std::uint8_t>> port_path;
         std::optional<std::string> serial;
@@ -1630,6 +1726,7 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     descriptor.idProduct,
                     state_->functions.get_bus_number(device),
                     state_->functions.get_device_address(device),
+                    raw_config->bConfigurationValue,
                     *port_path,
                     *serial,
                     alternate.bInterfaceNumber,
@@ -1657,6 +1754,7 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
     }
     if ((device.bulk_out_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_OUT ||
         (device.bulk_in_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_IN ||
+        device.configuration_value == 0 ||
         device.bulk_out_max_packet_size == 0 ||
         device.bulk_in_max_packet_size == 0 || device.port_path.empty() ||
         device.port_path.size() > 16) {
@@ -1664,9 +1762,23 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
             LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
     }
 
+    auto reservation_result = state_->reserve_interface(device);
+    if (!reservation_result.has_value()) {
+        return std::unexpected(reservation_result.error());
+    }
+    auto reserved_key = std::move(*reservation_result);
+    bool reservation_owned_by_open = true;
+    const auto release_open_reservation = [&]() noexcept {
+        if (reservation_owned_by_open) {
+            state_->release_interface_reservation(reserved_key);
+            reservation_owned_by_open = false;
+        }
+    };
+
     libusb_device** list = nullptr;
     const auto count = state_->functions.get_device_list(state_->context, &list);
     if (count < 0 || (count != 0 && list == nullptr)) {
+        release_open_reservation();
         return std::unexpected(LibusbRuntimeError{
             LibusbRuntimeErrorKind::enumeration_failed,
             count < 0 ? static_cast<int>(count) : LIBUSB_ERROR_OTHER});
@@ -1684,22 +1796,53 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
         }
         const auto open_result = state_->functions.open(candidate, &handle);
         if (open_result != LIBUSB_SUCCESS) {
+            release_open_reservation();
             return std::unexpected(
                 LibusbRuntimeError{LibusbRuntimeErrorKind::open_failed, open_result});
         }
         break;
     }
     if (handle == nullptr) {
+        release_open_reservation();
         return std::unexpected(
             LibusbRuntimeError{LibusbRuntimeErrorKind::device_not_found});
+    }
+
+    int active_configuration = 0;
+    const auto configuration_result =
+        state_->functions.get_configuration(handle, &active_configuration);
+    if (configuration_result != LIBUSB_SUCCESS) {
+        state_->functions.close(handle);
+        release_open_reservation();
+        return std::unexpected(LibusbRuntimeError{
+            LibusbRuntimeErrorKind::configuration_failed,
+            configuration_result,
+        });
+    }
+    if (active_configuration != device.configuration_value) {
+        const auto set_result = state_->functions.set_configuration(
+            handle, device.configuration_value);
+        if (set_result != LIBUSB_SUCCESS) {
+            state_->functions.close(handle);
+            release_open_reservation();
+            return std::unexpected(LibusbRuntimeError{
+                LibusbRuntimeErrorKind::configuration_failed,
+                set_result,
+            });
+        }
     }
 
     const auto claim_result =
         state_->functions.claim_interface(handle, device.interface_number);
     if (claim_result != LIBUSB_SUCCESS) {
         state_->functions.close(handle);
-        return std::unexpected(
-            LibusbRuntimeError{LibusbRuntimeErrorKind::claim_failed, claim_result});
+        release_open_reservation();
+        return std::unexpected(LibusbRuntimeError{
+            claim_result == LIBUSB_ERROR_BUSY
+                ? LibusbRuntimeErrorKind::interface_busy
+                : LibusbRuntimeErrorKind::claim_failed,
+            claim_result,
+        });
     }
     if (device.alternate_setting != 0) {
         const auto alternate_result = state_->functions.set_interface_alt_setting(
@@ -1708,6 +1851,7 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
             static_cast<void>(
                 state_->functions.release_interface(handle, device.interface_number));
             state_->functions.close(handle);
+            release_open_reservation();
             return std::unexpected(LibusbRuntimeError{
                 LibusbRuntimeErrorKind::alternate_setting_failed, alternate_result});
         }
@@ -1716,7 +1860,9 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
     std::shared_ptr<LibusbBulkOutBackend::State> backend_state;
     try {
         backend_state =
-            std::make_shared<LibusbBulkOutBackend::State>(state_, handle, device, options);
+            std::make_shared<LibusbBulkOutBackend::State>(
+                state_, handle, device, options, reserved_key);
+        reservation_owned_by_open = false;
         state_->register_backend(backend_state);
         return std::unique_ptr<LibusbBulkOutBackend>(
             new LibusbBulkOutBackend(backend_state));
@@ -1728,6 +1874,7 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
             static_cast<void>(
                 state_->functions.release_interface(handle, device.interface_number));
             state_->functions.close(handle);
+            release_open_reservation();
         }
         return std::unexpected(LibusbRuntimeError{LibusbRuntimeErrorKind::open_failed,
                                                   LIBUSB_ERROR_NO_MEM});
@@ -1792,6 +1939,12 @@ std::size_t LibusbBulkOutBackend::in_flight() const noexcept {
 
 bool LibusbBulkOutBackend::shutdown_quarantined() const noexcept {
     return state_ != nullptr && state_->quarantined.load(std::memory_order_acquire);
+}
+
+void LibusbBulkOutBackend::request_stop() noexcept {
+    if (state_ != nullptr) {
+        state_->request_stop();
+    }
 }
 
 void LibusbBulkOutBackend::stop() noexcept {
