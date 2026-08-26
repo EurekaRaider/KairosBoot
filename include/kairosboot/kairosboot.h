@@ -96,6 +96,10 @@ typedef struct kb_progress {
   const char *device_identifier;
 } kb_progress_t;
 
+/* Progress callbacks are serialized for each operation and never run on the
+ * libusb event thread. Return KB_PROGRESS_CANCEL to request cancellation.
+ * Do not release the same operation from its callback; a different thread may
+ * release it and will wait until the callback and transport drain complete. */
 typedef kb_progress_action_t(KB_CALL *kb_progress_callback_t)(
     const kb_progress_t *progress, void *user_data);
 

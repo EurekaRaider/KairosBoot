@@ -110,6 +110,10 @@ const char *runtime_error_message(
     return "The USB device is no longer present at its physical path.";
   case LibusbRuntimeErrorKind::open_failed:
     return "The USB device could not be opened.";
+  case LibusbRuntimeErrorKind::configuration_failed:
+    return "The USB device configuration could not be selected.";
+  case LibusbRuntimeErrorKind::interface_busy:
+    return "The Fastboot USB interface is already in use.";
   case LibusbRuntimeErrorKind::claim_failed:
     return "The Fastboot USB interface could not be claimed.";
   case LibusbRuntimeErrorKind::alternate_setting_failed:
@@ -125,6 +129,7 @@ kb_status_t runtime_error_status(
   case LibusbRuntimeErrorKind::version_mismatch:
     return KB_E_NOT_SUPPORTED;
   case LibusbRuntimeErrorKind::already_running:
+  case LibusbRuntimeErrorKind::interface_busy:
     return KB_E_BUSY;
   case LibusbRuntimeErrorKind::invalid_function_table:
   case LibusbRuntimeErrorKind::invalid_device:
@@ -137,6 +142,7 @@ kb_status_t runtime_error_status(
   case LibusbRuntimeErrorKind::runtime_stopped:
   case LibusbRuntimeErrorKind::enumeration_failed:
   case LibusbRuntimeErrorKind::open_failed:
+  case LibusbRuntimeErrorKind::configuration_failed:
   case LibusbRuntimeErrorKind::claim_failed:
   case LibusbRuntimeErrorKind::alternate_setting_failed:
     return KB_E_IO;

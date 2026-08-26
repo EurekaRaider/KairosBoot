@@ -127,6 +127,7 @@ endfunction()
 
 add_library(
   kairosboot_internal STATIC
+  src/api/operation_state.cpp
   src/fleet/controller_scheduler.cpp
   src/image/file_source.cpp
   src/image/sparse_image.cpp
@@ -145,7 +146,10 @@ set_target_properties(
              CXX_VISIBILITY_PRESET hidden
              VISIBILITY_INLINES_HIDDEN YES)
 target_compile_features(kairosboot_internal PUBLIC cxx_std_23)
-target_include_directories(kairosboot_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(
+  kairosboot_internal
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(kairosboot_internal
                       PRIVATE kairosboot_libusb Boost::asio_core Threads::Threads
                               ${CMAKE_DL_LIBS})
@@ -260,6 +264,17 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_operation_state_tests
+                 tests/api/operation_state_tests.cpp)
+  target_compile_features(kairosboot_operation_state_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_operation_state_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_operation_state_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_operation_state_tests)
+  add_test(NAME operation_state COMMAND kairosboot_operation_state_tests)
+  set_tests_properties(operation_state PROPERTIES TIMEOUT 15)
+
   add_executable(kairosboot_c_api_test tests/c_api_test.c)
   set_target_properties(
     kairosboot_c_api_test
