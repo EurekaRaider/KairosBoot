@@ -128,10 +128,12 @@ endfunction()
 add_library(
   kairosboot_internal STATIC
   src/fleet/controller_scheduler.cpp
+  src/image/file_source.cpp
   src/image/sparse_image.cpp
   src/protocol/fastboot_protocol.cpp
   src/transport/adaptive_tuner.cpp
   src/transport/buffer_budget.cpp
+  src/transport/image_transfer_source.cpp
   src/transport/libusb_runtime.cpp
   src/transport/tcp_fastboot.cpp
   src/transport/transfer_ring.cpp
@@ -300,6 +302,16 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_sparse_tests)
   add_test(NAME sparse_image COMMAND kairosboot_sparse_tests)
   set_tests_properties(sparse_image PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_file_source_tests
+                 tests/image/file_source_tests.cpp)
+  target_compile_features(kairosboot_file_source_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_file_source_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_file_source_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_file_source_tests)
+  add_test(NAME file_source COMMAND kairosboot_file_source_tests)
+  set_tests_properties(file_source PROPERTIES TIMEOUT 10)
 
   add_executable(kairosboot_tcp_tests tests/tcp/tcp_fastboot_tests.cpp
                                       tests/tcp/scripted_socket.cpp)
