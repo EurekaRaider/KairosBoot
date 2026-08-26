@@ -83,6 +83,7 @@ public:
 
     [[nodiscard]] bool cancel_requested() const noexcept;
     [[nodiscard]] OperationPhase phase() const noexcept;
+    [[nodiscard]] kb_status_t status() const noexcept;
     [[nodiscard]] std::optional<OperationErrorPayload> error() const;
 
     [[nodiscard]] OperationWaitResult wait_for(

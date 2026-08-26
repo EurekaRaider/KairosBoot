@@ -1,8 +1,9 @@
 #include <kairosboot/kairosboot.h>
 
+#include "src/api/operation_state.hpp"
 #include "src/transport/libusb_runtime.hpp"
 
-#include <atomic>
+#include <chrono>
 #include <expected>
 #include <memory>
 #include <mutex>
@@ -35,8 +36,13 @@ struct kb_error {
 };
 
 struct kb_operation {
-  std::atomic<kb_operation_state_t> state{KB_OPERATION_CREATED};
-  std::unique_ptr<kb_error> error;
+  explicit kb_operation(kairosboot::api::OperationState::Task task)
+      : state(std::make_unique<kairosboot::api::OperationState>(
+            std::move(task))) {}
+
+  std::unique_ptr<kairosboot::api::OperationState> state;
+  mutable std::mutex error_mutex;
+  mutable std::unique_ptr<kb_error> public_error;
 };
 
 namespace {
@@ -191,6 +197,57 @@ const char *device_field(const kb_device_list_t *devices, size_t index,
     return nullptr;
   }
   return (devices->devices[index].*field).c_str();
+}
+
+kb_operation_state_t public_operation_state(
+    const kairosboot::api::OperationPhase phase) noexcept {
+  using kairosboot::api::OperationPhase;
+  switch (phase) {
+  case OperationPhase::Created:
+    return KB_OPERATION_CREATED;
+  case OperationPhase::Running:
+    return KB_OPERATION_RUNNING;
+  case OperationPhase::Succeeded:
+    return KB_OPERATION_SUCCEEDED;
+  case OperationPhase::Failed:
+    return KB_OPERATION_FAILED;
+  case OperationPhase::Cancelled:
+    return KB_OPERATION_CANCELLED;
+  }
+  return KB_OPERATION_FAILED;
+}
+
+const kb_error_t *materialize_operation_error(
+    const kb_operation_t *operation) noexcept {
+  if (operation == nullptr || operation->state == nullptr) {
+    return nullptr;
+  }
+  const auto phase = operation->state->phase();
+  if (phase != kairosboot::api::OperationPhase::Failed &&
+      phase != kairosboot::api::OperationPhase::Cancelled) {
+    return nullptr;
+  }
+
+  std::scoped_lock lock(operation->error_mutex);
+  if (operation->public_error != nullptr) {
+    return operation->public_error.get();
+  }
+  try {
+    const auto payload = operation->state->error();
+    if (!payload.has_value()) {
+      return nullptr;
+    }
+    operation->public_error = std::make_unique<kb_error>(kb_error{
+        payload->status,
+        payload->message,
+        {},
+        payload->native_code,
+        payload->transfer_state,
+    });
+    return operation->public_error.get();
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 } // namespace
@@ -436,44 +493,38 @@ kb_status_t KB_CALL kb_flash_file(
 }
 
 kb_status_t KB_CALL kb_operation_wait(kb_operation_t *operation,
-                                      uint32_t /*timeout_ms*/) {
-  if (operation == nullptr) {
+                                      uint32_t timeout_ms) {
+  if (operation == nullptr || operation->state == nullptr) {
     return KB_E_INVALID_ARGUMENT;
   }
-  switch (operation->state.load()) {
-  case KB_OPERATION_SUCCEEDED:
-    return KB_OK;
-  case KB_OPERATION_CANCELLED:
-    return KB_E_CANCELLED;
-  case KB_OPERATION_FAILED:
-    return operation->error == nullptr ? KB_E_INTERNAL
-                                       : operation->error->status;
-  default:
+  if (timeout_ms == KB_WAIT_INFINITE) {
+    operation->state->wait();
+  } else if (operation->state->wait_for(
+                 std::chrono::milliseconds{timeout_ms}) ==
+             kairosboot::api::OperationWaitResult::Timeout) {
     return KB_E_TIMEOUT;
   }
+  return operation->state->status();
 }
 
 kb_status_t KB_CALL kb_operation_cancel(kb_operation_t *operation) {
-  if (operation == nullptr) {
+  if (operation == nullptr || operation->state == nullptr) {
     return KB_E_INVALID_ARGUMENT;
   }
-  const kb_operation_state_t state = operation->state.load();
-  if (state == KB_OPERATION_SUCCEEDED || state == KB_OPERATION_FAILED ||
-      state == KB_OPERATION_CANCELLED) {
-    return KB_OK;
-  }
-  operation->state.store(KB_OPERATION_CANCELLED);
+  operation->state->cancel();
   return KB_OK;
 }
 
 kb_operation_state_t KB_CALL
 kb_operation_state(const kb_operation_t *operation) {
-  return operation == nullptr ? KB_OPERATION_FAILED : operation->state.load();
+  return operation == nullptr || operation->state == nullptr
+             ? KB_OPERATION_FAILED
+             : public_operation_state(operation->state->phase());
 }
 
 const kb_error_t *KB_CALL
 kb_operation_error(const kb_operation_t *operation) {
-  return operation == nullptr ? nullptr : operation->error.get();
+  return materialize_operation_error(operation);
 }
 
 void KB_CALL kb_operation_release(kb_operation_t *operation) {

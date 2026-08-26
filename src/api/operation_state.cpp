@@ -119,6 +119,22 @@ OperationPhase OperationState::phase() const noexcept {
     return phase_;
 }
 
+kb_status_t OperationState::status() const noexcept {
+    std::scoped_lock lock(mutex_);
+    switch (phase_) {
+        case OperationPhase::Succeeded:
+            return KB_OK;
+        case OperationPhase::Cancelled:
+            return KB_E_CANCELLED;
+        case OperationPhase::Failed:
+            return error_.has_value() ? error_->status : KB_E_INTERNAL;
+        case OperationPhase::Created:
+        case OperationPhase::Running:
+            return KB_E_BUSY;
+    }
+    return KB_E_INTERNAL;
+}
+
 std::optional<OperationErrorPayload> OperationState::error() const {
     std::scoped_lock lock(mutex_);
     return error_;

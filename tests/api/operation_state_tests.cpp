@@ -48,6 +48,7 @@ void created_running_succeeded_and_wait_deadlines() {
     CHECK(operation.start());
     entered_future.wait();
     CHECK(operation.phase() == OperationPhase::Running);
+    CHECK(operation.status() == KB_E_BUSY);
     CHECK(operation.wait_for(0ms) == OperationWaitResult::Timeout);
     CHECK(operation.wait_for(10ms) == OperationWaitResult::Timeout);
 
@@ -55,6 +56,7 @@ void created_running_succeeded_and_wait_deadlines() {
     operation.wait();
     CHECK(operation.wait_for(0ms) == OperationWaitResult::Terminal);
     CHECK(operation.phase() == OperationPhase::Succeeded);
+    CHECK(operation.status() == KB_OK);
     CHECK(!operation.error().has_value());
     CHECK(!operation.start());
 }
@@ -138,6 +140,7 @@ void cancellation_is_idempotent_and_publishes_after_drain() {
     const auto error = operation.error();
     CHECK(error.has_value());
     CHECK(error->status == KB_E_CANCELLED);
+    CHECK(operation.status() == KB_E_CANCELLED);
     CHECK(error->message == "cancelled after transport drain");
     CHECK(error->native_code == 17);
     CHECK(error->transfer_state == KB_TRANSFER_PARTIAL_OR_UNKNOWN);
@@ -182,6 +185,7 @@ void failure_payload_is_synchronized_and_immutable() {
     CHECK(second.has_value());
     CHECK(*first == expected);
     CHECK(*second == expected);
+    CHECK(operation.status() == KB_E_IO);
 }
 
 void successful_task_is_cancelled_when_cancel_wins_publication() {
