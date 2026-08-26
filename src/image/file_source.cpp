@@ -6,6 +6,7 @@
 #include <new>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -53,6 +54,19 @@ public:
     ScopedHandle(const ScopedHandle&) = delete;
     ScopedHandle& operator=(const ScopedHandle&) = delete;
 
+    ScopedHandle(ScopedHandle&& other) noexcept
+        : handle_(other.release()) {}
+
+    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+        if (this != &other) {
+            if (handle_ != nullptr) {
+                (void)::CloseHandle(handle_);
+            }
+            handle_ = other.release();
+        }
+        return *this;
+    }
+
     ~ScopedHandle() {
         if (handle_ != nullptr) {
             (void)::CloseHandle(handle_);
@@ -85,6 +99,19 @@ public:
     ScopedFileDescriptor(const ScopedFileDescriptor&) = delete;
     ScopedFileDescriptor& operator=(const ScopedFileDescriptor&) = delete;
 
+    ScopedFileDescriptor(ScopedFileDescriptor&& other) noexcept
+        : descriptor_(other.release()) {}
+
+    ScopedFileDescriptor& operator=(ScopedFileDescriptor&& other) noexcept {
+        if (this != &other) {
+            if (descriptor_ >= 0) {
+                (void)::close(descriptor_);
+            }
+            descriptor_ = other.release();
+        }
+        return *this;
+    }
+
     ~ScopedFileDescriptor() {
         if (descriptor_ >= 0) {
             (void)::close(descriptor_);
@@ -105,6 +132,25 @@ private:
 
 #endif
 
+[[nodiscard]] std::expected<void, FileSourceError> validate_relative_path(
+    const std::filesystem::path& path) {
+    if (path.empty() || path.is_absolute() || path.has_root_path()) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath,
+            {},
+            "image path below directory must be relative"));
+    }
+    for (const auto& component : path) {
+        if (component.empty() || component == "." || component == "..") {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::UnsafePath,
+                {},
+                "image path below directory contains an unsafe component"));
+        }
+    }
+    return {};
+}
+
 }  // namespace
 
 std::expected<std::shared_ptr<FileImageSource>, FileSourceError>
@@ -121,7 +167,8 @@ FileImageSource::open(const std::filesystem::path& path) {
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
         OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED |
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
         nullptr);
     if (native_handle == INVALID_HANDLE_VALUE) {
         const auto native = ::GetLastError();
@@ -141,6 +188,12 @@ FileImageSource::open(const std::filesystem::path& path) {
             FileSourceErrorKind::SizeUnavailable,
             windows_error(::GetLastError()),
             "unable to determine the image file size"));
+    }
+    if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath,
+            {},
+            "image path is a reparse point"));
     }
     if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U ||
         ::GetFileType(handle.get()) != FILE_TYPE_DISK) {
@@ -177,7 +230,7 @@ FileImageSource::open(const std::filesystem::path& path) {
             "unable to allocate the image file source"));
     }
 #else
-    int flags = O_RDONLY | O_NONBLOCK;
+    int flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW;
 #if defined(O_CLOEXEC)
     flags |= O_CLOEXEC;
 #endif
@@ -186,9 +239,13 @@ FileImageSource::open(const std::filesystem::path& path) {
         const int native = errno;
         const auto kind = native == ENOENT || native == ENOTDIR
                               ? FileSourceErrorKind::NotFound
+                          : native == ELOOP
+                              ? FileSourceErrorKind::UnsafePath
                               : FileSourceErrorKind::OpenFailed;
         const auto message = kind == FileSourceErrorKind::NotFound
                                  ? "image file does not exist"
+                             : kind == FileSourceErrorKind::UnsafePath
+                                 ? "image path is a symbolic link"
                                  : "unable to open the image file";
         return std::unexpected(file_error(kind, posix_error(native), message));
     }
@@ -229,6 +286,258 @@ FileImageSource::open(const std::filesystem::path& path) {
             "unable to allocate the image file source"));
     }
 #endif
+}
+
+std::expected<std::shared_ptr<FileImageSource>, FileSourceError>
+FileImageSource::open_beneath(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& relative_path) {
+    if (directory.empty()) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::InvalidArgument,
+            {},
+            "image base directory is empty"));
+    }
+    if (auto validated = validate_relative_path(relative_path); !validated) {
+        return std::unexpected(std::move(validated.error()));
+    }
+
+    std::vector<std::filesystem::path> components;
+    for (const auto& component : relative_path) {
+        components.push_back(component);
+    }
+
+#if defined(_WIN32)
+    constexpr DWORD directory_sharing = FILE_SHARE_READ | FILE_SHARE_WRITE;
+    const auto root_handle = ::CreateFileW(
+        directory.c_str(),
+        FILE_READ_ATTRIBUTES,
+        directory_sharing,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr);
+    if (root_handle == INVALID_HANDLE_VALUE) {
+        const auto native = ::GetLastError();
+        const auto kind = native == ERROR_FILE_NOT_FOUND || native == ERROR_PATH_NOT_FOUND
+                              ? FileSourceErrorKind::NotFound
+                              : FileSourceErrorKind::OpenFailed;
+        return std::unexpected(file_error(
+            kind,
+            windows_error(native),
+            kind == FileSourceErrorKind::NotFound
+                ? "image base directory does not exist"
+                : "unable to open the image base directory"));
+    }
+    std::vector<ScopedHandle> held_directories;
+    held_directories.emplace_back(root_handle);
+
+    BY_HANDLE_FILE_INFORMATION root_information{};
+    if (::GetFileInformationByHandle(
+            held_directories.front().get(), &root_information) == FALSE) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::OpenFailed,
+            windows_error(::GetLastError()),
+            "unable to inspect the image base directory"));
+    }
+    if ((root_information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::UnsafePath,
+            {},
+            "image base directory is a reparse point"));
+    }
+    if ((root_information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::NotRegularFile,
+            {},
+            "image base path is not a directory"));
+    }
+
+    auto candidate = directory;
+    for (std::size_t index = 0; index < components.size(); ++index) {
+        const bool leaf = index + 1U == components.size();
+        candidate /= components[index];
+        const auto handle = ::CreateFileW(
+            candidate.c_str(),
+            leaf ? GENERIC_READ : FILE_READ_ATTRIBUTES,
+            leaf ? FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+                 : directory_sharing,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT |
+                (leaf ? FILE_FLAG_OVERLAPPED : 0U),
+            nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            const auto native = ::GetLastError();
+            const auto kind = native == ERROR_FILE_NOT_FOUND ||
+                                      native == ERROR_PATH_NOT_FOUND
+                                  ? FileSourceErrorKind::NotFound
+                                  : FileSourceErrorKind::OpenFailed;
+            return std::unexpected(file_error(
+                kind,
+                windows_error(native),
+                kind == FileSourceErrorKind::NotFound
+                    ? "image file below directory does not exist"
+                    : "unable to open image path below directory"));
+        }
+        ScopedHandle opened(handle);
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (::GetFileInformationByHandle(opened.get(), &information) == FALSE) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::OpenFailed,
+                windows_error(::GetLastError()),
+                "unable to inspect image path below directory"));
+        }
+        if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::UnsafePath,
+                {},
+                "image path below directory traverses a reparse point"));
+        }
+        if (!leaf) {
+            if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U) {
+                return std::unexpected(file_error(
+                    FileSourceErrorKind::UnsafePath,
+                    {},
+                    "image path below directory contains a non-directory component"));
+            }
+            held_directories.push_back(std::move(opened));
+            continue;
+        }
+        if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U ||
+            ::GetFileType(opened.get()) != FILE_TYPE_DISK) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::NotRegularFile,
+                {},
+                "image path below directory is not a regular file"));
+        }
+        LARGE_INTEGER native_size{};
+        if (::GetFileSizeEx(opened.get(), &native_size) == FALSE ||
+            native_size.QuadPart < 0) {
+            const auto native = ::GetLastError();
+            return std::unexpected(file_error(
+                FileSourceErrorKind::SizeUnavailable,
+                windows_error(native),
+                "unable to determine image size below directory"));
+        }
+        try {
+            auto source = std::unique_ptr<FileImageSource>(new FileImageSource(
+                opened.get(), static_cast<std::uint64_t>(native_size.QuadPart)));
+            (void)opened.release();
+            return std::shared_ptr<FileImageSource>(std::move(source));
+        } catch (const std::bad_alloc&) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::OpenFailed,
+                std::make_error_code(std::errc::not_enough_memory),
+                "unable to allocate image source below directory"));
+        }
+    }
+#else
+    int directory_flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
+#if defined(O_CLOEXEC)
+    directory_flags |= O_CLOEXEC;
+#endif
+    const int root_descriptor = ::open(directory.c_str(), directory_flags);
+    if (root_descriptor < 0) {
+        const int native = errno;
+        const auto kind = native == ENOENT
+                              ? FileSourceErrorKind::NotFound
+                          : native == ELOOP || native == ENOTDIR
+                              ? FileSourceErrorKind::UnsafePath
+                              : FileSourceErrorKind::OpenFailed;
+        return std::unexpected(file_error(
+            kind,
+            posix_error(native),
+            kind == FileSourceErrorKind::UnsafePath
+                ? "image base directory is a symbolic link or unsafe path"
+                : "unable to open the image base directory"));
+    }
+    ScopedFileDescriptor current(root_descriptor);
+    struct stat root_information {};
+    if (::fstat(current.get(), &root_information) != 0 ||
+        !S_ISDIR(root_information.st_mode)) {
+        return std::unexpected(file_error(
+            FileSourceErrorKind::NotRegularFile,
+            {},
+            "image base path is not a directory"));
+    }
+
+    for (std::size_t index = 0; index < components.size(); ++index) {
+        const bool leaf = index + 1U == components.size();
+        int flags = O_RDONLY | O_NOFOLLOW;
+#if defined(O_CLOEXEC)
+        flags |= O_CLOEXEC;
+#endif
+        if (leaf) {
+            flags |= O_NONBLOCK;
+        } else {
+            flags |= O_DIRECTORY;
+        }
+        const int descriptor = ::openat(
+            current.get(), components[index].c_str(), flags);
+        if (descriptor < 0) {
+            const int native = errno;
+            const auto kind = native == ENOENT
+                                  ? FileSourceErrorKind::NotFound
+                              : native == ELOOP || native == ENOTDIR
+                                  ? FileSourceErrorKind::UnsafePath
+                                  : FileSourceErrorKind::OpenFailed;
+            return std::unexpected(file_error(
+                kind,
+                posix_error(native),
+                kind == FileSourceErrorKind::UnsafePath
+                    ? "image path below directory traverses a symbolic link or unsafe component"
+                    : "unable to open image path below directory"));
+        }
+        ScopedFileDescriptor opened(descriptor);
+        struct stat information {};
+        if (::fstat(opened.get(), &information) != 0) {
+            const int native = errno;
+            return std::unexpected(file_error(
+                FileSourceErrorKind::SizeUnavailable,
+                posix_error(native),
+                "unable to inspect image path below directory"));
+        }
+        if (!leaf) {
+            if (!S_ISDIR(information.st_mode)) {
+                return std::unexpected(file_error(
+                    FileSourceErrorKind::UnsafePath,
+                    {},
+                    "image path below directory contains a non-directory component"));
+            }
+            current = std::move(opened);
+            continue;
+        }
+        if (!S_ISREG(information.st_mode)) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::NotRegularFile,
+                {},
+                "image path below directory is not a regular file"));
+        }
+        if (information.st_size < 0 ||
+            !std::in_range<std::uint64_t>(information.st_size)) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::SizeUnavailable,
+                {},
+                "unable to determine image size below directory"));
+        }
+        try {
+            auto source = std::unique_ptr<FileImageSource>(new FileImageSource(
+                opened.get(), static_cast<std::uint64_t>(information.st_size)));
+            (void)opened.release();
+            return std::shared_ptr<FileImageSource>(std::move(source));
+        } catch (const std::bad_alloc&) {
+            return std::unexpected(file_error(
+                FileSourceErrorKind::OpenFailed,
+                std::make_error_code(std::errc::not_enough_memory),
+                "unable to allocate image source below directory"));
+        }
+    }
+#endif
+    return std::unexpected(file_error(
+        FileSourceErrorKind::InvalidArgument,
+        {},
+        "image path below directory contains no components"));
 }
 
 FileImageSource::FileImageSource(const NativeHandle handle, const std::uint64_t size)
