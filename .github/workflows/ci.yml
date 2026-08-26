@@ -273,7 +273,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download Ubuntu 22.04 SDK
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: kairosboot-linux-${{ matrix.arch }}
           path: ${{ runner.temp }}/kairosboot-install
@@ -312,7 +312,7 @@ jobs:
           /t:Verify /m:1 /nr:false
 
       - name: Download all six native install trees
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: kairosboot-*
           path: ${{ runner.temp }}/native
@@ -423,7 +423,7 @@ jobs:
           dotnet-version: 10.0.400
 
       - name: Download actual NuGet package
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: kairosboot-managed-package
           path: ${{ runner.temp }}/package

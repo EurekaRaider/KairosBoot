@@ -413,7 +413,7 @@ jobs:
           dotnet-version: 10.0.400
 
       - name: Download all native install trees
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: native-*
           path: native
@@ -518,7 +518,7 @@ jobs:
           dotnet-version: 10.0.400
 
       - name: Download exact Release NuGet assets
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-nuget
           path: ${{ runner.temp }}/package
@@ -607,7 +607,7 @@ jobs:
           persist-credentials: false
 
       - name: Download native release archives
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*
           path: release-assets
