@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/primitive_service.hpp"
+#include "src/fastboot/slot_planner.hpp"
 #include "tests/protocol/scripted_transport.hpp"
 
 #include <algorithm>
@@ -26,6 +27,11 @@ using kairosboot::fastboot::PrimitiveErrorCode;
 using kairosboot::fastboot::PrimitiveOperation;
 using kairosboot::fastboot::PrimitiveService;
 using kairosboot::fastboot::RebootTarget;
+using kairosboot::fastboot::SlotErrorCode;
+using kairosboot::fastboot::SlotPlanner;
+using kairosboot::fastboot::SlotSelectionKind;
+using kairosboot::fastboot::SlotTopologySource;
+using kairosboot::fastboot::parse_slot_selection;
 using kairosboot::fastboot::validate_download_size;
 using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::ITransferSource;
@@ -816,6 +822,302 @@ void source_preflight_and_capability_fail_without_wire_io() {
     }
 }
 
+void slot_selection_validation_has_no_wire_effects() {
+    const auto current = parse_slot_selection("");
+    CHECK(current.has_value());
+    CHECK(current->kind == SlotSelectionKind::Current);
+
+    const auto legacy_a = parse_slot_selection("_a");
+    CHECK(legacy_a.has_value());
+    CHECK(legacy_a->kind == SlotSelectionKind::Explicit);
+    CHECK(legacy_a->name == "a");
+
+    CHECK(parse_slot_selection("other")->kind == SlotSelectionKind::Other);
+    CHECK(parse_slot_selection("all")->kind == SlotSelectionKind::All);
+    CHECK(!parse_slot_selection("current"));
+    CHECK(!parse_slot_selection("aa"));
+    CHECK(!parse_slot_selection("A"));
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    SlotPlanner planner(service);
+
+    const auto invalid_partition = planner.plan_partition("bad:partition", "a");
+    CHECK(!invalid_partition);
+    CHECK(invalid_partition.error().code == SlotErrorCode::InvalidArgument);
+    const auto invalid_slot = planner.plan_partition("boot", "slot-a");
+    CHECK(!invalid_slot);
+    CHECK(invalid_slot.error().code == SlotErrorCode::InvalidArgument);
+    const auto active_all = planner.resolve_active_slot("all");
+    CHECK(!active_all);
+    CHECK(active_all.error().code == SlotErrorCode::InvalidArgument);
+    CHECK(accepted_text(*script).empty());
+    CHECK(script->complete());
+}
+
+void modern_slot_queries_generate_deterministic_plans() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:has-slot:boot");
+    script->respond("OKAYyes");
+    script->expect_write("getvar:slot-count");
+    script->respond("OKAY2");
+    script->expect_write("getvar:current-slot");
+    script->respond("OKAY_b");
+
+    script->expect_write("getvar:has-slot:system");
+    script->respond("OKAYyes");
+    script->expect_write("getvar:slot-count");
+    script->respond("OKAY2");
+
+    script->expect_write("getvar:slot-count");
+    script->respond("OKAY2");
+    script->expect_write("getvar:current-slot");
+    script->respond("OKAYa");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    SlotPlanner planner(service);
+
+    const auto current = planner.plan_partition("boot");
+    CHECK(current.has_value());
+    CHECK(current->slotted);
+    CHECK(current->partition_names == std::vector<std::string>({"boot_b"}));
+    CHECK(current->slots == std::vector<std::string>({"b"}));
+
+    const auto all = planner.plan_partition("system", "all");
+    CHECK(all.has_value());
+    const std::vector<std::string> expected_names{"system_a", "system_b"};
+    const std::vector<std::string> expected_slots{"a", "b"};
+    CHECK(all->partition_names == expected_names);
+    CHECK(all->slots == expected_slots);
+
+    const auto other = planner.resolve_active_slot("other");
+    CHECK(other.has_value());
+    CHECK(*other == "b");
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void legacy_suffixes_are_normalized_and_sorted() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:has-slot:vendor_boot");
+    script->respond("OKAYyes");
+    script->expect_write("getvar:slot-count");
+    script->respond("FAILunknown variable");
+    script->expect_write("getvar:slot-suffixes");
+    script->respond("OKAY_b,_a");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    SlotPlanner planner(service);
+
+    const auto result = planner.plan_partition("vendor_boot", "_b");
+    CHECK(result.has_value());
+    CHECK(result->partition_names ==
+          std::vector<std::string>{"vendor_boot_b"});
+    CHECK(result->slots == std::vector<std::string>({"b"}));
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+
+    auto topology_transport = std::make_unique<ScriptedTransport>();
+    auto* topology_script = topology_transport.get();
+    topology_script->expect_write("getvar:slot-count");
+    topology_script->respond("FAILlegacy");
+    topology_script->expect_write("getvar:slot-suffixes");
+    topology_script->respond("OKAY_b,_a");
+    FastbootSession topology_session(std::move(topology_transport));
+    PrimitiveService topology_service(topology_session);
+    SlotPlanner topology_planner(topology_service);
+    const auto topology = topology_planner.query_topology();
+    CHECK(topology.has_value());
+    CHECK(topology->source == SlotTopologySource::LegacySlotSuffixes);
+    CHECK(topology->slots == std::vector<std::string>({"a", "b"}));
+    CHECK(topology_script->complete());
+}
+
+void non_slotted_partitions_are_not_silently_forced() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:has-slot:userdata");
+    script->respond("OKAYno");
+    script->expect_write("getvar:has-slot:userdata");
+    script->respond("OKAYno");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    SlotPlanner planner(service);
+
+    const auto implicit = planner.plan_partition("userdata");
+    CHECK(implicit.has_value());
+    CHECK(!implicit->slotted);
+    CHECK(implicit->partition_names ==
+          std::vector<std::string>{"userdata"});
+    CHECK(implicit->slots.empty());
+
+    const auto forced = planner.plan_partition("userdata", "a");
+    CHECK(!forced);
+    CHECK(forced.error().code == SlotErrorCode::Unsupported);
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void unsupported_and_failed_queries_are_distinct() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond("FAILunknown variable");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+
+        const auto result = planner.plan_partition("boot");
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::Unsupported);
+        CHECK(result.error().query_error.has_value());
+        CHECK(result.error().query_error->code == PrimitiveErrorCode::DeviceFail);
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond(
+            "",
+            TransportStatus::Timeout,
+            TransferCertainty::NotTransferred,
+            false,
+            std::nullopt,
+            60,
+            "deadline");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+
+        const auto result = planner.plan_partition("boot");
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::QueryFailed);
+        CHECK(result.error().query_error.has_value());
+        CHECK(result.error().query_error->code == PrimitiveErrorCode::Timeout);
+        CHECK(result.error().query_error->native_code == 60);
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Poisoned);
+    }
+}
+
+void malformed_slot_metadata_is_never_guessed() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond("OKAYyes");
+        script->expect_write("getvar:slot-count");
+        script->respond("OKAY2x");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+
+        const auto result = planner.plan_partition("boot", "a");
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::InvalidDeviceResponse);
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:slot-count");
+        script->respond("FAILlegacy");
+        script->expect_write("getvar:slot-suffixes");
+        script->respond("OKAY_a,a");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+
+        const auto result = planner.resolve_active_slot("a");
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::Ambiguous);
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond("OKAYmaybe");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+
+        const auto result = planner.plan_partition("boot");
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::InvalidDeviceResponse);
+        CHECK(script->complete());
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond("OKAYyes");
+        script->expect_write("getvar:slot-count");
+        script->respond("OKAY2");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+
+        const auto result = planner.plan_partition("boot", "c");
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::InvalidArgument);
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+}
+
+void other_slot_rejects_ambiguous_topologies() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:slot-count");
+    script->respond("OKAY3");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    SlotPlanner planner(service);
+    const auto result = planner.resolve_active_slot("other");
+    CHECK(!result);
+    CHECK(result.error().code == SlotErrorCode::Ambiguous);
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void current_slot_must_belong_to_discovered_topology() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:has-slot:boot");
+    script->respond("OKAYyes");
+    script->expect_write("getvar:slot-count");
+    script->respond("OKAY2");
+    script->expect_write("getvar:current-slot");
+    script->respond("OKAYc");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    SlotPlanner planner(service);
+    const auto result = planner.plan_partition("boot");
+    CHECK(!result);
+    CHECK(result.error().code == SlotErrorCode::InvalidDeviceResponse);
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
 }  // namespace
 
 int main() {
@@ -837,6 +1139,14 @@ int main() {
         {"source DATA mismatch", source_data_mismatch_never_reads_payload},
         {"source cancellation and failure", source_cancel_and_failure_poison_with_native_codes},
         {"source preflight and capability", source_preflight_and_capability_fail_without_wire_io},
+        {"slot selection validation", slot_selection_validation_has_no_wire_effects},
+        {"modern slot planning", modern_slot_queries_generate_deterministic_plans},
+        {"legacy slot suffixes", legacy_suffixes_are_normalized_and_sorted},
+        {"non-slotted partition planning", non_slotted_partitions_are_not_silently_forced},
+        {"slot query error classes", unsupported_and_failed_queries_are_distinct},
+        {"malformed slot metadata", malformed_slot_metadata_is_never_guessed},
+        {"ambiguous other slot", other_slot_rejects_ambiguous_topologies},
+        {"current slot topology membership", current_slot_must_belong_to_discovered_topology},
     };
 
     std::size_t failures = 0;
