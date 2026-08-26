@@ -180,6 +180,7 @@ add_library(
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
   src/fastboot/primitive_service.cpp
+  src/fastboot/reconnect_coordinator.cpp
   src/fastboot/update_plan.cpp
   src/fleet/controller_scheduler.cpp
   src/image/artifact_source.cpp
@@ -407,6 +408,18 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_primitive_service_tests)
   add_test(NAME primitive_service COMMAND kairosboot_primitive_service_tests)
   set_tests_properties(primitive_service PROPERTIES TIMEOUT 15)
+
+  add_executable(kairosboot_reconnect_coordinator_tests
+                 tests/fastboot/reconnect_coordinator_tests.cpp)
+  target_compile_features(kairosboot_reconnect_coordinator_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_reconnect_coordinator_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_reconnect_coordinator_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_reconnect_coordinator_tests)
+  add_test(NAME reconnect_coordinator
+           COMMAND kairosboot_reconnect_coordinator_tests)
+  set_tests_properties(reconnect_coordinator PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_variable_parser_tests
                  tests/fastboot/variable_parser_tests.cpp)
