@@ -1,0 +1,415 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify-release-contract
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.contract.outputs.version }}
+      commit: ${{ steps.contract.outputs.commit }}
+    steps:
+      - name: Check out signed tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag, owner, version, main ancestry, CI, and HIL
+        id: contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "release tag must be vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          if ! jq -e --arg actor "$RELEASE_ACTOR" '.allowedActors | index($actor)' \
+            .github/release-signers.json >/dev/null; then
+            echo "workflow actor is not in the release allowlist"
+            exit 1
+          fi
+          if [ "$(git cat-file -t "$RELEASE_TAG")" != "tag" ]; then
+            echo "release tag must be annotated"
+            exit 1
+          fi
+
+          tag_object=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" --jq '.verification.verified')" != "true" ]; then
+            echo "release tag is not verified by GitHub"
+            exit 1
+          fi
+          tagger_email=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" --jq '.tagger.email')
+          if ! jq -e --arg email "$tagger_email" '.allowedTaggerEmails | index($email)' \
+            .github/release-signers.json >/dev/null; then
+            echo "verified tagger email is not in the release allowlist"
+            exit 1
+          fi
+
+          version=${RELEASE_TAG#v}
+          if [ "$(jq -r '.version' version.json)" != "$version" ]; then
+            echo "tag and version.json do not match"
+            exit 1
+          fi
+          commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "tagged commit is not on main"
+            exit 1
+          fi
+
+          require_success() {
+            workflow=$1
+            count=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${commit}&status=success&per_page=100" \
+              --jq '.workflow_runs | map(select(.conclusion == "success")) | length')
+            if [ "$count" -lt 1 ]; then
+              echo "no successful ${workflow} run exists for ${commit}"
+              exit 1
+            fi
+          }
+          require_success ci.yml
+          require_success policy.yml
+          require_success hil.yml
+
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+  native-linux:
+    name: release-${{ matrix.id }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            runner: ubuntu-24.04
+          - id: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    steps:
+      - name: Install fixed build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            binutils ca-certificates cmake g++-12 git ninja-build python3
+
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Build and test
+        env:
+          CC: gcc-12
+          CXX: g++-12
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          cmake --install build --prefix "${RUNNER_TEMP}/install"
+
+      - name: Extract symbols and package SDK/CLI
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PLATFORM: ${{ matrix.id }}
+        run: |
+          mkdir -p build/symbols dist
+          objcopy --only-keep-debug "${RUNNER_TEMP}/install/bin/kairosboot" build/symbols/kairosboot.debug
+          objcopy --only-keep-debug "${RUNNER_TEMP}/install/lib/libkairosboot.so.${VERSION}" build/symbols/libkairosboot.debug
+          python3 scripts/package_native.py \
+            --install-root "${RUNNER_TEMP}/install" \
+            --output-dir dist \
+            --version "$VERSION" \
+            --platform "$PLATFORM" \
+            --symbols-root build/symbols
+
+      - name: Upload native install tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.id }}
+          path: ${{ runner.temp }}/install
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release archives
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.id }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  native-desktop:
+    name: release-${{ matrix.id }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            runner: windows-2022
+            architecture: x64
+            deployment-target: ""
+          - id: windows-arm64
+            runner: windows-11-arm
+            architecture: ARM64
+            deployment-target: ""
+          - id: macos-x64
+            runner: macos-15-intel
+            architecture: ""
+            deployment-target: "14.0"
+          - id: macos-arm64
+            runner: macos-15
+            architecture: ""
+            deployment-target: "14.0"
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment-target }}
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022"
+          -A ${{ matrix.architecture }}
+          -DBUILD_TESTING=ON
+
+      - name: Build, test, and install Windows
+        if: runner.os == 'Windows'
+        run: |
+          cmake --build build --config RelWithDebInfo --parallel
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure
+          cmake --install build --config RelWithDebInfo --prefix "${{ runner.temp }}/install"
+
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DBUILD_TESTING=ON
+
+      - name: Build, test, and install macOS
+        if: runner.os == 'macOS'
+        run: |
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          cmake --install build --prefix "${RUNNER_TEMP}/install"
+
+      - name: Extract macOS symbols
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          mkdir -p build/symbols
+          dsymutil "${RUNNER_TEMP}/install/bin/kairosboot" -o build/symbols/kairosboot.dSYM
+          dsymutil "${RUNNER_TEMP}/install/lib/libkairosboot.${VERSION}.dylib" -o build/symbols/libkairosboot.dSYM
+
+      - name: Package SDK, CLI, and symbols
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PLATFORM: ${{ matrix.id }}
+        run: >-
+          python3 scripts/package_native.py
+          --install-root "${{ runner.temp }}/install"
+          --output-dir dist
+          --version "$env:VERSION"
+          --platform "$env:PLATFORM"
+          --symbols-root build
+        shell: pwsh
+        if: runner.os == 'Windows'
+
+      - name: Package macOS SDK, CLI, and symbols
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          PLATFORM: ${{ matrix.id }}
+        run: >-
+          python3 scripts/package_native.py
+          --install-root "${RUNNER_TEMP}/install"
+          --output-dir dist
+          --version "$VERSION"
+          --platform "$PLATFORM"
+          --symbols-root build/symbols
+        if: runner.os == 'macOS'
+
+      - name: Upload native install tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.id }}
+          path: ${{ runner.temp }}/install
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release archives
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.id }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  dotnet-package:
+    name: release-nuget
+    needs:
+      - verify
+      - native-linux
+      - native-desktop
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download all native install trees
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: native-*
+          path: native
+
+      - name: Stage six native NuGet runtimes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          mkdir -p bindings/dotnet/KairosBoot/runtimes/{win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64}/native
+          cp native/native-windows-x64/bin/kairosboot.dll bindings/dotnet/KairosBoot/runtimes/win-x64/native/
+          cp native/native-windows-arm64/bin/kairosboot.dll bindings/dotnet/KairosBoot/runtimes/win-arm64/native/
+          cp "native/native-linux-x64/lib/libkairosboot.so.${VERSION}" bindings/dotnet/KairosBoot/runtimes/linux-x64/native/libkairosboot.so
+          cp "native/native-linux-arm64/lib/libkairosboot.so.${VERSION}" bindings/dotnet/KairosBoot/runtimes/linux-arm64/native/libkairosboot.so
+          cp "native/native-macos-x64/lib/libkairosboot.${VERSION}.dylib" bindings/dotnet/KairosBoot/runtimes/osx-x64/native/libkairosboot.dylib
+          cp "native/native-macos-arm64/lib/libkairosboot.${VERSION}.dylib" bindings/dotnet/KairosBoot/runtimes/osx-arm64/native/libkairosboot.dylib
+
+      - name: Pack managed SDK with native runtimes and symbols
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          dotnet msbuild bindings/dotnet/KairosBoot/KairosBoot.csproj \
+            /t:Pack \
+            /p:Configuration=Release \
+            /p:PackageOutputPath="$PWD/nuget" \
+            /p:PackageVersion="$VERSION" \
+            /p:IncludeNativeRuntimes=true \
+            /p:IncludeSymbols=true \
+            /p:SymbolPackageFormat=snupkg \
+            /m:1 \
+            /nr:false
+
+      - name: Upload NuGet assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-nuget
+          path: nuget/*.*nupkg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish-github-release
+    needs:
+      - verify
+      - native-linux
+      - native-desktop
+      - dotnet-package
+    runs-on: ubuntu-24.04
+    environment: github-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download native release archives
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Assemble source, notices, libusb source, SBOM, and provenance
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -eu
+          git archive --format=tar.gz --prefix="KairosBoot-v${VERSION}/" \
+            --output="release-assets/KairosBoot-v${VERSION}-source.tar.gz" "$COMMIT"
+          curl --fail --silent --show-error --location \
+            --output release-assets/libusb-1.0.30.tar.bz2 \
+            https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
+          printf '%s  %s\n' \
+            'fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf' \
+            'release-assets/libusb-1.0.30.tar.bz2' | sha256sum --check
+          cp LICENSE "release-assets/KairosBoot-v${VERSION}-LICENSE.txt"
+          cp THIRD_PARTY_NOTICES.md "release-assets/KairosBoot-v${VERSION}-THIRD_PARTY_NOTICES.md"
+          cp UNSIGNED.txt "release-assets/KairosBoot-v${VERSION}-UNSIGNED.txt"
+          cp signing-status.json release-assets/signing-status.json
+          python3 scripts/generate_sbom.py \
+            --version "$VERSION" \
+            --source-archive "release-assets/KairosBoot-v${VERSION}-source.tar.gz" \
+            --libusb-source release-assets/libusb-1.0.30.tar.bz2 \
+            --output release-assets/KairosBoot.spdx.json
+          python3 scripts/generate_provenance.py \
+            --assets release-assets \
+            --output release-assets/provenance.intoto.json
+          find release-assets -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | \
+            sort -z | xargs -0 -I{} sha256sum "release-assets/{}" | \
+            sed 's|  release-assets/|  |' >release-assets/SHA256SUMS
+
+      - name: Attest assembled release assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: release-assets/*
+
+      - name: Create draft, upload, redownload, verify, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' >existing-draft; then
+            if [ "$(cat existing-draft)" != "true" ]; then
+              echo "refusing to replace an already-published release"
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --draft --verify-tag --generate-notes --title "KairosBoot $TAG"
+          fi
+          gh release upload "$TAG" release-assets/* --clobber
+          mkdir verified-assets
+          gh release download "$TAG" --dir verified-assets
+          cd verified-assets
+          sha256sum --check SHA256SUMS
+          cd ..
+          gh release edit "$TAG" --draft=false

@@ -1,0 +1,64 @@
+name: HIL
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hil-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  usb-hil:
+    name: usb-hil-32-device-soak
+    if: vars.KAIROSBOOT_HIL_ENABLED == 'true'
+    runs-on:
+      - self-hosted
+      - kairosboot-hil
+    timeout-minutes: 2160
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Run isolated hardware lab harness
+        run: >-
+          /opt/kairosboot-hil/run
+          --source "${GITHUB_WORKSPACE}"
+          --output "${RUNNER_TEMP}/hil-evidence.json"
+
+      - name: Enforce release HIL gates
+        run: >-
+          python3 scripts/validate_hil_evidence.py
+          "${RUNNER_TEMP}/hil-evidence.json"
+          --commit "${GITHUB_SHA}"
+
+      - name: Upload HIL evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hil-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/hil-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  hil-required:
+    name: hil-required
+    if: always()
+    needs: usb-hil
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require configured hardware evidence
+        env:
+          HIL_RESULT: ${{ needs.usb-hil.result }}
+        run: |
+          if [ "$HIL_RESULT" != "success" ]; then
+            echo "HIL result: $HIL_RESULT"
+            echo "Configure KAIROSBOOT_HIL_ENABLED and the protected self-hosted lab before release."
+            exit 1
+          fi
