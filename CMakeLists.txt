@@ -187,6 +187,7 @@ add_library(
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
   src/image/sparse_image.cpp
+  src/protocol/file_transfer_sink.cpp
   src/protocol/fastboot_protocol.cpp
   src/transport/adaptive_tuner.cpp
   src/transport/buffer_budget.cpp
@@ -533,6 +534,17 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_protocol_tests PRIVATE kairosboot_internal)
   kairosboot_enable_strict_warnings(kairosboot_protocol_tests)
   add_test(NAME protocol COMMAND kairosboot_protocol_tests)
+
+  add_executable(kairosboot_file_transfer_sink_tests
+                 tests/protocol/file_transfer_sink_tests.cpp)
+  target_compile_features(kairosboot_file_transfer_sink_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_file_transfer_sink_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_file_transfer_sink_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_file_transfer_sink_tests)
+  add_test(NAME file_transfer_sink COMMAND kairosboot_file_transfer_sink_tests)
+  set_tests_properties(file_transfer_sink PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_performance_tests tests/performance/test_main.cpp)
   target_compile_features(kairosboot_performance_tests PRIVATE cxx_std_23)
