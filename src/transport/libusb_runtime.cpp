@@ -450,6 +450,13 @@ LibusbFunctions LibusbFunctions::system() {
     };
     functions.pin_current_module = [] { return pin_runtime_module(); };
     functions.module_pin_failure = [] { std::terminate(); };
+#if defined(__linux__)
+    functions.resolve_linux_topology = [](const LinuxUsbTopologyQuery& query) {
+        static const OpenatLinuxUsbSysfsReader reader;
+        const LinuxUsbTopologyDiscovery discovery(reader);
+        return discovery.discover(query);
+    };
+#endif
     return functions;
 }
 
@@ -1660,8 +1667,13 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             continue;
         }
 
+        const auto bus_number = state_->functions.get_bus_number(device);
+        const auto device_address =
+            state_->functions.get_device_address(device);
         std::optional<std::vector<std::uint8_t>> port_path;
         std::optional<std::string> serial;
+        std::optional<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>>
+            linux_topology_snapshot;
         const auto load_identity = [&]() -> bool {
             if (port_path.has_value()) {
                 return true;
@@ -1743,24 +1755,47 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     !load_identity()) {
                     continue;
                 }
-                devices.push_back(UsbDeviceInfo{
-                    descriptor.idVendor,
-                    descriptor.idProduct,
-                    state_->functions.get_bus_number(device),
-                    state_->functions.get_device_address(device),
-                    raw_config->bConfigurationValue,
-                    *port_path,
-                    *serial,
-                    alternate.bInterfaceNumber,
-                    alternate.bAlternateSetting,
-                    alternate.bInterfaceClass,
-                    alternate.bInterfaceSubClass,
-                    alternate.bInterfaceProtocol,
-                    bulk_out->bEndpointAddress,
-                    static_cast<std::uint16_t>(bulk_out->wMaxPacketSize & 0x07FFU),
-                    bulk_in->bEndpointAddress,
-                    static_cast<std::uint16_t>(bulk_in->wMaxPacketSize & 0x07FFU),
-                });
+                UsbDeviceInfo snapshot{
+                    .vendor_id = descriptor.idVendor,
+                    .product_id = descriptor.idProduct,
+                    .bus_number = bus_number,
+                    .device_address = device_address,
+                    .configuration_value = raw_config->bConfigurationValue,
+                    .port_path = *port_path,
+                    .serial_utf8 = *serial,
+                    .interface_number = alternate.bInterfaceNumber,
+                    .alternate_setting = alternate.bAlternateSetting,
+                    .interface_class = alternate.bInterfaceClass,
+                    .interface_subclass = alternate.bInterfaceSubClass,
+                    .interface_protocol = alternate.bInterfaceProtocol,
+                    .bulk_out_endpoint = bulk_out->bEndpointAddress,
+                    .bulk_out_max_packet_size = static_cast<std::uint16_t>(
+                        bulk_out->wMaxPacketSize & 0x07FFU),
+                    .bulk_in_endpoint = bulk_in->bEndpointAddress,
+                    .bulk_in_max_packet_size = static_cast<std::uint16_t>(
+                        bulk_in->wMaxPacketSize & 0x07FFU),
+                    .linux_topology = std::nullopt,
+                    .linux_topology_error = std::nullopt,
+                };
+                if (state_->functions.resolve_linux_topology) {
+                    // Physical topology belongs to the device, not to an
+                    // interface alternate. Resolve exactly once and copy the
+                    // same immutable result into every matching interface
+                    // snapshot so duplicates cannot observe mixed identities.
+                    if (!linux_topology_snapshot.has_value()) {
+                        linux_topology_snapshot.emplace(
+                            state_->functions.resolve_linux_topology(
+                                make_linux_usb_topology_query(snapshot)));
+                    }
+                    if (linux_topology_snapshot->has_value()) {
+                        snapshot.linux_topology =
+                            linux_topology_snapshot->value();
+                    } else {
+                        snapshot.linux_topology_error =
+                            linux_topology_snapshot->error();
+                    }
+                }
+                devices.push_back(std::move(snapshot));
             }
         }
     }

@@ -1,10 +1,12 @@
 #pragma once
 
-#include "src/transport/transfer_ring.hpp"
-
 #if defined(_WIN32)
 #include <winsock2.h>
 #endif
+
+#include "src/transport/linux_usb_topology.hpp"
+#include "src/transport/transfer_ring.hpp"
+
 #include <libusb.h>
 
 #include <atomic>
@@ -76,6 +78,12 @@ struct LibusbFunctions final {
     // production function table leaves it empty.
     std::function<void(LibusbSubmitFaultPoint)> submit_allocation_fault;
 
+    // Optional platform topology enrichment. Production installs this only on
+    // Linux; tests may inject it without depending on the host's /sys tree.
+    std::function<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>(
+        const LinuxUsbTopologyQuery&)>
+        resolve_linux_topology;
+
     [[nodiscard]] static LibusbFunctions system();
     [[nodiscard]] bool complete() const noexcept;
 };
@@ -131,6 +139,8 @@ struct UsbDeviceInfo final {
     std::uint16_t bulk_out_max_packet_size{};
     std::uint8_t bulk_in_endpoint{};
     std::uint16_t bulk_in_max_packet_size{};
+    std::optional<LinuxUsbTopology> linux_topology;
+    std::optional<LinuxUsbTopologyError> linux_topology_error;
 };
 
 enum class ZeroPacketPolicy : std::uint8_t {

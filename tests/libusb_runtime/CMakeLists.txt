@@ -78,6 +78,7 @@ enable_testing()
 add_executable(kairosboot_libusb_runtime_tests
     ../../src/transport/buffer_budget.cpp
     ../../src/transport/libusb_runtime.cpp
+    ../../src/transport/linux_usb_topology.cpp
     ../../src/transport/transfer_ring.cpp
     ../../src/transport/usb_fastboot.cpp
     test_main.cpp
@@ -106,3 +107,33 @@ else()
 endif()
 
 add_test(NAME kairosboot.libusb-runtime COMMAND kairosboot_libusb_runtime_tests)
+
+add_executable(kairosboot_linux_usb_topology_tests
+    ../../src/transport/linux_usb_topology.cpp
+    linux_usb_topology_tests.cpp
+)
+
+target_include_directories(kairosboot_linux_usb_topology_tests PRIVATE ../..)
+target_compile_features(kairosboot_linux_usb_topology_tests PRIVATE cxx_std_23)
+target_link_libraries(kairosboot_linux_usb_topology_tests PRIVATE
+    kairosboot_libusb_dependency
+)
+set_target_properties(kairosboot_linux_usb_topology_tests PROPERTIES
+    CXX_EXTENSIONS OFF
+)
+
+if(MSVC)
+    target_compile_options(kairosboot_linux_usb_topology_tests PRIVATE
+        /W4 /WX /permissive-
+    )
+else()
+    target_compile_options(kairosboot_linux_usb_topology_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif()
+
+add_test(NAME kairosboot.linux-usb-topology
+         COMMAND kairosboot_linux_usb_topology_tests)
