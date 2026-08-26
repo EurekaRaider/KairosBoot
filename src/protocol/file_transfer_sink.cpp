@@ -727,11 +727,10 @@ std::expected<void, FileTransferSinkError> FileTransferSink::seal(
         }
         const std::size_t name_bytes =
             destination_name.size() * sizeof(wchar_t);
-        constexpr std::size_t rename_header =
-            offsetof(FILE_RENAME_INFO, FileName);
+        constexpr std::size_t rename_base = sizeof(FILE_RENAME_INFO);
         if (name_bytes >
-                std::numeric_limits<std::size_t>::max() - rename_header ||
-            name_bytes + rename_header >
+                std::numeric_limits<std::size_t>::max() - rename_base ||
+            name_bytes + rename_base >
                 static_cast<std::size_t>(
                     std::numeric_limits<DWORD>::max())) {
             return fail_seal_locked(
@@ -740,7 +739,7 @@ std::expected<void, FileTransferSinkError> FileTransferSink::seal(
                 "destination rename information is too large");
         }
         std::vector<std::byte> rename_buffer(
-            rename_header + name_bytes);
+            rename_base + name_bytes);
         auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(
             rename_buffer.data());
         rename->ReplaceIfExists = TRUE;
