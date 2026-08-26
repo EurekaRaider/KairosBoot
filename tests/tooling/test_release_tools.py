@@ -6,7 +6,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 import subprocess
 import tarfile
 import tempfile
@@ -67,6 +66,9 @@ class ReleaseToolTests(unittest.TestCase):
 
     def test_native_archives_have_expected_shape_and_modes(self) -> None:
         install = self.create_install_tree()
+        # The archive contract must not depend on Unix mode bits being available
+        # on the host filesystem (notably when this test runs on Windows).
+        (install / "bin" / "kairosboot").chmod(0o644)
         symbols = self.create_symbols()
         output = self.root / "dist"
         run_script(
@@ -101,7 +103,7 @@ class ReleaseToolTests(unittest.TestCase):
             )
         with tarfile.open(cli, "r:gz") as archive:
             member = archive.getmember("KairosBoot-v1.2.3-linux-x64-cli/bin/kairosboot")
-            self.assertNotEqual(member.mode & stat.S_IXUSR, 0)
+            self.assertEqual(member.mode & 0o777, 0o755)
             self.assertNotIn(
                 "KairosBoot-v1.2.3-linux-x64-cli/lib/cmake",
                 archive.getnames(),

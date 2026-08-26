@@ -11,9 +11,22 @@ import zipfile
 from pathlib import Path
 
 
+def normalize_tar_mode(member: tarfile.TarInfo, relative: Path) -> tarfile.TarInfo:
+    """Give installed command files a portable executable archive mode."""
+    if member.isfile() and relative.parts[:1] == ("bin",):
+        member.mode = 0o755
+    return member
+
+
 def add_tree_to_tar(archive: tarfile.TarFile, source: Path, prefix: str) -> None:
     for path in sorted(source.rglob("*")):
-        archive.add(path, arcname=f"{prefix}/{path.relative_to(source)}", recursive=False)
+        relative = path.relative_to(source)
+        archive.add(
+            path,
+            arcname=f"{prefix}/{relative}",
+            recursive=False,
+            filter=lambda member, relative=relative: normalize_tar_mode(member, relative),
+        )
 
 
 def add_tree_to_zip(archive: zipfile.ZipFile, source: Path, prefix: str) -> None:
