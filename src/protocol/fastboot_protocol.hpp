@@ -21,6 +21,8 @@ namespace kairosboot::protocol {
 inline constexpr std::size_t kDefaultMaxCommandBytes = 4096;
 inline constexpr std::size_t kDefaultMaxResponseBytes = 256;
 inline constexpr std::size_t kDefaultMaxInformationalResponses = 1024;
+inline constexpr std::size_t kDefaultReceiveChunkBytes = 1024U * 1024U;
+inline constexpr std::size_t kMaximumReceiveChunkBytes = 4U * 1024U * 1024U;
 
 enum class ResponseKind : std::uint8_t {
     Info,
@@ -59,6 +61,7 @@ enum class SessionState : std::uint8_t {
     WritingCommand,
     AwaitingResponse,
     Downloading,
+    ReceivingData,
     Poisoned,
     Closed,
 };
@@ -86,6 +89,7 @@ enum class ProtocolPhase : std::uint8_t {
     CommandWrite,
     InitialResponse,
     DataWrite,
+    DataRead,
     FinalResponse,
 };
 
@@ -102,6 +106,12 @@ struct ProtocolError {
     // Certainty for the outbound unit preceding phase. During a response read,
     // this is FullyTransferred even when no response bytes were received.
     TransferCertainty outbound_certainty{TransferCertainty::NotTransferred};
+    // Device-to-host payload state. inbound_expected is unset for ordinary
+    // command/download operations and set after accepting a DATA response;
+    // inbound_transferred counts bytes committed to the caller's sink.
+    std::optional<std::uint64_t> inbound_expected;
+    std::uint64_t inbound_transferred{0};
+    TransferCertainty inbound_certainty{TransferCertainty::NotTransferred};
     int native_code{0};
 };
 
@@ -110,6 +120,9 @@ struct CommandResult {
     std::vector<Response> informational;
     ProtocolPhase phase{ProtocolPhase::FinalResponse};
     TransferCertainty outbound_certainty{TransferCertainty::FullyTransferred};
+    std::optional<std::uint64_t> inbound_expected;
+    std::uint64_t inbound_transferred{0};
+    TransferCertainty inbound_certainty{TransferCertainty::NotTransferred};
 
     [[nodiscard]] bool succeeded() const noexcept {
         return terminal.kind == ResponseKind::Okay;
@@ -121,6 +134,7 @@ struct SessionOptions {
     std::size_t max_command_bytes{kDefaultMaxCommandBytes};
     std::size_t max_response_bytes{kDefaultMaxResponseBytes};
     std::size_t max_informational_responses{kDefaultMaxInformationalResponses};
+    std::size_t receive_chunk_bytes{kDefaultReceiveChunkBytes};
 };
 
 // A synchronous protocol state machine. Higher layers may place it behind an
@@ -149,6 +163,12 @@ public:
         std::shared_ptr<ITransferSource> source,
         const TransferProgressObserver& observer = {});
 
+    [[nodiscard]] std::expected<CommandResult, ProtocolError> receive_to_sink(
+        std::string_view command,
+        std::shared_ptr<ITransferSink> sink,
+        std::uint64_t maximum_bytes,
+        const TransferProgressObserver& observer = {});
+
     [[nodiscard]] SessionState state() const noexcept;
     [[nodiscard]] std::optional<ProtocolError> poison_error() const;
     void request_cancel() noexcept;
@@ -169,6 +189,11 @@ private:
         std::uint32_t size,
         std::span<const std::byte> bytes,
         std::shared_ptr<ITransferSource> source,
+        const TransferProgressObserver& observer);
+    [[nodiscard]] std::expected<CommandResult, ProtocolError> receive_locked(
+        std::string_view command,
+        std::shared_ptr<ITransferSink> sink,
+        std::uint64_t maximum_bytes,
         const TransferProgressObserver& observer);
     [[nodiscard]] std::expected<Response, ProtocolError> read_response_locked(
         ProtocolPhase phase,

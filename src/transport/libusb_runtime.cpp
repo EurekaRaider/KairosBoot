@@ -663,6 +663,9 @@ struct LibusbBulkOutBackend::State final {
     [[nodiscard]] LibusbBulkOutBackend::ReadResult read_logical_response(
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout);
+    [[nodiscard]] LibusbBulkOutBackend::ReadResult read_data(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout);
     [[nodiscard]] std::size_t in_flight() const noexcept;
     void close_if_drained() noexcept;
     void release_reservation_locked() noexcept;
@@ -670,6 +673,10 @@ struct LibusbBulkOutBackend::State final {
 private:
     [[nodiscard]] bool process_one_raw(bool shutting_down);
     [[nodiscard]] bool process_read_raw(bool shutting_down);
+    [[nodiscard]] LibusbBulkOutBackend::ReadResult read(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout,
+        bool probe_for_truncation);
     [[nodiscard]] std::optional<ReadyRead> pop_ready_read();
     void configure_read_transfer(ReadPending& pending_read) noexcept;
     void finish_read_locked(LibusbBulkOutBackend::ReadCode code,
@@ -1234,7 +1241,7 @@ bool LibusbBulkOutBackend::State::process_read_raw(const bool shutting_down) {
 
     switch (raw.status) {
         case LIBUSB_TRANSFER_COMPLETED:
-            if (actual >= read_pending->buffer.size()) {
+            if (actual > read_pending->destination_capacity) {
                 finish_read_locked(
                     LibusbBulkOutBackend::ReadCode::overflow, copied, true);
             } else {
@@ -1380,6 +1387,19 @@ LibusbBulkOutBackend::ReadResult
 LibusbBulkOutBackend::State::read_logical_response(
     const std::span<std::byte> destination,
     const std::chrono::milliseconds timeout) {
+    return read(destination, timeout, true);
+}
+
+LibusbBulkOutBackend::ReadResult LibusbBulkOutBackend::State::read_data(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    return read(destination, timeout, false);
+}
+
+LibusbBulkOutBackend::ReadResult LibusbBulkOutBackend::State::read(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout,
+    const bool probe_for_truncation) {
     const auto deadline = deadline_after(timeout);
     if (SteadyClock::now() >= deadline) {
         return {LibusbBulkOutBackend::ReadCode::timeout, 0, false};
@@ -1408,11 +1428,13 @@ LibusbBulkOutBackend::State::read_logical_response(
             auto pending_read = std::make_unique<ReadPending>();
             pending_read->owner = this;
             pending_read->transfer = transfer;
-            // The destination is never handed to libusb. This owned probe
-            // buffer remains valid through a late callback or process-lifetime
-            // quarantine, and its extra byte distinguishes a full destination
-            // from a truncated logical response.
-            pending_read->buffer.resize(destination.size() + 1U);
+            // The destination is never handed to libusb. This owned buffer
+            // remains valid through a late callback or process-lifetime
+            // quarantine. Status reads add one probe byte to distinguish a full
+            // destination from a truncated logical response; DATA reads do not
+            // probe because they must never consume the next stream byte.
+            pending_read->buffer.resize(
+                destination.size() + (probe_for_truncation ? 1U : 0U));
             pending_read->destination_capacity = destination.size();
             pending_read->deadline = deadline;
             configure_read_transfer(*pending_read);
@@ -1931,6 +1953,12 @@ LibusbBulkOutBackend::ReadResult LibusbBulkOutBackend::read_logical_response(
     const std::span<std::byte> destination,
     const std::chrono::milliseconds timeout) {
     return state_->read_logical_response(destination, timeout);
+}
+
+LibusbBulkOutBackend::ReadResult LibusbBulkOutBackend::read_data(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    return state_->read_data(destination, timeout);
 }
 
 std::size_t LibusbBulkOutBackend::in_flight() const noexcept {

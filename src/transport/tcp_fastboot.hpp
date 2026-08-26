@@ -154,6 +154,10 @@ public:
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
 
+    [[nodiscard]] protocol::TransferResult read_data(
+        std::span<std::byte> destination,
+        std::chrono::milliseconds timeout) override;
+
     void request_cancel() noexcept override;
     void cancel() noexcept;
     void close() noexcept override;
@@ -172,6 +176,7 @@ private:
     TcpTransportOptions options_;
     std::stop_source local_cancel_;
     mutable std::mutex mutex_;
+    std::uint64_t inbound_data_frame_bytes_left_{0};
     bool open_{true};
 };
 

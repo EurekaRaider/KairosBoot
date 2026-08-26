@@ -3,6 +3,7 @@
 #include "src/fastboot/slot_planner.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <limits>
 #include <system_error>
@@ -54,6 +55,8 @@ namespace {
         case protocol::ProtocolPhase::InitialResponse:
             return protocol::TransferCertainty::NotTransferred;
         case protocol::ProtocolPhase::DataWrite:
+            return phase_certainty;
+        case protocol::ProtocolPhase::DataRead:
             return phase_certainty;
         case protocol::ProtocolPhase::FinalResponse:
             return protocol::TransferCertainty::FullyTransferred;
@@ -134,6 +137,62 @@ namespace {
         return ascii_alphanumeric || character == '_' || character == '-' ||
             character == '.';
     });
+}
+
+[[nodiscard]] bool append_fetch_hex(
+    std::string& command,
+    const std::uint64_t value) {
+    std::array<char, 16> digits{};
+    const auto [end, error] = std::to_chars(
+        digits.data(), digits.data() + digits.size(), value, 16);
+    if (error != std::errc{}) {
+        return false;
+    }
+    const auto length = static_cast<std::size_t>(end - digits.data());
+    command.append(":0x");
+    if (length < 8) {
+        command.append(8 - length, '0');
+    }
+    command.append(digits.data(), length);
+    return true;
+}
+
+[[nodiscard]] std::expected<std::string, PrimitiveError> fetch_command(
+    const std::string_view partition,
+    const FetchRange& range) {
+    if (!is_valid_partition_name(partition)) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Fetch,
+            "Fastboot fetch partition name is invalid"));
+    }
+    if (range.size.has_value() && !range.offset.has_value()) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Fetch,
+            "Fastboot fetch size requires an explicit offset"));
+    }
+    constexpr auto maximum_range_value =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    if ((range.offset && *range.offset > maximum_range_value) ||
+        (range.size && *range.size > maximum_range_value)) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Fetch,
+            "Fastboot fetch offset and size must fit signed 64-bit values"));
+    }
+
+    std::string command("fetch:");
+    command.append(partition);
+    if ((range.offset && !append_fetch_hex(command, *range.offset)) ||
+        (range.size && !append_fetch_hex(command, *range.size))) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Fetch,
+            "Fastboot fetch range could not be formatted"));
+    }
+    if (command.size() > protocol::kDefaultMaxCommandBytes) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Fetch,
+            "Fastboot fetch command exceeds the 4096-byte protocol limit"));
+    }
+    return command;
 }
 
 [[nodiscard]] std::expected<std::string, SlotError> normalize_slot_name(
@@ -238,6 +297,63 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::download_source(
     }
     return finish_download(
         session_.download_source(std::move(source), observer));
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::stage(
+    const std::span<const std::byte> bytes) {
+    if (auto size = validate_download_size(bytes.size()); !size) {
+        auto error = std::move(size.error());
+        error.operation = PrimitiveOperation::Stage;
+        return std::unexpected(std::move(error));
+    }
+    return finish_download(session_.download(bytes), PrimitiveOperation::Stage);
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::stage_source(
+    std::shared_ptr<protocol::ITransferSource> source,
+    const protocol::TransferProgressObserver& observer) {
+    if (auto valid = validate_download_source(source); !valid) {
+        auto error = std::move(valid.error());
+        error.operation = PrimitiveOperation::Stage;
+        return std::unexpected(std::move(error));
+    }
+    return finish_download(
+        session_.download_source(std::move(source), observer),
+        PrimitiveOperation::Stage);
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::upload_to_sink(
+    std::shared_ptr<protocol::ITransferSink> sink,
+    const std::uint64_t maximum_bytes,
+    const protocol::TransferProgressObserver& observer) {
+    return finish_receive(
+        PrimitiveOperation::Upload,
+        session_.receive_to_sink(
+            "upload", std::move(sink), maximum_bytes, observer));
+}
+
+std::expected<PrimitiveReply, PrimitiveError>
+PrimitiveService::get_staged_to_sink(
+    std::shared_ptr<protocol::ITransferSink> sink,
+    const std::uint64_t maximum_bytes,
+    const protocol::TransferProgressObserver& observer) {
+    return upload_to_sink(std::move(sink), maximum_bytes, observer);
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::fetch_to_sink(
+    const std::string_view partition,
+    const FetchRange range,
+    std::shared_ptr<protocol::ITransferSink> sink,
+    const std::uint64_t maximum_bytes,
+    const protocol::TransferProgressObserver& observer) {
+    auto command_text = fetch_command(partition, range);
+    if (!command_text) {
+        return std::unexpected(std::move(command_text.error()));
+    }
+    return finish_receive(
+        PrimitiveOperation::Fetch,
+        session_.receive_to_sink(
+            *command_text, std::move(sink), maximum_bytes, observer));
 }
 
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::boot_downloaded() {
@@ -463,6 +579,9 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::command(
         .informational = std::move(result->informational),
         .phase = result->phase,
         .outbound_certainty = result->outbound_certainty,
+        .inbound_expected = result->inbound_expected,
+        .inbound_transferred = result->inbound_transferred,
+        .inbound_certainty = result->inbound_certainty,
     };
     if (retire_on_success) {
         session_.close();
@@ -471,20 +590,43 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::command(
 }
 
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::finish_download(
-    std::expected<protocol::CommandResult, protocol::ProtocolError> result) {
+    std::expected<protocol::CommandResult, protocol::ProtocolError> result,
+    const PrimitiveOperation operation) {
     if (!result) {
         return std::unexpected(protocol_error(
-            PrimitiveOperation::Download, result.error(), true));
+            operation, result.error(), true));
     }
     if (!result->succeeded()) {
         return std::unexpected(device_fail(
-            PrimitiveOperation::Download, *result, true));
+            operation, *result, true));
     }
     return PrimitiveReply{
         .terminal = std::move(result->terminal),
         .informational = std::move(result->informational),
         .phase = result->phase,
         .outbound_certainty = protocol::TransferCertainty::FullyTransferred,
+    };
+}
+
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::finish_receive(
+    const PrimitiveOperation operation,
+    std::expected<protocol::CommandResult, protocol::ProtocolError> result) {
+    if (!result) {
+        return std::unexpected(protocol_error(
+            operation, result.error(), false));
+    }
+    if (!result->succeeded()) {
+        return std::unexpected(device_fail(
+            operation, *result, false));
+    }
+    return PrimitiveReply{
+        .terminal = std::move(result->terminal),
+        .informational = std::move(result->informational),
+        .phase = result->phase,
+        .outbound_certainty = result->outbound_certainty,
+        .inbound_expected = result->inbound_expected,
+        .inbound_transferred = result->inbound_transferred,
+        .inbound_certainty = result->inbound_certainty,
     };
 }
 
@@ -504,6 +646,9 @@ PrimitiveError PrimitiveService::protocol_error(
         .outbound_certainty = download_semantics
             ? download_certainty(error.phase, error.outbound_certainty)
             : error.outbound_certainty,
+        .inbound_expected = error.inbound_expected,
+        .inbound_transferred = error.inbound_transferred,
+        .inbound_certainty = error.inbound_certainty,
         .native_code = error.native_code,
         .session_poisoned = session_.state() == protocol::SessionState::Poisoned,
     };
@@ -525,6 +670,9 @@ PrimitiveError PrimitiveService::device_fail(
         .outbound_certainty = download_semantics
             ? download_certainty(result.phase, result.outbound_certainty)
             : result.outbound_certainty,
+        .inbound_expected = result.inbound_expected,
+        .inbound_transferred = result.inbound_transferred,
+        .inbound_certainty = result.inbound_certainty,
         .native_code = 0,
         .session_poisoned = false,
     };

@@ -480,6 +480,55 @@ void each_read_consumes_exactly_one_frame() {
     CHECK(script->complete());
 }
 
+void data_reads_split_frames_without_consuming_final_status() {
+    auto script = script_with_handshake();
+    script->provide_receive(encode_tcp_frame_length(6), SocketIoStatus::Ok, 8, 8);
+    script->provide_receive("abcd", SocketIoStatus::Ok, 4, 4);
+    script->provide_receive("ef", SocketIoStatus::Ok, 2, 2);
+    script->provide_receive(encode_tcp_frame_length(8), SocketIoStatus::Ok, 8, 8);
+    script->provide_receive("OKAYdone", SocketIoStatus::Ok, 8, 8);
+
+    auto transport = open_scripted_transport(script);
+    std::array<std::byte, 4> destination{};
+    const auto first = transport->read_data(destination, 100ms);
+    CHECK(first.status == TransportStatus::Ok);
+    CHECK(first.transferred == 4);
+    CHECK(as_vector(destination) == to_bytes("abcd"));
+
+    const auto second = transport->read_data(destination, 100ms);
+    CHECK(second.status == TransportStatus::Ok);
+    CHECK(second.transferred == 2);
+    CHECK(as_vector(std::span(destination).first(2)) == to_bytes("ef"));
+
+    std::array<std::byte, 16> status{};
+    const auto terminal = transport->read(status, 100ms);
+    CHECK(terminal.status == TransportStatus::Ok);
+    CHECK(terminal.transferred == 8);
+    CHECK(as_vector(std::span(status).first(8)) == to_bytes("OKAYdone"));
+    CHECK(transport->is_open());
+    CHECK(script->complete());
+}
+
+void final_status_rejects_unconsumed_data_frame_bytes() {
+    auto script = script_with_handshake();
+    script->provide_receive(encode_tcp_frame_length(5));
+    script->provide_receive("abcd", SocketIoStatus::Ok, 4, 4);
+
+    auto transport = open_scripted_transport(script);
+    std::array<std::byte, 4> data{};
+    const auto payload = transport->read_data(data, 100ms);
+    CHECK(payload.status == TransportStatus::Ok);
+    CHECK(payload.transferred == 4);
+
+    std::array<std::byte, 16> status{};
+    const auto terminal = transport->read(status, 100ms);
+    CHECK(terminal.status == TransportStatus::IoError);
+    CHECK(terminal.certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(terminal.truncated);
+    CHECK(!transport->is_open());
+    CHECK(script->complete());
+}
+
 void eof_during_header_disconnects_and_closes() {
     auto script = script_with_handshake();
     script->provide_receive("\x00\x00", SocketIoStatus::EndOfStream, 2, 8);
@@ -847,6 +896,10 @@ int main() {
         {"framed read completes partial header and payload",
          framed_read_completes_partial_header_and_payload},
         {"each read consumes exactly one frame", each_read_consumes_exactly_one_frame},
+        {"DATA reads split frames without consuming status",
+         data_reads_split_frames_without_consuming_final_status},
+        {"status rejects unconsumed DATA frame bytes",
+         final_status_rejects_unconsumed_data_frame_bytes},
         {"EOF during header disconnects and closes", eof_during_header_disconnects_and_closes},
         {"EOF after partial payload reports unknown partial",
          eof_after_partial_payload_reports_unknown_partial},

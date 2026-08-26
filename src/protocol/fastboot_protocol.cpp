@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cstdio>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace kairosboot::protocol {
@@ -140,6 +141,10 @@ FastbootSession::FastbootSession(
     if (options_.max_informational_responses == 0) {
         options_.max_informational_responses = 1;
     }
+    options_.receive_chunk_bytes = std::clamp(
+        options_.receive_chunk_bytes,
+        std::size_t{1},
+        kMaximumReceiveChunkBytes);
 }
 
 FastbootSession::~FastbootSession() {
@@ -222,6 +227,318 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_source(
         static_cast<std::uint32_t>(size), {}, std::move(source), observer);
 }
 
+std::expected<CommandResult, ProtocolError> FastbootSession::receive_to_sink(
+    const std::string_view command_text,
+    std::shared_ptr<ITransferSink> sink,
+    const std::uint64_t maximum_bytes,
+    const TransferProgressObserver& observer) {
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::Busy,
+            .message = "another Fastboot operation is already using this session",
+        });
+    }
+    if (sink == nullptr) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::InvalidArgument,
+            .message = "Fastboot receive sink is null",
+        });
+    }
+    if (maximum_bytes == 0) {
+        return std::unexpected(ProtocolError{
+            .code = ProtocolErrorCode::InvalidArgument,
+            .message = "Fastboot receive maximum must not be zero",
+        });
+    }
+    return receive_locked(
+        command_text, std::move(sink), maximum_bytes, observer);
+}
+
+std::expected<CommandResult, ProtocolError> FastbootSession::receive_locked(
+    const std::string_view command_text,
+    std::shared_ptr<ITransferSink> sink,
+    const std::uint64_t maximum_bytes,
+    const TransferProgressObserver& observer) {
+    if (const auto begin = begin_locked(command_text); !begin) {
+        return std::unexpected(begin.error());
+    }
+
+    state_ = SessionState::WritingCommand;
+    if (const auto write = write_exact_locked(
+            std::as_bytes(std::span(command_text)), ProtocolPhase::CommandWrite);
+        !write) {
+        return std::unexpected(write.error());
+    }
+
+    state_ = SessionState::AwaitingResponse;
+    std::vector<Response> informational;
+    std::uint32_t announced_size = 0;
+    for (;;) {
+        auto response = read_response_locked(
+            ProtocolPhase::InitialResponse,
+            TransferCertainty::FullyTransferred,
+            informational);
+        if (!response) {
+            return std::unexpected(response.error());
+        }
+
+        if (response->kind == ResponseKind::Info || response->kind == ResponseKind::Text) {
+            if (informational.size() >= options_.max_informational_responses) {
+                return poison_locked(ProtocolError{
+                    .code = ProtocolErrorCode::TooManyInformationalResponses,
+                    .message = "Fastboot device exceeded the informational response limit",
+                    .informational = informational,
+                    .phase = ProtocolPhase::InitialResponse,
+                    .outbound_certainty = TransferCertainty::FullyTransferred,
+                });
+            }
+            informational.push_back(std::move(*response));
+            continue;
+        }
+
+        if (response->kind == ResponseKind::Fail) {
+            state_ = SessionState::Ready;
+            return CommandResult{
+                .terminal = std::move(*response),
+                .informational = std::move(informational),
+                .phase = ProtocolPhase::InitialResponse,
+                .outbound_certainty = TransferCertainty::FullyTransferred,
+            };
+        }
+
+        if (response->kind == ResponseKind::Okay) {
+            state_ = SessionState::Ready;
+            return std::unexpected(ProtocolError{
+                .code = ProtocolErrorCode::UnexpectedResponse,
+                .message = "Fastboot receive command completed without a DATA response",
+                .informational = informational,
+                .phase = ProtocolPhase::InitialResponse,
+                .outbound_certainty = TransferCertainty::FullyTransferred,
+            });
+        }
+
+        if (response->kind != ResponseKind::Data || !response->data_size) {
+            return poison_locked(ProtocolError{
+                .code = ProtocolErrorCode::UnexpectedResponse,
+                .message = "Fastboot receive expected DATA or FAIL before the payload",
+                .informational = informational,
+                .phase = ProtocolPhase::InitialResponse,
+                .outbound_certainty = TransferCertainty::FullyTransferred,
+            });
+        }
+
+        announced_size = *response->data_size;
+        if (announced_size == 0 || announced_size > maximum_bytes) {
+            transport_->request_cancel();
+            transport_->close();
+            return poison_locked(ProtocolError{
+                .code = announced_size == 0
+                    ? ProtocolErrorCode::UnexpectedResponse
+                    : ProtocolErrorCode::DataLengthMismatch,
+                .message = announced_size == 0
+                    ? "Fastboot receive DATA size must not be zero"
+                    : "Fastboot receive DATA size exceeds the caller's limit",
+                .informational = informational,
+                .phase = ProtocolPhase::InitialResponse,
+                .outbound_certainty = TransferCertainty::FullyTransferred,
+                .inbound_expected = announced_size,
+                .inbound_transferred = 0,
+                .inbound_certainty = announced_size == 0
+                    ? TransferCertainty::NotTransferred
+                    : TransferCertainty::PartialOrUnknown,
+            });
+        }
+        break;
+    }
+
+    std::vector<std::byte> buffer;
+    try {
+        buffer.resize(std::min<std::size_t>(
+            options_.receive_chunk_bytes,
+            static_cast<std::size_t>(announced_size)));
+    } catch (const std::bad_alloc&) {
+        transport_->request_cancel();
+        transport_->close();
+        return poison_locked(ProtocolError{
+            .code = ProtocolErrorCode::TransportIo,
+            .message = "allocating the bounded Fastboot receive buffer failed",
+            .informational = informational,
+            .transport_status = TransportStatus::IoError,
+            .phase = ProtocolPhase::DataRead,
+            .outbound_certainty = TransferCertainty::FullyTransferred,
+            .inbound_expected = announced_size,
+            .inbound_transferred = 0,
+            .inbound_certainty = TransferCertainty::PartialOrUnknown,
+        });
+    }
+
+    const auto receive_failure = [this, announced_size, &informational](
+                                     ProtocolError error,
+                                     const std::uint64_t committed,
+                                     const bool partial_or_unknown) {
+        error.informational = informational;
+        error.inbound_expected = announced_size;
+        error.inbound_transferred = committed;
+        if (committed == announced_size && !partial_or_unknown) {
+            error.inbound_certainty = TransferCertainty::FullyTransferred;
+        } else if (committed == 0 && !partial_or_unknown) {
+            error.inbound_certainty = TransferCertainty::NotTransferred;
+        } else {
+            error.inbound_certainty = TransferCertainty::PartialOrUnknown;
+        }
+        transport_->request_cancel();
+        transport_->close();
+        return poison_locked(std::move(error));
+    };
+    const auto phase_failure = [&receive_failure](
+                                   const ProtocolErrorCode code,
+                                   const std::string_view message,
+                                   const TransferResult& io,
+                                   const std::uint64_t committed,
+                                   const bool partial_or_unknown) {
+        return receive_failure(
+            ProtocolError{
+                .code = code,
+                .message = std::string(message),
+                .transport_status = io.status,
+                .transfer_certainty = io.certainty,
+                .phase = ProtocolPhase::DataRead,
+                .outbound_certainty = TransferCertainty::FullyTransferred,
+                .native_code = io.native_code,
+            },
+            committed,
+            partial_or_unknown);
+    };
+
+    state_ = SessionState::ReceivingData;
+    std::uint64_t committed = 0;
+    while (committed < announced_size) {
+        const auto remaining = static_cast<std::size_t>(announced_size - committed);
+        const auto requested = std::min(buffer.size(), remaining);
+        auto transfer = transport_->read_data(
+            std::span(buffer).first(requested), options_.io_timeout);
+        if (transfer.transferred > requested) {
+            return phase_failure(
+                ProtocolErrorCode::TransportContractViolation,
+                "transport reported receiving more Fastboot data than requested",
+                transfer,
+                committed,
+                true);
+        }
+        if (transfer.status != TransportStatus::Ok) {
+            auto error = transport_error_locked(
+                transfer,
+                "data read",
+                ProtocolPhase::DataRead,
+                TransferCertainty::FullyTransferred);
+            return receive_failure(
+                std::move(error),
+                committed,
+                transfer.transferred != 0 ||
+                    transfer.certainty == TransferCertainty::PartialOrUnknown);
+        }
+        if (transfer.certainty != TransferCertainty::FullyTransferred ||
+            transfer.truncated) {
+            return phase_failure(
+                ProtocolErrorCode::TransportContractViolation,
+                transfer.truncated
+                    ? "Fastboot inbound data exceeded the receive chunk"
+                    : "successful Fastboot data read has uncertain transfer outcome",
+                transfer,
+                committed,
+                true);
+        }
+        if (transfer.transferred == 0) {
+            return phase_failure(
+                ProtocolErrorCode::ZeroProgress,
+                "transport made no progress while receiving Fastboot data",
+                transfer,
+                committed,
+                false);
+        }
+
+        const auto payload = std::span<const std::byte>(
+            buffer.data(), transfer.transferred);
+        auto stored = sink->write(committed, payload);
+        if (stored.transferred > payload.size()) {
+            return phase_failure(
+                ProtocolErrorCode::TransportContractViolation,
+                "Fastboot receive sink reported storing more bytes than provided",
+                stored,
+                committed,
+                true);
+        }
+        if (stored.status != TransportStatus::Ok) {
+            auto error = transport_error_locked(
+                stored,
+                "receive sink write",
+                ProtocolPhase::DataRead,
+                TransferCertainty::FullyTransferred);
+            return receive_failure(
+                std::move(error),
+                committed + stored.transferred,
+                stored.transferred != payload.size() ||
+                    stored.certainty != TransferCertainty::FullyTransferred);
+        }
+        if (stored.certainty != TransferCertainty::FullyTransferred ||
+            stored.truncated || stored.transferred != payload.size()) {
+            return phase_failure(
+                ProtocolErrorCode::TransportContractViolation,
+                "Fastboot receive sink did not commit the complete data chunk",
+                stored,
+                committed + stored.transferred,
+                true);
+        }
+
+        committed += transfer.transferred;
+        if (observer) {
+            auto action = TransferProgressAction::continue_transfer;
+            try {
+                action = observer(committed, announced_size);
+            } catch (...) {
+                return phase_failure(
+                    ProtocolErrorCode::TransportIo,
+                    "Fastboot receive progress observer failed",
+                    TransferResult{
+                        .status = TransportStatus::IoError,
+                        .certainty = TransferCertainty::NotTransferred,
+                    },
+                    committed,
+                    committed != announced_size);
+            }
+            if (action == TransferProgressAction::cancel) {
+                return phase_failure(
+                    ProtocolErrorCode::TransportCancelled,
+                    "Fastboot receive was cancelled by progress observer",
+                    TransferResult{
+                        .status = TransportStatus::Cancelled,
+                        .certainty = TransferCertainty::NotTransferred,
+                    },
+                    committed,
+                    committed != announced_size);
+            }
+        }
+    }
+
+    state_ = SessionState::AwaitingResponse;
+    auto terminal = read_terminal_locked(
+        std::move(informational),
+        ProtocolPhase::FinalResponse,
+        TransferCertainty::FullyTransferred);
+    if (!terminal) {
+        auto error = std::move(terminal.error());
+        error.inbound_expected = announced_size;
+        error.inbound_transferred = committed;
+        error.inbound_certainty = TransferCertainty::FullyTransferred;
+        return std::unexpected(std::move(error));
+    }
+    terminal->inbound_expected = announced_size;
+    terminal->inbound_transferred = committed;
+    terminal->inbound_certainty = TransferCertainty::FullyTransferred;
+    return terminal;
+}
+
 std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
     const std::uint32_t size,
     const std::span<const std::byte> bytes,
@@ -285,10 +602,10 @@ std::expected<CommandResult, ProtocolError> FastbootSession::download_locked(
         if (response->kind == ResponseKind::Fail) {
             state_ = SessionState::Ready;
             return CommandResult{
-                std::move(*response),
-                std::move(informational),
-                ProtocolPhase::InitialResponse,
-                TransferCertainty::FullyTransferred,
+                .terminal = std::move(*response),
+                .informational = std::move(informational),
+                .phase = ProtocolPhase::InitialResponse,
+                .outbound_certainty = TransferCertainty::FullyTransferred,
             };
         }
 
@@ -615,10 +932,10 @@ std::expected<CommandResult, ProtocolError> FastbootSession::read_terminal_locke
         if (response->kind == ResponseKind::Okay || response->kind == ResponseKind::Fail) {
             state_ = SessionState::Ready;
             return CommandResult{
-                std::move(*response),
-                std::move(informational),
-                phase,
-                outbound_certainty,
+                .terminal = std::move(*response),
+                .informational = std::move(informational),
+                .phase = phase,
+                .outbound_certainty = outbound_certainty,
             };
         }
 

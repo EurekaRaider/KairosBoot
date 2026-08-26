@@ -1267,6 +1267,12 @@ protocol::TransferResult UdpFastbootTransport::read(
     };
 }
 
+protocol::TransferResult UdpFastbootTransport::read_data(
+    const std::span<std::byte> destination,
+    const std::chrono::milliseconds timeout) {
+    return read(destination, timeout);
+}
+
 void UdpFastbootTransport::request_cancel() noexcept {
     local_cancel_.request_stop();
 }
