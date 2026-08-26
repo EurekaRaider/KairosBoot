@@ -41,7 +41,11 @@ add_library(
   src/transport/adaptive_tuner.cpp
   src/transport/buffer_budget.cpp
   src/transport/transfer_ring.cpp)
-set_target_properties(kairosboot_internal PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(
+  kairosboot_internal
+  PROPERTIES POSITION_INDEPENDENT_CODE ON
+             CXX_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES)
 target_compile_features(kairosboot_internal PUBLIC cxx_std_23)
 target_include_directories(kairosboot_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 kairosboot_enable_strict_warnings(kairosboot_internal)
@@ -147,6 +151,13 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_performance_tests PRIVATE kairosboot_internal)
   kairosboot_enable_strict_warnings(kairosboot_performance_tests)
   add_test(NAME performance COMMAND kairosboot_performance_tests)
+
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(
+    NAME abi_symbols
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_abi.py" --library
+            "$<TARGET_FILE:kairosboot>")
 
   add_test(
     NAME cli_contract
