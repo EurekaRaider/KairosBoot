@@ -63,7 +63,7 @@ work before destructive commands are exposed.
 | .NET SDK | Thin `net48;net10.0` binding with `SafeHandle`, UTF-8 marshalling, tasks, cancellation, and native error propagation |
 | CLI | `--version`, `doctor --json`, and `devices` in text or JSON form |
 | USB discovery | Public enumeration of Fastboot USB interfaces through the locked libusb runtime |
-| Transport core | Fastboot response state machine plus asynchronous USB, TCP v1, and reliable UDP v1 internals tested independently |
+| Transport core | Fastboot response state machine plus asynchronous USB and Boost.Asio-based TCP v1 / reliable UDP v1 internals tested independently |
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
 | Flash operations | Public signatures exist, but return `KB_E_NOT_SUPPORTED`; no destructive transport integration yet |
 | Fleet jobs | Versioned schema and scheduler primitives exist; manifest planning and execution are not public features yet |
@@ -221,7 +221,8 @@ ctest --test-dir build --output-on-failure
 The root `CMakeLists.txt` fetches Boost 1.92.0, the latest stable release locked
 for this source revision, from its official CMake archive and verifies the
 committed SHA-256 digest. Boost.Asio is an internal transport dependency; Boost
-types are not exposed by the installed C, C++, or C# APIs.
+types are not exposed by the installed C, C++, or C# APIs, and the TCP/UDP
+implementations do not call native socket APIs directly.
 
 For a multi-configuration generator such as Visual Studio, build and test the
 explicit Release configuration:
