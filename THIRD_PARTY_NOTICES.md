@@ -17,3 +17,10 @@ replacement of the dynamically linked library.
 Android Platform-Tools binaries are test oracles only and are not redistributed
 as part of KairosBoot.
 
+## Microsoft Visual C++ Runtime
+
+Windows binary distributions include the architecture-matching, app-local
+Microsoft Visual C++ runtime files selected by CMake from the Visual Studio
+redistributable directory. Those files remain subject to the Microsoft Visual
+Studio licensing terms and are included so the SDK and CLI do not depend on a
+machine-wide Visual C++ Redistributable installation.

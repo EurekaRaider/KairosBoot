@@ -117,9 +117,16 @@ def copy_license(source_root: Path, prefix: Path) -> None:
 def prepare_windows(binary_archive: Path, source_root: Path, prefix: Path, architecture: str) -> None:
     with tempfile.TemporaryDirectory(prefix="kairosboot-libusb-windows-") as temporary:
         extracted = Path(temporary)
-        subprocess.run(
-            ["tar", "-xf", str(binary_archive), "-C", str(extracted)], check=True
-        )
+        seven_zip = shutil.which("7z") or shutil.which("7zz")
+        if seven_zip is not None:
+            subprocess.run(
+                [seven_zip, "x", "-y", f"-o{extracted}", str(binary_archive)],
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["tar", "-xf", str(binary_archive), "-C", str(extracted)], check=True
+            )
         header = extracted / "include" / "libusb.h"
         binary_root = extracted / WINDOWS_LAYOUTS[architecture]
         validate_header(header)

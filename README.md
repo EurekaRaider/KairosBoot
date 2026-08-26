@@ -21,21 +21,34 @@ wrapper, .NET bindings, and high-throughput multi-device flashing.
 - C# bindings for .NET Framework 4.8 and .NET 10
 - The `kairosboot` command-line tool
 
-The first implementation milestone establishes the public API, protocol test
-harness, and cross-platform build before enabling destructive device commands.
+The current implementation milestone includes the stable API foundation,
+Fastboot response state machine, TCP v1 framing, an asynchronous libusb bulk-OUT
+runtime, transfer-ring scheduling, sparse-image validation, and no-hardware
+test doubles. These transport cores are not yet wired to the public destructive
+device commands.
 
 ## Build the foundation milestone
 
-KairosBoot requires CMake 3.22 or newer and a compiler with C++23 support.
+KairosBoot requires CMake 3.22 or newer, Python 3, `make`, and a compiler with
+C++23 support. Release builds use exactly libusb 1.0.30 as a dynamically linked
+dependency. Prepare it from the locked, hash-verified archives before
+configuring (choose `linux`, `macos`, or `windows` and `x64` or `arm64`):
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+python3 scripts/prepare_libusb.py \
+  --prefix "$PWD/build-deps/libusb" \
+  --platform macos \
+  --architecture arm64
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DKAIROSBOOT_LIBUSB_ROOT="$PWD/build-deps/libusb"
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The current foundation build intentionally has no device transport. Device
-enumeration and flashing return `KB_E_NOT_SUPPORTED`; they never report a
+The installed SDK/CLI contains the matching libusb runtime, LGPL license, and a
+dependency manifest. The current public C ABI still returns
+`KB_E_NOT_SUPPORTED` for enumeration and flashing; it never reports a
 successful flash. Check this explicitly with:
 
 ```sh
