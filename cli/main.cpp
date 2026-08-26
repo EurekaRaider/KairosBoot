@@ -446,7 +446,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error("--version does not accept operands");
     }
     if (const auto rejected = reject_non_json_globals()) {
-      return std::move(*rejected);
+      return *rejected;
     }
     return result;
   }
@@ -456,7 +456,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error(std::string{command} + " does not accept operands");
     }
     if (const auto rejected = reject_non_json_globals()) {
-      return std::move(*rejected);
+      return *rejected;
     }
     return result;
   }
@@ -466,7 +466,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error("doctor does not accept operands");
     }
     if (const auto rejected = reject_non_json_globals()) {
-      return std::move(*rejected);
+      return *rejected;
     }
     return result;
   }
@@ -476,7 +476,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error("devices does not accept operands");
     }
     if (const auto rejected = reject_non_json_globals()) {
-      return std::move(*rejected);
+      return *rejected;
     }
     return result;
   }
@@ -977,13 +977,20 @@ bool interrupt_requested() noexcept {
   return InterlockedCompareExchange(&interrupt_requested_flag, 0, 0) != 0;
 }
 #else
-volatile std::sig_atomic_t interrupt_requested_flag = 0;
+std::atomic_flag interrupt_requested_flag = ATOMIC_FLAG_INIT;
 
-void interrupt_handler(int /*signal*/) noexcept { interrupt_requested_flag = 1; }
+void interrupt_handler(int /*signal*/) noexcept {
+  static_cast<void>(
+      interrupt_requested_flag.test_and_set(std::memory_order_relaxed));
+}
 
-void reset_interrupt_request() noexcept { interrupt_requested_flag = 0; }
+void reset_interrupt_request() noexcept {
+  interrupt_requested_flag.clear(std::memory_order_relaxed);
+}
 
-bool interrupt_requested() noexcept { return interrupt_requested_flag != 0; }
+bool interrupt_requested() noexcept {
+  return interrupt_requested_flag.test(std::memory_order_relaxed);
+}
 #endif
 
 class InterruptCancellation final {
