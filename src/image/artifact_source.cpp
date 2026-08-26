@@ -1581,17 +1581,18 @@ materialize_zip_entry(ZipReader& reader, const ZipEntry& entry,
 resolve_zip(const std::filesystem::path& archive_path,
             const std::string_view requested_entry, const ArtifactSourceLimits& limits,
             const Budget& budget, SpoolReservation& reservation,
-            std::timed_mutex& archive_mutex) {
+            std::mutex& archive_mutex) {
     auto selected_name = validate_name(requested_entry, limits.max_name_bytes, false);
     if (!selected_name) {
         return std::unexpected(std::move(selected_name.error()));
     }
     std::unique_lock archive_lock(archive_mutex, std::defer_lock);
-    while (!archive_lock.try_lock_until(std::min(
-        budget.deadline(), Clock::now() + std::chrono::milliseconds(10)))) {
+    while (!archive_lock.try_lock()) {
         if (auto stopped = budget.check()) {
             return std::unexpected(std::move(*stopped));
         }
+        std::this_thread::sleep_until(std::min(
+            budget.deadline(), Clock::now() + std::chrono::milliseconds(1)));
     }
     if (limits.archive_reader_observer) {
         limits.archive_reader_observer();
@@ -1647,7 +1648,7 @@ resolve_directory(const std::filesystem::path& directory,
 resolve_uncached(const std::filesystem::path& container, const std::string_view entry,
                  const ArtifactSourceLimits& limits, const Budget& budget,
                  SpoolReservation& reservation,
-                 std::timed_mutex& archive_mutex) {
+                 std::mutex& archive_mutex) {
     if (container.empty()) {
         return std::unexpected(make_error(ArtifactSourceErrorKind::InvalidArgument,
                                           "artifact container path is empty"));

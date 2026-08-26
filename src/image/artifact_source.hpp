@@ -119,7 +119,7 @@ class ArtifactSourceResolver final {
     // Miniz retains one archive central directory for the reader lifetime.
     // Serialize readers so adversarial different-key archives cannot multiply
     // the configured metadata ceiling within one batch.
-    std::timed_mutex archive_mutex_;
+    std::mutex archive_mutex_;
 };
 
 struct PreflightFlashArtifact final {
