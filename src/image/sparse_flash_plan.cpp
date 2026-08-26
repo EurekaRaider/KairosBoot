@@ -616,19 +616,10 @@ private:
         std::uint64_t chunk_count = 0;
         std::uint64_t cursor = 0;
         for (const auto& fragment : fragments) {
-            if (stop_token.stop_requested()) {
-                return std::unexpected(plan_error(
-                    SparseFlashPlanErrorKind::Cancelled,
-                    cursor * block_size,
-                    "sparse flash planning was cancelled"));
-            }
             if (fragment.start_block > cursor) {
                 ++chunk_count;
             }
             ++chunk_count;
-            if (fragment.kind == SparseChunkKind::Fill) {
-                ++fill_count;
-            }
             cursor = fragment_end_block(fragment);
         }
         if (cursor < total_blocks) {
@@ -1100,8 +1091,6 @@ SparseFlashPlan::create_impl(
         }
         parts.push_back(std::move(*part));
         current.clear();
-        current_size = empty_encoded_size(total_blocks);
-        current_cursor = 0;
         return {};
     };
 
