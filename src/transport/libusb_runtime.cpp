@@ -513,12 +513,12 @@ LibusbFunctions LibusbFunctions::system() {
 #endif
 #if defined(__APPLE__)
     functions.resolve_macos_topology = [](
-        const std::span<const MacUsbTopologyQuery> queries,
+        const std::span<const MacUsbTopologyDeviceQuery> devices,
         const MacUsbTopologyTimePoint deadline,
         const std::stop_token cancellation) {
         static const IokitMacUsbRegistryBackend backend;
         const MacUsbTopologyDiscovery discovery(backend);
-        return discovery.discover_device(queries, deadline, cancellation);
+        return discovery.discover_devices(devices, deadline, cancellation);
     };
 #endif
     return functions;
@@ -2043,9 +2043,12 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         }
     }
 
-    if (state_->functions.resolve_macos_topology) {
+    if (state_->functions.resolve_macos_topology &&
+        !macos_device_ranges.empty()) {
         const auto deadline = SteadyClock::now() + kMacTopologyResolveBudget;
         const auto cancellation = state_->topology_stop_source.get_token();
+        std::vector<MacUsbTopologyDeviceQuery> device_queries;
+        device_queries.reserve(macos_device_ranges.size());
         for (const auto [begin, end] : macos_device_ranges) {
             if (cancellation.stop_requested() ||
                 !state_->accepting.load(std::memory_order_acquire)) {
@@ -2053,41 +2056,119 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
             }
 
-            std::vector<MacUsbTopologyQuery> queries;
-            queries.reserve(end - begin);
+            MacUsbTopologyDeviceQuery device_query;
+            device_query.interfaces.reserve(end - begin);
             for (auto device_index = begin; device_index < end; ++device_index) {
-                queries.push_back(
+                device_query.interfaces.push_back(
                     make_macos_usb_topology_query(devices[device_index]));
             }
-            auto resolved = state_->functions.resolve_macos_topology(
-                queries, deadline, cancellation);
-            if (!resolved.has_value()) {
-                for (auto device_index = begin;
-                     device_index < end;
-                     ++device_index) {
-                    devices[device_index].macos_topology_error = resolved.error();
-                }
-                continue;
+            device_queries.push_back(std::move(device_query));
+        }
+
+        auto resolved = state_->functions.resolve_macos_topology(
+            device_queries, deadline, cancellation);
+        if (cancellation.stop_requested() ||
+            !state_->accepting.load(std::memory_order_acquire)) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+        }
+        const auto assign_error = [&devices, &macos_device_ranges](
+                                      const std::size_t range_index,
+                                      const MacUsbTopologyError& error) {
+            const auto [begin, end] = macos_device_ranges[range_index];
+            for (auto device_index = begin; device_index < end; ++device_index) {
+                devices[device_index].macos_topology_error = error;
             }
-            if (resolved->size() != end - begin) {
-                const MacUsbTopologyError malformed_result{
-                    .kind = MacUsbTopologyErrorKind::MalformedRegistry,
-                    .stage = MacUsbTopologyStage::FinalValidation,
-                    .native_code = 0,
-                    .registry_path = {},
-                    .message =
-                        "macOS topology resolver returned the wrong interface count",
-                };
-                for (auto device_index = begin;
-                     device_index < end;
-                     ++device_index) {
-                    devices[device_index].macos_topology_error = malformed_result;
-                }
-                continue;
+        };
+        if (!resolved.has_value()) {
+            for (std::size_t range_index = 0U;
+                 range_index < macos_device_ranges.size();
+                 ++range_index) {
+                assign_error(range_index, resolved.error());
             }
-            for (std::size_t offset = 0U; offset < resolved->size(); ++offset) {
-                devices[begin + offset].macos_topology =
-                    std::move((*resolved)[offset]);
+        } else if (resolved->size() != macos_device_ranges.size()) {
+            const MacUsbTopologyError malformed_result{
+                .kind = MacUsbTopologyErrorKind::MalformedRegistry,
+                .stage = MacUsbTopologyStage::FinalValidation,
+                .native_code = 0,
+                .registry_path = {},
+                .message =
+                    "macOS topology resolver returned the wrong device count",
+            };
+            for (std::size_t range_index = 0U;
+                 range_index < macos_device_ranges.size();
+                 ++range_index) {
+                assign_error(range_index, malformed_result);
+            }
+        } else {
+            for (std::size_t range_index = 0U;
+                 range_index < resolved->size();
+                 ++range_index) {
+                auto& device_result = (*resolved)[range_index];
+                const auto [begin, end] = macos_device_ranges[range_index];
+                if (!device_result.has_value()) {
+                    assign_error(range_index, device_result.error());
+                    continue;
+                }
+                if (device_result->size() != end - begin) {
+                    assign_error(range_index, MacUsbTopologyError{
+                        .kind = MacUsbTopologyErrorKind::MalformedRegistry,
+                        .stage = MacUsbTopologyStage::FinalValidation,
+                        .native_code = 0,
+                        .registry_path = {},
+                        .message =
+                            "macOS topology resolver returned the wrong interface count",
+                    });
+                    continue;
+                }
+                const auto& expected_interfaces =
+                    device_queries[range_index].interfaces;
+                const auto& generation = device_result->front();
+                bool ordered_stable_generation = true;
+                for (std::size_t offset = 0U;
+                     offset < device_result->size();
+                     ++offset) {
+                    const auto& topology = (*device_result)[offset];
+                    const auto& expected = expected_interfaces[offset];
+                    if (topology.vendor_id != expected.vendor_id ||
+                        topology.product_id != expected.product_id ||
+                        topology.bus_number != expected.bus_number ||
+                        topology.device_address != expected.device_address ||
+                        topology.session_id != expected.session_id ||
+                        topology.hub_port_chain != expected.port_numbers ||
+                        topology.interface_fingerprint !=
+                            expected.interface_fingerprint ||
+                        topology.registry_entry_id !=
+                            generation.registry_entry_id ||
+                        topology.location_id != generation.location_id ||
+                        topology.physical_port_path !=
+                            generation.physical_port_path ||
+                        topology.root_controller_id !=
+                            generation.root_controller_id ||
+                        topology.registry_path != generation.registry_path ||
+                        topology.root_controller_registry_path !=
+                            generation.root_controller_registry_path) {
+                        ordered_stable_generation = false;
+                        break;
+                    }
+                }
+                if (!ordered_stable_generation) {
+                    assign_error(range_index, MacUsbTopologyError{
+                        .kind = MacUsbTopologyErrorKind::MalformedRegistry,
+                        .stage = MacUsbTopologyStage::FinalValidation,
+                        .native_code = 0,
+                        .registry_path = {},
+                        .message =
+                            "macOS topology resolver returned interfaces out of order or from mixed generations",
+                    });
+                    continue;
+                }
+                for (std::size_t offset = 0U;
+                     offset < device_result->size();
+                     ++offset) {
+                    devices[begin + offset].macos_topology =
+                        std::move((*device_result)[offset]);
+                }
             }
         }
     }

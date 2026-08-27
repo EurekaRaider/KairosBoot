@@ -104,12 +104,13 @@ struct LibusbFunctions final {
         capture_windows_session_identity;
 
     // Optional macOS topology enrichment. One call receives every selected
-    // interface of one libusb device and must resolve them from one consistent
-    // device-scoped generation. Tests may inject this on any host; production
-    // installs the IOKit-backed resolver only on Apple platforms.
-    std::function<std::expected<std::vector<MacUsbTopology>,
+    // Each batch entry contains every selected interface of one libusb device.
+    // The resolver must preserve device/interface order and publish each
+    // device from one consistent generation. Tests may inject this on any
+    // host; production installs the IOKit-backed resolver only on Apple.
+    std::function<std::expected<std::vector<MacUsbTopologyDeviceResult>,
                                 MacUsbTopologyError>(
-        std::span<const MacUsbTopologyQuery>,
+        std::span<const MacUsbTopologyDeviceQuery>,
         MacUsbTopologyTimePoint,
         std::stop_token)>
         resolve_macos_topology;

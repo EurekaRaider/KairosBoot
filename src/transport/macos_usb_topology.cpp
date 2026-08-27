@@ -1209,7 +1209,7 @@ read_interfaces(const io_registry_entry_t device,
 
 [[nodiscard]] std::expected<std::vector<MacUsbRegistryNode>,
                             MacUsbTopologyError>
-iokit_snapshot(const MacUsbTopologyQuery& query,
+iokit_snapshot(const std::span<const MacUsbTopologyQuery> device_queries,
                const MacUsbTopologyTimePoint deadline,
                const std::stop_token cancellation) {
     if (const auto interrupted = interruption_error(
@@ -1263,8 +1263,14 @@ iokit_snapshot(const MacUsbTopologyQuery& query,
             break;
         }
         const auto filtered_session = session_id_filter(service.get());
-        if (!filtered_session.has_value() ||
-            *filtered_session != query.session_id) {
+        const auto requested = !filtered_session.has_value()
+            ? device_queries.end()
+            : std::ranges::find_if(
+                  device_queries,
+                  [filtered_session](const MacUsbTopologyQuery& query) {
+                      return query.session_id == *filtered_session;
+                  });
+        if (requested == device_queries.end()) {
             continue;
         }
         auto path = registry_path(service.get(),
@@ -1286,7 +1292,7 @@ iokit_snapshot(const MacUsbTopologyQuery& query,
                 *path,
                 session.error().native_code));
         }
-        if (!session->has_value() || **session != query.session_id) {
+        if (!session->has_value() || **session != requested->session_id) {
             return std::unexpected(make_error(
                 MacUsbTopologyErrorKind::IdentityChanged,
                 MacUsbTopologyStage::DeviceSnapshot,
@@ -1416,7 +1422,7 @@ iokit_snapshot(const MacUsbTopologyQuery& query,
                 final_entry_id.error().native_code));
         }
         if (!final_session->has_value() || **final_session != **session ||
-            **final_session != query.session_id ||
+            **final_session != requested->session_id ||
             *final_entry_id != *entry_id) {
             return std::unexpected(make_error(
                 MacUsbTopologyErrorKind::IdentityChanged,
@@ -1465,6 +1471,229 @@ iokit_snapshot(const MacUsbTopologyQuery& query,
 
 #endif  // defined(__APPLE__)
 
+[[nodiscard]] std::expected<void, MacUsbTopologyError>
+validate_device_queries(
+    const std::span<const MacUsbTopologyQuery> queries,
+    const MacUsbTopologyTimePoint deadline,
+    const std::stop_token cancellation) {
+    if (queries.empty()) {
+        return std::unexpected(make_error(
+            MacUsbTopologyErrorKind::InvalidArgument,
+            MacUsbTopologyStage::Validation,
+            "macOS topology device discovery requires at least one interface"));
+    }
+    if (queries.size() > kMaximumRegistryInterfaces) {
+        return std::unexpected(make_error(
+            MacUsbTopologyErrorKind::ResourceExhausted,
+            MacUsbTopologyStage::Validation,
+            "macOS topology device discovery exceeds the interface limit"));
+    }
+
+    const auto& device_query = queries.front();
+    for (std::size_t index = 0U; index < queries.size(); ++index) {
+        if (const auto interrupted = interruption_error(
+                deadline, cancellation, MacUsbTopologyStage::Validation)) {
+            return std::unexpected(*interrupted);
+        }
+        const auto& query = queries[index];
+        if (!query_is_valid(query)) {
+            return std::unexpected(make_error(
+                query.port_numbers.size() > kMaximumMacUsbTopologyDepth
+                    ? MacUsbTopologyErrorKind::TopologyTooDeep
+                    : MacUsbTopologyErrorKind::InvalidArgument,
+                MacUsbTopologyStage::Validation,
+                "invalid libusb identity for macOS topology discovery"));
+        }
+        const bool same_device =
+            query.vendor_id == device_query.vendor_id &&
+            query.product_id == device_query.product_id &&
+            query.bus_number == device_query.bus_number &&
+            query.device_address == device_query.device_address &&
+            query.session_id == device_query.session_id &&
+            query.port_numbers == device_query.port_numbers &&
+            query.serial_utf8 == device_query.serial_utf8 &&
+            query.product_utf8 == device_query.product_utf8 &&
+            query.interface_fingerprint.configuration_value ==
+                device_query.interface_fingerprint.configuration_value;
+        if (!same_device) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::InvalidArgument,
+                MacUsbTopologyStage::Validation,
+                "macOS topology batch mixes more than one libusb device identity"));
+        }
+        for (std::size_t previous = 0U; previous < index; ++previous) {
+            if (queries[previous].interface_fingerprint ==
+                query.interface_fingerprint) {
+                return std::unexpected(make_error(
+                    MacUsbTopologyErrorKind::AmbiguousMapping,
+                    MacUsbTopologyStage::Validation,
+                    "macOS topology batch repeats an interface fingerprint"));
+            }
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] std::vector<MacUsbRegistryNode> nodes_for_session(
+    const std::vector<MacUsbRegistryNode>& nodes,
+    const std::uint64_t session_id) {
+    std::vector<MacUsbRegistryNode> result;
+    for (const auto& node : nodes) {
+        if (node.session_id == session_id) {
+            result.push_back(node);
+        }
+    }
+    return result;
+}
+
+[[nodiscard]] MacUsbTopologyDeviceResult correlate_device(
+    const std::span<const MacUsbTopologyQuery> queries,
+    const std::vector<MacUsbRegistryNode>& candidates,
+    const MacUsbTopologyTimePoint deadline,
+    const std::stop_token cancellation) {
+    const auto& device_query = queries.front();
+    const MacUsbRegistryNode* match = nullptr;
+    const MacUsbRegistryAncestor* matched_controller = nullptr;
+    bool identity_mismatch = false;
+    bool saw_session = false;
+    for (const auto& candidate : candidates) {
+        if (const auto interrupted = interruption_error(
+                deadline, cancellation, MacUsbTopologyStage::Correlation)) {
+            return std::unexpected(*interrupted);
+        }
+        if (candidate.session_id != device_query.session_id) {
+            continue;
+        }
+        if (!node_shape_is_valid(candidate)) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::MalformedRegistry,
+                MacUsbTopologyStage::Correlation,
+                "IORegistry backend returned a malformed USB node",
+                candidate.registry_path));
+        }
+        if (saw_session) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::AmbiguousMapping,
+                MacUsbTopologyStage::Correlation,
+                "more than one IORegistry device has the libusb session identity",
+                candidate.registry_path));
+        }
+        saw_session = true;
+        const bool same_physical_port =
+            candidate.bus_number == device_query.bus_number &&
+            candidate.port_numbers == device_query.port_numbers;
+        if (!same_physical_port ||
+            candidate.device_address != device_query.device_address ||
+            candidate.vendor_id != device_query.vendor_id ||
+            candidate.product_id != device_query.product_id ||
+            (device_query.serial_utf8.has_value() &&
+             (!candidate.serial_utf8.has_value() ||
+              *candidate.serial_utf8 != *device_query.serial_utf8)) ||
+            (device_query.product_utf8.has_value() &&
+             (!candidate.product_utf8.has_value() ||
+              *candidate.product_utf8 != *device_query.product_utf8))) {
+            identity_mismatch = true;
+            continue;
+        }
+
+        const auto* controller = root_controller(candidate);
+        if (controller == nullptr) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::MalformedRegistry,
+                MacUsbTopologyStage::Correlation,
+                "IORegistry ancestry contains no USB host controller",
+                candidate.registry_path));
+        }
+        if (match != nullptr) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::AmbiguousMapping,
+                MacUsbTopologyStage::Correlation,
+                "more than one IORegistry device maps to the libusb snapshot",
+                candidate.registry_path));
+        }
+        match = &candidate;
+        matched_controller = controller;
+    }
+    if (match == nullptr || matched_controller == nullptr) {
+        return std::unexpected(make_error(
+            identity_mismatch ? MacUsbTopologyErrorKind::IdentityMismatch
+                              : MacUsbTopologyErrorKind::NotFound,
+            MacUsbTopologyStage::Correlation,
+            identity_mismatch
+                ? "IORegistry USB identity does not match the libusb snapshot"
+                : "no IORegistry device maps to the libusb snapshot"));
+    }
+
+    auto physical_path = canonical_macos_usb_port_path(
+        match->bus_number, match->port_numbers);
+    if (!physical_path.has_value()) {
+        return std::unexpected(physical_path.error());
+    }
+    auto controller_id = controller_identifier(
+        matched_controller->registry_entry_id);
+    if (controller_id.empty()) {
+        return std::unexpected(make_error(
+            MacUsbTopologyErrorKind::ResourceExhausted,
+            MacUsbTopologyStage::Correlation,
+            "failed to format the root-controller registry identity",
+            matched_controller->registry_path));
+    }
+    if (const auto interrupted = interruption_error(
+            deadline, cancellation, MacUsbTopologyStage::FinalValidation)) {
+        return std::unexpected(*interrupted);
+    }
+
+    std::vector<MacUsbTopology> topologies;
+    topologies.reserve(queries.size());
+    for (const auto& query : queries) {
+        const MacUsbRegistryInterface* matched_interface = nullptr;
+        for (const auto& interface : match->interfaces) {
+            if (const auto interrupted = interruption_error(
+                    deadline, cancellation, MacUsbTopologyStage::Correlation)) {
+                return std::unexpected(*interrupted);
+            }
+            if (interface.fingerprint != query.interface_fingerprint) {
+                continue;
+            }
+            if (matched_interface != nullptr) {
+                return std::unexpected(make_error(
+                    MacUsbTopologyErrorKind::AmbiguousMapping,
+                    MacUsbTopologyStage::Correlation,
+                    "more than one IORegistry interface matches the libusb fingerprint",
+                    interface.registry_path));
+            }
+            matched_interface = &interface;
+        }
+        if (matched_interface == nullptr) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::IdentityMismatch,
+                MacUsbTopologyStage::Correlation,
+                "an IORegistry interface does not match the libusb device snapshot",
+                match->registry_path));
+        }
+        topologies.push_back(MacUsbTopology{
+            .physical_port_path = *physical_path,
+            .root_controller_id = controller_id,
+            .hub_port_chain = match->port_numbers,
+            .registry_entry_id = match->registry_entry_id,
+            .session_id = match->session_id,
+            .interface_registry_entry_id = matched_interface->registry_entry_id,
+            .location_id = match->location_id,
+            .vendor_id = match->vendor_id,
+            .product_id = match->product_id,
+            .bus_number = match->bus_number,
+            .device_address = match->device_address,
+            .interface_fingerprint = matched_interface->fingerprint,
+            .serial_utf8 = match->serial_utf8,
+            .product_utf8 = match->product_utf8,
+            .registry_path = match->registry_path,
+            .interface_registry_path = matched_interface->registry_path,
+            .root_controller_registry_path = matched_controller->registry_path,
+        });
+    }
+    return topologies;
+}
+
 }  // namespace
 
 IokitMacUsbRegistryBackend::IokitMacUsbRegistryBackend(
@@ -1473,17 +1702,23 @@ IokitMacUsbRegistryBackend::IokitMacUsbRegistryBackend(
 
 std::expected<std::vector<MacUsbRegistryNode>, MacUsbTopologyError>
 IokitMacUsbRegistryBackend::snapshot(
-    const MacUsbTopologyQuery& query,
+    const std::span<const MacUsbTopologyQuery> device_queries,
     const MacUsbTopologyTimePoint deadline,
     const std::stop_token cancellation) const {
     try {
-        if (!query_is_valid(query)) {
+        if (device_queries.empty() ||
+            std::ranges::any_of(device_queries, [](const auto& query) {
+                return !query_is_valid(query);
+            })) {
             return std::unexpected(make_error(
-                query.port_numbers.size() > kMaximumMacUsbTopologyDepth
+                std::ranges::any_of(device_queries, [](const auto& query) {
+                    return query.port_numbers.size() >
+                        kMaximumMacUsbTopologyDepth;
+                })
                     ? MacUsbTopologyErrorKind::TopologyTooDeep
                     : MacUsbTopologyErrorKind::InvalidArgument,
                 MacUsbTopologyStage::Validation,
-                "invalid libusb identity for macOS topology discovery"));
+                "invalid libusb device batch for macOS topology discovery"));
         }
         if (const auto interrupted = interruption_error(
                 deadline,
@@ -1494,10 +1729,10 @@ IokitMacUsbRegistryBackend::snapshot(
         std::expected<std::vector<MacUsbRegistryNode>, MacUsbTopologyError>
             result;
         if (source_ != nullptr) {
-            result = source_->snapshot(query, deadline, cancellation);
+            result = source_->snapshot(device_queries, deadline, cancellation);
         } else {
 #if defined(__APPLE__)
-            result = iokit_snapshot(query, deadline, cancellation);
+            result = iokit_snapshot(device_queries, deadline, cancellation);
 #else
             result = std::unexpected(make_error(
                 MacUsbTopologyErrorKind::UnsupportedPlatform,
@@ -1555,66 +1790,87 @@ MacUsbTopologyDiscovery::discover_device(
     const MacUsbTopologyTimePoint deadline,
     const std::stop_token cancellation) const {
     try {
-        if (queries.empty()) {
+        MacUsbTopologyDeviceQuery device{
+            .interfaces = std::vector<MacUsbTopologyQuery>(
+                queries.begin(), queries.end()),
+        };
+        auto resolved = discover_devices(
+            std::span<const MacUsbTopologyDeviceQuery>{&device, 1U},
+            deadline,
+            cancellation);
+        if (!resolved.has_value()) {
+            return std::unexpected(resolved.error());
+        }
+        if (resolved->size() != 1U) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::MalformedRegistry,
+                MacUsbTopologyStage::FinalValidation,
+                "macOS topology batch returned the wrong device count"));
+        }
+        return std::move(resolved->front());
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            MacUsbTopologyErrorKind::ResourceExhausted,
+            MacUsbTopologyStage::Correlation,
+            "memory allocation failed while correlating macOS USB topology"));
+    }
+}
+
+std::expected<std::vector<MacUsbTopologyDeviceResult>, MacUsbTopologyError>
+MacUsbTopologyDiscovery::discover_devices(
+    const std::span<const MacUsbTopologyDeviceQuery> devices,
+    const MacUsbTopologyTimePoint deadline,
+    const std::stop_token cancellation) const {
+    try {
+        if (devices.empty()) {
             return std::unexpected(make_error(
                 MacUsbTopologyErrorKind::InvalidArgument,
                 MacUsbTopologyStage::Validation,
-                "macOS topology device discovery requires at least one interface"));
+                "macOS topology batch requires at least one device"));
         }
-        if (queries.size() > kMaximumRegistryInterfaces) {
+        if (devices.size() > kMaximumRegistryCandidates) {
             return std::unexpected(make_error(
                 MacUsbTopologyErrorKind::ResourceExhausted,
                 MacUsbTopologyStage::Validation,
-                "macOS topology device discovery exceeds the interface limit"));
+                "macOS topology batch exceeds the device limit"));
         }
-        const auto& device_query = queries.front();
-        for (std::size_t index = 0U; index < queries.size(); ++index) {
-            if (const auto interrupted = interruption_error(
-                    deadline, cancellation, MacUsbTopologyStage::Validation)) {
-                return std::unexpected(*interrupted);
+
+        std::vector<MacUsbTopologyQuery> representatives;
+        representatives.reserve(devices.size());
+        std::size_t total_interfaces = 0U;
+        for (std::size_t index = 0U; index < devices.size(); ++index) {
+            auto validated = validate_device_queries(
+                devices[index].interfaces, deadline, cancellation);
+            if (!validated.has_value()) {
+                return std::unexpected(validated.error());
             }
-            const auto& query = queries[index];
-            if (!query_is_valid(query)) {
+            if (devices[index].interfaces.size() >
+                kMaximumRegistryCandidates - total_interfaces) {
                 return std::unexpected(make_error(
-                    query.port_numbers.size() > kMaximumMacUsbTopologyDepth
-                        ? MacUsbTopologyErrorKind::TopologyTooDeep
-                        : MacUsbTopologyErrorKind::InvalidArgument,
+                    MacUsbTopologyErrorKind::ResourceExhausted,
                     MacUsbTopologyStage::Validation,
-                    "invalid libusb identity for macOS topology discovery"));
+                    "macOS topology batch exceeds the interface limit"));
             }
-            const bool same_device =
-                query.vendor_id == device_query.vendor_id &&
-                query.product_id == device_query.product_id &&
-                query.bus_number == device_query.bus_number &&
-                query.device_address == device_query.device_address &&
-                query.session_id == device_query.session_id &&
-                query.port_numbers == device_query.port_numbers &&
-                query.serial_utf8 == device_query.serial_utf8 &&
-                query.product_utf8 == device_query.product_utf8 &&
-                query.interface_fingerprint.configuration_value ==
-                    device_query.interface_fingerprint.configuration_value;
-            if (!same_device) {
-                return std::unexpected(make_error(
-                    MacUsbTopologyErrorKind::InvalidArgument,
-                    MacUsbTopologyStage::Validation,
-                    "macOS topology batch mixes more than one libusb device identity"));
-            }
+            total_interfaces += devices[index].interfaces.size();
+            const auto& representative = devices[index].interfaces.front();
             for (std::size_t previous = 0U; previous < index; ++previous) {
-                if (queries[previous].interface_fingerprint ==
-                    query.interface_fingerprint) {
+                if (representatives[previous].session_id ==
+                    representative.session_id) {
                     return std::unexpected(make_error(
                         MacUsbTopologyErrorKind::AmbiguousMapping,
                         MacUsbTopologyStage::Validation,
-                        "macOS topology batch repeats an interface fingerprint"));
+                        "macOS topology batch repeats a device session"));
                 }
             }
+            representatives.push_back(representative);
         }
         if (const auto interrupted = interruption_error(
                 deadline, cancellation, MacUsbTopologyStage::Validation)) {
             return std::unexpected(*interrupted);
         }
 
-        auto first = backend_.snapshot(device_query, deadline, cancellation);
+        auto first = backend_.snapshot(
+            representatives, deadline, cancellation);
         if (const auto interrupted = interruption_error(
                 deadline, cancellation, MacUsbTopologyStage::FinalValidation)) {
             return std::unexpected(*interrupted);
@@ -1622,7 +1878,8 @@ MacUsbTopologyDiscovery::discover_device(
         if (!first.has_value()) {
             return std::unexpected(first.error());
         }
-        auto second = backend_.snapshot(device_query, deadline, cancellation);
+        auto second = backend_.snapshot(
+            representatives, deadline, cancellation);
         if (const auto interrupted = interruption_error(
                 deadline, cancellation, MacUsbTopologyStage::FinalValidation)) {
             return std::unexpected(*interrupted);
@@ -1639,101 +1896,43 @@ MacUsbTopologyDiscovery::discover_device(
         }
         normalize_snapshot(*first);
         normalize_snapshot(*second);
-        if (*first != *second) {
-            return std::unexpected(make_error(
-                MacUsbTopologyErrorKind::IdentityChanged,
-                MacUsbTopologyStage::FinalValidation,
-                "IORegistry USB identity changed between validation snapshots"));
-        }
 
-        const MacUsbRegistryNode* match = nullptr;
-        const MacUsbRegistryAncestor* matched_controller = nullptr;
-        bool identity_mismatch = false;
-        bool saw_session = false;
-        for (const auto& candidate : *second) {
+        std::vector<MacUsbTopologyDeviceResult> results;
+        results.reserve(devices.size());
+        for (std::size_t index = 0U; index < devices.size(); ++index) {
             if (const auto interrupted = interruption_error(
                     deadline,
                     cancellation,
-                    MacUsbTopologyStage::Correlation)) {
+                    MacUsbTopologyStage::FinalValidation)) {
                 return std::unexpected(*interrupted);
             }
-            if (candidate.session_id != device_query.session_id) {
+            const auto session_id = representatives[index].session_id;
+            auto first_device = nodes_for_session(*first, session_id);
+            auto second_device = nodes_for_session(*second, session_id);
+            if (const auto interrupted = interruption_error(
+                    deadline,
+                    cancellation,
+                    MacUsbTopologyStage::FinalValidation)) {
+                return std::unexpected(*interrupted);
+            }
+            if (first_device != second_device) {
+                results.emplace_back(std::unexpected(make_error(
+                    MacUsbTopologyErrorKind::IdentityChanged,
+                    MacUsbTopologyStage::FinalValidation,
+                    "IORegistry USB identity changed between validation snapshots")));
                 continue;
             }
-            if (!node_shape_is_valid(candidate)) {
-                return std::unexpected(make_error(
-                    MacUsbTopologyErrorKind::MalformedRegistry,
-                    MacUsbTopologyStage::Correlation,
-                    "IORegistry backend returned a malformed USB node",
-                    candidate.registry_path));
+            auto resolved = correlate_device(
+                devices[index].interfaces,
+                second_device,
+                deadline,
+                cancellation);
+            if (!resolved.has_value() &&
+                (resolved.error().kind == MacUsbTopologyErrorKind::Cancelled ||
+                 resolved.error().kind == MacUsbTopologyErrorKind::Timeout)) {
+                return std::unexpected(resolved.error());
             }
-            if (saw_session) {
-                return std::unexpected(make_error(
-                    MacUsbTopologyErrorKind::AmbiguousMapping,
-                    MacUsbTopologyStage::Correlation,
-                    "more than one IORegistry device has the libusb session identity",
-                    candidate.registry_path));
-            }
-            saw_session = true;
-            const bool same_physical_port =
-                candidate.bus_number == device_query.bus_number &&
-                candidate.port_numbers == device_query.port_numbers;
-            if (!same_physical_port ||
-                candidate.device_address != device_query.device_address ||
-                candidate.vendor_id != device_query.vendor_id ||
-                candidate.product_id != device_query.product_id ||
-                (device_query.serial_utf8.has_value() &&
-                 (!candidate.serial_utf8.has_value() ||
-                  *candidate.serial_utf8 != *device_query.serial_utf8)) ||
-                (device_query.product_utf8.has_value() &&
-                 (!candidate.product_utf8.has_value() ||
-                  *candidate.product_utf8 != *device_query.product_utf8))) {
-                identity_mismatch = true;
-                continue;
-            }
-
-            const auto* controller = root_controller(candidate);
-            if (controller == nullptr) {
-                return std::unexpected(make_error(
-                    MacUsbTopologyErrorKind::MalformedRegistry,
-                    MacUsbTopologyStage::Correlation,
-                    "IORegistry ancestry contains no USB host controller",
-                    candidate.registry_path));
-            }
-
-            if (match != nullptr) {
-                return std::unexpected(make_error(
-                    MacUsbTopologyErrorKind::AmbiguousMapping,
-                    MacUsbTopologyStage::Correlation,
-                    "more than one IORegistry device maps to the libusb snapshot",
-                    candidate.registry_path));
-            }
-            match = &candidate;
-            matched_controller = controller;
-        }
-        if (match == nullptr || matched_controller == nullptr) {
-            return std::unexpected(make_error(
-                identity_mismatch ? MacUsbTopologyErrorKind::IdentityMismatch
-                                  : MacUsbTopologyErrorKind::NotFound,
-                MacUsbTopologyStage::Correlation,
-                identity_mismatch
-                    ? "IORegistry USB identity does not match the libusb snapshot"
-                    : "no IORegistry device maps to the libusb snapshot"));
-        }
-
-        auto physical_path = canonical_macos_usb_port_path(
-            match->bus_number, match->port_numbers);
-        if (!physical_path.has_value()) {
-            return std::unexpected(physical_path.error());
-        }
-        auto controller_id = controller_identifier(
-            matched_controller->registry_entry_id);
-        if (controller_id.empty()) {
-            return std::unexpected(make_error(
-                MacUsbTopologyErrorKind::ResourceExhausted,
-                MacUsbTopologyStage::Correlation,
-                "failed to format the root-controller registry identity",
-                matched_controller->registry_path));
+            results.push_back(std::move(resolved));
         }
         if (const auto interrupted = interruption_error(
                 deadline,
@@ -1741,65 +1940,12 @@ MacUsbTopologyDiscovery::discover_device(
                 MacUsbTopologyStage::FinalValidation)) {
             return std::unexpected(*interrupted);
         }
-
-        std::vector<MacUsbTopology> topologies;
-        topologies.reserve(queries.size());
-        for (const auto& query : queries) {
-            const MacUsbRegistryInterface* matched_interface = nullptr;
-            for (const auto& interface : match->interfaces) {
-                if (const auto interrupted = interruption_error(
-                        deadline,
-                        cancellation,
-                        MacUsbTopologyStage::Correlation)) {
-                    return std::unexpected(*interrupted);
-                }
-                if (interface.fingerprint != query.interface_fingerprint) {
-                    continue;
-                }
-                if (matched_interface != nullptr) {
-                    return std::unexpected(make_error(
-                        MacUsbTopologyErrorKind::AmbiguousMapping,
-                        MacUsbTopologyStage::Correlation,
-                        "more than one IORegistry interface matches the libusb fingerprint",
-                        interface.registry_path));
-                }
-                matched_interface = &interface;
-            }
-            if (matched_interface == nullptr) {
-                return std::unexpected(make_error(
-                    MacUsbTopologyErrorKind::IdentityMismatch,
-                    MacUsbTopologyStage::Correlation,
-                    "an IORegistry interface does not match the libusb device snapshot",
-                    match->registry_path));
-            }
-            topologies.push_back(MacUsbTopology{
-                .physical_port_path = *physical_path,
-                .root_controller_id = controller_id,
-                .hub_port_chain = match->port_numbers,
-                .registry_entry_id = match->registry_entry_id,
-                .session_id = match->session_id,
-                .interface_registry_entry_id =
-                    matched_interface->registry_entry_id,
-                .location_id = match->location_id,
-                .vendor_id = match->vendor_id,
-                .product_id = match->product_id,
-                .bus_number = match->bus_number,
-                .device_address = match->device_address,
-                .interface_fingerprint = matched_interface->fingerprint,
-                .serial_utf8 = match->serial_utf8,
-                .product_utf8 = match->product_utf8,
-                .registry_path = match->registry_path,
-                .interface_registry_path = matched_interface->registry_path,
-                .root_controller_registry_path =
-                    matched_controller->registry_path,
-            });
-        }
-        return topologies;
+        return results;
     } catch (const std::bad_alloc&) {
         return std::unexpected(make_error(
             MacUsbTopologyErrorKind::ResourceExhausted,
             MacUsbTopologyStage::Correlation,
-            "memory allocation failed while correlating macOS USB topology"));
+            "memory allocation failed while correlating a macOS USB batch"));
     }
 }
 

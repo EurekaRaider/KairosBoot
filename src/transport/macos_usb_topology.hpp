@@ -52,6 +52,12 @@ struct MacUsbTopologyQuery final {
     std::optional<std::string> product_utf8;
 };
 
+// Every entry represents one libusb device generation and carries all of its
+// selected interfaces in deterministic enumeration order.
+struct MacUsbTopologyDeviceQuery final {
+    std::vector<MacUsbTopologyQuery> interfaces;
+};
+
 struct MacUsbRegistryInterface final {
     std::uint64_t registry_entry_id{};
     MacUsbInterfaceFingerprint fingerprint;
@@ -80,8 +86,8 @@ struct MacUsbRegistryAncestor final {
 };
 
 // One immutable, device-scoped IORegistry observation. Production obtains two
-// independently enumerated observations; discovery publishes topology only
-// when the complete query-scoped snapshots are identical.
+// platform-wide observations for the requested batch; discovery publishes a
+// device only when that device's complete snapshots are identical.
 struct MacUsbRegistryNode final {
     std::uint64_t registry_entry_id{};
     std::uint64_t session_id{};
@@ -159,6 +165,9 @@ struct MacUsbTopologyError final {
     [[nodiscard]] bool operator==(const MacUsbTopologyError&) const = default;
 };
 
+using MacUsbTopologyDeviceResult =
+    std::expected<std::vector<MacUsbTopology>, MacUsbTopologyError>;
+
 // Injectable, read-only IORegistry seam. Implementations must honor the same
 // absolute deadline and stop token for every enumeration. Returning a snapshot
 // never authorizes opening a device or mutating any registry/system state.
@@ -168,7 +177,7 @@ public:
 
     [[nodiscard]] virtual std::expected<std::vector<MacUsbRegistryNode>,
                                         MacUsbTopologyError>
-    snapshot(const MacUsbTopologyQuery& query,
+    snapshot(std::span<const MacUsbTopologyQuery> device_queries,
              MacUsbTopologyTimePoint deadline,
              std::stop_token cancellation) const = 0;
 };
@@ -182,7 +191,7 @@ public:
 
     [[nodiscard]] virtual std::expected<std::vector<MacUsbRegistryNode>,
                                         MacUsbTopologyError>
-    snapshot(const MacUsbTopologyQuery& query,
+    snapshot(std::span<const MacUsbTopologyQuery> device_queries,
              MacUsbTopologyTimePoint deadline,
              std::stop_token cancellation) const = 0;
 };
@@ -196,7 +205,7 @@ public:
 
     [[nodiscard]] std::expected<std::vector<MacUsbRegistryNode>,
                                 MacUsbTopologyError>
-    snapshot(const MacUsbTopologyQuery& query,
+    snapshot(std::span<const MacUsbTopologyQuery> device_queries,
              MacUsbTopologyTimePoint deadline,
              std::stop_token cancellation) const override;
 
@@ -222,6 +231,16 @@ public:
     discover_device(std::span<const MacUsbTopologyQuery> queries,
                     MacUsbTopologyTimePoint deadline,
                     std::stop_token cancellation = {}) const;
+
+    // Resolve every selected device from exactly two shared platform snapshot
+    // passes. Per-device identity failures are returned in the corresponding
+    // result; a batch-wide timeout, cancellation, or native-pass failure is the
+    // outer error and never publishes a partial result vector.
+    [[nodiscard]] std::expected<std::vector<MacUsbTopologyDeviceResult>,
+                                MacUsbTopologyError>
+    discover_devices(std::span<const MacUsbTopologyDeviceQuery> devices,
+                     MacUsbTopologyTimePoint deadline,
+                     std::stop_token cancellation = {}) const;
 
 private:
     const IMacUsbRegistryBackend& backend_;

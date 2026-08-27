@@ -33,6 +33,8 @@ using kairosboot::transport::MacUsbRegistryNode;
 using kairosboot::transport::MacUsbTopology;
 using kairosboot::transport::MacUsbTopologyClock;
 using kairosboot::transport::MacUsbTopologyDiscovery;
+using kairosboot::transport::MacUsbTopologyDeviceQuery;
+using kairosboot::transport::MacUsbTopologyDeviceResult;
 using kairosboot::transport::MacUsbTopologyError;
 using kairosboot::transport::MacUsbTopologyErrorKind;
 using kairosboot::transport::MacUsbTopologyQuery;
@@ -140,11 +142,15 @@ public:
     std::vector<Result> results;
     std::function<void(std::size_t)> after_call;
     mutable std::size_t calls{};
+    mutable std::vector<std::size_t> query_counts;
+    mutable std::vector<MacUsbTopologyTimePoint> deadlines;
 
     [[nodiscard]] Result snapshot(
-        const MacUsbTopologyQuery&,
-        const MacUsbTopologyTimePoint,
+        const std::span<const MacUsbTopologyQuery> queries,
+        const MacUsbTopologyTimePoint deadline,
         const std::stop_token) const override {
+        query_counts.push_back(queries.size());
+        deadlines.push_back(deadline);
         const auto index = calls++;
         if (index >= results.size()) {
             throw std::runtime_error("unexpected registry snapshot call");
@@ -165,12 +171,16 @@ public:
     Result result{std::vector<MacUsbRegistryNode>{}};
     std::function<void()> before_return;
     mutable std::size_t calls{};
+    mutable std::vector<std::size_t> query_counts;
+    mutable std::vector<MacUsbTopologyTimePoint> deadlines;
 
     [[nodiscard]] Result snapshot(
-        const MacUsbTopologyQuery&,
-        const MacUsbTopologyTimePoint,
+        const std::span<const MacUsbTopologyQuery> queries,
+        const MacUsbTopologyTimePoint deadline,
         const std::stop_token) const override {
         ++calls;
+        query_counts.push_back(queries.size());
+        deadlines.push_back(deadline);
         if (before_return) {
             before_return();
         }
@@ -456,6 +466,165 @@ void multi_interface_device_uses_one_generation_or_fails_closed() {
     CHECK(missing.error().kind == MacUsbTopologyErrorKind::IdentityMismatch);
 }
 
+void thirty_two_devices_share_exactly_two_global_snapshot_passes() {
+    constexpr std::size_t device_count = 32U;
+    std::vector<MacUsbTopologyDeviceQuery> devices;
+    std::vector<MacUsbRegistryNode> nodes;
+    devices.reserve(device_count);
+    nodes.reserve(device_count);
+
+    for (std::size_t index = 0U; index < device_count; ++index) {
+        auto first = query(
+            0U,
+            static_cast<std::uint8_t>(index + 1U),
+            {static_cast<std::uint8_t>(index + 1U)},
+            0x1000U + index);
+        first.serial_utf8 = std::string{"DUPLICATE-SERIAL"};
+        auto second = first;
+        second.interface_fingerprint = fingerprint(1U);
+        devices.push_back(MacUsbTopologyDeviceQuery{
+            .interfaces = {first, second},
+        });
+
+        auto registry_node = node(
+            first,
+            0x2000U + index,
+            0x3000U + (index * 2U),
+            first.session_id,
+            0x4000U + (index % 2U));
+        registry_node.interfaces.push_back(MacUsbRegistryInterface{
+            .registry_entry_id = 0x3001U + (index * 2U),
+            .fingerprint = second.interface_fingerprint,
+            .registry_path = "IOService:/device/interface-second-" +
+                std::to_string(index),
+        });
+        nodes.push_back(std::move(registry_node));
+    }
+
+    ScriptedSource source;
+    source.result = nodes;
+    IokitMacUsbRegistryBackend backend(source);
+    MacUsbTopologyDiscovery discovery(backend);
+    const auto deadline = MacUsbTopologyClock::now() + 1h;
+    const auto resolved = discovery.discover_devices(devices, deadline);
+
+    CHECK(resolved.has_value());
+    CHECK(resolved->size() == device_count);
+    CHECK(source.calls == 2U);
+    CHECK(source.query_counts == std::vector<std::size_t>({device_count,
+                                                          device_count}));
+    for (std::size_t index = 0U; index < device_count; ++index) {
+        const auto& device = (*resolved)[index];
+        CHECK(device.has_value());
+        CHECK(device->size() == 2U);
+        CHECK((*device)[0].session_id == (*device)[1].session_id);
+        CHECK((*device)[0].registry_entry_id == (*device)[1].registry_entry_id);
+        CHECK((*device)[0].root_controller_id ==
+              (*device)[1].root_controller_id);
+        CHECK((*device)[0].interface_fingerprint ==
+              devices[index].interfaces[0].interface_fingerprint);
+        CHECK((*device)[1].interface_fingerprint ==
+              devices[index].interfaces[1].interface_fingerprint);
+        CHECK((*device)[0].serial_utf8 ==
+              std::optional<std::string>{"DUPLICATE-SERIAL"});
+        CHECK((*device)[0].interface_registry_entry_id !=
+              (*device)[1].interface_registry_entry_id);
+    }
+}
+
+void batch_generation_change_fails_the_whole_device_only() {
+    auto first_device = query(0U, 1U, {1U}, 0x501U);
+    auto first_device_second = first_device;
+    first_device_second.interface_fingerprint = fingerprint(1U);
+    auto second_device = query(0U, 2U, {2U}, 0x502U);
+    auto second_device_second = second_device;
+    second_device_second.interface_fingerprint = fingerprint(1U);
+    const std::array devices{
+        MacUsbTopologyDeviceQuery{
+            .interfaces = {first_device, first_device_second},
+        },
+        MacUsbTopologyDeviceQuery{
+            .interfaces = {second_device, second_device_second},
+        },
+    };
+
+    auto first_node = node(first_device, 0x601U, 0x701U);
+    first_node.interfaces.push_back(MacUsbRegistryInterface{
+        .registry_entry_id = 0x702U,
+        .fingerprint = first_device_second.interface_fingerprint,
+        .registry_path = "IOService:/first/interface-2",
+    });
+    auto second_node = node(second_device, 0x602U, 0x703U);
+    second_node.interfaces.push_back(MacUsbRegistryInterface{
+        .registry_entry_id = 0x704U,
+        .fingerprint = second_device_second.interface_fingerprint,
+        .registry_path = "IOService:/second/interface-2",
+    });
+    auto changed_first_node = first_node;
+    changed_first_node.interfaces.back().registry_entry_id = 0x705U;
+
+    ScriptedBackend backend;
+    backend.results = {
+        snapshot_result({first_node, second_node}),
+        snapshot_result({changed_first_node, second_node}),
+    };
+    MacUsbTopologyDiscovery discovery(backend);
+    const auto resolved = discovery.discover_devices(
+        devices, MacUsbTopologyClock::now() + 1h);
+
+    CHECK(resolved.has_value());
+    CHECK(resolved->size() == 2U);
+    CHECK(!(*resolved)[0].has_value());
+    CHECK((*resolved)[0].error().kind ==
+          MacUsbTopologyErrorKind::IdentityChanged);
+    CHECK((*resolved)[1].has_value());
+    CHECK((*resolved)[1]->size() == 2U);
+    CHECK(backend.calls == 2U);
+}
+
+void batch_cancel_and_deadline_after_second_pass_publish_nothing() {
+    const auto wanted = query();
+    const std::array devices{MacUsbTopologyDeviceQuery{
+        .interfaces = {wanted},
+    }};
+
+    std::stop_source cancellation;
+    ScriptedSource cancelled_source;
+    cancelled_source.result = std::vector<MacUsbRegistryNode>{node(wanted)};
+    cancelled_source.before_return = [&cancellation, &cancelled_source] {
+        if (cancelled_source.calls == 2U) {
+            cancellation.request_stop();
+        }
+    };
+    IokitMacUsbRegistryBackend cancelled_backend(cancelled_source);
+    MacUsbTopologyDiscovery cancelled_discovery(cancelled_backend);
+    const auto cancelled = cancelled_discovery.discover_devices(
+        devices,
+        MacUsbTopologyClock::now() + 1h,
+        cancellation.get_token());
+    CHECK(!cancelled.has_value());
+    CHECK(cancelled.error().kind == MacUsbTopologyErrorKind::Cancelled);
+    CHECK(cancelled_source.calls == 2U);
+    CHECK(cancelled_source.deadlines[0] == cancelled_source.deadlines[1]);
+
+    ScriptedSource timed_source;
+    timed_source.result = std::vector<MacUsbRegistryNode>{node(wanted)};
+    const auto deadline = MacUsbTopologyClock::now() + 100ms;
+    timed_source.before_return = [deadline, &timed_source] {
+        if (timed_source.calls == 2U) {
+            std::this_thread::sleep_until(deadline);
+        }
+    };
+    IokitMacUsbRegistryBackend timed_backend(timed_source);
+    MacUsbTopologyDiscovery timed_discovery(timed_backend);
+    const auto timed_out = timed_discovery.discover_devices(devices, deadline);
+    CHECK(!timed_out.has_value());
+    CHECK(timed_out.error().kind == MacUsbTopologyErrorKind::Timeout);
+    CHECK(timed_source.calls == 2U);
+    CHECK(timed_source.deadlines ==
+          std::vector<MacUsbTopologyTimePoint>({deadline, deadline}));
+}
+
 void duplicate_serials_are_never_used_as_the_physical_key() {
     const auto wanted = query();
     auto other_query = query(1U, 8U, {4U}, 0x301U);
@@ -635,10 +804,11 @@ void modern_and_intel_controller_ancestry_allow_root_hubs() {
 
 void injectable_native_source_handles_empty_iterator_and_final_cancel() {
     const auto wanted = query();
+    const std::array queries{wanted};
     ScriptedSource empty_source;
     IokitMacUsbRegistryBackend empty_backend(empty_source);
     const auto empty = empty_backend.snapshot(
-        wanted, MacUsbTopologyClock::now() + 1h, {});
+        queries, MacUsbTopologyClock::now() + 1h, {});
     CHECK(empty.has_value());
     CHECK(empty->empty());
     CHECK(empty_source.calls == 1U);
@@ -651,7 +821,7 @@ void injectable_native_source_handles_empty_iterator_and_final_cancel() {
     };
     IokitMacUsbRegistryBackend interrupted_backend(interrupted_source);
     const auto interrupted = interrupted_backend.snapshot(
-        wanted,
+        queries,
         MacUsbTopologyClock::now() + 1h,
         cancellation.get_token());
     CHECK(!interrupted.has_value());
@@ -662,7 +832,7 @@ void injectable_native_source_handles_empty_iterator_and_final_cancel() {
     ScriptedSource untouched;
     IokitMacUsbRegistryBackend timed_backend(untouched);
     const auto timed_out = timed_backend.snapshot(
-        wanted, MacUsbTopologyClock::now() - 1ms, {});
+        queries, MacUsbTopologyClock::now() - 1ms, {});
     CHECK(!timed_out.has_value());
     CHECK(timed_out.error().kind == MacUsbTopologyErrorKind::Timeout);
     CHECK(untouched.calls == 0U);
@@ -670,6 +840,7 @@ void injectable_native_source_handles_empty_iterator_and_final_cancel() {
 
 void source_error_never_masks_post_call_cancel() {
     const auto wanted = query();
+    const std::array queries{wanted};
     const MacUsbTopologyError source_error{
         .kind = MacUsbTopologyErrorKind::IoError,
         .stage = MacUsbTopologyStage::DeviceEnumeration,
@@ -685,7 +856,7 @@ void source_error_never_masks_post_call_cancel() {
     };
     IokitMacUsbRegistryBackend cancelled_backend(cancelled_source);
     const auto cancelled = cancelled_backend.snapshot(
-        wanted,
+        queries,
         MacUsbTopologyClock::now() + 1h,
         cancellation.get_token());
     CHECK(!cancelled.has_value());
@@ -735,6 +906,9 @@ int main() {
         {"TOCTOU", two_snapshot_toctou_changes_fail_closed},
         {"snapshot order", deterministic_snapshot_order_does_not_create_a_false_race},
         {"multi-interface generation", multi_interface_device_uses_one_generation_or_fails_closed},
+        {"32-device batch snapshots", thirty_two_devices_share_exactly_two_global_snapshot_passes},
+        {"batch device generation", batch_generation_change_fails_the_whole_device_only},
+        {"batch interruption", batch_cancel_and_deadline_after_second_pass_publish_nothing},
         {"duplicate serial", duplicate_serials_are_never_used_as_the_physical_key},
         {"ambiguity", duplicate_device_and_interface_mappings_are_ambiguous},
         {"identity mismatch", mismatched_and_missing_identities_fail_closed},
