@@ -932,6 +932,55 @@ prepare_target(kb_context_t &context, const char *selector_text) {
   return bind_target(std::move(*parsed), std::move(*runtime));
 }
 
+[[nodiscard]] std::expected<PreparedTarget,
+                            kairosboot::api::OperationErrorPayload>
+prepare_flash_target(
+    kb_context_t &context,
+    const std::optional<std::string_view> legacy_serial) {
+  const auto requested_identifier =
+      legacy_serial.has_value() ? std::string{*legacy_serial} : std::string{};
+  const bool network_selector =
+      legacy_serial.has_value() &&
+      (legacy_serial->starts_with("tcp:") ||
+       legacy_serial->starts_with("udp:"));
+  if (network_selector) {
+    return prepare_target(context, requested_identifier.c_str());
+  }
+
+  auto runtime = acquire_context_usb_runtime(context);
+  if (!runtime) {
+    return std::unexpected(kairosboot::api::normalize_public_error(
+        runtime.error(), requested_identifier));
+  }
+  auto enumerated = (*runtime)->enumerate(fastboot_usb_filter());
+  if (!enumerated) {
+    return std::unexpected(kairosboot::api::normalize_public_error(
+        enumerated.error(), requested_identifier));
+  }
+  auto selected =
+      kairosboot::api::select_usb_device(*enumerated, legacy_serial);
+  if (!selected) {
+    return std::unexpected(kairosboot::api::normalize_public_error(
+        selected.error(), requested_identifier));
+  }
+
+  const auto selected_identifier = device_identifier(*selected);
+  return PreparedTarget{
+      .selector =
+          {
+              .kind = legacy_serial.has_value()
+                          ? kairosboot::api::DeviceSelectorKind::UsbSerial
+                          : kairosboot::api::DeviceSelectorKind::UsbUnique,
+              .value = requested_identifier,
+              .usb_bus = 0,
+              .usb_ports = {},
+              .identifier = selected_identifier,
+          },
+      .usb_runtime = std::move(*runtime),
+      .usb_device = std::move(*selected),
+  };
+}
+
 [[nodiscard]] kairosboot::api::OperationErrorPayload network_error(
     const kairosboot::transport::TcpError &error,
     const std::string &identifier) {
@@ -1862,22 +1911,9 @@ kb_status_t KB_CALL kb_flash_file_async(
                              file_source.error(), requested_identifier));
     }
 
-    auto runtime = acquire_context_usb_runtime(*context);
-    if (!runtime) {
-      return fail(error, runtime_error_status(runtime.error().kind),
-                  runtime_error_message(runtime.error().kind), serial_or_null,
-                  runtime.error().native_code);
-    }
-    auto enumerated = (*runtime)->enumerate(fastboot_usb_filter());
-    if (!enumerated) {
-      return fail(error, kairosboot::api::normalize_public_error(
-                             enumerated.error(), requested_identifier));
-    }
-    auto selected =
-        kairosboot::api::select_usb_device(*enumerated, requested_serial);
-    if (!selected) {
-      return fail(error, kairosboot::api::normalize_public_error(
-                             selected.error(), requested_identifier));
+    auto prepared_target = prepare_flash_target(*context, requested_serial);
+    if (!prepared_target) {
+      return fail(error, prepared_target.error());
     }
 
     kb_flash_options_t flash_options;
@@ -1890,12 +1926,10 @@ kb_status_t KB_CALL kb_flash_file_async(
 
     std::shared_ptr<const kairosboot::image::IImageSource> image_source =
         std::move(*file_source);
-    auto selected_runtime = *runtime;
-    auto device = std::move(*selected);
-    auto selected_identifier = device_identifier(device);
+    auto selected_identifier = prepared_target->selector.identifier;
     std::string partition_copy{partition_view};
 
-    auto task = [runtime = std::move(selected_runtime), device = std::move(device),
+    auto task = [target = std::move(*prepared_target),
                  image_source = std::move(image_source),
                  partition_copy = std::move(partition_copy), flash_options,
                  selected_identifier = std::move(selected_identifier)](
@@ -1919,13 +1953,13 @@ kb_status_t KB_CALL kb_flash_file_async(
             valid_size.error(), selected_identifier));
       }
 
-      kairosboot::transport::UsbFastbootTransportOptions transport_options;
-      transport_options.bulk_out.timeout_ms = flash_options.timeout_ms;
-      auto opened = kairosboot::transport::UsbFastbootTransport::open(
-          runtime, device, std::move(transport_options));
+      kb_command_options_t transport_options;
+      kb_command_options_init(&transport_options);
+      transport_options.timeout_ms = flash_options.timeout_ms;
+      auto opened = open_target(target, transport_options,
+                                task_context.cancellation_token());
       if (!opened) {
-        return operation_failure(kairosboot::api::normalize_public_error(
-            opened.error(), selected_identifier));
+        return operation_failure(std::move(opened.error()));
       }
 
       std::unique_ptr<kairosboot::protocol::ITransportSession>
@@ -2059,21 +2093,7 @@ kb_status_t KB_CALL kb_flash_file(
   if (start != KB_OK) {
     return start;
   }
-
-  const kb_status_t result = kb_operation_wait(operation, KB_WAIT_INFINITE);
-  if (result != KB_OK && error != nullptr) {
-    const kb_error_t *operation_error = kb_operation_error(operation);
-    if (operation_error == nullptr) {
-      (void)fail(error, result, kb_status_string(result));
-    } else {
-      (void)fail(error, result, kb_error_message(operation_error),
-                 kb_error_device_identifier(operation_error),
-                 kb_error_native_code(operation_error),
-                 kb_error_transfer_state(operation_error));
-    }
-  }
-  kb_operation_release(operation);
-  return result;
+  return finish_blocking_operation(operation, error);
 }
 
 kb_status_t KB_CALL kb_update_package_async(
