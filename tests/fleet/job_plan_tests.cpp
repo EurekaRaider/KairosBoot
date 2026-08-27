@@ -2,9 +2,13 @@
 #include "src/fleet/job_plan.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -38,6 +42,7 @@ using kairosboot::fleet::ManifestSetActiveStep;
 using kairosboot::fleet::ManifestSourceLocation;
 using kairosboot::fleet::ManifestStep;
 using kairosboot::fleet::ManifestTarget;
+using kairosboot::fleet::load_fleet_manifest_file;
 using kairosboot::fleet::make_job_plan;
 using kairosboot::image::Sha256Digest;
 
@@ -248,6 +253,84 @@ inline constexpr ManifestSourceLocation kLocation{1U, 1U};
     };
 }
 
+[[nodiscard]] std::string read_binary_file(
+    const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    CHECK(input.good());
+    std::string bytes{std::istreambuf_iterator<char>{input},
+                      std::istreambuf_iterator<char>{}};
+    CHECK(!input.bad());
+    return bytes;
+}
+
+class TemporaryManifest final {
+public:
+    explicit TemporaryManifest(const std::string_view bytes)
+        : path_(std::filesystem::temp_directory_path() /
+                ("kairosboot-job-plan-" +
+                 std::to_string(std::chrono::steady_clock::now()
+                                    .time_since_epoch()
+                                    .count()) +
+                 ".yaml")) {
+        std::ofstream output(path_, std::ios::binary | std::ios::trunc);
+        CHECK(output.good());
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        CHECK(output.good());
+    }
+
+    TemporaryManifest(const TemporaryManifest&) = delete;
+    TemporaryManifest& operator=(const TemporaryManifest&) = delete;
+
+    ~TemporaryManifest() {
+        std::error_code ignored;
+        std::filesystem::remove(path_, ignored);
+    }
+
+    [[nodiscard]] const std::filesystem::path& path() const noexcept {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+void parser_planner_and_disk_golden_are_one_contract() {
+    const auto contracts =
+        std::filesystem::path{__FILE__}.parent_path().parent_path() /
+        "contracts";
+    const auto fixture_path = contracts / "fleet-job-v1.fixture.yaml";
+    auto expected = read_binary_file(contracts / "job-plan-v1.golden.json");
+    CHECK(!expected.empty());
+    CHECK(expected.back() == '\n');
+    expected.pop_back();
+    CHECK(expected.find('\n') == std::string::npos);
+
+    auto manifest = load_fleet_manifest_file(fixture_path);
+    CHECK(manifest);
+    auto plan = make_job_plan(std::move(*manifest));
+    CHECK(plan);
+    CHECK(plan->canonical_json() == expected);
+    CHECK(plan->sha256_hex() ==
+          "992daa21b5ea246910fc5d9ffffafed3e36e883d6a407b70abe3b04def3823f4");
+
+    auto uppercase_source = read_binary_file(fixture_path);
+    const std::string lowercase_digest(64U, '1');
+    const auto digest_offset = uppercase_source.find(lowercase_digest);
+    CHECK(digest_offset != std::string::npos);
+    uppercase_source.replace(digest_offset, lowercase_digest.size(),
+                             std::string(64U, 'A'));
+    TemporaryManifest uppercase_file{uppercase_source};
+    auto uppercase_manifest = load_fleet_manifest_file(uppercase_file.path());
+    CHECK(uppercase_manifest);
+    CHECK(uppercase_manifest->artifacts[0].sha256.value ==
+          std::string(64U, 'a'));
+    auto uppercase_plan = make_job_plan(std::move(*uppercase_manifest));
+    CHECK(uppercase_plan);
+    CHECK(uppercase_plan->canonical_json().find(
+              "\"sha256\":\"" + std::string(64U, 'a') + "\"") !=
+          std::string_view::npos);
+}
+
 void fixture_matches_frozen_json_and_digest() {
     constexpr std::string_view expected =
         R"json({"artifacts":[{"id":"system","index":0,"path":"images/system.img","sha256":"1111111111111111111111111111111111111111111111111111111111111111"}],"kind":"FlashJob","manifestApiVersion":"kairosboot.io/v1","manifestSha256":"58539b1d8a0ba3108ffd0f0ea835d25efca9a6ce85b06cd15f0f1307d4b1c9ef","policy":{"maxParallelDevices":32,"memoryBudget":"auto","onDeviceFailure":"continue"},"schemaVersion":1,"targets":[{"expectedProduct":"product_a","index":0,"name":"product-a","selector":{"serials":["SERIAL-01","SERIAL-02"],"usbPaths":[]},"steps":[{"artifact":"system","index":0,"oemCommand":null,"operation":"flash","partition":"system","rebootTarget":null,"slot":null}]}]})json";
@@ -456,7 +539,9 @@ void errors_are_fail_closed_and_do_not_consume_input() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 5U> tests{
+    const std::array<Test, 6U> tests{
+        Test{"parser, planner, and disk golden form one contract",
+             &parser_planner_and_disk_golden_are_one_contract},
         Test{"fixture matches frozen JSON and digest",
              &fixture_matches_frozen_json_and_digest},
         Test{"all operations, slots, defaults, order, and escaping",
