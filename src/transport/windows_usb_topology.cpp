@@ -371,6 +371,7 @@ template <typename Integer>
                     left.port_numbers,
                     left.serial_utf8,
                     left.interface_fingerprint.interface_number,
+                    left.interface_fingerprint.alternate_setting,
                     left.interface_fingerprint.interface_class,
                     left.interface_fingerprint.interface_subclass,
                     left.interface_fingerprint.interface_protocol,
@@ -389,6 +390,7 @@ template <typename Integer>
                  right.port_numbers,
                  right.serial_utf8,
                  right.interface_fingerprint.interface_number,
+                 right.interface_fingerprint.alternate_setting,
                  right.interface_fingerprint.interface_class,
                  right.interface_fingerprint.interface_subclass,
                  right.interface_fingerprint.interface_protocol,
@@ -2594,6 +2596,7 @@ WindowsUsbTopologyQuery make_windows_usb_topology_query(
             : std::optional<std::string>{device.serial_utf8},
         .interface_fingerprint = WindowsUsbInterfaceFingerprint{
             .interface_number = device.interface_number,
+            .alternate_setting = device.alternate_setting,
             .interface_class = device.interface_class,
             .interface_subclass = device.interface_subclass,
             .interface_protocol = device.interface_protocol,

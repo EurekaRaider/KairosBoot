@@ -1023,13 +1023,13 @@ void test_macos_topology_batches_all_enumerated_devices_once() {
     runtime->stop();
 }
 
-void test_device_topology_is_resolved_once_for_distinct_interfaces() {
+void test_device_topology_is_resolved_once_for_distinct_alternates() {
     auto fake = std::make_shared<FakeLibusb>();
     auto functions = fake->functions();
 
     std::array<std::array<libusb_endpoint_descriptor, 2U>, 2U> endpoints{};
     std::array<libusb_interface_descriptor, 2U> alternates{};
-    std::array<libusb_interface, 2U> interfaces{};
+    std::array<libusb_interface, 1U> interfaces{};
     for (std::size_t index = 0; index < alternates.size(); ++index) {
         endpoints[index][0].bEndpointAddress =
             static_cast<std::uint8_t>(0x01U + index);
@@ -1040,17 +1040,18 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
         endpoints[index][1].bmAttributes = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
         endpoints[index][1].wMaxPacketSize = 512U;
 
-        alternates[index].bInterfaceNumber =
-            static_cast<std::uint8_t>(2U + index);
-        alternates[index].bAlternateSetting = 0U;
+        alternates[index].bInterfaceNumber = 2U;
+        alternates[index].bAlternateSetting =
+            static_cast<std::uint8_t>(index);
         alternates[index].bNumEndpoints = 2U;
         alternates[index].bInterfaceClass = 0xFFU;
         alternates[index].bInterfaceSubClass = 0x42U;
         alternates[index].bInterfaceProtocol = 0x03U;
         alternates[index].endpoint = endpoints[index].data();
-        interfaces[index].altsetting = &alternates[index];
-        interfaces[index].num_altsetting = 1;
     }
+    interfaces[0].altsetting = alternates.data();
+    interfaces[0].num_altsetting =
+        static_cast<int>(alternates.size());
     libusb_config_descriptor config{};
     config.bConfigurationValue = 1U;
     config.bNumInterfaces = static_cast<std::uint8_t>(interfaces.size());
@@ -1232,8 +1233,10 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
     KB_CHECK(macos_queries[0].session_id == macos_queries[1].session_id);
     KB_CHECK(macos_queries[0].interface_fingerprint !=
              macos_queries[1].interface_fingerprint);
-    KB_CHECK((*enumerated)[0].interface_number !=
+    KB_CHECK((*enumerated)[0].interface_number ==
              (*enumerated)[1].interface_number);
+    KB_CHECK((*enumerated)[0].alternate_setting !=
+             (*enumerated)[1].alternate_setting);
     KB_CHECK((*enumerated)[0].linux_topology.has_value());
     KB_CHECK((*enumerated)[1].linux_topology.has_value());
     KB_CHECK((*enumerated)[0].linux_topology ==
@@ -1244,6 +1247,12 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
     KB_CHECK(windows_identity_captures == 2U);
     KB_CHECK(windows_resolver_calls == 1U);
     KB_CHECK(windows_queries.size() == 2U);
+    KB_CHECK(windows_queries[0].interface_fingerprint.interface_number ==
+             windows_queries[1].interface_fingerprint.interface_number);
+    KB_CHECK(windows_queries[0]
+                 .interface_fingerprint.alternate_setting == 0U);
+    KB_CHECK(windows_queries[1]
+                 .interface_fingerprint.alternate_setting == 1U);
     for (std::size_t index = 0U; index < windows_queries.size(); ++index) {
         const auto& query = windows_queries[index];
         const auto& snapshot = (*enumerated)[index];
@@ -1258,6 +1267,8 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
                  std::optional<std::string>{snapshot.serial_utf8});
         KB_CHECK(query.interface_fingerprint.interface_number ==
                  snapshot.interface_number);
+        KB_CHECK(query.interface_fingerprint.alternate_setting ==
+                 snapshot.alternate_setting);
         KB_CHECK(query.interface_fingerprint.interface_class ==
                  snapshot.interface_class);
         KB_CHECK(query.interface_fingerprint.interface_subclass ==
@@ -3476,8 +3487,8 @@ int main() {
          test_enumeration_retains_macos_topology_or_diagnostic},
         {"macOS topology all-device batch",
          test_macos_topology_batches_all_enumerated_devices_once},
-        {"platform topology device/interface identity",
-         test_device_topology_is_resolved_once_for_distinct_interfaces},
+        {"platform topology device/alternate identity",
+         test_device_topology_is_resolved_once_for_distinct_alternates},
         {"Windows runtime 32-device batch and duplicate serial",
          test_windows_runtime_batches_thirty_two_duplicate_serial_devices},
         {"Windows topology exact session and zero rejection",

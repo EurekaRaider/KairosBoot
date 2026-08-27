@@ -53,6 +53,7 @@ constexpr std::string_view kDeviceInstanceId =
 [[nodiscard]] WindowsUsbInterfaceFingerprint fingerprint() {
     return WindowsUsbInterfaceFingerprint{
         .interface_number = 0U,
+        .alternate_setting = 0U,
         .interface_class = 0xFFU,
         .interface_subclass = 0x42U,
         .interface_protocol = 0x03U,
@@ -389,6 +390,7 @@ void pnp_never_reinterprets_bus_address_or_interface_fingerprint() {
     auto wanted = query(kSession, 37U, 241U);
     wanted.interface_fingerprint = WindowsUsbInterfaceFingerprint{
         .interface_number = 0U,
+        .alternate_setting = 7U,
         .interface_class = 0xFFU,
         .interface_subclass = 0x7AU,
         .interface_protocol = 0xB1U,
@@ -696,6 +698,29 @@ void duplicate_serial_on_other_session_cannot_shadow_exact_devinst() {
     CHECK(result->device_instance_id_utf8 == correct.device_instance_id_utf8);
 }
 
+void reordered_alternate_candidates_remain_query_aligned() {
+    auto wanted = query();
+    wanted.interface_fingerprint.alternate_setting = 1U;
+    auto alternate_zero = node(wanted);
+    alternate_zero.interface_fingerprint.alternate_setting = 0U;
+    auto alternate_one = node(wanted);
+
+    FakeBackend backend;
+    backend.results = {
+        BackendResult{std::vector<WindowsUsbTopologyNode>{
+            alternate_zero, alternate_one}},
+        BackendResult{std::vector<WindowsUsbTopologyNode>{
+            alternate_one, alternate_zero}},
+    };
+    WindowsUsbTopologyDiscovery discovery(backend);
+    const auto result = discovery.discover(wanted);
+
+    CHECK(result.has_value());
+    CHECK(backend.calls == 2U);
+    CHECK(result->interface_fingerprint == wanted.interface_fingerprint);
+    CHECK(result->interface_fingerprint.alternate_setting == 1U);
+}
+
 void batch_discovery_is_two_global_passes_and_device_atomic() {
     constexpr std::size_t kDeviceCount = 32U;
     constexpr std::size_t kInterfacesPerDevice = 2U;
@@ -705,7 +730,8 @@ void batch_discovery_is_two_global_passes_and_device_atomic() {
     stable_pass.reserve(kDeviceCount);
     for (std::size_t device = 0U; device < kDeviceCount; ++device) {
         auto first = batch_query(device, 0U);
-        auto second = batch_query(device, 1U);
+        auto second = batch_query(device, 0U);
+        second.interface_fingerprint.alternate_setting = 1U;
         stable_pass.push_back(batch_native_snapshot(first));
         queries.push_back(std::move(first));
         queries.push_back(std::move(second));
@@ -738,6 +764,9 @@ void batch_discovery_is_two_global_passes_and_device_atomic() {
               std::optional<std::string>{"DUPLICATE-SERIAL"});
         CHECK((*resolved)[index]->interface_fingerprint ==
               queries[index].interface_fingerprint);
+        CHECK((*resolved)[index]
+                  ->interface_fingerprint.alternate_setting ==
+              static_cast<std::uint8_t>(index % kInterfacesPerDevice));
         CHECK((*resolved)[index]->device_instance_id_utf8 ==
               queries[index].device_instance_id_utf8);
     }
@@ -1068,6 +1097,7 @@ void libusb_snapshot_adapter_requires_explicit_session_data() {
     device.port_path = {7U, 2U};
     device.serial_utf8 = "SERIAL-ADAPTER";
     device.interface_number = 3U;
+    device.alternate_setting = 2U;
     device.interface_class = 0xFFU;
     device.interface_subclass = 0x42U;
     device.interface_protocol = 0x03U;
@@ -1085,6 +1115,7 @@ void libusb_snapshot_adapter_requires_explicit_session_data() {
     CHECK(adapted.serial_utf8 ==
           std::optional<std::string>{"SERIAL-ADAPTER"});
     CHECK(adapted.interface_fingerprint.interface_number == 3U);
+    CHECK(adapted.interface_fingerprint.alternate_setting == 2U);
     CHECK(adapted.interface_fingerprint.interface_class == 0xFFU);
     CHECK(adapted.interface_fingerprint.interface_subclass == 0x42U);
     CHECK(adapted.interface_fingerprint.interface_protocol == 0x03U);
@@ -1128,6 +1159,8 @@ int main() {
         {"property read unplug",
          unplug_during_native_property_read_is_identity_change},
         {"duplicate serial isolation", duplicate_serial_on_other_session_cannot_shadow_exact_devinst},
+        {"alternate double-pass ordering",
+         reordered_alternate_candidates_remain_query_aligned},
         {"batch two-pass device atomicity",
          batch_discovery_is_two_global_passes_and_device_atomic},
         {"duplicate exact session", duplicate_candidates_for_exact_session_fail_closed},

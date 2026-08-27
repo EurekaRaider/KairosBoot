@@ -20,6 +20,7 @@ inline constexpr std::size_t kMaximumWindowsUsbTopologyDepth = 16U;
 
 struct WindowsUsbInterfaceFingerprint final {
     std::uint8_t interface_number{};
+    std::uint8_t alternate_setting{};
     std::uint8_t interface_class{};
     std::uint8_t interface_subclass{};
     std::uint8_t interface_protocol{};
