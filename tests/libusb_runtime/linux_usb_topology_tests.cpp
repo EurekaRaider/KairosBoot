@@ -415,7 +415,7 @@ private:
 struct LinkRetargetContext final {
     std::filesystem::path link;
     std::string replacement_target;
-    std::error_code error;
+    std::error_code error{};
     bool invoked{};
 };
 
@@ -439,7 +439,7 @@ struct DirectoryReplacementContext final {
     std::filesystem::path current;
     std::filesystem::path replacement;
     std::filesystem::path displaced;
-    std::error_code error;
+    std::error_code error{};
     bool invoked{};
 };
 
