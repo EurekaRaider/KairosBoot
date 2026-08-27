@@ -198,6 +198,9 @@ void libusb_kinds_have_stable_status_and_retain_native_code() {
         Case{LibusbRuntimeErrorKind::interface_busy, KB_E_BUSY},
         Case{LibusbRuntimeErrorKind::claim_failed, KB_E_IO},
         Case{LibusbRuntimeErrorKind::alternate_setting_failed, KB_E_IO},
+        Case{LibusbRuntimeErrorKind::operation_cancelled, KB_E_CANCELLED},
+        Case{LibusbRuntimeErrorKind::operation_timed_out, KB_E_TIMEOUT},
+        Case{LibusbRuntimeErrorKind::identity_changed, KB_E_NO_DEVICE},
     };
 
     for (const auto& test : cases) {
