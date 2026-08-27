@@ -30,6 +30,7 @@ namespace {
 using namespace std::chrono_literals;
 
 using kairosboot::fastboot::execute_prepared_update;
+using kairosboot::fastboot::bind_initial_reconnect_session;
 using kairosboot::fastboot::FastbootUsbMode;
 using kairosboot::fastboot::IReconnectDiscovery;
 using kairosboot::fastboot::IReconnectSessionOpener;
@@ -77,6 +78,7 @@ using kairosboot::image::ImageSourceError;
 using kairosboot::image::ResolvedArtifact;
 using kairosboot::image::SparseFlashPlan;
 using kairosboot::protocol::FastbootSession;
+using kairosboot::protocol::ITransportSession;
 using kairosboot::protocol::ProtocolPhase;
 using kairosboot::protocol::Response;
 using kairosboot::protocol::ResponseKind;
@@ -354,6 +356,42 @@ public:
     };
 }
 
+struct ReconnectDeviceFixture final {
+    std::unique_ptr<PrimitiveUpdateDevice> device;
+    FastbootSession* initial_session{};
+};
+
+[[nodiscard]] ReconnectDeviceFixture make_reconnect_device(
+    std::unique_ptr<ITransportSession> transport,
+    ReconnectCoordinator& coordinator,
+    ReconnectTarget target = actor_target(),
+    ReconnectOptions options = actor_reconnect_options()) {
+    auto session = std::make_unique<FastbootSession>(std::move(transport));
+    auto* session_pointer = session.get();
+    auto identity = ReconnectDeviceIdentity{
+        .physical_port = target.physical_port,
+        .serial = target.serial,
+        .usb_fingerprint = target.usb_fingerprint,
+        .product = target.product,
+        .mode = target.previous_mode,
+    };
+    auto binding = bind_initial_reconnect_session(
+        OpenedReconnectSession{
+            .verified_identity = std::move(identity),
+            .session = std::move(session),
+            .outbound_certainty = TransferCertainty::FullyTransferred,
+        },
+        target);
+    CHECK(binding);
+    auto device = PrimitiveUpdateDevice::create_with_reconnect(
+        std::move(*binding), coordinator, options);
+    CHECK(device);
+    return {
+        .device = std::move(*device),
+        .initial_session = session_pointer,
+    };
+}
+
 void append_u16(std::vector<std::byte>& bytes, const std::uint16_t value) {
     bytes.push_back(static_cast<std::byte>(value & 0xffU));
     bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xffU));
@@ -472,6 +510,15 @@ struct BoundArtifact final {
     stream << "download:" << std::hex << std::setw(8) << std::setfill('0')
            << size;
     return stream.str();
+}
+
+[[nodiscard]] bool accepted_contains(
+    const ScriptedTransport& script,
+    const std::string_view bytes) {
+    const auto wanted = to_bytes(bytes);
+    const auto& accepted = script.accepted_bytes();
+    return std::search(accepted.begin(), accepted.end(), wanted.begin(),
+                       wanted.end()) != accepted.end();
 }
 
 void expect_flash(
@@ -724,6 +771,74 @@ void later_prepare_failure_sends_zero_destructive_commands() {
           TransferCertainty::FullyTransferred);
     CHECK(script->complete());
     CHECK(session.state() == SessionState::Ready);
+}
+
+void invalid_reconnect_options_block_every_task_before_flash() {
+    const auto run = [](const PlannedUpdateTask second_task) {
+        auto system = package_artifact("system.img", "system-image");
+        PreparedUpdatePackage package{
+            .plan = {
+                .tasks = {
+                    PlannedUpdateTask{
+                        .kind = UpdateTaskKind::Flash,
+                        .partition = "system",
+                        .artifact = "system.img",
+                    },
+                    second_task,
+                },
+            },
+            .artifacts = {system},
+            .requires_device_validation = false,
+        };
+        if (second_task.kind == UpdateTaskKind::UpdateSuper) {
+            auto super = package_artifact(
+                "super_empty.img", "immutable-super-image");
+            package.update_super_state =
+                UpdateSuperPreparationState::Prepared;
+            package.prepared_super_artifact =
+                std::make_shared<const PreparedSuperArtifact>(
+                    super.resolved, super.artifact);
+        }
+
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:max-download-size");
+        script->respond("OKAY4096");
+        ActorDiscovery discovery;
+        ActorOpener opener;
+        ActorWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+        auto invalid_options = actor_reconnect_options();
+        invalid_options.initial_backoff = 0ms;
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, actor_target(),
+            invalid_options);
+
+        auto result = execute_prepared_update(package, *fixture.device);
+        CHECK(!result);
+        CHECK(result.error().kind ==
+              UpdateExecutionErrorKind::DeviceTaskFailed);
+        CHECK(result.error().task_index == 1U);
+        CHECK(result.error().completed_tasks == 0U);
+        CHECK(result.error().device_error);
+        CHECK(result.error().device_error->outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(result.error().device_error->message.find(
+                  "invalid reconnect target or options") !=
+              std::string::npos);
+        CHECK(script->accepted_bytes() ==
+              to_bytes("getvar:max-download-size"));
+        CHECK(script->complete());
+        CHECK(discovery.calls == 0U);
+        CHECK(opener.candidates.empty());
+        CHECK(fixture.initial_session->state() == SessionState::Ready);
+    };
+
+    run(PlannedUpdateTask{.kind = UpdateTaskKind::UpdateSuper});
+    run(PlannedUpdateTask{
+        .kind = UpdateTaskKind::Reboot,
+        .reboot_target = PlannedRebootTarget::Fastboot,
+    });
 }
 
 void primitive_error_mapping_preserves_every_diagnostic() {
@@ -1219,6 +1334,10 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
     initial->respond("OKAY0x100000");
     initial->expect_write("getvar:is-userspace");
     initial->respond("OKAYno");
+    initial->expect_write("getvar:product");
+    initial->respond("OKAYproduct_a");
+    initial->expect_write("getvar:serialno");
+    initial->respond("OKAYSERIAL-A");
     initial->expect_write("reboot-fastboot");
     initial->respond("OKAYrebooting");
 
@@ -1248,9 +1367,6 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
     replacement->respond("OKAY0x100000");
     expect_flash(*replacement, "system", flash_payload);
 
-    FastbootSession initial_session(std::move(initial_transport));
-    PrimitiveService initial_service(initial_session);
-
     auto wanted = actor_target();
     ActorDiscovery discovery;
     discovery.steps = {
@@ -1269,8 +1385,10 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
     opener.transports.push_back(std::move(replacement_transport));
     ActorWaiter waiter;
     ReconnectCoordinator coordinator(discovery, opener, waiter);
-    PrimitiveUpdateDevice device(
-        initial_service, coordinator, wanted, actor_reconnect_options());
+    auto fixture = make_reconnect_device(
+        std::move(initial_transport), coordinator, wanted,
+        actor_reconnect_options());
+    auto& device = *fixture.device;
 
     PreparedUpdatePackage package{
         .plan = {
@@ -1314,7 +1432,7 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
 
     CHECK(initial->complete());
     CHECK(initial->closed());
-    CHECK(initial_session.state() == SessionState::Closed);
+    CHECK(fixture.initial_session->state() == SessionState::Closed);
     CHECK(discovery.calls == 2U);
     CHECK(opener.candidates.size() == 1U);
     CHECK(opener.candidates.front().physical_port == wanted.physical_port);
@@ -1329,6 +1447,72 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
     CHECK(replacement->complete());
 }
 
+void preparing_after_reconnect_uses_the_new_session_generation() {
+    auto first = bind_artifact(
+        "system.img",
+        std::make_shared<MemorySource>(to_bytes("first-image")));
+    auto second = bind_artifact(
+        "vendor.img",
+        std::make_shared<MemorySource>(to_bytes("second-image")));
+
+    auto initial_transport = std::make_unique<ScriptedTransport>();
+    auto* initial = initial_transport.get();
+    initial->expect_write("getvar:max-download-size");
+    initial->respond("OKAY4096");
+    initial->expect_write("getvar:is-userspace");
+    initial->respond("OKAYno");
+    initial->expect_write("getvar:product");
+    initial->respond("OKAYproduct_a");
+    initial->expect_write("getvar:serialno");
+    initial->respond("OKAYSERIAL-A");
+    initial->expect_write("reboot-fastboot");
+    initial->respond("OKAYrebooting");
+
+    auto replacement_transport = std::make_unique<ScriptedTransport>();
+    auto* replacement = replacement_transport.get();
+    replacement->expect_write("getvar:max-download-size");
+    replacement->respond("OKAY8192");
+
+    const auto wanted = actor_target();
+    ActorDiscovery discovery;
+    discovery.steps = {
+        std::vector<ReconnectCandidate>{
+            actor_candidate(wanted.physical_port, wanted.serial),
+        },
+    };
+    ActorOpener opener;
+    opener.identities.push_back(actor_identity());
+    opener.transports.push_back(std::move(replacement_transport));
+    ActorWaiter waiter;
+    ReconnectCoordinator coordinator(discovery, opener, waiter);
+    auto fixture = make_reconnect_device(
+        std::move(initial_transport), coordinator, wanted,
+        actor_reconnect_options());
+
+    auto prepared_before = fixture.device->prepare_task(
+        flash_input(first, "system", "system.img"), {});
+    CHECK(prepared_before);
+    auto reboot = fixture.device->prepare_task(
+        UpdateDeviceTaskInput{
+            .task = {
+                .kind = UpdateTaskKind::Reboot,
+                .reboot_target = PlannedRebootTarget::Fastboot,
+            },
+        },
+        {});
+    CHECK(reboot);
+    CHECK((*reboot)->execute(UpdateOperationContext{
+        .deadline = waiter.current + 30s,
+    }));
+
+    auto prepared_after = fixture.device->prepare_task(
+        flash_input(second, "vendor", "vendor.img"), {});
+    CHECK(prepared_after);
+    CHECK(initial->complete());
+    CHECK(initial->closed());
+    CHECK(replacement->complete());
+}
+
 void update_super_can_perform_the_fastbootd_transition_itself() {
     const auto payload = one_block_sparse_image();
     auto super = bind_artifact(
@@ -1338,6 +1522,10 @@ void update_super_can_perform_the_fastbootd_transition_itself() {
     auto* initial = initial_transport.get();
     initial->expect_write("getvar:is-userspace");
     initial->respond("OKAYno");
+    initial->expect_write("getvar:product");
+    initial->respond("OKAYproduct_a");
+    initial->expect_write("getvar:serialno");
+    initial->respond("OKAYSERIAL-A");
     initial->expect_write("reboot-fastboot");
     initial->respond("OKAYrebooting");
 
@@ -1357,8 +1545,6 @@ void update_super_can_perform_the_fastbootd_transition_itself() {
     replacement->expect_write("update-super:super");
     replacement->respond("OKAYupdated");
 
-    FastbootSession initial_session(std::move(initial_transport));
-    PrimitiveService initial_service(initial_session);
     const auto wanted = actor_target();
     ActorDiscovery discovery;
     discovery.steps = {
@@ -1371,8 +1557,10 @@ void update_super_can_perform_the_fastbootd_transition_itself() {
     opener.transports.push_back(std::move(replacement_transport));
     ActorWaiter waiter;
     ReconnectCoordinator coordinator(discovery, opener, waiter);
-    PrimitiveUpdateDevice device(
-        initial_service, coordinator, wanted, actor_reconnect_options());
+    auto fixture = make_reconnect_device(
+        std::move(initial_transport), coordinator, wanted,
+        actor_reconnect_options());
+    auto& device = *fixture.device;
     auto token = device.prepare_task(update_super_input(super), {});
     CHECK(token);
 
@@ -1392,39 +1580,62 @@ void already_fastbootd_never_reboots_or_discovers() {
         "super_empty.img", std::make_shared<MemorySource>(payload));
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
-    script->expect_write("getvar:is-userspace");
-    script->respond("OKAYyes");
-    script->expect_write("getvar:super-partition-name");
-    script->respond("OKAYsuper");
-    script->expect_write("getvar:max-download-size");
-    script->respond("OKAY0x100000");
-    const auto command = download_command(payload.size());
-    script->expect_write(command);
-    script->respond(std::string{"DATA"} + command.substr(9U));
-    script->expect_source_write(
-        payload,
-        {{.size = payload.size(), .progress_watermark = payload.size()}});
-    script->respond("OKAYdownloaded");
+    expect_update_super_preparation(*script);
+    expect_update_super_download(*script, payload);
     script->expect_write("update-super:super");
     script->respond("OKAYupdated");
 
     FastbootSession session(std::move(transport));
     PrimitiveService service(session);
-    ActorDiscovery discovery;
-    ActorOpener opener;
-    ActorWaiter waiter;
-    ReconnectCoordinator coordinator(discovery, opener, waiter);
-    PrimitiveUpdateDevice device(
-        service, coordinator, actor_target(), actor_reconnect_options());
+    PrimitiveUpdateDevice device(service);
     auto token = device.prepare_task(update_super_input(super), {});
     CHECK(token);
-    CHECK((*token)->execute(UpdateOperationContext{
-        .deadline = waiter.current + 30s,
-    }));
-    CHECK(discovery.calls == 0U);
-    CHECK(opener.candidates.empty());
+    CHECK((*token)->execute({}));
     CHECK(script->complete());
     CHECK(session.state() == SessionState::Ready);
+}
+
+void raw_reboot_fastboot_is_fastbootd_only() {
+    const auto input = [] {
+        return UpdateDeviceTaskInput{
+            .task = {
+                .kind = UpdateTaskKind::Reboot,
+                .reboot_target = PlannedRebootTarget::Fastboot,
+            },
+        };
+    };
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:is-userspace");
+        script->respond("OKAYyes");
+        script->expect_write("getvar:is-userspace");
+        script->respond("OKAYyes");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(input(), {});
+        CHECK(token);
+        CHECK((*token)->execute({}));
+        CHECK(!accepted_contains(*script, "reboot-fastboot"));
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:is-userspace");
+        script->respond("OKAYno");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(input(), {});
+        CHECK(!token);
+        CHECK(token.error().kind == UpdateDeviceErrorKind::Unsupported);
+        CHECK(!accepted_contains(*script, "reboot-fastboot"));
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
 }
 
 void partial_reboot_fastboot_never_starts_discovery() {
@@ -1435,19 +1646,23 @@ void partial_reboot_fastboot_never_starts_discovery() {
     auto* script = transport.get();
     script->expect_write("getvar:is-userspace");
     script->respond("OKAYno");
+    script->expect_write("getvar:product");
+    script->respond("OKAYproduct_a");
+    script->expect_write("getvar:serialno");
+    script->respond("OKAYSERIAL-A");
     script->expect_write(
         "reboot-fastboot", 3U, TransportStatus::IoError,
         TransferCertainty::PartialOrUnknown, 71,
         "scripted partial reboot command");
 
-    FastbootSession session(std::move(transport));
-    PrimitiveService service(session);
     ActorDiscovery discovery;
     ActorOpener opener;
     ActorWaiter waiter;
     ReconnectCoordinator coordinator(discovery, opener, waiter);
-    PrimitiveUpdateDevice device(
-        service, coordinator, actor_target(), actor_reconnect_options());
+    auto fixture = make_reconnect_device(
+        std::move(transport), coordinator, actor_target(),
+        actor_reconnect_options());
+    auto& device = *fixture.device;
     auto token = device.prepare_task(update_super_input(super), {});
     CHECK(token);
     auto result = (*token)->execute(UpdateOperationContext{
@@ -1463,40 +1678,148 @@ void partial_reboot_fastboot_never_starts_discovery() {
     CHECK(discovery.calls == 0U);
     CHECK(opener.candidates.empty());
     CHECK(script->complete());
-    CHECK(session.state() == SessionState::Poisoned);
+    CHECK(fixture.initial_session->state() == SessionState::Poisoned);
 }
 
 void invalid_reconnect_identity_fails_before_protocol_bytes() {
+    const auto rejected = [](ReconnectDeviceIdentity identity,
+                             ReconnectTarget target) {
+        auto binding = bind_initial_reconnect_session(
+            OpenedReconnectSession{
+                .verified_identity = std::move(identity),
+                .session = std::make_unique<FastbootSession>(
+                    std::make_unique<ScriptedTransport>()),
+                .outbound_certainty = TransferCertainty::FullyTransferred,
+            },
+            std::move(target));
+        CHECK(!binding);
+        CHECK(binding.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+    };
+
+    auto invalid_target = actor_target();
+    invalid_target.physical_port.ports.clear();
+    rejected(actor_identity(actor_port(), std::string{"SERIAL-A"},
+                            "product_a", FastbootUsbMode::Bootloader),
+             invalid_target);
+    auto invalid_direction = actor_target();
+    invalid_direction.previous_mode = FastbootUsbMode::Fastbootd;
+    invalid_direction.required_mode = FastbootUsbMode::Bootloader;
+    rejected(actor_identity(actor_port(), std::string{"SERIAL-A"},
+                            "product_a", FastbootUsbMode::Fastbootd),
+             invalid_direction);
+
+    const auto target = actor_target();
+    rejected(actor_identity(actor_port({9U}), target.serial, target.product,
+                            FastbootUsbMode::Bootloader),
+             target);
+    rejected(actor_identity(target.physical_port, std::string{"SERIAL-B"},
+                            target.product, FastbootUsbMode::Bootloader),
+             target);
+    rejected(actor_identity(target.physical_port, target.serial, "product_b",
+                            FastbootUsbMode::Bootloader),
+             target);
+    rejected(actor_identity(target.physical_port, target.serial,
+                            target.product, FastbootUsbMode::Fastbootd),
+             target);
+    auto wrong_fingerprint = actor_identity(
+        target.physical_port, target.serial, target.product,
+        FastbootUsbMode::Bootloader);
+    ++wrong_fingerprint.usb_fingerprint.product_id;
+    rejected(std::move(wrong_fingerprint), target);
+}
+
+void initial_protocol_identity_is_rechecked_before_reboot() {
     auto super = bind_artifact(
         "super_empty.img",
         std::make_shared<MemorySource>(one_block_sparse_image()));
+    const auto run = [&super](const std::string_view product,
+                             const std::optional<std::string_view> serial,
+                             const std::string_view failed_variable) {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:is-userspace");
+        script->respond("OKAYno");
+        script->expect_write("getvar:product");
+        script->respond(std::string{"OKAY"} + std::string(product));
+        if (serial) {
+            script->expect_write("getvar:serialno");
+            script->respond(std::string{"OKAY"} + std::string(*serial));
+        }
+
+        ActorDiscovery discovery;
+        ActorOpener opener;
+        ActorWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, actor_target(),
+            actor_reconnect_options());
+        auto token = fixture.device->prepare_task(
+            update_super_input(super), {});
+        CHECK(token);
+        auto result = (*token)->execute(UpdateOperationContext{
+            .deadline = waiter.current + 30s,
+        });
+        CHECK(!result);
+        CHECK(result.error().message.find(failed_variable) !=
+              std::string::npos);
+        CHECK(!result.error().session_closed);
+        CHECK(!result.error().session_poisoned);
+        CHECK(!accepted_contains(*script, "reboot-fastboot"));
+        CHECK(discovery.calls == 0U);
+        CHECK(opener.candidates.empty());
+        CHECK(script->complete());
+        CHECK(fixture.initial_session->state() == SessionState::Ready);
+    };
+
+    run("product_b", std::nullopt, "product");
+    run("product_a", std::string_view{"SERIAL-B"}, "serialno");
+}
+
+void explicit_reboot_fastboot_fail_keeps_the_actor_ready() {
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
-    FastbootSession session(std::move(transport));
-    PrimitiveService service(session);
+    script->expect_write("getvar:is-userspace");
+    script->respond("OKAYno");
+    script->expect_write("getvar:product");
+    script->respond("OKAYproduct_a");
+    script->expect_write("getvar:serialno");
+    script->respond("OKAYSERIAL-A");
+    script->expect_write("reboot-fastboot");
+    script->respond("FAILtransition rejected");
+    script->expect_write("getvar:product");
+    script->respond("OKAYproduct_a");
+
     ActorDiscovery discovery;
     ActorOpener opener;
     ActorWaiter waiter;
     ReconnectCoordinator coordinator(discovery, opener, waiter);
-    auto wanted = actor_target();
-    wanted.physical_port.ports.clear();
-    PrimitiveUpdateDevice device(
-        service, coordinator, wanted, actor_reconnect_options());
-    auto token = device.prepare_task(update_super_input(super), {});
+    auto fixture = make_reconnect_device(
+        std::move(transport), coordinator, actor_target(),
+        actor_reconnect_options());
+    auto token = fixture.device->prepare_task(
+        UpdateDeviceTaskInput{
+            .task = {
+                .kind = UpdateTaskKind::Reboot,
+                .reboot_target = PlannedRebootTarget::Fastboot,
+            },
+        },
+        {});
     CHECK(token);
-    auto result = (*token)->execute(UpdateOperationContext{
+    auto rebooted = (*token)->execute(UpdateOperationContext{
         .deadline = waiter.current + 30s,
     });
-    CHECK(!result);
-    CHECK(result.error().outbound_certainty ==
-          TransferCertainty::NotTransferred);
-    CHECK(result.error().message.find("invalid reconnect target") !=
-          std::string::npos);
+    CHECK(!rebooted);
+    CHECK(rebooted.error().device_message == "transition rejected");
+    CHECK(!rebooted.error().session_closed);
+    CHECK(!rebooted.error().session_poisoned);
+    CHECK(fixture.initial_session->state() == SessionState::Ready);
     CHECK(discovery.calls == 0U);
-    CHECK(opener.candidates.empty());
-    CHECK(script->accepted_bytes().empty());
+
+    auto product = fixture.device->getvar("product", {});
+    CHECK(product);
+    CHECK(*product == "product_a");
     CHECK(script->complete());
-    CHECK(session.state() == SessionState::Ready);
 }
 
 void reconnect_timeout_and_cancel_share_the_operation_boundary() {
@@ -1508,17 +1831,21 @@ void reconnect_timeout_and_cancel_share_the_operation_boundary() {
         auto* script = transport.get();
         script->expect_write("getvar:is-userspace");
         script->respond("OKAYno");
+        script->expect_write("getvar:product");
+        script->respond("OKAYproduct_a");
+        script->expect_write("getvar:serialno");
+        script->respond("OKAYSERIAL-A");
         script->expect_write("reboot-fastboot");
         script->respond("OKAYrebooting");
-        FastbootSession session(std::move(transport));
-        PrimitiveService service(session);
         ActorDiscovery discovery;
         discovery.steps = {std::vector<ReconnectCandidate>{}};
         ActorOpener opener;
         ActorWaiter waiter;
         ReconnectCoordinator coordinator(discovery, opener, waiter);
-        PrimitiveUpdateDevice device(
-            service, coordinator, actor_target(), actor_reconnect_options());
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, actor_target(),
+            actor_reconnect_options());
+        auto& device = *fixture.device;
         auto token = device.prepare_task(update_super_input(super), {});
         CHECK(token);
         const auto deadline = waiter.current + 3ms;
@@ -1543,10 +1870,12 @@ void reconnect_timeout_and_cancel_share_the_operation_boundary() {
         auto* script = transport.get();
         script->expect_write("getvar:is-userspace");
         script->respond("OKAYno");
+        script->expect_write("getvar:product");
+        script->respond("OKAYproduct_a");
+        script->expect_write("getvar:serialno");
+        script->respond("OKAYSERIAL-A");
         script->expect_write("reboot-fastboot");
         script->respond("OKAYrebooting");
-        FastbootSession session(std::move(transport));
-        PrimitiveService service(session);
         ActorDiscovery discovery;
         discovery.steps = {std::vector<ReconnectCandidate>{}};
         ActorOpener opener;
@@ -1554,8 +1883,10 @@ void reconnect_timeout_and_cancel_share_the_operation_boundary() {
         std::stop_source stop;
         waiter.cancel_source = &stop;
         ReconnectCoordinator coordinator(discovery, opener, waiter);
-        PrimitiveUpdateDevice device(
-            service, coordinator, actor_target(), actor_reconnect_options());
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, actor_target(),
+            actor_reconnect_options());
+        auto& device = *fixture.device;
         auto token = device.prepare_task(update_super_input(super), {});
         CHECK(token);
         const auto deadline = waiter.current + 30s;
@@ -1586,10 +1917,12 @@ void reconnect_rejects_wrong_port_product_and_mode_before_data() {
         auto* script = transport.get();
         script->expect_write("getvar:is-userspace");
         script->respond("OKAYno");
+        script->expect_write("getvar:product");
+        script->respond("OKAYproduct_a");
+        script->expect_write("getvar:serialno");
+        script->respond("OKAYSERIAL-A");
         script->expect_write("reboot-fastboot");
         script->respond("OKAYrebooting");
-        FastbootSession session(std::move(transport));
-        PrimitiveService service(session);
         const auto wanted = actor_target();
         ActorDiscovery discovery;
         discovery.steps = {std::vector<ReconnectCandidate>{
@@ -1600,8 +1933,9 @@ void reconnect_rejects_wrong_port_product_and_mode_before_data() {
         auto options = actor_reconnect_options();
         options.maximum_discovery_attempts = 1U;
         ReconnectCoordinator coordinator(discovery, opener, waiter);
-        PrimitiveUpdateDevice device(
-            service, coordinator, wanted, options);
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, wanted, options);
+        auto& device = *fixture.device;
         auto token = device.prepare_task(update_super_input(super), {});
         CHECK(token);
         auto result = (*token)->execute(UpdateOperationContext{
@@ -1618,10 +1952,12 @@ void reconnect_rejects_wrong_port_product_and_mode_before_data() {
         auto* script = transport.get();
         script->expect_write("getvar:is-userspace");
         script->respond("OKAYno");
+        script->expect_write("getvar:product");
+        script->respond("OKAYproduct_a");
+        script->expect_write("getvar:serialno");
+        script->respond("OKAYSERIAL-A");
         script->expect_write("reboot-fastboot");
         script->respond("OKAYrebooting");
-        FastbootSession session(std::move(transport));
-        PrimitiveService service(session);
         const auto wanted = actor_target();
         ActorDiscovery discovery;
         discovery.steps = {std::vector<ReconnectCandidate>{
@@ -1633,8 +1969,10 @@ void reconnect_rejects_wrong_port_product_and_mode_before_data() {
         opener.transports.push_back(std::make_unique<ScriptedTransport>());
         ActorWaiter waiter;
         ReconnectCoordinator coordinator(discovery, opener, waiter);
-        PrimitiveUpdateDevice device(
-            service, coordinator, wanted, actor_reconnect_options());
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, wanted,
+            actor_reconnect_options());
+        auto& device = *fixture.device;
         auto token = device.prepare_task(update_super_input(super), {});
         CHECK(token);
         auto result = (*token)->execute(UpdateOperationContext{
@@ -1650,10 +1988,12 @@ void reconnect_rejects_wrong_port_product_and_mode_before_data() {
         auto* script = transport.get();
         script->expect_write("getvar:is-userspace");
         script->respond("OKAYno");
+        script->expect_write("getvar:product");
+        script->respond("OKAYproduct_a");
+        script->expect_write("getvar:serialno");
+        script->respond("OKAYSERIAL-A");
         script->expect_write("reboot-fastboot");
         script->respond("OKAYrebooting");
-        FastbootSession session(std::move(transport));
-        PrimitiveService service(session);
         const auto wanted = actor_target();
         const auto passive =
             actor_candidate(wanted.physical_port, wanted.serial);
@@ -1671,8 +2011,9 @@ void reconnect_rejects_wrong_port_product_and_mode_before_data() {
         auto options = actor_reconnect_options();
         options.maximum_open_attempts = 1U;
         ReconnectCoordinator coordinator(discovery, opener, waiter);
-        PrimitiveUpdateDevice device(
-            service, coordinator, wanted, options);
+        auto fixture = make_reconnect_device(
+            std::move(transport), coordinator, wanted, options);
+        auto& device = *fixture.device;
         auto token = device.prepare_task(update_super_input(super), {});
         CHECK(token);
         auto result = (*token)->execute(UpdateOperationContext{
@@ -2029,6 +2370,8 @@ int main() {
          slot_other_legacy_fallback_and_ambiguous_topology_fail_closed},
         {"two phase fail closed",
          later_prepare_failure_sends_zero_destructive_commands},
+        {"reconnect prepare fail closed",
+         invalid_reconnect_options_block_every_task_before_flash},
         {"error bridge", primitive_error_mapping_preserves_every_diagnostic},
         {"actual device fail",
          actual_device_fail_preserves_info_and_device_message},
@@ -2048,13 +2391,21 @@ int main() {
          update_super_bootloader_mode_is_explicitly_unsupported},
         {"fastbootd replacement session",
          fastbootd_reconnect_is_shared_by_every_later_prepared_token},
+        {"reconnect generation cache",
+         preparing_after_reconnect_uses_the_new_session_generation},
         {"update-super enters fastbootd",
          update_super_can_perform_the_fastbootd_transition_itself},
         {"already fastbootd", already_fastbootd_never_reboots_or_discovers},
+        {"raw reboot fastboot boundary",
+         raw_reboot_fastboot_is_fastbootd_only},
         {"partial reboot blocks reconnect",
          partial_reboot_fastboot_never_starts_discovery},
         {"invalid reconnect identity",
          invalid_reconnect_identity_fails_before_protocol_bytes},
+        {"initial identity recheck",
+         initial_protocol_identity_is_rechecked_before_reboot},
+        {"reboot device fail remains ready",
+         explicit_reboot_fastboot_fail_keeps_the_actor_ready},
         {"reconnect timeout cancellation",
          reconnect_timeout_and_cancel_share_the_operation_boundary},
         {"reconnect identity rejection",

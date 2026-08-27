@@ -21,6 +21,48 @@ namespace kairosboot::fastboot {
 
 class PrimitiveUpdateSessionActor;
 
+// Sealed capability produced by consuming one exclusive open result. The
+// FastbootSession and its verified physical/protocol identity travel in the
+// same object, so an unrelated PrimitiveService cannot be paired with a target
+// at the actor call site. Production callers may create this only from the
+// result of the factory that performed the initial enumerate/open/probe.
+class VerifiedInitialSessionBinding final {
+public:
+    VerifiedInitialSessionBinding(const VerifiedInitialSessionBinding&) = delete;
+    VerifiedInitialSessionBinding& operator=(
+        const VerifiedInitialSessionBinding&) = delete;
+    VerifiedInitialSessionBinding(
+        VerifiedInitialSessionBinding&&) noexcept = default;
+    VerifiedInitialSessionBinding& operator=(
+        VerifiedInitialSessionBinding&&) noexcept = default;
+
+private:
+    VerifiedInitialSessionBinding(
+        std::unique_ptr<protocol::FastbootSession> session,
+        std::unique_ptr<PrimitiveService> service,
+        ReconnectTarget reconnect_target) noexcept;
+
+    std::unique_ptr<protocol::FastbootSession> session_;
+    std::unique_ptr<PrimitiveService> service_;
+    ReconnectTarget reconnect_target_{};
+
+    friend std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
+    bind_initial_reconnect_session(
+        OpenedReconnectSession,
+        ReconnectTarget);
+    friend class PrimitiveUpdateSessionActor;
+    friend class PrimitiveUpdateDevice;
+};
+
+// Side-effect-free adoption of the initial factory open result. Both an absent
+// serial and a present serial are compared exactly; physical port is always the
+// primary binding key. No production USB factory currently exposes this proof,
+// so production code must use the raw fastbootd-only adapter until it does.
+[[nodiscard]] std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
+bind_initial_reconnect_session(
+    OpenedReconnectSession opened,
+    ReconnectTarget reconnect_target);
+
 struct PrimitiveUpdateProgress final {
     std::size_t part_index{};
     std::size_t part_count{};
@@ -62,8 +104,9 @@ struct PrimitiveUpdateDeviceOptions final {
 // PrimitiveService is synchronous and retains its session-configured per-I/O
 // timeout. This adapter checks the absolute deadline before and after each
 // synchronous call; it deliberately does not reset or replace protocol timeout
-// policy for individual commands. The caller serializes access and keeps the
-// PrimitiveService/session alive until every returned token is destroyed.
+// policy for individual commands. The caller serializes access. The raw
+// adapter borrows its PrimitiveService/session; the reconnect adapter consumes
+// and owns its factory-bound initial session until every token is destroyed.
 class PrimitiveUpdateDevice final : public IUpdateDevice {
 public:
     explicit PrimitiveUpdateDevice(
@@ -72,13 +115,13 @@ public:
 
     // Enables the bootloader-to-fastbootd transition used by update packages.
     // The coordinator and its discovery/opener/waiter dependencies must outlive
-    // this adapter and every prepared token. reconnect_target must describe the
-    // already-selected USB device by physical port, fingerprint and product;
-    // serial is an additional check and is never used as the primary key.
-    PrimitiveUpdateDevice(
-        PrimitiveService& service,
+    // this adapter and every prepared token. initial_binding proves that the
+    // initial service was factory-bound to the selected physical USB identity.
+    [[nodiscard]] static std::expected<
+        std::unique_ptr<PrimitiveUpdateDevice>, UpdateDeviceError>
+    create_with_reconnect(
+        VerifiedInitialSessionBinding initial_binding,
         ReconnectCoordinator& reconnect_coordinator,
-        ReconnectTarget reconnect_target,
         ReconnectOptions reconnect_options = {},
         PrimitiveUpdateDeviceOptions options = {});
 
@@ -92,6 +135,16 @@ public:
                  const UpdateOperationContext& context) override;
 
 private:
+    struct ReconnectConstructionTag final {};
+
+    PrimitiveUpdateDevice(
+        ReconnectConstructionTag,
+        VerifiedInitialSessionBinding initial_binding,
+        ReconnectCoordinator& reconnect_coordinator,
+        ReconnectOptions reconnect_options,
+        PrimitiveUpdateDeviceOptions options);
+
+    void synchronize_session_cache_generation() noexcept;
     [[nodiscard]] std::expected<std::uint64_t, UpdateDeviceError>
     maximum_download_size(const UpdateOperationContext& context);
     [[nodiscard]] std::expected<std::string, UpdateDeviceError>
@@ -108,6 +161,7 @@ private:
 
     std::shared_ptr<PrimitiveUpdateSessionActor> session_actor_;
     PrimitiveUpdateDeviceOptions options_;
+    std::size_t cache_generation_{};
     std::optional<std::uint64_t> maximum_download_size_;
     std::optional<std::string> current_slot_;
     std::optional<std::vector<std::string>> slot_topology_;

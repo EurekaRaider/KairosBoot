@@ -393,6 +393,67 @@ void quarantine_update_super(
 
 }  // namespace
 
+VerifiedInitialSessionBinding::VerifiedInitialSessionBinding(
+    std::unique_ptr<protocol::FastbootSession> session,
+    std::unique_ptr<PrimitiveService> service,
+    ReconnectTarget reconnect_target) noexcept
+    : session_(std::move(session)),
+      service_(std::move(service)),
+      reconnect_target_(std::move(reconnect_target)) {}
+
+std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
+bind_initial_reconnect_session(
+    OpenedReconnectSession opened,
+    ReconnectTarget reconnect_target) {
+    if (reconnect_target.previous_mode != FastbootUsbMode::Bootloader ||
+        reconnect_target.required_mode != FastbootUsbMode::Fastbootd) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "initial USB session binding requires a bootloader-to-fastbootd "
+            "mode direction"));
+    }
+    if (auto valid = validate_reconnect_request(reconnect_target); !valid) {
+        auto error = local_error(
+            UpdateDeviceErrorKind::Failed,
+            "initial USB session binding has an invalid reconnect target: " +
+                valid.error().message);
+        error.native_code = valid.error().native_code;
+        return std::unexpected(std::move(error));
+    }
+    if (opened.session == nullptr ||
+        opened.session->state() != protocol::SessionState::Ready ||
+        opened.outbound_certainty !=
+            protocol::TransferCertainty::FullyTransferred) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "initial reconnect binding requires one ready, exclusively "
+            "opened session with fully transferred identity probes"));
+    }
+    const auto& verified_identity = opened.verified_identity;
+    if (verified_identity.physical_port != reconnect_target.physical_port ||
+        verified_identity.usb_fingerprint !=
+            reconnect_target.usb_fingerprint ||
+        verified_identity.serial != reconnect_target.serial ||
+        verified_identity.product != reconnect_target.product ||
+        verified_identity.mode != reconnect_target.previous_mode) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "initial PrimitiveService is not factory-bound to the complete "
+            "ReconnectTarget physical, descriptor, serial, product and mode "
+            "identity"));
+    }
+    try {
+        auto service = std::make_unique<PrimitiveService>(*opened.session);
+        return VerifiedInitialSessionBinding(
+            std::move(opened.session), std::move(service),
+            std::move(reconnect_target));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "unable to allocate the factory-bound initial service"));
+    }
+}
+
 struct FastbootdSessionAccess final {
     PrimitiveService* service{};
     bool transitioned{};
@@ -408,14 +469,15 @@ public:
         : current_service_(&service) {}
 
     PrimitiveUpdateSessionActor(
-        PrimitiveService& service,
+        VerifiedInitialSessionBinding initial_binding,
         ReconnectCoordinator& reconnect_coordinator,
-        ReconnectTarget reconnect_target,
         ReconnectOptions reconnect_options) noexcept
-        : current_service_(&service),
+        : current_service_(initial_binding.service_.get()),
           reconnect_coordinator_(&reconnect_coordinator),
-          reconnect_target_(std::move(reconnect_target)),
-          reconnect_options_(reconnect_options) {}
+          reconnect_target_(std::move(initial_binding.reconnect_target_)),
+          reconnect_options_(reconnect_options),
+          owned_session_(std::move(initial_binding.session_)),
+          owned_service_(std::move(initial_binding.service_)) {}
 
     [[nodiscard]] PrimitiveService& current_service() const noexcept {
         return *current_service_;
@@ -427,6 +489,45 @@ public:
 
     [[nodiscard]] bool reconnect_enabled() const noexcept {
         return reconnect_coordinator_ != nullptr;
+    }
+
+    [[nodiscard]] std::expected<void, UpdateDeviceError>
+    validate_fastbootd_transition_configuration() const {
+        if (!reconnect_enabled()) {
+            return {};
+        }
+        if (reconnect_target_.previous_mode != FastbootUsbMode::Bootloader ||
+            reconnect_target_.required_mode != FastbootUsbMode::Fastbootd) {
+            return std::unexpected(local_error(
+                UpdateDeviceErrorKind::Failed,
+                "fastbootd transition requires a bootloader-to-fastbootd "
+                "ReconnectTarget"));
+        }
+        if (auto valid = validate_reconnect_request(
+                reconnect_target_, reconnect_options_);
+            !valid) {
+            auto error = local_error(
+                UpdateDeviceErrorKind::Failed,
+                "fastbootd transition has an invalid reconnect target or "
+                "options: " + valid.error().message);
+            error.native_code = valid.error().native_code;
+            return std::unexpected(std::move(error));
+        }
+        return {};
+    }
+
+    [[nodiscard]] std::expected<void, UpdateDeviceError>
+    validate_fastbootd_task_preparation(
+        const UpdateOperationContext& context) const {
+        if (auto valid = validate_fastbootd_transition_configuration();
+            !valid) {
+            return valid;
+        }
+        if (reconnect_enabled()) {
+            return {};
+        }
+        return require_userspace_fastboot(
+            current_service(), context, "the preparation mode check");
     }
 
     [[nodiscard]] std::expected<FastbootdSessionAccess, UpdateDeviceError>
@@ -443,22 +544,9 @@ public:
             };
         }
 
-        if (reconnect_target_.previous_mode != FastbootUsbMode::Bootloader ||
-            reconnect_target_.required_mode != FastbootUsbMode::Fastbootd) {
-            return std::unexpected(local_error(
-                UpdateDeviceErrorKind::Failed,
-                "fastbootd transition requires a bootloader-to-fastbootd "
-                "ReconnectTarget"));
-        }
-        if (auto valid = validate_reconnect_request(
-                reconnect_target_, reconnect_options_);
+        if (auto valid = validate_fastbootd_transition_configuration();
             !valid) {
-            auto error = local_error(
-                UpdateDeviceErrorKind::Failed,
-                "fastbootd transition has an invalid reconnect target: " +
-                    valid.error().message);
-            error.native_code = valid.error().native_code;
-            return std::unexpected(std::move(error));
+            return std::unexpected(std::move(valid.error()));
         }
         if (unavailable_after_transition_) {
             auto error = local_error(
@@ -507,10 +595,22 @@ public:
                 return std::unexpected(std::move(*stopped));
             }
             if (mode->terminal.payload == "yes") {
-                return FastbootdSessionAccess{
-                    .service = &service,
-                    .transitioned = false,
-                };
+                if (generation_ != 0U) {
+                    return FastbootdSessionAccess{
+                        .service = &service,
+                        .transitioned = false,
+                    };
+                }
+                auto error = local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "initial session mode no longer matches its "
+                    "factory-bound bootloader identity",
+                    mode->phase, mode->outbound_certainty);
+                error.informational = std::move(mode->informational);
+                error.inbound_expected = mode->inbound_expected;
+                error.inbound_transferred = mode->inbound_transferred;
+                error.inbound_certainty = mode->inbound_certainty;
+                return std::unexpected(std::move(error));
             }
             if (mode->terminal.payload != "no") {
                 auto error = local_error(
@@ -528,6 +628,19 @@ public:
                 UpdateDeviceErrorKind::Failed,
                 "fastbootd transition reached an invalid mode state"));
         }
+
+        auto product = verify_initial_identity_variable(
+            service, "product", reconnect_target_.product, context);
+        if (!product) {
+            return std::unexpected(std::move(product.error()));
+        }
+        if (reconnect_target_.serial) {
+            auto serial = verify_initial_identity_variable(
+                service, "serialno", *reconnect_target_.serial, context);
+            if (!serial) {
+                return std::unexpected(std::move(serial.error()));
+            }
+        }
         if (auto stopped = interruption(
                 context,
                 "fastbootd transition was interrupted before reboot-fastboot")) {
@@ -539,6 +652,8 @@ public:
             service, context.cancellation, reboot_cancel_forwarded,
             [&service] { return service.reboot(RebootTarget::Fastboot); });
         if (!rebooted) {
+            const bool explicit_device_fail =
+                rebooted.error().code == PrimitiveErrorCode::DeviceFail;
             auto mapped = map_primitive_update_error(
                 std::move(rebooted.error()), context);
             retain_quarantine_if_forwarded(mapped,
@@ -547,9 +662,13 @@ public:
             // particular, PartialOrUnknown cannot be converted into a scan or
             // guessed retry.
             if (mapped.session_closed || mapped.session_poisoned ||
-                mapped.outbound_certainty !=
-                    protocol::TransferCertainty::NotTransferred) {
+                (!explicit_device_fail &&
+                 mapped.outbound_certainty !=
+                     protocol::TransferCertainty::NotTransferred)) {
                 unavailable_after_transition_ = true;
+                if (!mapped.session_closed) {
+                    mapped.session_poisoned = true;
+                }
             }
             describe_task_failure(
                 mapped, 0U, 2U,
@@ -670,8 +789,8 @@ public:
             auto replacement_session = std::move(reconnected->session);
             auto replacement_service =
                 std::make_unique<PrimitiveService>(*replacement_session);
-            owned_service_.reset();
-            owned_session_.reset();
+            retired_service_ = std::move(owned_service_);
+            retired_session_ = std::move(owned_session_);
             owned_session_ = std::move(replacement_session);
             owned_service_ = std::move(replacement_service);
             current_service_ = owned_service_.get();
@@ -694,10 +813,60 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::expected<void, UpdateDeviceError>
+    verify_initial_identity_variable(
+        PrimitiveService& service,
+        const std::string_view name,
+        const std::string_view expected,
+        const UpdateOperationContext& context) {
+        if (auto stopped = interruption(
+                context,
+                "fastbootd transition was interrupted before initial " +
+                    std::string(name) + " verification")) {
+            return std::unexpected(std::move(*stopped));
+        }
+        std::atomic<bool> cancellation_forwarded{false};
+        auto reply = invoke_with_cancellation(
+            service, context.cancellation, cancellation_forwarded,
+            [&service, name] { return service.getvar(name); });
+        if (!reply) {
+            auto mapped = map_primitive_update_error(
+                std::move(reply.error()), context);
+            retain_quarantine_if_forwarded(mapped, cancellation_forwarded);
+            return std::unexpected(std::move(mapped));
+        }
+        if (auto stopped = interruption_after_reply(
+                context,
+                "fastbootd transition was interrupted after initial " +
+                    std::string(name) + " verification",
+                *reply)) {
+            retain_quarantine_if_forwarded(*stopped, cancellation_forwarded);
+            return std::unexpected(std::move(*stopped));
+        }
+        if (reply->terminal.payload != expected) {
+            auto error = local_error(
+                UpdateDeviceErrorKind::Failed,
+                "initial session " + std::string(name) +
+                    " no longer matches its factory-bound USB identity",
+                reply->phase, reply->outbound_certainty);
+            error.informational = std::move(reply->informational);
+            error.inbound_expected = reply->inbound_expected;
+            error.inbound_transferred = reply->inbound_transferred;
+            error.inbound_certainty = reply->inbound_certainty;
+            return std::unexpected(std::move(error));
+        }
+        return {};
+    }
+
     PrimitiveService* current_service_{};
     ReconnectCoordinator* reconnect_coordinator_{};
     ReconnectTarget reconnect_target_{};
     ReconnectOptions reconnect_options_{};
+    // Retain the one retired initial session until every prepared token and
+    // scripted/HIL observer has finished. It is closed before publication and
+    // can never again be selected by current_service_.
+    std::unique_ptr<protocol::FastbootSession> retired_session_;
+    std::unique_ptr<PrimitiveService> retired_service_;
     std::unique_ptr<protocol::FastbootSession> owned_session_;
     std::unique_ptr<PrimitiveService> owned_service_;
     std::size_t generation_{};
@@ -1257,8 +1426,7 @@ public:
             describe_task_failure(*stopped, 0U, 1U);
             return std::unexpected(std::move(*stopped));
         }
-        if (target_ == RebootTarget::Fastboot &&
-            session_actor_->reconnect_enabled()) {
+        if (target_ == RebootTarget::Fastboot) {
             auto fastbootd = session_actor_->ensure_fastbootd(context);
             if (!fastbootd) {
                 return std::unexpected(std::move(fastbootd.error()));
@@ -1341,17 +1509,44 @@ PrimitiveUpdateDevice::PrimitiveUpdateDevice(
       options_(std::move(options)) {}
 
 PrimitiveUpdateDevice::PrimitiveUpdateDevice(
-    PrimitiveService& service,
+    ReconnectConstructionTag,
+    VerifiedInitialSessionBinding initial_binding,
     ReconnectCoordinator& reconnect_coordinator,
-    ReconnectTarget reconnect_target,
     ReconnectOptions reconnect_options,
     PrimitiveUpdateDeviceOptions options)
     : session_actor_(std::make_shared<PrimitiveUpdateSessionActor>(
-          service,
+          std::move(initial_binding),
           reconnect_coordinator,
-          std::move(reconnect_target),
           reconnect_options)),
       options_(std::move(options)) {}
+
+std::expected<std::unique_ptr<PrimitiveUpdateDevice>, UpdateDeviceError>
+PrimitiveUpdateDevice::create_with_reconnect(
+    VerifiedInitialSessionBinding initial_binding,
+    ReconnectCoordinator& reconnect_coordinator,
+    const ReconnectOptions reconnect_options,
+    PrimitiveUpdateDeviceOptions options) {
+    try {
+        return std::unique_ptr<PrimitiveUpdateDevice>(
+            new PrimitiveUpdateDevice(
+                ReconnectConstructionTag{}, std::move(initial_binding),
+                reconnect_coordinator, reconnect_options,
+                std::move(options)));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "unable to allocate the reconnect-capable update actor"));
+    } catch (const std::exception& error) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "unable to construct the reconnect-capable update actor: " +
+                std::string(error.what())));
+    } catch (...) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "unable to construct the reconnect-capable update actor"));
+    }
+}
 
 std::expected<std::string, UpdateDeviceError> PrimitiveUpdateDevice::getvar(
     const std::string_view name,
@@ -1398,9 +1593,22 @@ std::expected<std::string, UpdateDeviceError> PrimitiveUpdateDevice::getvar(
     return std::move(result->terminal.payload);
 }
 
+void PrimitiveUpdateDevice::synchronize_session_cache_generation() noexcept {
+    const auto generation = session_actor_->generation();
+    if (cache_generation_ == generation) {
+        return;
+    }
+    maximum_download_size_.reset();
+    current_slot_.reset();
+    slot_topology_.reset();
+    has_slot_.clear();
+    cache_generation_ = generation;
+}
+
 std::expected<std::uint64_t, UpdateDeviceError>
 PrimitiveUpdateDevice::maximum_download_size(
     const UpdateOperationContext& context) {
+    synchronize_session_cache_generation();
     if (maximum_download_size_) {
         return *maximum_download_size_;
     }
@@ -1430,6 +1638,7 @@ PrimitiveUpdateDevice::current_slot(
             context, "slot resolution was interrupted before current-slot")) {
         return std::unexpected(std::move(*stopped));
     }
+    synchronize_session_cache_generation();
     if (current_slot_) {
         return *current_slot_;
     }
@@ -1463,6 +1672,7 @@ PrimitiveUpdateDevice::slot_topology(
             context, "slot resolution was interrupted before topology query")) {
         return std::unexpected(std::move(*stopped));
     }
+    synchronize_session_cache_generation();
     if (slot_topology_) {
         return *slot_topology_;
     }
@@ -1535,6 +1745,7 @@ PrimitiveUpdateDevice::partition_has_slot(
             context, "slot resolution was interrupted before has-slot")) {
         return std::unexpected(std::move(*stopped));
     }
+    synchronize_session_cache_generation();
     if (const auto found = has_slot_.find(partition);
         found != has_slot_.end()) {
         return found->second;
@@ -1773,6 +1984,14 @@ PrimitiveUpdateDevice::prepare_task(
                     UpdateDeviceErrorKind::Failed,
                     "reboot task contains an invalid target"));
             }
+            if (*target == RebootTarget::Fastboot) {
+                auto valid =
+                    session_actor_->validate_fastbootd_task_preparation(
+                        context);
+                if (!valid) {
+                    return std::unexpected(std::move(valid.error()));
+                }
+            }
             std::unique_ptr<IPreparedDeviceTask> token =
                 std::make_unique<PreparedRebootTask>(session_actor_, *target);
             return token;
@@ -1788,6 +2007,12 @@ PrimitiveUpdateDevice::prepare_task(
                     UpdateDeviceErrorKind::Failed,
                     "update-super task and complete immutable "
                     "super_empty.img binding are inconsistent"));
+            }
+
+            auto transition =
+                session_actor_->validate_fastbootd_task_preparation(context);
+            if (!transition) {
+                return std::unexpected(std::move(transition.error()));
             }
 
             const auto& artifact = input.super_artifact->artifact();
@@ -1821,12 +2046,6 @@ PrimitiveUpdateDevice::prepare_task(
             const bool resolve_transaction_at_execution =
                 session_actor_->reconnect_enabled();
             if (!resolve_transaction_at_execution) {
-                if (auto userspace = require_userspace_fastboot(
-                        session_actor_->current_service(), context,
-                        "the preparation mode check");
-                    !userspace) {
-                    return std::unexpected(std::move(userspace.error()));
-                }
                 auto partition = resolve_super_partition_name(
                     session_actor_->current_service(), context);
                 if (!partition) {
