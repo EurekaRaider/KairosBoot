@@ -42,6 +42,13 @@ struct UpdateDeviceError final {
     bool session_poisoned{};
     bool session_closed{};
     int native_code{};
+    // Aggregate outcome of this immutable prepared task. The protocol fields
+    // above always preserve the exact current PrimitiveError; these fields
+    // separately describe progress across multi-part task actions.
+    protocol::TransferCertainty task_certainty{
+        protocol::TransferCertainty::NotTransferred};
+    std::size_t completed_actions{};
+    std::size_t total_actions{};
 };
 
 struct UpdateOperationContext final {

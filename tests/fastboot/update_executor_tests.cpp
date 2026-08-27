@@ -974,6 +974,9 @@ void device_error_fidelity_survives_task_failed_observer_exception() {
         .session_poisoned = true,
         .session_closed = true,
         .native_code = 110,
+        .task_certainty = TransferCertainty::PartialOrUnknown,
+        .completed_actions = 3U,
+        .total_actions = 5U,
     };
     UpdateExecutorOptions options;
     options.observer = [](const auto& item) {
@@ -1003,6 +1006,9 @@ void device_error_fidelity_survives_task_failed_observer_exception() {
     CHECK(error.session_poisoned);
     CHECK(error.session_closed);
     CHECK(error.native_code == 110);
+    CHECK(error.task_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(error.completed_actions == 3U);
+    CHECK(error.total_actions == 5U);
     CHECK(result.error().secondary_observer_error);
     CHECK(result.error().secondary_observer_error->find("observer secondary failure") !=
           std::string::npos);
