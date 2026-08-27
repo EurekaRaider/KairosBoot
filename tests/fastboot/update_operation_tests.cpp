@@ -115,6 +115,11 @@ public:
                          const std::size_t index) noexcept
         : state_(std::move(state)), index_(index) {}
 
+    [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+        const noexcept override {
+        return 0U;
+    }
+
     [[nodiscard]] std::expected<void, UpdateDeviceError>
     execute(const UpdateOperationContext& context) const override {
         if (state_->prepare_calls != state_->expected_tasks) {

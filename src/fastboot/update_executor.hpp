@@ -85,6 +85,11 @@ public:
     IPreparedDeviceTask& operator=(const IPreparedDeviceTask&) = delete;
     virtual ~IPreparedDeviceTask() = default;
 
+    // Exact Fastboot DATA payload bytes this immutable token will send from
+    // the host. This excludes command and response framing.
+    [[nodiscard]] virtual std::uint64_t host_to_device_data_bytes()
+        const noexcept = 0;
+
     [[nodiscard]] virtual std::expected<void, UpdateDeviceError>
     execute(const UpdateOperationContext& context) const = 0;
 };
