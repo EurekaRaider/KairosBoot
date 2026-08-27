@@ -446,6 +446,9 @@ void root_and_ancestor_replacement_after_capture_cannot_redirect_resolution() {
     CHECK(cached_after_replacement);
     CHECK(*cached_after_replacement == *after_root_replacement);
 
+    // Windows rejects ancestor renames while a descendant handle is retained;
+    // the root replacement above is the equivalent supported native operation.
+#if !defined(_WIN32)
     const auto trusted_anchor = temporary.path() / "trusted-anchor";
     const auto outside_anchor = temporary.path() / "outside-anchor";
     std::filesystem::create_directories(trusted_anchor / "root/images");
@@ -466,6 +469,7 @@ void root_and_ancestor_replacement_after_capture_cannot_redirect_resolution() {
             std::filesystem::path("images") / "system.img");
     CHECK(after_ancestor_replacement);
     CHECK(read_source(*(*after_ancestor_replacement)->source) == "inside");
+#endif
 }
 
 void concurrent_root_relative_resolves_share_the_captured_boundary() {

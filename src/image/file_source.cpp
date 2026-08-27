@@ -332,12 +332,16 @@ open_relative_windows(const HANDLE directory,
         const auto kind = native_error == ERROR_FILE_NOT_FOUND ||
                                   native_error == ERROR_PATH_NOT_FOUND
                               ? FileSourceErrorKind::NotFound
+                          : native_error == ERROR_DIRECTORY
+                              ? FileSourceErrorKind::NotRegularFile
                               : FileSourceErrorKind::OpenFailed;
         return std::unexpected(file_error(
             kind,
             windows_error(native_error),
             kind == FileSourceErrorKind::NotFound
                 ? "image file below directory does not exist"
+            : kind == FileSourceErrorKind::NotRegularFile
+                ? "image path below directory is not a regular file"
                 : "unable to open image path relative to its directory handle"));
     }
     if (raw_handle == nullptr || raw_handle == INVALID_HANDLE_VALUE) {

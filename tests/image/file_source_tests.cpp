@@ -284,6 +284,9 @@ void directory_boundary_survives_root_and_ancestor_replacement() {
     CHECK(read && *read == contents.size());
     CHECK(as_string(contents) == "inside");
 
+    // Windows can rename the retained root itself but not an open handle's
+    // ancestor; the root and alias-retarget cases cover its native guarantee.
+#if !defined(_WIN32)
     const auto trusted_anchor = temporary.path() / "trusted-anchor";
     const auto outside_anchor = temporary.path() / "outside-anchor";
     std::filesystem::create_directories(trusted_anchor / "root/images");
@@ -307,10 +310,11 @@ void directory_boundary_survives_root_and_ancestor_replacement() {
     read = (*after_ancestor_replacement)->read_at(0U, contents);
     CHECK(read && *read == contents.size());
     CHECK(as_string(contents) == "inside");
+#endif
 
     const auto root_alias = temporary.path() / "root-alias";
     std::filesystem::create_directory_symlink(
-        retained_anchor / "root", root_alias, link_error);
+        retained_root, root_alias, link_error);
     CHECK(!link_error);
     auto alias_boundary =
         kairosboot::image::FileDirectoryBoundary::capture(root_alias);

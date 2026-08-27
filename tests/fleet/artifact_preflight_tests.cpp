@@ -377,6 +377,9 @@ void root_boundary_rejects_child_escape_and_parent_replacement() {
     CHECK(through_root_alias);
     CHECK(read_prepared(through_root_alias->at(0U)) == "inside");
 
+    // Windows rejects ancestor renames while a descendant handle is retained;
+    // root replacement and alias retargeting remain covered above.
+#if !defined(_WIN32)
     const auto trusted_anchor = temporary.path() / "trusted-anchor";
     const auto outside_anchor = temporary.path() / "outside-anchor";
     std::filesystem::create_directories(trusted_anchor / "root/images");
@@ -395,6 +398,7 @@ void root_boundary_rejects_child_escape_and_parent_replacement() {
         alias_plan, trusted_anchor / "root", ancestor_options);
     CHECK(after_ancestor_replacement);
     CHECK(read_prepared(after_ancestor_replacement->at(0U)) == "inside");
+#endif
 
     const auto original_parent = root / "images-original";
     ArtifactPreflightOptions race_options;
