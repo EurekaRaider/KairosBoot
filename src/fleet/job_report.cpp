@@ -1365,6 +1365,12 @@ struct JobReportBuilder::Implementation final {
                     JobReportErrorKind::AlreadyTerminal,
                     "running JobReport is no longer available"));
             }
+            if (!require_terminal && state.cancellation_latched) {
+                return std::unexpected(make_error(
+                    JobReportErrorKind::CancellationLatched,
+                    "running JobReport cannot be published after cancellation "
+                    "is latched"));
+            }
             copy = state.report;
         }
         auto validation = validate_report_data(copy);
@@ -1694,13 +1700,15 @@ std::expected<void, JobReportError> JobReportBuilder::advance_step(
         }
         auto& device = **selected;
         if (device.state != ReportWorkState::Running ||
-            completed_step_index + 1U >= device.steps.size()) {
+            completed_step_index >= device.steps.size() ||
+            completed_step_index == device.steps.size() - 1U) {
             return std::expected<void, JobReportError>{std::unexpected(
                 make_error(JobReportErrorKind::InvalidTransition,
                            "step advance index is invalid"))};
         }
+        const auto next_step_index = completed_step_index + 1U;
         auto& completed = device.steps[completed_step_index];
-        auto& next = device.steps[completed_step_index + 1U];
+        auto& next = device.steps[next_step_index];
         if (completed.state != ReportWorkState::Running ||
             next.state != ReportWorkState::Pending ||
             !flash_is_complete(completed)) {
@@ -1815,6 +1823,20 @@ std::expected<void, JobReportError> JobReportBuilder::fail_device_preflight(
     const std::size_t device_index,
     std::optional<std::string> observed_product,
     std::string finished_at,
+    ReportError error) {
+    return fail_device_preflight_with_reason(
+        device_index,
+        std::move(observed_product),
+        std::move(finished_at),
+        std::move(error),
+        ReportSkipReason::DevicePreflightFailure);
+}
+
+std::expected<void, JobReportError>
+JobReportBuilder::fail_device_preflight_with_reason(
+    const std::size_t device_index,
+    std::optional<std::string> observed_product,
+    std::string finished_at,
     ReportError error,
     const ReportSkipReason reason) {
     if (reason != ReportSkipReason::DevicePreflightFailure &&
@@ -1858,6 +1880,13 @@ std::expected<void, JobReportError> JobReportBuilder::fail_device_preflight(
                 make_error(JobReportErrorKind::InvalidTransition,
                            "preflight failure occurred after execution began"))};
         }
+        if (reason == ReportSkipReason::ProductMismatch && observed_product &&
+            *observed_product == device.expected_product) {
+            return std::expected<void, JobReportError>{std::unexpected(
+                make_error(JobReportErrorKind::InvalidTransition,
+                           "matching product cannot be published as product "
+                           "mismatch"))};
+        }
         device.observed_product = std::move(observed_product);
         auto scoped = scoped_error(std::move(error), device.identifier);
         device.state = ReportWorkState::Failed;
@@ -1874,26 +1903,12 @@ std::expected<void, JobReportError> JobReportBuilder::fail_product_preflight(
     std::optional<std::string> observed_product,
     std::string finished_at,
     ReportError error) {
-    if (observed_product) {
-        std::lock_guard lock{implementation_->mutex};
-        if (device_index >= implementation_->state.report.devices.size()) {
-            return std::unexpected(make_error(
-                JobReportErrorKind::InvalidArgument,
-                "device index is out of range"));
-        }
-        if (*observed_product == implementation_->state.report
-                                     .devices[device_index]
-                                     .expected_product) {
-            return std::unexpected(make_error(
-                JobReportErrorKind::InvalidTransition,
-                "matching product cannot be published as product mismatch"));
-        }
-    }
-    return fail_device_preflight(device_index,
-                                 std::move(observed_product),
-                                 std::move(finished_at),
-                                 std::move(error),
-                                 ReportSkipReason::ProductMismatch);
+    return fail_device_preflight_with_reason(
+        device_index,
+        std::move(observed_product),
+        std::move(finished_at),
+        std::move(error),
+        ReportSkipReason::ProductMismatch);
 }
 
 std::expected<void, JobReportError> JobReportBuilder::skip_pending_device(
@@ -1953,6 +1968,18 @@ std::expected<void, JobReportError> JobReportBuilder::request_cancellation(
             return std::expected<void, JobReportError>{std::unexpected(
                 make_error(JobReportErrorKind::CancellationLatched,
                            "job cancellation was already latched"))};
+        }
+        const auto unresolved_product = std::ranges::find_if(
+            state.report.devices, [](const auto& device) {
+                return device.state == ReportWorkState::Pending &&
+                       (!device.observed_product ||
+                        *device.observed_product != device.expected_product);
+            });
+        if (unresolved_product != state.report.devices.end()) {
+            return std::expected<void, JobReportError>{std::unexpected(
+                make_error(JobReportErrorKind::InvalidTransition,
+                           "device product outcome is not complete; use a "
+                           "zero-device cancellation report before binding"))};
         }
         state.cancellation_latched = true;
         state.cancellation_error = std::move(error);
@@ -2111,6 +2138,13 @@ std::expected<void, JobReportError> JobReportBuilder::finish_failed(
                     make_error(JobReportErrorKind::InvalidTransition,
                                "job-level preflight failure occurred after "
                                "destructive work"))};
+            }
+            if (device.state == ReportWorkState::Failed &&
+                !all_steps(device, ReportWorkState::Skipped)) {
+                return std::expected<void, JobReportError>{std::unexpected(
+                    make_error(JobReportErrorKind::InvalidTransition,
+                               "job-level preflight failure cannot wrap an "
+                               "executed device failure"))};
             }
             if (device.state == ReportWorkState::Pending) {
                 if (!device.observed_product ||

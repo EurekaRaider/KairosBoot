@@ -259,8 +259,7 @@ public:
         std::size_t device_index,
         std::optional<std::string> observed_product,
         std::string finished_at,
-        ReportError error,
-        ReportSkipReason reason = ReportSkipReason::DevicePreflightFailure);
+        ReportError error);
     [[nodiscard]] std::expected<void, JobReportError> fail_product_preflight(
         std::size_t device_index,
         std::optional<std::string> observed_product,
@@ -271,9 +270,12 @@ public:
         std::string finished_at,
         ReportSkipReason reason);
 
-    // Once latched, non-cancellation transitions and normal publication fail
-    // closed. finish_cancelled() may be called after transport drain and wins
-    // over any device successes or failures committed before the latch.
+    // Once latched, non-cancellation transitions, running snapshots, and normal
+    // publication fail closed. A builder containing concrete devices accepts
+    // cancellation only after each device has a terminal product outcome. A
+    // cancellation before device binding/product verification is represented
+    // by a zero-device builder/report. finish_cancelled() may be called after
+    // transport drain and wins over successes or failures committed earlier.
     [[nodiscard]] std::expected<void, JobReportError> request_cancellation(
         ReportError error);
     [[nodiscard]] std::expected<void, JobReportError> finish_cancelled(
@@ -299,6 +301,13 @@ private:
     struct Implementation;
     explicit JobReportBuilder(std::unique_ptr<Implementation> implementation)
         noexcept;
+    [[nodiscard]] std::expected<void, JobReportError>
+    fail_device_preflight_with_reason(
+        std::size_t device_index,
+        std::optional<std::string> observed_product,
+        std::string finished_at,
+        ReportError error,
+        ReportSkipReason reason);
 
     std::unique_ptr<Implementation> implementation_;
 };

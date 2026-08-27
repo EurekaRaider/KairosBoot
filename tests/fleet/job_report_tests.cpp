@@ -298,6 +298,16 @@ void product_mismatch_is_all_skipped() {
     mismatch.observed_product = "product_b";
     auto builder = make_builder({std::move(mismatch)});
     CHECK(!builder.running_snapshot());
+    const auto matching_product = builder.fail_product_preflight(
+        0U,
+        std::optional<std::string>{"product_a"},
+        "2026-08-27T06:00:01Z",
+        ReportError{.code = KB_E_DEVICE_FAIL,
+                    .message = "matching product is not a mismatch",
+                    .transfer_certainty = KB_TRANSFER_NOT_SENT});
+    CHECK(!matching_product);
+    CHECK(matching_product.error().kind ==
+          JobReportErrorKind::InvalidTransition);
     CHECK(builder.fail_product_preflight(
         0U,
         std::optional<std::string>{"product_b"},
@@ -373,6 +383,10 @@ void cancellation_latch_wins_after_success_and_failure() {
                             device_failure(),
                             ReportSkipReason::FollowingStepFailure));
     CHECK(builder.request_cancellation(cancellation()));
+    const auto latched_snapshot = builder.running_snapshot();
+    CHECK(!latched_snapshot);
+    CHECK(latched_snapshot.error().kind ==
+          JobReportErrorKind::CancellationLatched);
 
     const auto normal = builder.finish("2026-08-27T06:00:03Z");
     CHECK(!normal);
@@ -387,6 +401,43 @@ void cancellation_latch_wins_after_success_and_failure() {
     CHECK(report->summary().cancelled == 1U);
     CHECK(report->devices()[2].steps[0].state ==
           ReportWorkState::Cancelled);
+}
+
+void unresolved_product_rejects_cancellation_without_latching() {
+    auto unresolved = device("usb:5-4", "SERIAL-UNVERIFIED");
+    unresolved.observed_product.reset();
+    auto builder = make_builder({std::move(unresolved)});
+
+    const auto rejected = builder.request_cancellation(cancellation());
+    CHECK(!rejected);
+    CHECK(rejected.error().kind == JobReportErrorKind::InvalidTransition);
+    CHECK(builder.verify_product(0U, "product_a"));
+    CHECK(builder.running_snapshot());
+
+    CHECK(builder.request_cancellation(cancellation()));
+    const auto hidden = builder.running_snapshot();
+    CHECK(!hidden);
+    CHECK(hidden.error().kind == JobReportErrorKind::CancellationLatched);
+    CHECK(builder.finish_cancelled("2026-08-27T06:00:01Z"));
+    auto report = builder.terminal_snapshot();
+    CHECK(report);
+    CHECK(report->state() == ReportState::Cancelled);
+    CHECK(report->devices()[0].state == ReportWorkState::Cancelled);
+}
+
+void pre_binding_cancellation_uses_zero_device_report() {
+    auto builder = make_builder({});
+    CHECK(builder.request_cancellation(cancellation()));
+    const auto hidden = builder.running_snapshot();
+    CHECK(!hidden);
+    CHECK(hidden.error().kind == JobReportErrorKind::CancellationLatched);
+    CHECK(builder.finish_cancelled("2026-08-27T06:00:01Z"));
+    auto report = builder.terminal_snapshot();
+    CHECK(report);
+    CHECK(report->state() == ReportState::Cancelled);
+    CHECK(report->devices().empty());
+    CHECK(report->summary().total == 0U);
+    CHECK(report->error()->code == KB_E_CANCELLED);
 }
 
 void transport_drain_cancellation_blocks_racing_failure() {
@@ -437,6 +488,13 @@ void illegal_transitions_and_time_order_fail_closed() {
     CHECK(!builder.finish("2026-08-27T06:00:01Z"));
     CHECK(!builder.begin_first_step(0U, "2026-08-27T05:59:59Z"));
     CHECK(builder.begin_first_step(0U, "2026-08-27T06:00:01Z"));
+    const auto overflow = builder.advance_step(
+        0U,
+        std::numeric_limits<std::size_t>::max(),
+        "2026-08-27T06:00:02Z",
+        "2026-08-27T06:00:03Z");
+    CHECK(!overflow);
+    CHECK(overflow.error().kind == JobReportErrorKind::InvalidTransition);
     CHECK(!builder.update_flash_progress(0U, 0U, 4097U));
     CHECK(!builder.advance_step(0U,
                                 0U,
@@ -475,6 +533,49 @@ void illegal_transitions_and_time_order_fail_closed() {
         plan_digest(),
         "2026-08-27T06:00:00Z",
         {device("usb:7-3", "SERIAL-ENUM", {unknown_operation})}));
+}
+
+void job_failure_cannot_wrap_executed_device_failure() {
+    auto executed = make_builder({device("usb:7-4", "SERIAL-EXECUTED")});
+    CHECK(executed.begin_first_step(0U, "2026-08-27T06:00:01Z"));
+    CHECK(executed.fail_step(0U,
+                             0U,
+                             "2026-08-27T06:00:02Z",
+                             device_failure(),
+                             ReportSkipReason::FollowingStepFailure));
+    const auto wrapped = executed.finish_failed(
+        "2026-08-27T06:00:03Z", preflight_failure());
+    CHECK(!wrapped);
+    CHECK(wrapped.error().kind == JobReportErrorKind::InvalidTransition);
+    CHECK(executed.finish("2026-08-27T06:00:03Z"));
+    auto executed_report = executed.terminal_snapshot();
+    CHECK(executed_report);
+    CHECK(executed_report->state() == ReportState::Failed);
+    CHECK(!executed_report->error());
+    CHECK(executed_report->devices()[0].steps[0].state ==
+          ReportWorkState::Failed);
+
+    auto preflight = device("usb:7-5", "SERIAL-PREFLIGHT");
+    preflight.observed_product.reset();
+    auto allowed = make_builder({std::move(preflight)});
+    CHECK(allowed.fail_device_preflight(
+        0U,
+        std::nullopt,
+        "2026-08-27T06:00:01Z",
+        ReportError{.code = KB_E_NO_DEVICE,
+                    .message = "device unavailable during preflight",
+                    .transfer_certainty = KB_TRANSFER_NOT_SENT}));
+    CHECK(allowed.finish_failed("2026-08-27T06:00:02Z",
+                                preflight_failure()));
+    auto allowed_report = allowed.terminal_snapshot();
+    CHECK(allowed_report);
+    CHECK(allowed_report->state() == ReportState::Failed);
+    CHECK(allowed_report->error()->code == KB_E_INVALID_ARGUMENT);
+    CHECK(allowed_report->devices()[0].state == ReportWorkState::Failed);
+    CHECK(allowed_report->devices()[0].steps[0].state ==
+          ReportWorkState::Skipped);
+    CHECK(allowed_report->devices()[0].steps[0].skip_reason ==
+          ReportSkipReason::DevicePreflightFailure);
 }
 
 void every_stable_kb_error_code_has_the_frozen_status_name() {
@@ -621,7 +722,7 @@ void utf8_and_fractional_timestamp_profile_is_frozen() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 15U> tests{
+    const std::array<Test, 18U> tests{
         Test{"exact golden", &exact_golden_and_partial_failure},
         Test{"running snapshots", &running_snapshots_are_owned_and_immutable},
         Test{"all operations", &every_operation_and_success_state_are_canonical},
@@ -631,9 +732,15 @@ int main() {
              &products_can_be_verified_incrementally_before_publication},
         Test{"policy skip reason", &policy_stop_requires_typed_skip_reason},
         Test{"cancellation wins", &cancellation_latch_wins_after_success_and_failure},
+        Test{"product barrier cancellation",
+             &unresolved_product_rejects_cancellation_without_latching},
+        Test{"zero-device cancellation",
+             &pre_binding_cancellation_uses_zero_device_report},
         Test{"transport drain cancellation",
              &transport_drain_cancellation_blocks_racing_failure},
         Test{"illegal transitions", &illegal_transitions_and_time_order_fail_closed},
+        Test{"job failure scope",
+             &job_failure_cannot_wrap_executed_device_failure},
         Test{"stable KB error mapping",
              &every_stable_kb_error_code_has_the_frozen_status_name},
         Test{"strong exception guarantee",
