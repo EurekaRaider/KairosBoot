@@ -279,6 +279,15 @@ public:
 
     [[nodiscard]] std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> enumerate(
         const UsbInterfaceFilter& filter) const;
+    // Passive descriptor/topology enumeration with cooperative cancellation at
+    // every owner-controlled native stage boundary. A single synchronous
+    // libusb/OS call already in progress is allowed to return; the result is
+    // discarded if cancellation or the absolute deadline won before the next
+    // boundary. No worker is detached and no protocol bytes are emitted.
+    [[nodiscard]] std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError>
+    enumerate(const UsbInterfaceFilter& filter,
+              std::chrono::steady_clock::time_point deadline,
+              std::stop_token cancellation) const;
     [[nodiscard]] std::expected<std::unique_ptr<LibusbBulkOutBackend>, LibusbRuntimeError>
     open_bulk_out(const UsbDeviceInfo& device, BulkOutOptions options = {});
     // Cancellation/deadline checks happen before publication and at every

@@ -2220,16 +2220,55 @@ void LibusbRuntime::stop() noexcept {
 
 std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enumerate(
     const UsbInterfaceFilter& filter) const {
-    const auto topology_cancellation =
-        state_->topology_stop_source.get_token();
+    return enumerate(filter, SteadyClock::time_point::max(), {});
+}
+
+std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError>
+LibusbRuntime::enumerate(
+    const UsbInterfaceFilter& filter,
+    const SteadyClock::time_point deadline,
+    const std::stop_token cancellation) const {
+    const auto runtime_cancellation = state_->topology_stop_source.get_token();
+    std::stop_source combined_stop_source;
+    std::stop_callback caller_stop_callback{
+        cancellation,
+        [&combined_stop_source] { combined_stop_source.request_stop(); }};
+    std::stop_callback runtime_stop_callback{
+        runtime_cancellation,
+        [&combined_stop_source] { combined_stop_source.request_stop(); }};
+    const auto combined_cancellation = combined_stop_source.get_token();
+    const auto termination_error = [&]() -> std::optional<LibusbRuntimeError> {
+        if (runtime_cancellation.stop_requested() ||
+            !state_->accepting.load(std::memory_order_acquire)) {
+            return LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped};
+        }
+        if (cancellation.stop_requested()) {
+            return LibusbRuntimeError{
+                LibusbRuntimeErrorKind::operation_cancelled};
+        }
+        if (SteadyClock::now() >= deadline) {
+            return LibusbRuntimeError{
+                LibusbRuntimeErrorKind::operation_timed_out,
+                LIBUSB_ERROR_TIMEOUT};
+        }
+        return std::nullopt;
+    };
+    if (const auto terminated = termination_error()) {
+        return std::unexpected(*terminated);
+    }
     std::unique_lock lifecycle(state_->stop_mutex);
-    if (!state_->accepting.load(std::memory_order_acquire)) {
-        return std::unexpected(
-            LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+    if (const auto terminated = termination_error()) {
+        return std::unexpected(*terminated);
     }
 
     libusb_device** list = nullptr;
     const auto count = state_->functions.get_device_list(state_->context, &list);
+    if (const auto terminated = termination_error()) {
+        if (list != nullptr) {
+            state_->functions.free_device_list(list, 1);
+        }
+        return std::unexpected(*terminated);
+    }
     if (count < 0 || (count != 0 && list == nullptr)) {
         return std::unexpected(LibusbRuntimeError{
             LibusbRuntimeErrorKind::enumeration_failed,
@@ -2242,17 +2281,12 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         windows_topology_queries;
     const auto windows_topology_deadline =
         state_->functions.resolve_windows_topology
-        ? SteadyClock::now() + kWindowsTopologyResolveBudget
+        ? std::min(deadline,
+                   SteadyClock::now() + kWindowsTopologyResolveBudget)
         : SteadyClock::time_point::max();
-    const auto runtime_stopping = [&]() noexcept {
-        return topology_cancellation.stop_requested() ||
-            !state_->accepting.load(std::memory_order_acquire);
-    };
-
     for (ssize_t index = 0; index < count; ++index) {
-        if (runtime_stopping()) {
-            return std::unexpected(
-                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+        if (const auto terminated = termination_error()) {
+            return std::unexpected(*terminated);
         }
         auto* device = list[index];
         std::optional<unsigned long> windows_session_data;
@@ -2279,16 +2313,20 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     state_->functions.capture_windows_session_identity(
                         *windows_session_data,
                         windows_topology_deadline,
-                        topology_cancellation));
-                if (runtime_stopping()) {
-                    return std::unexpected(LibusbRuntimeError{
-                        LibusbRuntimeErrorKind::runtime_stopped});
+                        combined_cancellation));
+                if (const auto terminated = termination_error()) {
+                    return std::unexpected(*terminated);
                 }
             }
         }
         const auto device_range_begin = devices.size();
         libusb_device_descriptor descriptor{};
-        if (state_->functions.get_device_descriptor(device, &descriptor) != LIBUSB_SUCCESS ||
+        const auto descriptor_result =
+            state_->functions.get_device_descriptor(device, &descriptor);
+        if (const auto terminated = termination_error()) {
+            return std::unexpected(*terminated);
+        }
+        if (descriptor_result != LIBUSB_SUCCESS ||
             !matches(filter.vendor_id, descriptor.idVendor) ||
             !matches(filter.product_id, descriptor.idProduct)) {
             continue;
@@ -2299,6 +2337,12 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             state_->functions.get_active_config_descriptor(device, &raw_config);
         if (config_result != LIBUSB_SUCCESS) {
             config_result = state_->functions.get_config_descriptor(device, 0, &raw_config);
+        }
+        if (const auto terminated = termination_error()) {
+            if (raw_config != nullptr) {
+                state_->functions.free_config_descriptor(raw_config);
+            }
+            return std::unexpected(*terminated);
         }
         if (config_result != LIBUSB_SUCCESS || raw_config == nullptr) {
             continue;
@@ -2319,6 +2363,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             windows_session_data.has_value()
                 ? *windows_session_data
                 : state_->functions.get_session_data(device));
+        if (const auto terminated = termination_error()) {
+            return std::unexpected(*terminated);
+        }
         std::optional<std::vector<std::uint8_t>> port_path;
         std::optional<std::string> serial;
         std::optional<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>>
@@ -2404,8 +2451,15 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                         selected = &endpoint_descriptor;
                     }
                 }
-                if (ambiguous_bulk_pair || bulk_out == nullptr || bulk_in == nullptr ||
-                    !load_identity()) {
+                if (ambiguous_bulk_pair || bulk_out == nullptr ||
+                    bulk_in == nullptr) {
+                    continue;
+                }
+                const auto identity_loaded = load_identity();
+                if (const auto terminated = termination_error()) {
+                    return std::unexpected(*terminated);
+                }
+                if (!identity_loaded) {
                     continue;
                 }
                 UsbDeviceInfo snapshot{
@@ -2444,6 +2498,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                         linux_topology_snapshot.emplace(
                             state_->functions.resolve_linux_topology(
                                 make_linux_usb_topology_query(snapshot)));
+                        if (const auto terminated = termination_error()) {
+                            return std::unexpected(*terminated);
+                        }
                     }
                     if (linux_topology_snapshot->has_value()) {
                         snapshot.linux_topology =
@@ -2531,10 +2588,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     : state_->functions.capture_windows_session_identity(
                           current_session,
                           windows_topology_deadline,
-                          topology_cancellation);
-                if (runtime_stopping()) {
-                    return std::unexpected(LibusbRuntimeError{
-                        LibusbRuntimeErrorKind::runtime_stopped});
+                          combined_cancellation);
+                if (const auto terminated = termination_error()) {
+                    return std::unexpected(*terminated);
                 }
 
                 const auto& first_snapshot = devices[windows_device_begin];
@@ -2592,11 +2648,13 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
     // call.
     list_guard.reset();
     lifecycle.unlock();
+    if (const auto terminated = termination_error()) {
+        return std::unexpected(*terminated);
+    }
 
     if (!windows_topology_queries.empty()) {
-        if (runtime_stopping()) {
-            return std::unexpected(
-                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+        if (const auto terminated = termination_error()) {
+            return std::unexpected(*terminated);
         }
         std::vector<WindowsUsbTopologyQuery> queries;
         queries.reserve(windows_topology_queries.size());
@@ -2604,10 +2662,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             queries.push_back(pending.second);
         }
         auto resolved = state_->functions.resolve_windows_topology(
-            queries, windows_topology_deadline, topology_cancellation);
-        if (runtime_stopping()) {
-            return std::unexpected(
-                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+            queries, windows_topology_deadline, combined_cancellation);
+        if (const auto terminated = termination_error()) {
+            return std::unexpected(*terminated);
         }
         if (!resolved.has_value()) {
             for (const auto& pending : windows_topology_queries) {
@@ -2650,15 +2707,13 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
 
     if (state_->functions.resolve_macos_topology &&
         !macos_device_ranges.empty()) {
-        const auto deadline = SteadyClock::now() + kMacTopologyResolveBudget;
-        const auto cancellation = state_->topology_stop_source.get_token();
+        const auto topology_deadline = std::min(
+            deadline, SteadyClock::now() + kMacTopologyResolveBudget);
         std::vector<MacUsbTopologyDeviceQuery> device_queries;
         device_queries.reserve(macos_device_ranges.size());
         for (const auto& [begin, end] : macos_device_ranges) {
-            if (cancellation.stop_requested() ||
-                !state_->accepting.load(std::memory_order_acquire)) {
-                return std::unexpected(
-                    LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+            if (const auto terminated = termination_error()) {
+                return std::unexpected(*terminated);
             }
 
             MacUsbTopologyDeviceQuery device_query;
@@ -2671,11 +2726,9 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         }
 
         auto resolved = state_->functions.resolve_macos_topology(
-            device_queries, deadline, cancellation);
-        if (cancellation.stop_requested() ||
-            !state_->accepting.load(std::memory_order_acquire)) {
-            return std::unexpected(
-                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+            device_queries, topology_deadline, combined_cancellation);
+        if (const auto terminated = termination_error()) {
+            return std::unexpected(*terminated);
         }
         const auto assign_error = [&devices, &macos_device_ranges](
                                       const std::size_t range_index,
@@ -2777,10 +2830,8 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             }
         }
     }
-    if (state_->topology_stop_source.stop_requested() ||
-        !state_->accepting.load(std::memory_order_acquire)) {
-        return std::unexpected(
-            LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+    if (const auto terminated = termination_error()) {
+        return std::unexpected(*terminated);
     }
     return devices;
 }

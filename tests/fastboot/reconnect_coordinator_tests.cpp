@@ -35,6 +35,7 @@ using kairosboot::fastboot::ReconnectStage;
 using kairosboot::fastboot::ReconnectTarget;
 using kairosboot::fastboot::ReconnectTimePoint;
 using kairosboot::fastboot::ReconnectUsbFingerprint;
+using kairosboot::fastboot::ReconnectUsbFingerprintPolicy;
 using kairosboot::fastboot::ReconnectWaitResult;
 using kairosboot::fastboot::ReconnectWaitStatus;
 using kairosboot::fastboot::UsbPhysicalPortPath;
@@ -1120,6 +1121,135 @@ void usb_fingerprint_is_checked_before_and_after_open() {
     }
 }
 
+void mode_transition_fingerprint_policy_requires_live_identity() {
+    const auto replacement_fingerprint = fingerprint(0x18D1, 0x4EE1, 2U);
+    {
+        auto wanted = target();
+        wanted.usb_fingerprint_policy =
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity;
+        const auto passive = candidate(
+            wanted.physical_port, wanted.serial, replacement_fingerprint);
+        QueueDiscovery discovery;
+        discovery.steps = {std::vector<ReconnectCandidate>{passive}};
+        QueueOpener opener;
+        opener.actions = {OpenAction{
+            .verified_identity = identity(
+                passive, wanted.product, wanted.required_mode),
+        }};
+        ManualWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+
+        const auto result = coordinator.reconnect(
+            wanted, waiter.current + 1s, options());
+        CHECK(result.has_value());
+        CHECK(result->identity.usb_fingerprint == replacement_fingerprint);
+        CHECK(result->identity.mode == wanted.required_mode);
+    }
+    {
+        auto wanted = target();
+        wanted.previous_mode = FastbootUsbMode::Fastbootd;
+        wanted.required_mode = FastbootUsbMode::Fastbootd;
+        const auto passive = candidate(
+            wanted.physical_port, wanted.serial, replacement_fingerprint);
+        QueueDiscovery discovery;
+        discovery.steps = {std::vector<ReconnectCandidate>{passive}};
+        QueueOpener opener;
+        ManualWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+
+        const auto result = coordinator.reconnect(
+            wanted, waiter.current + 1s, options());
+        CHECK(!result.has_value());
+        CHECK(result.error().code ==
+              ReconnectErrorCode::UsbFingerprintMismatch);
+        CHECK(opener.candidates.empty());
+    }
+    {
+        auto invalid = target();
+        invalid.previous_mode = FastbootUsbMode::Fastbootd;
+        invalid.required_mode = FastbootUsbMode::Fastbootd;
+        invalid.usb_fingerprint_policy =
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity;
+        QueueDiscovery discovery;
+        QueueOpener opener;
+        ManualWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+        const auto result = coordinator.reconnect(
+            invalid, waiter.current + 1s, options());
+        CHECK(!result.has_value());
+        CHECK(result.error().code == ReconnectErrorCode::InvalidArgument);
+        CHECK(discovery.calls == 0U);
+    }
+    {
+        auto invalid = target(TransferCertainty::NotTransferred);
+        invalid.usb_fingerprint_policy =
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity;
+        QueueDiscovery discovery;
+        QueueOpener opener;
+        ManualWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+        const auto result = coordinator.reconnect(
+            invalid, waiter.current + 1s, options());
+        CHECK(!result.has_value());
+        CHECK(result.error().code == ReconnectErrorCode::InvalidArgument);
+        CHECK(discovery.calls == 0U);
+    }
+}
+
+void changed_transition_fingerprint_still_rejects_live_identity_mismatch() {
+    const auto replacement_fingerprint = fingerprint(0x18D1, 0x4EE1, 2U);
+    const auto run = [&](ReconnectDeviceIdentity verified,
+                         const ReconnectErrorCode expected) {
+        auto wanted = target();
+        wanted.usb_fingerprint_policy =
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity;
+        const auto passive = candidate(
+            wanted.physical_port, wanted.serial, replacement_fingerprint);
+        QueueDiscovery discovery;
+        discovery.steps = {std::vector<ReconnectCandidate>{passive}};
+        QueueOpener opener;
+        opener.actions = {OpenAction{
+            .verified_identity = std::move(verified),
+        }};
+        ManualWaiter waiter;
+        ReconnectCoordinator coordinator(discovery, opener, waiter);
+        const auto result = coordinator.reconnect(
+            wanted, waiter.current + 1s, options());
+        CHECK(!result.has_value());
+        CHECK(result.error().code == expected);
+    };
+
+    const auto wanted = target();
+    run(identity(
+            port(1U, {9U}),
+            wanted.serial,
+            wanted.product,
+            wanted.required_mode,
+            replacement_fingerprint),
+        ReconnectErrorCode::DeviceChangedDuringOpen);
+    run(identity(
+            wanted.physical_port,
+            std::string{"OTHER"},
+            wanted.product,
+            wanted.required_mode,
+            replacement_fingerprint),
+        ReconnectErrorCode::DeviceChangedDuringOpen);
+    run(identity(
+            wanted.physical_port,
+            wanted.serial,
+            "other_product",
+            wanted.required_mode,
+            replacement_fingerprint),
+        ReconnectErrorCode::ProductMismatch);
+    run(identity(
+            wanted.physical_port,
+            wanted.serial,
+            wanted.product,
+            wanted.previous_mode,
+            replacement_fingerprint),
+        ReconnectErrorCode::UsbFingerprintMismatch);
+}
+
 void only_ready_sessions_are_published() {
     const auto wanted = target();
     QueueDiscovery discovery;
@@ -1252,6 +1382,8 @@ int main() {
         {"cancelled uncertain open", cancellation_preserves_uncertain_open_error},
         {"missing serial reconnect", missing_serial_uses_path_fingerprint_and_post_open_identity},
         {"USB fingerprint verification", usb_fingerprint_is_checked_before_and_after_open},
+        {"mode transition fingerprint policy", mode_transition_fingerprint_policy_requires_live_identity},
+        {"changed fingerprint live identity", changed_transition_fingerprint_still_rejects_live_identity_mismatch},
         {"ready session contract", only_ready_sessions_are_published},
         {"attempt limits", configured_attempt_limits_fail_before_counters_can_wrap},
         {"latest dependency failure", latest_dependency_failure_replaces_prior_open_failure},

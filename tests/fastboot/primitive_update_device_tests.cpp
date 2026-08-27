@@ -61,6 +61,7 @@ using kairosboot::fastboot::ReconnectOptions;
 using kairosboot::fastboot::ReconnectTarget;
 using kairosboot::fastboot::ReconnectTimePoint;
 using kairosboot::fastboot::ReconnectUsbFingerprint;
+using kairosboot::fastboot::ReconnectUsbFingerprintPolicy;
 using kairosboot::fastboot::ReconnectWaitResult;
 using kairosboot::fastboot::ReconnectWaitStatus;
 using kairosboot::fastboot::UsbPhysicalPortPath;
@@ -1375,6 +1376,14 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
     expect_flash(*replacement, "system", flash_payload);
 
     auto wanted = actor_target();
+    wanted.usb_fingerprint_policy =
+        ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity;
+    auto replacement_fingerprint = wanted.usb_fingerprint;
+    ++replacement_fingerprint.product_id;
+    replacement_fingerprint.interface_number = 2U;
+    auto replacement_candidate =
+        actor_candidate(wanted.physical_port, wanted.serial);
+    replacement_candidate.usb_fingerprint = replacement_fingerprint;
     ActorDiscovery discovery;
     discovery.steps = {
         // Same serial on the wrong port must not be followed while the expected
@@ -1384,11 +1393,13 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
         },
         std::vector<ReconnectCandidate>{
             actor_candidate(actor_port({2U, 4U}), wanted.serial),
-            actor_candidate(wanted.physical_port, wanted.serial),
+            replacement_candidate,
         },
     };
     ActorOpener opener;
-    opener.identities.push_back(actor_identity());
+    auto replacement_identity = actor_identity();
+    replacement_identity.usb_fingerprint = replacement_fingerprint;
+    opener.identities.push_back(std::move(replacement_identity));
     opener.transports.push_back(std::move(replacement_transport));
     ActorWaiter waiter;
     ReconnectCoordinator coordinator(discovery, opener, waiter);
@@ -1443,6 +1454,8 @@ void fastbootd_reconnect_is_shared_by_every_later_prepared_token() {
     CHECK(discovery.calls == 2U);
     CHECK(opener.candidates.size() == 1U);
     CHECK(opener.candidates.front().physical_port == wanted.physical_port);
+    CHECK(opener.candidates.front().usb_fingerprint ==
+          replacement_fingerprint);
     CHECK(std::ranges::all_of(discovery.deadlines,
                               [deadline](const auto value) {
                                   return value == deadline;

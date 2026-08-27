@@ -430,11 +430,9 @@ bind_initial_reconnect_session(
             "opened session with fully transferred identity probes"));
     }
     const auto& verified_identity = opened.verified_identity;
-    if (verified_identity.physical_port != reconnect_target.physical_port ||
-        verified_identity.usb_fingerprint !=
-            reconnect_target.usb_fingerprint ||
+    if (!reconnect_identity_matches_target(
+            reconnect_target, verified_identity) ||
         verified_identity.serial != reconnect_target.serial ||
-        verified_identity.product != reconnect_target.product ||
         verified_identity.mode != reconnect_target.previous_mode) {
         return std::unexpected(local_error(
             UpdateDeviceErrorKind::Failed,
@@ -730,11 +728,7 @@ public:
         }
 
         const auto& identity = reconnected->identity;
-        const bool serial_matches =
-            !target.serial.has_value() || identity.serial == target.serial;
-        if (identity.physical_port != target.physical_port ||
-            identity.usb_fingerprint != target.usb_fingerprint ||
-            !serial_matches || identity.product != target.product ||
+        if (!reconnect_identity_matches_target(target, identity) ||
             identity.mode != FastbootUsbMode::Fastbootd ||
             reconnected->session == nullptr ||
             reconnected->session->state() != protocol::SessionState::Ready) {

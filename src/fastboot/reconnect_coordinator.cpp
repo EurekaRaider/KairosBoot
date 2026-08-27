@@ -74,6 +74,16 @@ struct AttemptState final {
     return false;
 }
 
+[[nodiscard]] bool valid_fingerprint_policy(
+    const ReconnectUsbFingerprintPolicy policy) noexcept {
+    switch (policy) {
+        case ReconnectUsbFingerprintPolicy::Exact:
+        case ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity:
+            return true;
+    }
+    return false;
+}
+
 [[nodiscard]] ReconnectError make_error(
     const ReconnectErrorCode code,
     const ReconnectStage stage,
@@ -153,6 +163,42 @@ void clear_dependency_failures(AttemptState& state) noexcept {
 
 }  // namespace
 
+bool reconnect_usb_fingerprint_allowed(
+    const ReconnectTarget& target,
+    const ReconnectUsbFingerprint& observed,
+    const std::optional<FastbootUsbMode> verified_mode) noexcept {
+    if (target.usb_fingerprint_policy ==
+        ReconnectUsbFingerprintPolicy::Exact) {
+        return observed == target.usb_fingerprint;
+    }
+    if (target.usb_fingerprint_policy !=
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity ||
+        target.previous_mode == target.required_mode ||
+        target.preceding_operation_certainty !=
+            protocol::TransferCertainty::FullyTransferred) {
+        return false;
+    }
+    if (!verified_mode.has_value()) {
+        return true;
+    }
+    if (*verified_mode == target.previous_mode) {
+        return observed == target.usb_fingerprint;
+    }
+    return *verified_mode == target.required_mode;
+}
+
+bool reconnect_identity_matches_target(
+    const ReconnectTarget& target,
+    const ReconnectDeviceIdentity& identity) noexcept {
+    return identity.physical_port == target.physical_port &&
+        (!target.serial.has_value() || identity.serial == target.serial) &&
+        identity.product == target.product &&
+        (identity.mode == target.previous_mode ||
+         identity.mode == target.required_mode) &&
+        reconnect_usb_fingerprint_allowed(
+            target, identity.usb_fingerprint, identity.mode);
+}
+
 IReconnectWaiter::TimePoint SteadyReconnectWaiter::now() const noexcept {
     return Clock::now();
 }
@@ -230,6 +276,7 @@ std::expected<void, ReconnectError> validate_reconnect_request(
     }
     if (!valid_mode(target.previous_mode) ||
         !valid_mode(target.required_mode) ||
+        !valid_fingerprint_policy(target.usb_fingerprint_policy) ||
         !valid_certainty(target.preceding_operation_certainty)) {
         return std::unexpected(make_error(
             ReconnectErrorCode::InvalidArgument,
@@ -256,6 +303,18 @@ std::expected<void, ReconnectError> validate_reconnect_request(
             ReconnectErrorCode::UnsafePreviousOutcome,
             ReconnectStage::Validation,
             "Fastboot reconnect refused an uncertain preceding operation; no offset or protocol state will be guessed",
+            target,
+            state));
+    }
+    if (target.usb_fingerprint_policy ==
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity &&
+        (target.previous_mode == target.required_mode ||
+         target.preceding_operation_certainty !=
+             protocol::TransferCertainty::FullyTransferred)) {
+        return std::unexpected(make_error(
+            ReconnectErrorCode::InvalidArgument,
+            ReconnectStage::Validation,
+            "Fastboot reconnect may change USB fingerprint only for a fully transferred mode transition",
             target,
             state));
     }
@@ -432,7 +491,8 @@ ReconnectCoordinator::reconnect(
                         target,
                         state));
                 }
-                if (candidate->usb_fingerprint != target.usb_fingerprint) {
+                if (!reconnect_usb_fingerprint_allowed(
+                        target, candidate->usb_fingerprint)) {
                     return std::unexpected(make_error(
                         ReconnectErrorCode::UsbFingerprintMismatch,
                         ReconnectStage::Selection,
@@ -608,7 +668,8 @@ ReconnectCoordinator::reconnect(
                             certainty));
                     }
                     if (verified.physical_port != target.physical_port ||
-                        verified.usb_fingerprint != target.usb_fingerprint ||
+                        verified.usb_fingerprint !=
+                            candidate->usb_fingerprint ||
                         (target.serial.has_value() &&
                          verified.serial != target.serial) ||
                         (candidate->serial.has_value() &&
@@ -632,6 +693,19 @@ ReconnectCoordinator::reconnect(
                             0,
                             certainty));
                     }
+                    if (!reconnect_usb_fingerprint_allowed(
+                            target,
+                            verified.usb_fingerprint,
+                            verified.mode)) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::UsbFingerprintMismatch,
+                            ReconnectStage::Verification,
+                            "Fastboot reconnect live mode does not authorize the changed USB fingerprint",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    }
                     if (verified.mode == target.previous_mode &&
                         target.previous_mode != target.required_mode) {
                         state.last_observation =
@@ -642,6 +716,16 @@ ReconnectCoordinator::reconnect(
                             ReconnectErrorCode::OpenContractViolation,
                             ReconnectStage::Verification,
                             "Fastboot reconnect opener returned an unexpected verified mode",
+                            target,
+                            state,
+                            0,
+                            certainty));
+                    } else if (!reconnect_identity_matches_target(
+                                   target, verified)) {
+                        return std::unexpected(make_error(
+                            ReconnectErrorCode::OpenContractViolation,
+                            ReconnectStage::Verification,
+                            "Fastboot reconnect verified identity does not match the reconnect target",
                             target,
                             state,
                             0,
