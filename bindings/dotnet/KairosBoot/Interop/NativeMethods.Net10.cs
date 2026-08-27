@@ -15,6 +15,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void FlashOptionsInit(ref NativeFlashOptions options);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_update_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void UpdateOptionsInit(ref NativeUpdateOptions options);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_command_options_init")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void CommandOptionsInit(ref NativeCommandOptions options);
@@ -85,6 +89,25 @@ internal static partial class NativeMethods
         string partition,
         string filePath,
         ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_update_package_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int UpdatePackageAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string packagePath,
+        ref NativeUpdateOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_update_package", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int UpdatePackage(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string packagePath,
+        ref NativeUpdateOptions options,
         out IntPtr error);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_getvar_async", StringMarshalling = StringMarshalling.Utf8)]

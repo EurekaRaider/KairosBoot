@@ -12,6 +12,9 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, EntryPoint = "kb_flash_options_init", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FlashOptionsInit(ref NativeFlashOptions options);
 
+    [DllImport(LibraryName, EntryPoint = "kb_update_options_init", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void UpdateOptionsInit(ref NativeUpdateOptions options);
+
     [DllImport(LibraryName, EntryPoint = "kb_command_options_init", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void CommandOptionsInit(ref NativeCommandOptions options);
 
@@ -68,6 +71,23 @@ internal static partial class NativeMethods
         [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
         ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_update_package_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int UpdatePackageAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string packagePath,
+        ref NativeUpdateOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_update_package", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int UpdatePackage(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string packagePath,
+        ref NativeUpdateOptions options,
         out IntPtr error);
 
     [DllImport(LibraryName, EntryPoint = "kb_getvar_async", CallingConvention = CallingConvention.Cdecl)]

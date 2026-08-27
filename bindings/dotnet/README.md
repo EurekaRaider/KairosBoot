@@ -37,6 +37,30 @@ deadline. Cancellation calls `kb_operation_cancel`; disposal unregisters that
 callback, releases and drains the native operation, and only then frees the
 managed progress delegate state.
 
+Complete update packages use the same operation lifetime contract. The C#
+first-class entry point is asynchronous on both target frameworks; the native
+blocking export remains imported and ABI-tested for parity with the C SDK:
+
+```csharp
+using var context = Context.Create();
+var options = new UpdateOptions(TimeSpan.FromMinutes(10), wipe: false);
+var progress = new Progress<UpdateProgress>(value =>
+    Console.WriteLine($"{value.Stage}: {value.BytesCompleted}/{value.BytesTotal}"));
+
+await context.UpdatePackageAsync(
+    "factory/update.zip",
+    options,
+    deviceSelector: "usb:serial:DEVICE123",
+    progress: progress,
+    cancellationToken: cancellationToken);
+```
+
+`UpdateOptions.Timeout` bounds package preflight, device selection/open,
+validation, and every update task. `UpdateOptions.Default` uses no deadline and
+preserves user data. Set `wipe: true` only when wipe-conditioned package tasks
+may erase user data. Cancellation requests `kb_operation_cancel` and continues
+polling until the native operation and its callbacks have drained.
+
 The same API exposes typed asynchronous primitives for `getvar`, `erase`,
 `set_active`, `reboot`, `continue`, `oem`, raw commands, `boot`, `stage`,
 `upload`, and `fetch`. Every primitive returns a binary-safe `CommandResult`:
@@ -185,3 +209,16 @@ The native foundation enumerates USB Fastboot interfaces and executes bounded,
 source-streamed `download` plus `flash` operations. The contract runner uses an
 invalid partition to verify deterministic preflight errors, including UTF-8
 device identifiers and `NotSent` transfer certainty, without touching hardware.
+
+The update binding also has a deterministic C11 shim that validates the exact
+`kb_update_options_t` layout, UTF-8 marshalling, blocking-import parity,
+progress, cancellation, and SafeHandle release without USB hardware. It builds
+the shim with release optimization and runs net10.0 on the current platform;
+Windows x64 can run both target frameworks:
+
+```sh
+python3 bindings/dotnet/KairosBoot.ContractTests/run_update_shim_tests.py
+
+python bindings/dotnet/KairosBoot.ContractTests/run_update_shim_tests.py \
+  --framework net48 --framework net10.0
+```

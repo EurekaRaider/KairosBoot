@@ -37,6 +37,15 @@ Use `FlashOptions` for a strongly typed per-I/O deadline and pass
 infinite timeout. The binding retains the managed progress callback until
 native operation release has drained every callback.
 
+Use `UpdatePackageAsync` for a complete `update.zip`/flash-all operation.
+`UpdateOptions` supplies a whole-operation deadline and an explicit `Wipe`
+policy; its default has no deadline and preserves user data. Progress is
+reported as `IProgress<UpdateProgress>`, and `CancellationToken` requests native
+cancellation while the managed task continues draining the operation before
+releasing its SafeHandle and callback state. The asynchronous method is the
+first-class C# entry point on net48 and net10.0; the package also carries the
+blocking native import for ABI parity with the C SDK.
+
 Typed `GetVarAsync`, `EraseAsync`, `SetActiveAsync`, `RebootAsync`,
 `ContinueBootAsync`, `OemAsync`, `RawCommandAsync`, `BootAsync`, `StageAsync`,
 `UploadAsync`, and `FetchAsync` methods return `Task<CommandResult>`. They use
