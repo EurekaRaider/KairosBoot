@@ -889,6 +889,7 @@ read_hierarchy(const io_registry_entry_t device,
     std::vector<std::uint64_t> sessions{leaf_session_id};
     UniqueIoObject owned_current;
     io_registry_entry_t current = device;
+    std::uint64_t current_session_id = leaf_session_id;
 
     while (true) {
         if (const auto interrupted = interruption_error(
@@ -899,6 +900,19 @@ read_hierarchy(const io_registry_entry_t device,
             current, kIOUSBPlane, MacUsbTopologyStage::Hierarchy);
         if (!path.has_value()) {
             return std::unexpected(path.error());
+        }
+        auto observed_session = read_session_id(
+            current, MacUsbTopologyStage::Hierarchy, *path);
+        if (!observed_session.has_value()) {
+            return std::unexpected(observed_session.error());
+        }
+        if (!observed_session->has_value() ||
+            **observed_session != current_session_id) {
+            return std::unexpected(make_error(
+                MacUsbTopologyErrorKind::IdentityChanged,
+                MacUsbTopologyStage::Hierarchy,
+                "IOUSB session identity changed while its port chain was read",
+                *path));
         }
         auto port = read_device_port(current, *path);
         if (!port.has_value()) {
@@ -949,6 +963,7 @@ read_hierarchy(const io_registry_entry_t device,
                 *path));
         }
         sessions.push_back((**parent).session_id);
+        current_session_id = (**parent).session_id;
         owned_current = std::move((**parent).service);
         current = owned_current.get();
     }
