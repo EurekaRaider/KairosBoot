@@ -46,6 +46,101 @@ def handshake(connection: socket.socket) -> None:
     connection.sendall(hello)
 
 
+def udp_packet(
+    packet_id: int, sequence: int, payload: bytes = b"", flags: int = 0
+) -> bytes:
+    return struct.pack(">BBH", packet_id, flags, sequence) + payload
+
+
+def serve_udp_flash(
+    server: socket.socket, image: bytes, partition: bytes = b"system"
+) -> None:
+    def receive(
+        expected: bytes, peer: tuple[str, int] | None = None
+    ) -> tuple[str, int]:
+        datagram, observed_peer = server.recvfrom(8192)
+        if datagram != expected:
+            raise AssertionError(
+                f"unexpected Fastboot UDP datagram: {datagram!r}, "
+                f"expected {expected!r}"
+            )
+        if peer is not None and observed_peer != peer:
+            raise AssertionError(
+                f"Fastboot UDP peer changed: {observed_peer!r} != {peer!r}"
+            )
+        return observed_peer
+
+    peer = receive(udp_packet(1, 0))
+    server.sendto(udp_packet(1, 0, struct.pack(">H", 100)), peer)
+    receive(udp_packet(2, 100, struct.pack(">HH", 1, 8192)), peer)
+    server.sendto(udp_packet(2, 100, struct.pack(">HH", 1, 512)), peer)
+
+    sequence = 101
+
+    def exchange(request: bytes, response: bytes) -> None:
+        nonlocal sequence
+        receive(udp_packet(3, sequence, request), peer)
+        server.sendto(udp_packet(3, sequence), peer)
+        sequence += 1
+        receive(udp_packet(3, sequence), peer)
+        server.sendto(udp_packet(3, sequence, response), peer)
+        sequence += 1
+
+    exchange(b"getvar:max-download-size", b"OKAY0x00100000")
+    encoded_size = f"{len(image):08x}".encode("ascii")
+    exchange(b"download:" + encoded_size, b"DATA" + encoded_size)
+    exchange(image, b"OKAYdownloaded")
+    exchange(b"flash:" + partition, b"OKAYflashed")
+
+
+def invoke_udp(
+    cli: pathlib.Path,
+    arguments: Sequence[str],
+    device: Callable[[socket.socket], None],
+    expected_exit: int = 0,
+    timeout_ms: int = 5000,
+) -> tuple[bytes, bytes]:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.settimeout(10)
+        port = server.getsockname()[1]
+        process = subprocess.Popen(
+            [
+                str(cli),
+                "--device",
+                f"udp:127.0.0.1:{port}",
+                "--timeout-ms",
+                str(timeout_ms),
+                *arguments,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        device_error: Optional[BaseException] = None
+        try:
+            device(server)
+        except BaseException as error:
+            device_error = error
+
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise AssertionError(
+                f"UDP CLI timed out: stdout={stdout!r}, stderr={stderr!r}"
+            )
+
+        if device_error is not None:
+            raise device_error
+        if process.returncode != expected_exit:
+            raise AssertionError(
+                f"UDP CLI exit {process.returncode}, expected {expected_exit}: "
+                f"stdout={stdout!r}, stderr={stderr!r}"
+            )
+        return stdout, stderr
+
+
 def invoke(
     cli: pathlib.Path,
     arguments: Sequence[str],
@@ -148,6 +243,54 @@ def invoke_without_connection(
     document = json.loads(completed.stdout)
     if document.get("ok") is not False or document.get("status") != expected_status:
         raise AssertionError(f"unexpected local rejection JSON: {document!r}")
+    return document
+
+
+def invoke_flash_without_server(
+    cli: pathlib.Path,
+    scheme: str,
+    image: pathlib.Path,
+) -> dict[str, object]:
+    socket_type = socket.SOCK_STREAM if scheme == "tcp" else socket.SOCK_DGRAM
+    with socket.socket(socket.AF_INET, socket_type) as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+
+    completed = subprocess.run(
+        [
+            str(cli),
+            "--device",
+            f"{scheme}:127.0.0.1:{port}",
+            "--timeout-ms",
+            "100",
+            "--json",
+            "flash",
+            "system",
+            str(image),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+    if completed.returncode != 4 or completed.stderr:
+        raise AssertionError(
+            f"unavailable {scheme} flash target produced an unexpected result: "
+            f"exit={completed.returncode}, stdout={completed.stdout!r}, "
+            f"stderr={completed.stderr!r}"
+        )
+    if completed.stdout.count(b"\n") != 1 or not completed.stdout.endswith(
+        b"\n"
+    ):
+        raise AssertionError(
+            f"unavailable {scheme} failure was not one-line JSON: "
+            f"{completed.stdout!r}"
+        )
+    document = json.loads(completed.stdout)
+    if document.get("ok") is not False:
+        raise AssertionError(
+            f"unavailable {scheme} target did not fail: {document!r}"
+        )
     return document
 
 
@@ -572,6 +715,75 @@ def run(cli: pathlib.Path) -> None:
         stage_file = directory / "阶段-镜像.bin"
         stage_payload = bytes(range(16))
         stage_file.write_bytes(stage_payload)
+
+        def flashed_over_tcp(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == stage_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:system"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "system", str(stage_file)],
+            flashed_over_tcp,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash",
+            "partition": "system",
+            "file": str(stage_file),
+        }
+
+        stdout, stderr = invoke_udp(
+            cli,
+            ["--json", "flash", "system", str(stage_file)],
+            lambda server: serve_udp_flash(server, stage_payload),
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash",
+            "partition": "system",
+            "file": str(stage_file),
+        }
+
+        for invalid_selector in ("tcp:", "udp:127.0.0.1:70000"):
+            completed = subprocess.run(
+                [
+                    str(cli),
+                    "--device",
+                    invalid_selector,
+                    "--json",
+                    "flash",
+                    "system",
+                    str(stage_file),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            if completed.returncode != 4 or completed.stderr:
+                raise AssertionError(
+                    f"invalid flash selector was not rejected locally: "
+                    f"{invalid_selector!r}, exit={completed.returncode}, "
+                    f"stdout={completed.stdout!r}, stderr={completed.stderr!r}"
+                )
+            parse_failure_json(
+                completed.stdout, completed.stderr, "invalid_argument"
+            )
+
+        tcp_unavailable = invoke_flash_without_server(cli, "tcp", stage_file)
+        assert tcp_unavailable["status"] in {"io", "timeout"}
+        assert tcp_unavailable["transferState"] == "not_sent"
+        udp_unavailable = invoke_flash_without_server(cli, "udp", stage_file)
+        assert udp_unavailable["status"] in {"io", "timeout"}
+        assert udp_unavailable["transferState"] == "not_sent"
 
         def staged_download(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"download:00000010"

@@ -2,6 +2,7 @@
 #include <kairosboot/kairosboot.hpp>
 
 #include "src/transport/tcp_fastboot.hpp"
+#include "src/transport/udp_fastboot.hpp"
 
 #include <boost/asio.hpp>
 
@@ -31,6 +32,7 @@
 namespace {
 
 using boost::asio::ip::tcp;
+using boost::asio::ip::udp;
 
 #define CHECK(condition)                                                        \
   do {                                                                          \
@@ -147,6 +149,32 @@ private:
     return socket;
   }
 
+  void serve_flash_success() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+    write_frame(socket, "OKAY0x00100000");
+    CHECK(as_string(read_frame(socket)) == "download:00000010");
+    write_frame(socket, "DATA00000010");
+    const auto payload = read_frame(socket);
+    CHECK(payload.size() == 16U);
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+      CHECK(payload[index] == std::byte{static_cast<unsigned char>(index)});
+    }
+    write_frame(socket, "OKAYdownloaded");
+    CHECK(as_string(read_frame(socket)) == "flash:system");
+    write_frame(socket, "OKAYflashed");
+  }
+
+  void serve_cancelled_flash() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+    write_frame(socket, "OKAY0x00100000");
+    std::array<std::byte, 1> trailing{};
+    boost::system::error_code closed;
+    static_cast<void>(socket.read_some(boost::asio::buffer(trailing), closed));
+    CHECK(closed);
+  }
+
   void run() noexcept {
     try {
       {
@@ -232,6 +260,9 @@ private:
         write_frame(socket, "INFOpolicy");
         write_frame(socket, std::string("FAILdenied\0x", 12));
       }
+      serve_flash_success();
+      serve_flash_success();
+      serve_cancelled_flash();
       {
         auto socket = accept();
         CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
@@ -368,6 +399,22 @@ private:
     return result;
   }
 
+  void serve_flash_success() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+    write_frame(socket, "OKAY0x00100000");
+    CHECK(as_string(read_frame(socket)) == "download:00000010");
+    write_frame(socket, "DATA00000010");
+    const auto payload = read_frame(socket);
+    CHECK(payload.size() == 16U);
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+      CHECK(payload[index] == std::byte{static_cast<unsigned char>(index)});
+    }
+    write_frame(socket, "OKAYdownloaded");
+    CHECK(as_string(read_frame(socket)) == "flash:system");
+    write_frame(socket, "OKAYflashed");
+  }
+
   void run() noexcept {
     try {
       {
@@ -425,6 +472,8 @@ private:
         CHECK(as_string(read_frame(socket)) == "upload");
         write_frame(socket, "DATA00000020");
       }
+      serve_flash_success();
+      serve_flash_success();
       {
         auto socket = accept();
         CHECK(as_string(read_frame(socket)) == "getvar:cancel");
@@ -459,11 +508,175 @@ private:
   std::exception_ptr failure_;
 };
 
+std::vector<std::byte> udp_packet(
+    const kairosboot::transport::UdpPacketId id,
+    const std::uint16_t sequence,
+    const std::span<const std::byte> payload = {}) {
+  const auto header = kairosboot::transport::encode_udp_header({
+      .id = id,
+      .sequence = sequence,
+  });
+  std::vector<std::byte> result(header.begin(), header.end());
+  result.insert(result.end(), payload.begin(), payload.end());
+  return result;
+}
+
+std::vector<std::byte> udp_bytes(const std::string_view text) {
+  return std::vector<std::byte>(
+      reinterpret_cast<const std::byte*>(text.data()),
+      reinterpret_cast<const std::byte*>(text.data() + text.size()));
+}
+
+std::array<std::byte, 2> udp_be16(const std::uint16_t value) {
+  return {
+      static_cast<std::byte>((value >> 8U) & 0xffU),
+      static_cast<std::byte>(value & 0xffU),
+  };
+}
+
+std::array<std::byte, 4> udp_initialization(
+    const std::uint16_t packet_bytes) {
+  return {
+      std::byte{0},
+      std::byte{1},
+      static_cast<std::byte>((packet_bytes >> 8U) & 0xffU),
+      static_cast<std::byte>(packet_bytes & 0xffU),
+  };
+}
+
+class ScriptedUdpFlashServer final {
+public:
+  explicit ScriptedUdpFlashServer(const std::size_t operation_count)
+      : socket_(context_, udp::endpoint(udp::v4(), 0)),
+        port_(socket_.local_endpoint().port()),
+        operation_count_(operation_count), worker_([this] { run(); }) {}
+
+  ~ScriptedUdpFlashServer() {
+    if (worker_.joinable()) {
+      boost::system::error_code ignored;
+      socket_.cancel(ignored);
+      socket_.close(ignored);
+      worker_.join();
+    }
+  }
+
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+  void finish() {
+    worker_.join();
+    if (failure_) {
+      std::rethrow_exception(failure_);
+    }
+  }
+
+private:
+  [[nodiscard]] udp::endpoint receive(
+      const std::span<const std::byte> expected,
+      const std::optional<udp::endpoint>& expected_peer = std::nullopt) {
+    std::array<std::byte, 8192> buffer{};
+    udp::endpoint peer;
+    const auto received = socket_.receive_from(boost::asio::buffer(buffer), peer);
+    CHECK(received == expected.size());
+    CHECK(std::ranges::equal(
+        std::span<const std::byte>{buffer}.first(received), expected));
+    if (expected_peer.has_value()) {
+      CHECK(peer == *expected_peer);
+    }
+    return peer;
+  }
+
+  void send(const std::span<const std::byte> packet,
+            const udp::endpoint& peer) {
+    CHECK(socket_.send_to(boost::asio::buffer(packet), peer) == packet.size());
+  }
+
+  void serve_flash() {
+    using kairosboot::transport::UdpPacketId;
+    const auto query = udp_packet(UdpPacketId::Query, 0);
+    const auto peer = receive(query);
+    const auto starting_sequence = udp_be16(100);
+    send(udp_packet(UdpPacketId::Query, 0, starting_sequence), peer);
+
+    const auto host_initialization = udp_initialization(8192);
+    static_cast<void>(receive(
+        udp_packet(UdpPacketId::Initialization, 100, host_initialization),
+        peer));
+    const auto target_initialization = udp_initialization(512);
+    send(udp_packet(UdpPacketId::Initialization, 100,
+                    target_initialization),
+         peer);
+
+    std::uint16_t sequence = 101;
+    const auto exchange = [&](const std::span<const std::byte> request,
+                              const std::span<const std::byte> response) {
+      static_cast<void>(receive(
+          udp_packet(UdpPacketId::Fastboot, sequence, request), peer));
+      send(udp_packet(UdpPacketId::Fastboot, sequence), peer);
+      ++sequence;
+      static_cast<void>(
+          receive(udp_packet(UdpPacketId::Fastboot, sequence), peer));
+      send(udp_packet(UdpPacketId::Fastboot, sequence, response), peer);
+      ++sequence;
+    };
+
+    exchange(udp_bytes("getvar:max-download-size"),
+             udp_bytes("OKAY0x00100000"));
+    exchange(udp_bytes("download:00000010"), udp_bytes("DATA00000010"));
+    std::array<std::byte, 16> image{};
+    for (std::size_t index = 0; index < image.size(); ++index) {
+      image[index] = std::byte{static_cast<unsigned char>(index)};
+    }
+    exchange(image, udp_bytes("OKAYdownloaded"));
+    exchange(udp_bytes("flash:system"), udp_bytes("OKAYflashed"));
+  }
+
+  void run() noexcept {
+    try {
+      for (std::size_t index = 0; index < operation_count_; ++index) {
+        serve_flash();
+      }
+    } catch (...) {
+      failure_ = std::current_exception();
+    }
+  }
+
+  boost::asio::io_context context_;
+  udp::socket socket_;
+  std::uint16_t port_;
+  std::size_t operation_count_;
+  std::thread worker_;
+  std::exception_ptr failure_;
+};
+
+std::uint16_t unavailable_tcp_port() {
+  boost::asio::io_context context;
+  tcp::acceptor acceptor(context, tcp::endpoint(tcp::v4(), 0));
+  const auto port = acceptor.local_endpoint().port();
+  acceptor.close();
+  return port;
+}
+
+std::uint16_t unavailable_udp_port() {
+  boost::asio::io_context context;
+  udp::socket socket(context, udp::endpoint(udp::v4(), 0));
+  const auto port = socket.local_endpoint().port();
+  socket.close();
+  return port;
+}
+
 kb_progress_action_t KB_CALL record_progress(
     const kb_progress_t* progress, void* user_data) {
   auto& watermarks = *static_cast<std::vector<std::uint64_t>*>(user_data);
   watermarks.push_back(progress->bytes_completed);
   return KB_PROGRESS_CONTINUE;
+}
+
+kb_progress_action_t KB_CALL cancel_flash_at_download(
+    const kb_progress_t* progress, void*) {
+  return progress != nullptr && progress->stage != nullptr &&
+                 std::string_view{progress->stage} == "download"
+             ? KB_PROGRESS_CANCEL
+             : KB_PROGRESS_CONTINUE;
 }
 
 struct CancelOnTaskFailureProbe final {
@@ -700,6 +913,60 @@ void run_contract() {
   }
   TemporaryUpdatePackage update_package(
       "version 1\nflash system system.img\n", update_image);
+  const auto image_path = (update_package.path() / "system.img").string();
+
+  kb_flash_options_t flash_options;
+  kb_flash_options_init(&flash_options);
+  std::vector<std::uint64_t> flash_watermarks;
+  flash_options.progress_callback = record_progress;
+  flash_options.progress_user_data = &flash_watermarks;
+  kb_operation_t* flash_operation = nullptr;
+  CHECK(kb_flash_file_async(
+            context, selector.c_str(), "system", image_path.c_str(),
+            &flash_options, &flash_operation, &error) == KB_OK);
+  CHECK(flash_operation != nullptr);
+  CHECK(error == nullptr);
+  CHECK(kb_operation_wait(flash_operation, KB_WAIT_INFINITE) == KB_OK);
+  CHECK(kb_operation_state(flash_operation) == KB_OPERATION_SUCCEEDED);
+  CHECK(kb_operation_error(flash_operation) == nullptr);
+  kb_operation_release(flash_operation);
+  CHECK(flash_watermarks ==
+        std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
+
+  flash_watermarks.clear();
+  CHECK(kb_flash_file(context, selector.c_str(), "system", image_path.c_str(),
+                      &flash_options, &error) == KB_OK);
+  CHECK(error == nullptr);
+  CHECK(flash_watermarks ==
+        std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
+
+  kb_flash_options_init(&flash_options);
+  flash_options.progress_callback = cancel_flash_at_download;
+  flash_operation = nullptr;
+  CHECK(kb_flash_file_async(
+            context, selector.c_str(), "system", image_path.c_str(),
+            &flash_options, &flash_operation, &error) == KB_OK);
+  CHECK(flash_operation != nullptr);
+  CHECK(kb_operation_wait(flash_operation, KB_WAIT_INFINITE) ==
+        KB_E_CANCELLED);
+  const auto* cancelled_flash = kb_operation_error(flash_operation);
+  CHECK(cancelled_flash != nullptr);
+  CHECK(kb_error_status(cancelled_flash) == KB_E_CANCELLED);
+  CHECK(kb_error_transfer_state(cancelled_flash) == KB_TRANSFER_NOT_SENT);
+  CHECK(std::strcmp(kb_error_device_identifier(cancelled_flash),
+                    selector.c_str()) == 0);
+  kb_operation_release(flash_operation);
+
+  CHECK(kb_flash_file_async(context, "tcp:", "system", image_path.c_str(),
+                            nullptr, &flash_operation,
+                            &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(flash_operation == nullptr);
+  CHECK(error != nullptr);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  CHECK(std::strcmp(kb_error_device_identifier(error), "tcp:") == 0);
+  kb_error_release(error);
+  error = nullptr;
+
   std::vector<std::uint64_t> update_watermarks;
   kb_update_options_t update_options;
   kb_update_options_init(&update_options);
@@ -927,6 +1194,37 @@ void run_cxx_contract() {
         KB_TRANSFER_PARTIAL_OR_UNKNOWN);
   CHECK(oversized.error().session_poisoned());
 
+  std::array<std::byte, 16> flash_data{};
+  for (std::size_t index = 0; index < flash_data.size(); ++index) {
+    flash_data[index] = std::byte{static_cast<unsigned char>(index)};
+  }
+  TemporaryUpdatePackage flash_package("version 1\n", flash_data);
+  const auto flash_path = flash_package.path() / "system.img";
+  std::vector<std::uint64_t> flash_watermarks;
+  kairosboot::FlashOptions flash_options;
+  flash_options.progress = [&](const kairosboot::Progress& progress) {
+    CHECK(progress.device_identifier == selector_text);
+    CHECK(progress.stage == "download" || progress.stage == "complete");
+    flash_watermarks.push_back(progress.bytes_completed);
+    return kairosboot::ProgressAction::Continue;
+  };
+  auto flash_operation = context->flash_file_async(
+      std::optional<std::string_view>{selector_text}, "system", flash_path,
+      flash_options);
+  CHECK(flash_operation.has_value());
+  CHECK(flash_operation->wait().has_value());
+  CHECK(flash_operation->state() == KB_OPERATION_SUCCEEDED);
+  CHECK(flash_watermarks ==
+        std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
+
+  flash_watermarks.clear();
+  auto flashed = context->flash_file(
+      std::optional<std::string_view>{selector_text}, "system", flash_path,
+      flash_options);
+  CHECK(flashed.has_value());
+  CHECK(flash_watermarks ==
+        std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
+
   auto cancelled_operation = context->getvar_async(selector, "cancel");
   CHECK(cancelled_operation.has_value());
   server.wait_for_cancel_command();
@@ -941,6 +1239,87 @@ void run_cxx_contract() {
   server.finish();
 }
 
+void run_udp_flash_contract() {
+  ScriptedUdpFlashServer server(4U);
+  const auto selector_text =
+      "udp:127.0.0.1:" + std::to_string(server.port());
+  std::array<std::byte, 16> image{};
+  for (std::size_t index = 0; index < image.size(); ++index) {
+    image[index] = std::byte{static_cast<unsigned char>(index)};
+  }
+  TemporaryUpdatePackage package("version 1\n", image);
+  const auto image_path = (package.path() / "system.img").string();
+
+  kb_context_t* c_context = nullptr;
+  kb_error_t* error = nullptr;
+  CHECK(kb_context_create(nullptr, &c_context, &error) == KB_OK);
+  kb_flash_options_t c_options;
+  kb_flash_options_init(&c_options);
+  c_options.timeout_ms = 2'000U;
+  kb_operation_t* operation = nullptr;
+  CHECK(kb_flash_file_async(
+            c_context, selector_text.c_str(), "system", image_path.c_str(),
+            &c_options, &operation, &error) == KB_OK);
+  CHECK(operation != nullptr);
+  CHECK(kb_operation_wait(operation, KB_WAIT_INFINITE) == KB_OK);
+  CHECK(kb_operation_state(operation) == KB_OPERATION_SUCCEEDED);
+  kb_operation_release(operation);
+  CHECK(error == nullptr);
+
+  CHECK(kb_flash_file(c_context, selector_text.c_str(), "system",
+                      image_path.c_str(), &c_options, &error) == KB_OK);
+  CHECK(error == nullptr);
+
+  operation = nullptr;
+  CHECK(kb_flash_file_async(
+            c_context, "udp:127.0.0.1:70000", "system", image_path.c_str(),
+            &c_options, &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == nullptr);
+  CHECK(error != nullptr);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+  kb_context_release(c_context);
+
+  auto cxx_context = kairosboot::Context::create();
+  CHECK(cxx_context.has_value());
+  kairosboot::FlashOptions cxx_options;
+  cxx_options.timeout = std::chrono::seconds{2};
+  auto cxx_operation = cxx_context->flash_file_async(
+      std::optional<std::string_view>{selector_text}, "system",
+      package.path() / "system.img", cxx_options);
+  CHECK(cxx_operation.has_value());
+  CHECK(cxx_operation->wait().has_value());
+  auto cxx_result = cxx_context->flash_file(
+      std::optional<std::string_view>{selector_text}, "system",
+      package.path() / "system.img", cxx_options);
+  CHECK(cxx_result.has_value());
+
+  cxx_options.timeout = std::chrono::milliseconds{100};
+  const auto unavailable_tcp =
+      "tcp:127.0.0.1:" + std::to_string(unavailable_tcp_port());
+  auto tcp_failure = cxx_context->flash_file(
+      std::optional<std::string_view>{unavailable_tcp}, "system",
+      package.path() / "system.img", cxx_options);
+  CHECK(!tcp_failure.has_value());
+  CHECK(tcp_failure.error().status() == KB_E_IO ||
+        tcp_failure.error().status() == KB_E_TIMEOUT);
+  CHECK(tcp_failure.error().transfer_state() == KB_TRANSFER_NOT_SENT);
+  CHECK(tcp_failure.error().device_identifier() == unavailable_tcp);
+
+  const auto unavailable_udp =
+      "udp:127.0.0.1:" + std::to_string(unavailable_udp_port());
+  auto udp_failure = cxx_context->flash_file(
+      std::optional<std::string_view>{unavailable_udp}, "system",
+      package.path() / "system.img", cxx_options);
+  CHECK(!udp_failure.has_value());
+  CHECK(udp_failure.error().status() == KB_E_TIMEOUT ||
+        udp_failure.error().status() == KB_E_IO);
+  CHECK(udp_failure.error().transfer_state() == KB_TRANSFER_NOT_SENT);
+  CHECK(udp_failure.error().device_identifier() == unavailable_udp);
+
+  server.finish();
+}
+
 }  // namespace
 
 int main() {
@@ -949,7 +1328,8 @@ int main() {
     context_release_is_safe_after_async_update_start();
     whole_update_timeout_includes_progress_callbacks();
     run_cxx_contract();
-    std::cout << "PASS: typed C and C++ primitives over Fastboot TCP\n";
+    run_udp_flash_contract();
+    std::cout << "PASS: typed C and C++ primitives over Fastboot TCP/UDP\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

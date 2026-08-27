@@ -221,8 +221,9 @@ KB_API const char *KB_CALL kb_device_list_product(
     const kb_device_list_t *devices, size_t index);
 KB_API void KB_CALL kb_device_list_release(kb_device_list_t *devices);
 
-/* For backward compatibility, serial_or_null is always an exact USB serial;
- * values beginning with tcp:, udp:, or usb: are not interpreted as selectors. */
+/* serial_or_null selects the sole USB device when NULL. Values beginning with
+ * tcp: or udp: use the typed network selector grammar documented below; every
+ * other non-NULL value retains the legacy exact USB serial behavior. */
 KB_API kb_status_t KB_CALL kb_flash_file_async(
     kb_context_t *context, const char *serial_or_null, const char *partition,
     const char *file_path, const kb_flash_options_t *options_or_null,
