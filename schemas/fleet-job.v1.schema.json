@@ -33,7 +33,12 @@
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
         "path": { "$ref": "#/$defs/nonEmpty" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+        "sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
       }
     },
     "selector": {
