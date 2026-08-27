@@ -209,8 +209,8 @@ public:
 };
 
 struct OpenAction final {
-    std::optional<ReconnectOpenError> error;
-    std::optional<ReconnectDeviceIdentity> verified_identity;
+    std::optional<ReconnectOpenError> error{};
+    std::optional<ReconnectDeviceIdentity> verified_identity{};
     bool null_session{};
     TransferCertainty outbound_certainty{TransferCertainty::FullyTransferred};
     bool close_session_before_return{};
