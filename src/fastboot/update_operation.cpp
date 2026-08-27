@@ -252,9 +252,29 @@ run_update_package_operation(
     const UpdatePackageOperationOptions& options,
     PrimitiveUpdateDeviceOptions device_options,
     const std::stop_token cancellation) {
-    PrimitiveUpdateDevice device(service, std::move(device_options));
-    return run_update_package_operation(
-        resolver, package_directory_or_zip, device, options, cancellation);
+    try {
+        PrimitiveUpdateDevice device(service, std::move(device_options));
+        return run_update_package_operation(
+            resolver, package_directory_or_zip, device, options,
+            cancellation);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(operation_error(
+            UpdatePackageOperationErrorKind::InternalFailure,
+            UpdatePackageOperationStage::PackagePreflight,
+            "memory allocation failed while creating the update actor"));
+    } catch (const std::exception& error) {
+        return std::unexpected(operation_error(
+            UpdatePackageOperationErrorKind::InternalFailure,
+            UpdatePackageOperationStage::PackagePreflight,
+            "update actor construction failed: " +
+                std::string(error.what())));
+    } catch (...) {
+        return std::unexpected(operation_error(
+            UpdatePackageOperationErrorKind::InternalFailure,
+            UpdatePackageOperationStage::PackagePreflight,
+            "update actor construction failed with a non-standard "
+            "exception"));
+    }
 }
 
 }  // namespace kairosboot::fastboot
