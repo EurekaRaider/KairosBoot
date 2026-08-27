@@ -184,6 +184,7 @@ add_library(
   src/fastboot/primitive_service.cpp
   src/fastboot/reconnect_coordinator.cpp
   src/fastboot/update_executor.cpp
+  src/fastboot/update_operation.cpp
   src/fastboot/update_package_preflight.cpp
   src/fastboot/update_plan.cpp
   src/fleet/controller_scheduler.cpp
@@ -482,6 +483,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_update_executor_tests)
   add_test(NAME update_executor COMMAND kairosboot_update_executor_tests)
   set_tests_properties(update_executor PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_update_operation_tests
+                 tests/fastboot/update_operation_tests.cpp)
+  target_compile_features(kairosboot_update_operation_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_update_operation_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_update_operation_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_update_operation_tests)
+  add_test(NAME update_operation COMMAND kairosboot_update_operation_tests)
+  set_tests_properties(update_operation PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_primitive_update_device_tests
                  tests/fastboot/primitive_update_device_tests.cpp
