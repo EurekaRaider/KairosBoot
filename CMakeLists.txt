@@ -226,6 +226,7 @@ add_library(
   src/fastboot/update_operation.cpp
   src/fastboot/update_package_preflight.cpp
   src/fastboot/update_plan.cpp
+  src/fleet/artifact_preflight.cpp
   src/fleet/canonical_json.cpp
   src/fleet/controller_scheduler.cpp
   src/fleet/job_plan.cpp
@@ -474,6 +475,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_job_report_tests)
   add_test(NAME job_report COMMAND kairosboot_job_report_tests)
   set_tests_properties(job_report PROPERTIES TIMEOUT 20)
+
+  add_executable(kairosboot_artifact_preflight_tests
+                 tests/fleet/artifact_preflight_tests.cpp)
+  target_compile_features(kairosboot_artifact_preflight_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_artifact_preflight_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_artifact_preflight_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_artifact_preflight_tests)
+  add_test(NAME artifact_preflight COMMAND kairosboot_artifact_preflight_tests)
+  set_tests_properties(artifact_preflight PROPERTIES TIMEOUT 20)
 
   add_executable(kairosboot_fleet_manifest_tests
                  tests/fleet/manifest_tests.cpp)
