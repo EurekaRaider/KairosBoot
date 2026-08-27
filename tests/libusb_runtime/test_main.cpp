@@ -2029,6 +2029,8 @@ void test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock() {
             std::unexpected(MacUsbTopologyError{
                 .kind = MacUsbTopologyErrorKind::Cancelled,
                 .stage = MacUsbTopologyStage::DeviceEnumeration,
+                .native_code = 0,
+                .registry_path = {},
                 .message = "cancelled by runtime stop",
             })};
     };
