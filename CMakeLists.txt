@@ -226,6 +226,7 @@ add_library(
   src/fastboot/update_operation.cpp
   src/fastboot/update_package_preflight.cpp
   src/fastboot/update_plan.cpp
+  src/fleet/canonical_json.cpp
   src/fleet/controller_scheduler.cpp
   src/fleet/manifest.cpp
   src/image/artifact_source.cpp
@@ -443,6 +444,17 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_canonical_json_tests
+                 tests/fleet/canonical_json_tests.cpp)
+  target_compile_features(kairosboot_canonical_json_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_canonical_json_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_canonical_json_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_canonical_json_tests)
+  add_test(NAME canonical_json COMMAND kairosboot_canonical_json_tests)
+  set_tests_properties(canonical_json PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_fleet_manifest_tests
                  tests/fleet/manifest_tests.cpp)
   target_compile_features(kairosboot_fleet_manifest_tests PRIVATE cxx_std_23)
