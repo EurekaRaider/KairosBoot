@@ -780,19 +780,50 @@ void one_absolute_deadline_covers_all_snapshot_entries() {
 
     std::atomic<std::uint32_t> observed{};
     ArtifactSourceLimits limits;
-    limits.max_elapsed = std::chrono::milliseconds(300);
+    limits.max_elapsed = std::chrono::hours(1);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
     limits.package_entry_observer = [&](const std::string_view) {
-        observed.fetch_add(1U, std::memory_order_relaxed);
-        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        const auto count =
+            observed.fetch_add(1U, std::memory_order_relaxed) + 1U;
+        if (count == 2U) {
+            std::this_thread::sleep_until(deadline);
+        }
     };
     ArtifactSourceResolver resolver(limits);
-    auto prepared = preflight_update_package(resolver, package, false);
+    auto prepared = preflight_update_package(
+        resolver, package, false, {}, deadline);
     CHECK(!prepared);
     CHECK(prepared.error().kind == UpdatePackagePreflightErrorKind::Artifact);
     CHECK(prepared.error().artifact_error.has_value());
     CHECK(prepared.error().artifact_error->kind ==
           ArtifactSourceErrorKind::TimedOut);
-    CHECK(observed.load(std::memory_order_relaxed) >= 2U);
+    CHECK(observed.load(std::memory_order_relaxed) == 2U);
+}
+
+void caller_deadline_preempts_artifact_limit_before_preflight_work() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "caller-deadline";
+    create_directory_package(package, "", "flash boot boot.img\n");
+    write_text(package / "boot.img", "boot");
+
+    std::atomic<std::uint32_t> observed{};
+    ArtifactSourceLimits source_limits;
+    source_limits.max_elapsed = std::chrono::hours(1);
+    source_limits.package_entry_observer = [&](const std::string_view) {
+        observed.fetch_add(1U, std::memory_order_relaxed);
+    };
+    ArtifactSourceResolver resolver(source_limits);
+    const auto deadline = std::chrono::steady_clock::now();
+    auto prepared = preflight_update_package(
+        resolver, package, false, {}, deadline);
+
+    CHECK(!prepared);
+    CHECK(prepared.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(prepared.error().artifact_error.has_value());
+    CHECK(prepared.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::TimedOut);
+    CHECK(observed.load(std::memory_order_relaxed) == 0U);
 }
 
 void transport_free_tasks_and_device_requirements_remain_explicit() {
@@ -1081,6 +1112,8 @@ int main() {
              directory_names_are_exact_and_case_folded_deterministically},
         Test{"shared snapshot deadline",
              one_absolute_deadline_covers_all_snapshot_entries},
+        Test{"caller deadline preempts artifact limit",
+             caller_deadline_preempts_artifact_limit_before_preflight_work},
         Test{"transport-free tasks and device requirements",
              transport_free_tasks_and_device_requirements_remain_explicit},
         Test{"directory and ZIP parity",

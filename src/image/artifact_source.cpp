@@ -1713,9 +1713,11 @@ struct ArtifactPackageSnapshot::Impl final {
         std::map<std::string, DirectoryEntry, std::less<>>;
 
     Impl(ArtifactSourceLimits limits, std::filesystem::path container,
-         const std::stop_token cancellation)
+         const std::stop_token cancellation,
+         const Clock::time_point caller_deadline)
         : limits_(std::move(limits)),
-          budget_(cancellation, deadline_for(limits_)),
+          budget_(cancellation,
+                  std::min(deadline_for(limits_), caller_deadline)),
           container_(std::move(container)) {}
 
     [[nodiscard]] std::expected<void, ArtifactSourceError> initialize() {
@@ -2265,6 +2267,15 @@ std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
 ArtifactSourceResolver::open_package_snapshot(
     const std::filesystem::path& archive_or_directory,
     const std::stop_token cancellation) {
+    return open_package_snapshot(
+        archive_or_directory, Clock::time_point::max(), cancellation);
+}
+
+std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
+ArtifactSourceResolver::open_package_snapshot(
+    const std::filesystem::path& archive_or_directory,
+    const Clock::time_point caller_deadline,
+    const std::stop_token cancellation) {
     try {
         if (archive_or_directory.empty()) {
             return std::unexpected(make_error(
@@ -2302,7 +2313,7 @@ ArtifactSourceResolver::open_package_snapshot(
         }
         normalized = normalized.lexically_normal();
         auto impl = std::make_unique<ArtifactPackageSnapshot::Impl>(
-            limits_, std::move(normalized), cancellation);
+            limits_, std::move(normalized), cancellation, caller_deadline);
         if (auto initialized = impl->initialize(); !initialized) {
             return std::unexpected(std::move(initialized.error()));
         }

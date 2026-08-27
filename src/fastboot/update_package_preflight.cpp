@@ -383,14 +383,27 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                          const bool wants_wipe,
                          const UpdatePackagePreflightLimits& limits,
                          const std::stop_token cancellation) {
+    return preflight_update_package(
+        resolver, package_directory_or_zip, wants_wipe, limits,
+        std::chrono::steady_clock::time_point::max(), cancellation);
+}
+
+std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_update_package(
+    image::ArtifactSourceResolver& resolver,
+    const std::filesystem::path& package_directory_or_zip,
+    const bool wants_wipe,
+    const UpdatePackagePreflightLimits& limits,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token cancellation) {
     try {
         if (cancellation.stop_requested()) {
             return std::unexpected(failure(UpdatePackagePreflightErrorKind::Cancelled,
                                            "update package preflight was cancelled"));
         }
 
-        auto opened_snapshot =
-            resolver.open_package_snapshot(package_directory_or_zip, cancellation);
+        auto opened_snapshot = resolver.open_package_snapshot(
+            package_directory_or_zip, deadline, cancellation);
         if (!opened_snapshot) {
             return std::unexpected(artifact_failure(
                 "update package", std::move(opened_snapshot.error())));
