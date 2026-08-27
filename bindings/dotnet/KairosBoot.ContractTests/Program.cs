@@ -21,12 +21,20 @@ internal static class Program
             CheckNativeLayouts();
             CheckNativeBinaryCopy();
             CheckCommandOptions();
+            CheckUpdateOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
             CheckExtendedException();
             await CheckCancellationDrain().ConfigureAwait(false);
             await CheckCancellationCompletionRace().ConfigureAwait(false);
             await CheckThirtyTwoWaiters().ConfigureAwait(false);
+            if (Environment.GetEnvironmentVariable("KAIROSBOOT_UPDATE_SHIM") == "1")
+            {
+                await CheckScriptedUpdateShim().ConfigureAwait(false);
+                Console.WriteLine($"KairosBoot scripted update checks passed: {checks}");
+                return 0;
+            }
+
             if (Environment.GetEnvironmentVariable("KAIROSBOOT_MANAGED_ONLY") == "1")
             {
                 Console.WriteLine($"KairosBoot managed contract checks passed: {checks}");
@@ -78,15 +86,18 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 77)
+        if (uniqueEntryPoints.Count != 80)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 77 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 80 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 77, "unique entry points");
+        Check(uniqueEntryPoints.Count == 80, "unique entry points");
+        Check(entryPoints.Contains("kb_update_options_init"), "update options import");
+        Check(entryPoints.Contains("kb_update_package_async"), "async update import");
+        Check(entryPoints.Contains("kb_update_package"), "blocking update import");
         Check(entryPoints.Contains("kb_command_options_init"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
         Check(entryPoints.Contains("kb_error_session_poisoned"), "extended error import");
@@ -124,7 +135,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 77, "net48 DllImport count");
+        Check(methods.Count == 80, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -133,7 +144,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 58, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 62, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -151,7 +162,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 77, "net10 LibraryImport count");
+        Check(groups.Count == 80, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -162,7 +173,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 36, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 38, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -172,6 +183,32 @@ internal static class Program
 
     private static void CheckNativeLayouts()
     {
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.StructSize)).ToInt32() == 0,
+            "update options struct_size offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ApiVersion)).ToInt32() == 4,
+            "update options api_version offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.TimeoutMilliseconds)).ToInt32() == 8,
+            "update options timeout offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.Wipe)).ToInt32() == 12,
+            "update options wipe offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ProgressCallback)).ToInt32() == 16,
+            "update options callback offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ProgressUserData)).ToInt32() ==
+                (IntPtr.Size == 8 ? 24 : 20),
+            "update options callback state offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 32 : 24),
+            "update options native size");
+        Check(
+            NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
+            "update options declared size");
+
         Check(
             Marshal.OffsetOf<NativeCommandOptions>(nameof(NativeCommandOptions.StructSize)).ToInt32() == 0,
             "command options struct_size offset");
@@ -240,6 +277,34 @@ internal static class Program
             () => _ = new CommandOptions(Timeout.InfiniteTimeSpan, (ulong)int.MaxValue + 1));
     }
 
+    private static void CheckUpdateOptions()
+    {
+        Check(
+            UpdateOptions.Default.Timeout == Timeout.InfiniteTimeSpan,
+            "default update timeout");
+        Check(!UpdateOptions.Default.Wipe, "default update preserves data");
+        Check(
+            default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
+            "default struct update timeout");
+
+        var infiniteWipe = new UpdateOptions(Timeout.InfiniteTimeSpan, wipe: true);
+        Check(infiniteWipe.Timeout == Timeout.InfiniteTimeSpan, "explicit infinite update timeout");
+        Check(infiniteWipe.Wipe, "explicit update wipe");
+
+        var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+        Check(new UpdateOptions(fractional).Timeout == fractional, "finite update timeout");
+
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new UpdateOptions(TimeSpan.FromTicks(-1)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new UpdateOptions(
+                TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
+
+        var maximum = TimeSpan.FromTicks(
+            ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
+        Check(new UpdateOptions(maximum).Timeout == maximum, "maximum finite update timeout");
+    }
+
     private static void CheckCommandResultLifetime()
     {
         CommandResult result;
@@ -263,6 +328,23 @@ internal static class Program
 
     private static void CheckTypedPublicSurface()
     {
+        var updateMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "UpdatePackageAsync")
+            .ToList();
+        Check(updateMethods.Count == 2, "managed update overloads");
+        Check(
+            updateMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed update returns Task");
+        Check(
+            updateMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<UpdateProgress>))),
+            "managed update progress type");
+        Check(
+            updateMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed update cancellation");
+
         var expected = new[]
         {
             "GetVarAsync",
@@ -436,6 +518,89 @@ internal static class Program
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
         Check(new FlashOptions(maximum).Timeout == maximum, "maximum finite flash timeout");
+    }
+
+    private static async Task CheckScriptedUpdateShim()
+    {
+        ScriptedUpdateNativeMethods.Reset();
+
+        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        {
+            var nativeOptions = new NativeUpdateOptions();
+            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = 17;
+            nativeOptions.Wipe = 1;
+            var status = NativeMethods.UpdatePackage(
+                context,
+                "usb:serial:blocking",
+                "blocking.zip",
+                ref nativeOptions,
+                out var rawError);
+            Check(status == (int)KairosBootStatus.Ok, "blocking update shim status");
+            Check(rawError == IntPtr.Zero, "blocking update shim error ownership");
+        }
+
+        var reports = new List<UpdateProgress>();
+        using (var context = Context.Create())
+        {
+            await context.UpdatePackageAsync("default.zip").ConfigureAwait(false);
+
+            var progress = new InlineProgress<UpdateProgress>(reports.Add);
+            var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+            await context.UpdatePackageAsync(
+                "images/升级.zip",
+                new UpdateOptions(fractional, wipe: true),
+                "usb:serial:device",
+                progress,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Check(reports.Count == 3, "update progress count");
+            Check(reports[0].Stage == "preflight", "update preflight progress");
+            Check(reports[0].BytesTotal == 0, "update preflight byte total");
+            Check(reports[1].Stage == "download", "update download progress");
+            Check(
+                reports[1].BytesCompleted == 2 && reports[1].BytesTotal == 4,
+                "update download byte progress");
+            Check(reports[2].Stage == "complete", "update completion progress");
+            Check(
+                reports.All(report => report.DeviceIdentifier == "usb:serial:device"),
+                "update progress device identifier");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var cancellationProgress = new InlineProgress<UpdateProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.UpdatePackageAsync(
+                        "cancel.zip",
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: cancellationProgress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            using (var source = new CancellationTokenSource())
+            {
+                source.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.UpdatePackageAsync(
+                        "not-started.zip",
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            await ExpectAsync<ArgumentException>(
+                () => context.UpdatePackageAsync(string.Empty)).ConfigureAwait(false);
+            await ExpectAsync<ArgumentException>(
+                () => context.UpdatePackageAsync(
+                    "update.zip",
+                    deviceSelector: string.Empty)).ConfigureAwait(false);
+        }
+
+        Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "scripted native assertions");
+        Check(ScriptedUpdateNativeMethods.OptionsInitCount() == 4, "update options init calls");
+        Check(ScriptedUpdateNativeMethods.AsyncStartCount() == 3, "async update starts");
+        Check(ScriptedUpdateNativeMethods.BlockingCount() == 1, "blocking update import call");
+        Check(ScriptedUpdateNativeMethods.CancelCount() == 1, "native update cancellation");
+        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 3, "update operation release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "update context release");
     }
 
     private static void CheckVersion()
@@ -1025,6 +1190,48 @@ internal static class Program
         {
             return new InvalidOperationException($"Unexpected fake status {status}.");
         }
+    }
+
+    private sealed class InlineProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> report;
+
+        internal InlineProgress(Action<T> report)
+        {
+            this.report = report;
+        }
+
+        public void Report(T value)
+        {
+            report(value);
+        }
+    }
+
+    private static class ScriptedUpdateNativeMethods
+    {
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_reset", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void Reset();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_failure_code", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FailureCode();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_options_init_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int OptionsInitCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_async_start_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int AsyncStartCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_blocking_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int BlockingCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_cancel_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int CancelCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_operation_release_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int OperationReleaseCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_context_release_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int ContextReleaseCount();
     }
 
     private static TException Expect<TException>(Action action)

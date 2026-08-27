@@ -125,6 +125,85 @@ public readonly struct FlashOptions
     }
 }
 
+/// <summary>Controls a complete update-package operation.</summary>
+public readonly struct UpdateOptions
+{
+    private readonly bool hasExplicitTimeout;
+    private readonly TimeSpan timeout;
+    private readonly uint nativeTimeoutMilliseconds;
+
+    /// <summary>
+    /// Creates update options with a whole-operation timeout and optional data
+    /// wipe. Use <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for no
+    /// deadline. Finite sub-millisecond values are rounded up so the native
+    /// deadline is never shorter than requested.
+    /// </summary>
+    /// <param name="timeout">
+    /// A non-negative duration shorter than <see cref="uint.MaxValue"/>
+    /// milliseconds, or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.
+    /// </param>
+    /// <param name="wipe">
+    /// Whether wipe-conditioned package tasks may erase user data.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="timeout"/> cannot be represented by the native ABI.
+    /// </exception>
+    public UpdateOptions(TimeSpan timeout, bool wipe = false)
+    {
+        nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
+        this.timeout = timeout;
+        hasExplicitTimeout = true;
+        Wipe = wipe;
+    }
+
+    /// <summary>Gets options that use no deadline and preserve user data.</summary>
+    public static UpdateOptions Default => default;
+
+    /// <summary>Gets the timeout for the complete update operation.</summary>
+    public TimeSpan Timeout => hasExplicitTimeout
+        ? timeout
+        : System.Threading.Timeout.InfiniteTimeSpan;
+
+    /// <summary>Gets whether wipe-conditioned package tasks may erase user data.</summary>
+    public bool Wipe { get; }
+
+    internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
+        ? nativeTimeoutMilliseconds
+        : uint.MaxValue;
+
+    private static uint ToNativeMilliseconds(TimeSpan timeout)
+    {
+        if (timeout == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            return uint.MaxValue;
+        }
+
+        if (timeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                timeout,
+                "Update timeout must be non-negative or Timeout.InfiniteTimeSpan.");
+        }
+
+        var milliseconds = timeout.Ticks / TimeSpan.TicksPerMillisecond;
+        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
+        {
+            milliseconds++;
+        }
+
+        if ((ulong)milliseconds >= uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                timeout,
+                "Finite update timeout must be shorter than UInt32.MaxValue milliseconds.");
+        }
+
+        return (uint)milliseconds;
+    }
+}
+
 /// <summary>Progress reported while transferring or flashing an artifact.</summary>
 public sealed class FlashProgress
 {
@@ -147,6 +226,34 @@ public sealed class FlashProgress
     public ulong BytesTotal { get; }
 
     /// <summary>Gets the current operation stage.</summary>
+    public string Stage { get; }
+
+    /// <summary>Gets the device associated with this progress event.</summary>
+    public string DeviceIdentifier { get; }
+}
+
+/// <summary>Progress reported while validating and applying an update package.</summary>
+public sealed class UpdateProgress
+{
+    internal UpdateProgress(
+        ulong bytesCompleted,
+        ulong bytesTotal,
+        string stage,
+        string deviceIdentifier)
+    {
+        BytesCompleted = bytesCompleted;
+        BytesTotal = bytesTotal;
+        Stage = stage;
+        DeviceIdentifier = deviceIdentifier;
+    }
+
+    /// <summary>Gets the completed byte count for the current image transfer.</summary>
+    public ulong BytesCompleted { get; }
+
+    /// <summary>Gets the current image size, or zero outside a transfer stage.</summary>
+    public ulong BytesTotal { get; }
+
+    /// <summary>Gets the current update stage.</summary>
     public string Stage { get; }
 
     /// <summary>Gets the device associated with this progress event.</summary>

@@ -154,6 +154,37 @@ public sealed class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>Starts a complete update-package operation with safe defaults.</summary>
+    public Task UpdatePackageAsync(
+        string packagePath,
+        string? deviceSelector = null,
+        IProgress<UpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return UpdatePackageCoreAsync(
+            packagePath,
+            UpdateOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Starts a complete update-package operation with typed options.</summary>
+    public Task UpdatePackageAsync(
+        string packagePath,
+        UpdateOptions options,
+        string? deviceSelector = null,
+        IProgress<UpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return UpdatePackageCoreAsync(
+            packagePath,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
     /// <summary>Reads a Fastboot variable.</summary>
     public Task<CommandResult> GetVarAsync(
         string variable,
@@ -652,6 +683,63 @@ public sealed class Context : IDisposable
         }
     }
 
+    private async Task UpdatePackageCoreAsync(
+        string packagePath,
+        UpdateOptions options,
+        string? deviceSelector,
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(packagePath, nameof(packagePath));
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<UpdateProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<UpdateProgress>(
+                    progress,
+                    CreateUpdateProgress);
+            }
+
+            var nativeOptions = new NativeUpdateOptions();
+            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.Wipe = options.Wipe ? 1 : 0;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.UpdatePackageAsync(
+                handle,
+                deviceSelector,
+                packagePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
     private async Task<CommandResult> RunCommandAsync(
         CommandOptions options,
         IProgress<CommandProgress>? progress,
@@ -768,6 +856,15 @@ public sealed class Context : IDisposable
     private static FlashProgress CreateFlashProgress(NativeProgress native)
     {
         return new FlashProgress(
+            native.BytesCompleted,
+            native.BytesTotal,
+            Utf8String.FromNative(native.Stage),
+            Utf8String.FromNative(native.DeviceIdentifier));
+    }
+
+    private static UpdateProgress CreateUpdateProgress(NativeProgress native)
+    {
+        return new UpdateProgress(
             native.BytesCompleted,
             native.BytesTotal,
             Utf8String.FromNative(native.Stage),
