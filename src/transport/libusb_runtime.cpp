@@ -2278,7 +2278,7 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         const auto cancellation = state_->topology_stop_source.get_token();
         std::vector<MacUsbTopologyDeviceQuery> device_queries;
         device_queries.reserve(macos_device_ranges.size());
-        for (const auto [begin, end] : macos_device_ranges) {
+        for (const auto& [begin, end] : macos_device_ranges) {
             if (cancellation.stop_requested() ||
                 !state_->accepting.load(std::memory_order_acquire)) {
                 return std::unexpected(
