@@ -25,7 +25,9 @@ namespace {
 
 constexpr std::size_t kMaximumSysfsPathBytes = 4U * 1024U;
 constexpr std::size_t kMaximumSysfsComponents = 128U;
+#if !defined(_WIN32)
 constexpr std::size_t kMaximumAttributeBytes = 512U;
+#endif
 constexpr std::size_t kMaximumIdentityTextBytes = 256U;
 
 [[nodiscard]] LinuxUsbTopologyError make_error(
@@ -184,6 +186,7 @@ template <typename Integer>
     return static_cast<Integer>(parsed);
 }
 
+#if !defined(_WIN32)
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> parse_port_chain(
     const std::string_view value) {
     std::vector<std::uint8_t> ports;
@@ -208,6 +211,7 @@ template <typename Integer>
     return ports.empty() ? std::nullopt
                          : std::optional<std::vector<std::uint8_t>>{std::move(ports)};
 }
+#endif
 
 [[nodiscard]] std::expected<std::string, LinuxUsbTopologyError>
 device_entry_name(const LinuxUsbTopologyQuery& query) {
@@ -794,9 +798,19 @@ OpenatLinuxUsbSysfsReader::OpenatLinuxUsbSysfsReader(
     std::string sysfs_root,
     const LinuxUsbSysfsCheckpointHook checkpoint_hook,
     void* const checkpoint_context)
+#if !defined(_WIN32)
     : sysfs_root_(std::move(sysfs_root)),
       checkpoint_hook_(checkpoint_hook),
-      checkpoint_context_(checkpoint_context) {}
+      checkpoint_context_(checkpoint_context)
+#else
+    : sysfs_root_(std::move(sysfs_root))
+#endif
+{
+#if defined(_WIN32)
+    (void)checkpoint_hook;
+    (void)checkpoint_context;
+#endif
+}
 
 std::expected<std::vector<LinuxUsbSysfsNode>, LinuxUsbTopologyError>
 OpenatLinuxUsbSysfsReader::read_candidates(

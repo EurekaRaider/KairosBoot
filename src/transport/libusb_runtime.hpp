@@ -5,7 +5,9 @@
 #endif
 
 #include "src/transport/linux_usb_topology.hpp"
+#include "src/transport/macos_usb_topology.hpp"
 #include "src/transport/transfer_ring.hpp"
+#include "src/transport/windows_usb_topology.hpp"
 
 #include <libusb.h>
 
@@ -17,6 +19,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -51,6 +55,7 @@ struct LibusbFunctions final {
     std::function<void(libusb_config_descriptor*)> free_config_descriptor;
     std::function<std::uint8_t(libusb_device*)> get_bus_number;
     std::function<std::uint8_t(libusb_device*)> get_device_address;
+    std::function<unsigned long(libusb_device*)> get_session_data;
     std::function<int(libusb_device*, std::uint8_t*, int)> get_port_numbers;
     std::function<int(libusb_device*, libusb_device_string_type, char*, int)>
         get_device_string;
@@ -78,11 +83,39 @@ struct LibusbFunctions final {
     // production function table leaves it empty.
     std::function<void(LibusbSubmitFaultPoint)> submit_allocation_fault;
 
-    // Optional platform topology enrichment. Production installs this only on
-    // Linux; tests may inject it without depending on the host's /sys tree.
+    // Optional platform topology enrichment. Production installs each resolver
+    // only on its host platform; tests may inject either resolver anywhere.
     std::function<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>(
         const LinuxUsbTopologyQuery&)>
         resolve_linux_topology;
+    std::function<std::expected<std::vector<WindowsUsbTopologyResult>,
+                                WindowsUsbTopologyError>(
+        std::span<const WindowsUsbTopologyQuery>,
+        std::chrono::steady_clock::time_point,
+        std::stop_token)>
+        resolve_windows_topology;
+    // Required whenever resolve_windows_topology is installed. This captures
+    // the exact PnP instance ID for libusb's DEVINST before the remaining
+    // libusb snapshot is read, so later topology validation can reject DEVINST
+    // reuse instead of combining two device generations.
+    std::function<std::expected<std::string, WindowsUsbTopologyError>(
+        unsigned long,
+        std::chrono::steady_clock::time_point,
+        std::stop_token)>
+        capture_windows_session_identity;
+
+    // Optional macOS topology enrichment. One call receives every selected
+    // device; each batch entry contains all selected interfaces for that
+    // libusb device.
+    // The resolver must preserve device/interface order and publish each
+    // device from one consistent generation. Tests may inject this on any
+    // host; production installs the IOKit-backed resolver only on Apple.
+    std::function<std::expected<std::vector<MacUsbTopologyDeviceResult>,
+                                MacUsbTopologyError>(
+        std::span<const MacUsbTopologyDeviceQuery>,
+        MacUsbTopologyTimePoint,
+        std::stop_token)>
+        resolve_macos_topology;
 
     [[nodiscard]] static LibusbFunctions system();
     [[nodiscard]] bool complete() const noexcept;
@@ -127,6 +160,10 @@ struct UsbDeviceInfo final {
     std::uint16_t product_id{};
     std::uint8_t bus_number{};
     std::uint8_t device_address{};
+    // Opaque backend identity captured from libusb 1.0.30. On Darwin this is
+    // the IOKit sessionID used only to correlate an immutable registry
+    // snapshot; other platforms must not treat it as a physical-port key.
+    std::uint64_t backend_session_id{};
     std::uint8_t configuration_value{};
     std::vector<std::uint8_t> port_path;
     std::string serial_utf8;
@@ -141,6 +178,10 @@ struct UsbDeviceInfo final {
     std::uint16_t bulk_in_max_packet_size{};
     std::optional<LinuxUsbTopology> linux_topology;
     std::optional<LinuxUsbTopologyError> linux_topology_error;
+    std::optional<WindowsUsbTopology> windows_topology;
+    std::optional<WindowsUsbTopologyError> windows_topology_error;
+    std::optional<MacUsbTopology> macos_topology;
+    std::optional<MacUsbTopologyError> macos_topology_error;
 };
 
 enum class ZeroPacketPolicy : std::uint8_t {

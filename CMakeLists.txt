@@ -240,11 +240,13 @@ add_library(
   src/transport/image_transfer_source.cpp
   src/transport/libusb_runtime.cpp
   src/transport/linux_usb_topology.cpp
+  src/transport/macos_usb_topology.cpp
   src/transport/sequential_streaming_transport.cpp
   src/transport/tcp_fastboot.cpp
   src/transport/transfer_ring.cpp
   src/transport/udp_fastboot.cpp
-  src/transport/usb_fastboot.cpp)
+  src/transport/usb_fastboot.cpp
+  src/transport/windows_usb_topology.cpp)
 set_target_properties(
   kairosboot_internal
   PROPERTIES POSITION_INDEPENDENT_CODE ON
@@ -265,6 +267,15 @@ if(WIN32)
   target_compile_definitions(kairosboot_internal
                              PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
   target_link_libraries(kairosboot_internal PRIVATE bcrypt ws2_32)
+  target_link_libraries(kairosboot_internal PRIVATE setupapi cfgmgr32)
+endif()
+if(APPLE)
+  find_library(KAIROSBOOT_IOKIT_FRAMEWORK IOKit REQUIRED)
+  find_library(KAIROSBOOT_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+  target_link_libraries(
+    kairosboot_internal
+    PRIVATE "${KAIROSBOOT_IOKIT_FRAMEWORK}"
+            "${KAIROSBOOT_COREFOUNDATION_FRAMEWORK}")
 endif()
 kairosboot_enable_strict_warnings(kairosboot_internal)
 
@@ -655,6 +666,13 @@ if(BUILD_TESTING)
   target_compile_features(kairosboot_cxx_primitive_tcp_tests PRIVATE cxx_std_23)
   target_link_libraries(kairosboot_cxx_primitive_tcp_tests
                         PRIVATE KairosBoot::Cxx Boost::asio_core Threads::Threads)
+  if(WIN32)
+    target_compile_definitions(kairosboot_cxx_primitive_tcp_tests
+                               PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    # Boost.Asio remains the networking API. ws2_32 is its required Windows
+    # system import library and is intentionally private to this test target.
+    target_link_libraries(kairosboot_cxx_primitive_tcp_tests PRIVATE ws2_32)
+  endif()
   kairosboot_enable_strict_warnings(kairosboot_cxx_primitive_tcp_tests)
   add_test(NAME cxx_primitive_tcp COMMAND kairosboot_cxx_primitive_tcp_tests)
   set_tests_properties(cxx_primitive_tcp PROPERTIES TIMEOUT 15)
@@ -800,6 +818,28 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_linux_usb_topology_tests)
   add_test(NAME linux_usb_topology COMMAND kairosboot_linux_usb_topology_tests)
   set_tests_properties(linux_usb_topology PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_windows_usb_topology_tests
+                 tests/libusb_runtime/windows_usb_topology_tests.cpp)
+  target_compile_features(kairosboot_windows_usb_topology_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_windows_usb_topology_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_windows_usb_topology_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_windows_usb_topology_tests)
+  add_test(NAME windows_usb_topology COMMAND kairosboot_windows_usb_topology_tests)
+  set_tests_properties(windows_usb_topology PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_macos_usb_topology_tests
+                 tests/libusb_runtime/macos_usb_topology_tests.cpp)
+  target_compile_features(kairosboot_macos_usb_topology_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_macos_usb_topology_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_macos_usb_topology_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_macos_usb_topology_tests)
+  add_test(NAME macos_usb_topology COMMAND kairosboot_macos_usb_topology_tests)
+  set_tests_properties(macos_usb_topology PROPERTIES TIMEOUT 30)
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(

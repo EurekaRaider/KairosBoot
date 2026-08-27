@@ -137,8 +137,10 @@ public:
 
 private:
     std::string sysfs_root_;
+#if !defined(_WIN32)
     LinuxUsbSysfsCheckpointHook checkpoint_hook_{};
     void* checkpoint_context_{};
+#endif
 };
 
 class LinuxUsbTopologyDiscovery final {

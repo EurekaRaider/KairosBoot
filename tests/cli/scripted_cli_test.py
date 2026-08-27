@@ -503,7 +503,7 @@ def run(cli: pathlib.Path) -> None:
             ["--json", "update", str(timeout_update_package)],
             update_timeout,
             expected_exit=4,
-            timeout_ms=20,
+            timeout_ms=1000,
         )
         parse_failure_json(stdout, stderr, "timeout")
 
