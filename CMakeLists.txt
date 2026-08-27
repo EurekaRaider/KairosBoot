@@ -494,7 +494,7 @@ if(BUILD_TESTING)
   target_include_directories(kairosboot_device_preflight_tests
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(kairosboot_device_preflight_tests
-                        PRIVATE kairosboot_internal)
+                        PRIVATE kairosboot_internal kairosboot_libusb)
   kairosboot_enable_strict_warnings(kairosboot_device_preflight_tests)
   add_test(NAME device_preflight COMMAND kairosboot_device_preflight_tests)
   set_tests_properties(device_preflight PROPERTIES TIMEOUT 30)
