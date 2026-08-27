@@ -23,7 +23,9 @@ struct AttemptState final {
 
 [[nodiscard]] bool valid_physical_port(
     const UsbPhysicalPortPath& port) noexcept {
-    if (port.bus_number == 0 || port.ports.empty() || port.ports.size() > 7) {
+    // libusb's Darwin backend derives a zero-based bus number from locationID,
+    // so bus 0 is a valid physical identity on supported macOS hosts.
+    if (port.ports.empty() || port.ports.size() > 7) {
         return false;
     }
     return std::ranges::all_of(port.ports, [](const std::uint8_t value) {
