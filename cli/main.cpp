@@ -507,6 +507,9 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error("update requires <package>");
     }
     result.first = argv[index++];
+    if (result.first == "--wipe") {
+      return error("update requires <package>");
+    }
     if (result.first.empty()) {
       return error("update package must not be empty");
     }

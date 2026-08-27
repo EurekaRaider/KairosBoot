@@ -13,6 +13,7 @@ import socket
 import struct
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from typing import Optional
 
@@ -514,7 +515,33 @@ def run(cli: pathlib.Path) -> None:
             ("update", str(cancelled_update_package)),
             b"erase:system",
         )
-        parse_failure_json(stdout, stderr, "cancelled")
+        cancelled = parse_failure_json(stdout, stderr, "cancelled")
+        assert cancelled["sessionPoisoned"] is True
+
+        cumulative_timeout_package = make_update_package(
+            directory,
+            "cumulative-timeout-update",
+            "version 1\nerase cache\nerase metadata\nerase misc\n",
+        )
+
+        def cumulative_update_timeout(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"erase:cache"
+            time.sleep(0.35)
+            send_frame(connection, b"OKAYcache")
+            assert receive_frame(connection) == b"erase:metadata"
+            time.sleep(0.35)
+            send_frame(connection, b"OKAYmetadata")
+            assert receive_frame(connection) == b"erase:misc"
+            require_peer_close(connection)
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "update", str(cumulative_timeout_package)],
+            cumulative_update_timeout,
+            expected_exit=4,
+            timeout_ms=1000,
+        )
+        parse_failure_json(stdout, stderr, "timeout")
 
         invoke_without_connection(
             cli, ["flashing", "sideways"], 2, "invalid_argument"

@@ -119,6 +119,8 @@ expect_text_parse_error(
 expect_text_parse_error(
   update_arity "update requires <package>" update)
 expect_text_parse_error(
+  update_wipe_without_package "update requires <package>" update --wipe)
+expect_text_parse_error(
   duplicate_serial "option --serial may only be specified once" --serial A
   --serial B flash boot image.img)
 expect_text_parse_error(
@@ -280,6 +282,8 @@ expect_json_parse_error(
   --max-receive-bytes 1 flash boot image.img)
 expect_json_parse_error(
   update_arity "update requires <package>" update)
+expect_json_parse_error(
+  update_wipe_without_package "update requires <package>" update --wipe)
 expect_json_parse_error(
   update_unknown_option "update supports only --wipe after <package>" update
   package.zip --unknown)
