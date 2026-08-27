@@ -60,6 +60,12 @@ using kairosboot::transport::UsbDeviceInfo;
 using kairosboot::transport::UsbFastbootTransport;
 using kairosboot::transport::UsbFastbootTransportOptions;
 using kairosboot::transport::UsbInterfaceFilter;
+using kairosboot::transport::WindowsUsbNativeErrorDomain;
+using kairosboot::transport::WindowsUsbTopology;
+using kairosboot::transport::WindowsUsbTopologyError;
+using kairosboot::transport::WindowsUsbTopologyErrorKind;
+using kairosboot::transport::WindowsUsbTopologyQuery;
+using kairosboot::transport::WindowsUsbTopologyStage;
 using kairosboot::transport::ZeroPacketPolicy;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::protocol::TransportStatus;
@@ -223,6 +229,10 @@ public:
         };
         table.get_bus_number = [](libusb_device*) { return std::uint8_t{2}; };
         table.get_device_address = [](libusb_device*) { return std::uint8_t{5}; };
+        table.get_session_data = [self](libusb_device*) {
+            ++self->session_data_calls;
+            return self->session_data;
+        };
         table.get_port_numbers = [](libusb_device*,
                                     std::uint8_t* path,
                                     int length) -> int {
@@ -438,6 +448,7 @@ public:
     int set_configuration_result{LIBUSB_SUCCESS};
     int current_configuration{1};
     int last_set_configuration{-1};
+    unsigned long session_data{0x101UL};
     int claim_result{LIBUSB_SUCCESS};
     int alternate_result{LIBUSB_SUCCESS};
     int cancel_actual_length{};
@@ -453,6 +464,7 @@ public:
     std::atomic<int> free_device_list_calls{0};
     std::atomic<int> free_config_calls{0};
     std::atomic<int> serial_calls{0};
+    std::atomic<int> session_data_calls{0};
     std::atomic<int> open_calls{0};
     std::atomic<int> close_calls{0};
     std::atomic<int> get_configuration_calls{0};
@@ -665,6 +677,16 @@ void test_init_failure_version_and_singleton() {
     KB_CHECK(!incomplete.has_value());
     KB_CHECK(incomplete.error().kind == LibusbRuntimeErrorKind::invalid_function_table);
 
+    auto missing_session = std::make_shared<FakeLibusb>();
+    auto missing_session_functions = missing_session->functions();
+    missing_session_functions.get_session_data = {};
+    const auto missing_session_result =
+        LibusbRuntime::create(std::move(missing_session_functions));
+    KB_CHECK(!missing_session_result.has_value());
+    KB_CHECK(missing_session_result.error().kind ==
+             LibusbRuntimeErrorKind::invalid_function_table);
+    KB_CHECK(missing_session->init_calls == 0);
+
     auto wrong_version = std::make_shared<FakeLibusb>();
     wrong_version->version_.micro = 29;
     const auto version_result = LibusbRuntime::create(wrong_version->functions());
@@ -787,7 +809,7 @@ void test_enumeration_retains_linux_topology_or_diagnostic() {
     failing_runtime->stop();
 }
 
-void test_device_topology_is_resolved_once_for_distinct_interfaces() {
+void test_platform_topology_uses_consistent_identity_across_interfaces() {
     auto fake = std::make_shared<FakeLibusb>();
     auto functions = fake->functions();
 
@@ -852,6 +874,33 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
                         "devices/pci0000:00/0000:00:14.0/usb2/2-3/2-3.4",
                 }};
         };
+    std::vector<WindowsUsbTopologyQuery> windows_queries;
+    functions.resolve_windows_topology =
+        [&windows_queries](const WindowsUsbTopologyQuery& query) {
+            windows_queries.push_back(query);
+            return std::expected<WindowsUsbTopology,
+                                 WindowsUsbTopologyError>{
+                WindowsUsbTopology{
+                    .physical_port_path = "usb:2-3.4",
+                    .root_controller_id =
+                        "windows-pnp:PCI\\VEN_8086&DEV_7AE0\\CONTROLLER-01",
+                    .hub_port_chain = query.port_numbers,
+                    .vendor_id = query.vendor_id,
+                    .product_id = query.product_id,
+                    .bus_number = query.bus_number,
+                    .device_address = query.device_address,
+                    .serial_utf8 = query.serial_utf8,
+                    .interface_fingerprint = query.interface_fingerprint,
+                    .device_instance_id_utf8 =
+                        "USB\\VID_18D1&PID_4EE0\\SERIAL",
+                    .hub_instance_ids_utf8 = {
+                        "USB\\ROOT_HUB30\\ROOT-01",
+                        "USB\\VID_2109&PID_2817\\EXTERNAL-HUB",
+                    },
+                    .location_path_utf8 =
+                        "PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(3)#USB(4)",
+                }};
+        };
 
     auto runtime = create_runtime(fake, std::move(functions));
     UsbInterfaceFilter filter;
@@ -870,6 +919,62 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
              (*enumerated)[1].linux_topology);
     KB_CHECK(!(*enumerated)[0].linux_topology_error.has_value());
     KB_CHECK(!(*enumerated)[1].linux_topology_error.has_value());
+    KB_CHECK(fake->session_data_calls == 1);
+    KB_CHECK(windows_queries.size() == 2U);
+    for (std::size_t index = 0U; index < windows_queries.size(); ++index) {
+        const auto& query = windows_queries[index];
+        const auto& snapshot = (*enumerated)[index];
+        KB_CHECK(query.libusb_session_data == fake->session_data);
+        KB_CHECK(query.vendor_id == snapshot.vendor_id);
+        KB_CHECK(query.product_id == snapshot.product_id);
+        KB_CHECK(query.bus_number == snapshot.bus_number);
+        KB_CHECK(query.device_address == snapshot.device_address);
+        KB_CHECK(query.port_numbers == snapshot.port_path);
+        KB_CHECK(query.serial_utf8 ==
+                 std::optional<std::string>{snapshot.serial_utf8});
+        KB_CHECK(query.interface_fingerprint.interface_number ==
+                 snapshot.interface_number);
+        KB_CHECK(query.interface_fingerprint.interface_class ==
+                 snapshot.interface_class);
+        KB_CHECK(query.interface_fingerprint.interface_subclass ==
+                 snapshot.interface_subclass);
+        KB_CHECK(query.interface_fingerprint.interface_protocol ==
+                 snapshot.interface_protocol);
+        KB_CHECK(snapshot.windows_topology.has_value());
+        KB_CHECK(snapshot.windows_topology->interface_fingerprint ==
+                 query.interface_fingerprint);
+        KB_CHECK(!snapshot.windows_topology_error.has_value());
+    }
+    runtime->stop();
+}
+
+void test_zero_windows_session_is_diagnostic_and_never_resolved() {
+    auto fake = std::make_shared<FakeLibusb>();
+    fake->session_data = 0UL;
+    auto functions = fake->functions();
+    std::size_t resolver_calls = 0U;
+    functions.resolve_windows_topology =
+        [&resolver_calls](const WindowsUsbTopologyQuery&) {
+            ++resolver_calls;
+            return std::expected<WindowsUsbTopology,
+                                 WindowsUsbTopologyError>{
+                std::unexpected(WindowsUsbTopologyError{})};
+        };
+
+    auto runtime = create_runtime(fake, std::move(functions));
+    const auto snapshot = matching_device(runtime);
+    KB_CHECK(fake->session_data_calls == 1);
+    KB_CHECK(resolver_calls == 0U);
+    KB_CHECK(!snapshot.windows_topology.has_value());
+    KB_CHECK(snapshot.windows_topology_error.has_value());
+    KB_CHECK(snapshot.windows_topology_error->kind ==
+             WindowsUsbTopologyErrorKind::InvalidArgument);
+    KB_CHECK(snapshot.windows_topology_error->stage ==
+             WindowsUsbTopologyStage::Validation);
+    KB_CHECK(snapshot.windows_topology_error->native_domain ==
+             WindowsUsbNativeErrorDomain::None);
+    KB_CHECK(snapshot.windows_topology_error->native_code == 0U);
+    KB_CHECK(snapshot.windows_topology_error->libusb_session_data == 0UL);
     runtime->stop();
 }
 
@@ -2289,8 +2394,10 @@ int main() {
         {"event loop and filtered UTF-8 enumeration", test_event_loop_and_filtered_utf8_enumeration},
         {"Linux topology enrichment and diagnostic",
          test_enumeration_retains_linux_topology_or_diagnostic},
-        {"Linux topology device/interface identity",
-         test_device_topology_is_resolved_once_for_distinct_interfaces},
+        {"platform topology device/interface identity",
+         test_platform_topology_uses_consistent_identity_across_interfaces},
+        {"Windows topology exact session and zero rejection",
+         test_zero_windows_session_is_diagnostic_and_never_resolved},
         {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
         {"open rejects changed interface snapshot", test_open_rejects_changed_interface_snapshot},
         {"open configuration before claim", test_open_configuration_is_verified_before_claim},

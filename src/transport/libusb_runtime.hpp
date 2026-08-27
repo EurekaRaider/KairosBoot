@@ -6,6 +6,7 @@
 
 #include "src/transport/linux_usb_topology.hpp"
 #include "src/transport/transfer_ring.hpp"
+#include "src/transport/windows_usb_topology.hpp"
 
 #include <libusb.h>
 
@@ -51,6 +52,7 @@ struct LibusbFunctions final {
     std::function<void(libusb_config_descriptor*)> free_config_descriptor;
     std::function<std::uint8_t(libusb_device*)> get_bus_number;
     std::function<std::uint8_t(libusb_device*)> get_device_address;
+    std::function<unsigned long(libusb_device*)> get_session_data;
     std::function<int(libusb_device*, std::uint8_t*, int)> get_port_numbers;
     std::function<int(libusb_device*, libusb_device_string_type, char*, int)>
         get_device_string;
@@ -78,11 +80,14 @@ struct LibusbFunctions final {
     // production function table leaves it empty.
     std::function<void(LibusbSubmitFaultPoint)> submit_allocation_fault;
 
-    // Optional platform topology enrichment. Production installs this only on
-    // Linux; tests may inject it without depending on the host's /sys tree.
+    // Optional platform topology enrichment. Production installs each resolver
+    // only on its host platform; tests may inject either resolver anywhere.
     std::function<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>(
         const LinuxUsbTopologyQuery&)>
         resolve_linux_topology;
+    std::function<std::expected<WindowsUsbTopology, WindowsUsbTopologyError>(
+        const WindowsUsbTopologyQuery&)>
+        resolve_windows_topology;
 
     [[nodiscard]] static LibusbFunctions system();
     [[nodiscard]] bool complete() const noexcept;
@@ -141,6 +146,8 @@ struct UsbDeviceInfo final {
     std::uint16_t bulk_in_max_packet_size{};
     std::optional<LinuxUsbTopology> linux_topology;
     std::optional<LinuxUsbTopologyError> linux_topology_error;
+    std::optional<WindowsUsbTopology> windows_topology;
+    std::optional<WindowsUsbTopologyError> windows_topology_error;
 };
 
 enum class ZeroPacketPolicy : std::uint8_t {
