@@ -13,6 +13,7 @@ import socket
 import struct
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from typing import Optional
 
@@ -161,7 +162,11 @@ def require_peer_close(connection: socket.socket) -> None:
         raise AssertionError(f"CLI sent bytes after cancellation: {remaining!r}")
 
 
-def invoke_cancelled(cli: pathlib.Path) -> tuple[bytes, bytes]:
+def invoke_cancelled(
+    cli: pathlib.Path,
+    arguments: Sequence[str] = ("snapshot-update", "merge"),
+    expected_command: bytes = b"snapshot-update:merge",
+) -> tuple[bytes, bytes]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
@@ -179,8 +184,7 @@ def invoke_cancelled(cli: pathlib.Path) -> tuple[bytes, bytes]:
                 "--timeout-ms",
                 "5000",
                 "--json",
-                "snapshot-update",
-                "merge",
+                *arguments,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -190,7 +194,7 @@ def invoke_cancelled(cli: pathlib.Path) -> tuple[bytes, bytes]:
         with connection:
             connection.settimeout(10)
             handshake(connection)
-            assert receive_frame(connection) == b"snapshot-update:merge"
+            assert receive_frame(connection) == expected_command
             if os.name == "nt":
                 process.send_signal(signal.CTRL_BREAK_EVENT)
             else:
@@ -241,6 +245,16 @@ def assert_no_temporary_outputs(directory: pathlib.Path) -> None:
     leftovers = list(directory.glob(".kairosboot-*.tmp"))
     if leftovers:
         raise AssertionError(f"temporary outputs were not cleaned: {leftovers!r}")
+
+
+def make_update_package(
+    directory: pathlib.Path, name: str, fastboot_info: str
+) -> pathlib.Path:
+    package = directory / name
+    package.mkdir()
+    (package / "android-info.txt").write_bytes(b"")
+    (package / "fastboot-info.txt").write_bytes(fastboot_info.encode("utf-8"))
+    return package
 
 
 def run(cli: pathlib.Path) -> None:
@@ -404,6 +418,136 @@ def run(cli: pathlib.Path) -> None:
         stdout, stderr = invoke_cancelled(cli)
         cancellation_failure = parse_failure_json(stdout, stderr, "cancelled")
         assert cancellation_failure["sessionPoisoned"] is True
+
+        update_package = make_update_package(
+            directory, "更新 包", "version 1\nerase cache\n"
+        )
+
+        def update_success(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"erase:cache"
+            send_frame(connection, b"OKAYerased")
+
+        stdout, stderr = invoke(
+            cli, ["--json", "update", str(update_package)], update_success
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "update",
+            "package": str(update_package),
+            "wipe": False,
+        }
+
+        stdout, stderr = invoke(
+            cli, ["update", str(update_package)], update_success
+        )
+        if (
+            b"Updated from " not in stdout
+            or str(update_package).encode() not in stdout
+        ):
+            raise AssertionError(f"unexpected text update output: {stdout!r}")
+        if (
+            b"update: preflight" not in stderr
+            or b"update: complete" not in stderr
+        ):
+            raise AssertionError(f"text update did not report progress: {stderr!r}")
+
+        wipe_package = make_update_package(
+            directory, "wipe-package", "version 1\nif-wipe erase userdata\n"
+        )
+
+        def wipe_success(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"erase:userdata"
+            send_frame(connection, b"OKAYwiped")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "update", str(wipe_package), "--wipe"],
+            wipe_success,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "update"
+        assert document["package"] == str(wipe_package)
+        assert document["wipe"] is True
+
+        failed_update_package = make_update_package(
+            directory, "failed-update", "version 1\nerase metadata\n"
+        )
+
+        def update_failure(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"erase:metadata"
+            send_frame(connection, b"FAILpartition locked")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "update", str(failed_update_package)],
+            update_failure,
+            expected_exit=4,
+        )
+        failure = parse_failure_json(stdout, stderr, "device_fail")
+        assert failure["deviceMessage"] == {
+            "base64": base64.b64encode(b"partition locked").decode("ascii"),
+            "bytes": len(b"partition locked"),
+        }
+
+        timeout_update_package = make_update_package(
+            directory, "timeout-update", "version 1\nerase misc\n"
+        )
+
+        def update_timeout(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"erase:misc"
+            require_peer_close(connection)
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "update", str(timeout_update_package)],
+            update_timeout,
+            expected_exit=4,
+            timeout_ms=20,
+        )
+        parse_failure_json(stdout, stderr, "timeout")
+
+        cancelled_update_package = make_update_package(
+            directory, "cancelled-update", "version 1\nerase system\n"
+        )
+        stdout, stderr = invoke_cancelled(
+            cli,
+            ("update", str(cancelled_update_package)),
+            b"erase:system",
+        )
+        cancelled = parse_failure_json(stdout, stderr, "cancelled")
+        assert cancelled["sessionPoisoned"] is True
+
+        cumulative_timeout_package = make_update_package(
+            directory,
+            "cumulative-timeout-update",
+            "version 1\nerase cache\nerase metadata\nerase misc\n",
+        )
+
+        def cumulative_update_timeout(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"erase:cache"
+            time.sleep(1.5)
+            send_frame(connection, b"OKAYcache")
+            assert receive_frame(connection) == b"erase:metadata"
+            time.sleep(1.5)
+            send_frame(connection, b"OKAYmetadata")
+            assert receive_frame(connection) == b"erase:misc"
+            time.sleep(1.5)
+            try:
+                send_frame(connection, b"OKAYmisc")
+            except OSError:
+                # The shared whole-operation deadline normally closes the
+                # transport before this third, individually timely response.
+                pass
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "update", str(cumulative_timeout_package)],
+            cumulative_update_timeout,
+            expected_exit=4,
+            timeout_ms=4000,
+        )
+        parse_failure_json(stdout, stderr, "timeout")
 
         invoke_without_connection(
             cli, ["flashing", "sideways"], 2, "invalid_argument"

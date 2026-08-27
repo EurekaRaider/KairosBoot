@@ -21,7 +21,7 @@ execute_process(
 if(NOT HELP_RESULT EQUAL 0 OR NOT HELP_ERROR STREQUAL "")
   message(FATAL_ERROR "--help failed: ${HELP_RESULT} ${HELP_ERROR}")
 endif()
-foreach(HELP_COMMAND IN ITEMS flashing gsi snapshot-update
+foreach(HELP_COMMAND IN ITEMS update flashing gsi snapshot-update
                               create-logical-partition
                               delete-logical-partition
                               resize-logical-partition)
@@ -116,6 +116,10 @@ endfunction()
 
 expect_text_parse_error(
   flash_arity "flash requires exactly <partition> and <file>" flash boot)
+expect_text_parse_error(
+  update_arity "update requires <package>" update)
+expect_text_parse_error(
+  update_wipe_without_package "update requires <package>" update --wipe)
 expect_text_parse_error(
   duplicate_serial "option --serial may only be specified once" --serial A
   --serial B flash boot image.img)
@@ -277,6 +281,19 @@ expect_json_parse_error(
   receive_limit_flash "option --max-receive-bytes is not valid for flash"
   --max-receive-bytes 1 flash boot image.img)
 expect_json_parse_error(
+  update_arity "update requires <package>" update)
+expect_json_parse_error(
+  update_wipe_without_package "update requires <package>" update --wipe)
+expect_json_parse_error(
+  update_unknown_option "update supports only --wipe after <package>" update
+  package.zip --unknown)
+expect_json_parse_error(
+  update_duplicate_wipe "update option --wipe may only be specified once"
+  update package.zip --wipe --wipe)
+expect_json_parse_error(
+  receive_limit_update "option --max-receive-bytes is not valid for update"
+  --max-receive-bytes 1 update package.zip)
+expect_json_parse_error(
   typed_trailing_global "global options must precede the command" getvar
   product --timeout-ms 1)
 expect_json_parse_error(
@@ -397,6 +414,14 @@ set(CLI_EMPTY_STAGE_FILE
     "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-empty-stage.bin")
 set(CLI_UPLOAD_FILE "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-upload.bin")
 set(CLI_FETCH_FILE "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-fetch.bin")
+set(CLI_UPDATE_PACKAGE
+    "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-update-package")
+file(MAKE_DIRECTORY "${CLI_UPDATE_PACKAGE}")
+file(WRITE "${CLI_UPDATE_PACKAGE}/android-info.txt" "")
+# Keep the fixture byte-identical on every host. CMake may translate the final
+# newline to CRLF on Windows, while the frozen AOSP lexer intentionally treats
+# only a literal space as a token separator.
+file(WRITE "${CLI_UPDATE_PACKAGE}/fastboot-info.txt" "version 1")
 file(WRITE "${CLI_STAGE_FILE}" "stage-data")
 file(WRITE "${CLI_EMPTY_STAGE_FILE}" "")
 file(REMOVE "${CLI_UPLOAD_FILE}" "${CLI_FETCH_FILE}")
@@ -417,6 +442,7 @@ expect_json_runtime(upload_runtime --max-receive-bytes 16 upload
                     "${CLI_UPLOAD_FILE}")
 expect_json_runtime(fetch_runtime --max-receive-bytes 16 fetch vendor
                     "${CLI_FETCH_FILE}" --offset 2 --size 3)
+expect_json_runtime(update_runtime update "${CLI_UPDATE_PACKAGE}" --wipe)
 foreach(FLASHING_ACTION IN ITEMS lock unlock lock-critical unlock-critical
                                  get-unlock-ability)
   expect_json_runtime(flashing_${FLASHING_ACTION}_runtime flashing
@@ -488,3 +514,4 @@ endif()
 
 file(REMOVE "${CLI_STAGE_FILE}" "${CLI_EMPTY_STAGE_FILE}"
             "${CLI_UPLOAD_FILE}" "${CLI_FETCH_FILE}")
+file(REMOVE_RECURSE "${CLI_UPDATE_PACKAGE}")
