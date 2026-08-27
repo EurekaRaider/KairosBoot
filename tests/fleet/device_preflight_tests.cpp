@@ -32,6 +32,7 @@ using kairosboot::fastboot::FastbootUsbMode;
 using kairosboot::fleet::DevicePreflightError;
 using kairosboot::fleet::DevicePreflightErrorKind;
 using kairosboot::fleet::DevicePreflightOpenError;
+using kairosboot::fleet::DevicePreflightOpenErrorCode;
 using kairosboot::fleet::DevicePreflightOutcomeCode;
 using kairosboot::fleet::DevicePreflightProbeError;
 using kairosboot::fleet::DevicePreflightProbeErrorCode;
@@ -63,7 +64,11 @@ using kairosboot::protocol::TransferCertainty;
 using kairosboot::protocol::TransferResult;
 using kairosboot::protocol::TransportStatus;
 using kairosboot::transport::LinuxUsbTopology;
+using kairosboot::transport::MacUsbInterfaceFingerprint;
+using kairosboot::transport::MacUsbTopology;
 using kairosboot::transport::UsbDeviceInfo;
+using kairosboot::transport::WindowsUsbInterfaceFingerprint;
+using kairosboot::transport::WindowsUsbTopology;
 
 class CheckFailure final : public std::runtime_error {
 public:
@@ -108,7 +113,9 @@ struct TargetSpec final {
     return result;
 }
 
-[[nodiscard]] JobPlan plan(std::vector<TargetSpec> specifications) {
+[[nodiscard]] JobPlan plan(
+    std::vector<TargetSpec> specifications,
+    std::string erase_partition = "metadata") {
     std::vector<ManifestTarget> targets;
     targets.reserve(specifications.size());
     for (auto& specification : specifications) {
@@ -124,7 +131,8 @@ struct TargetSpec final {
             .expected_product = located(std::move(specification.product)),
             .steps = {ManifestStep{
                 .location = kLocation,
-                .payload = ManifestEraseStep{located("metadata")},
+                .payload = ManifestEraseStep{
+                    located(erase_partition)},
             }},
         });
     }
@@ -194,14 +202,109 @@ struct TargetSpec final {
     return result;
 }
 
+[[nodiscard]] UsbDeviceInfo windows_device(std::string serial,
+                                           std::string physical_path,
+                                           const std::uint8_t port,
+                                           const std::uint8_t address) {
+    auto result = device(
+        std::move(serial), std::move(physical_path), port, address);
+    const auto path = result.linux_topology->physical_port_path;
+    result.linux_topology.reset();
+    result.windows_topology = WindowsUsbTopology{
+        .physical_port_path = path,
+        .root_controller_id = "windows-pnp:PCI\\VEN_1234&DEV_5678",
+        .hub_port_chain = result.port_path,
+        .vendor_id = result.vendor_id,
+        .product_id = result.product_id,
+        .bus_number = result.bus_number,
+        .device_address = result.device_address,
+        .serial_utf8 = result.serial_utf8,
+        .interface_fingerprint = WindowsUsbInterfaceFingerprint{
+            .interface_number = result.interface_number,
+            .alternate_setting = result.alternate_setting,
+            .interface_class = result.interface_class,
+            .interface_subclass = result.interface_subclass,
+            .interface_protocol = result.interface_protocol,
+        },
+        .device_instance_id_utf8 = "USB\\VID_18D1&PID_4EE0\\" +
+            result.serial_utf8,
+        .hub_instance_ids_utf8 = {"USB\\ROOT_HUB30\\0"},
+        .location_path_utf8 = "PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(" +
+            std::to_string(port) + ")",
+    };
+    return result;
+}
+
+[[nodiscard]] UsbDeviceInfo macos_device(std::string serial,
+                                         std::string physical_path,
+                                         const std::uint8_t port,
+                                         const std::uint8_t address) {
+    auto result = device(
+        std::move(serial), std::move(physical_path), port, address);
+    const auto path = result.linux_topology->physical_port_path;
+    result.linux_topology.reset();
+    result.backend_session_id = 10'000U + address;
+    result.macos_topology = MacUsbTopology{
+        .physical_port_path = path,
+        .root_controller_id = "macos-iokit:/AppleUSBXHCI@14000000",
+        .hub_port_chain = result.port_path,
+        .registry_entry_id = 20'000U + address,
+        .session_id = result.backend_session_id,
+        .interface_registry_entry_id = 30'000U + address,
+        .location_id = 0x01000000U |
+            (static_cast<std::uint32_t>(port) << 16U),
+        .vendor_id = result.vendor_id,
+        .product_id = result.product_id,
+        .bus_number = result.bus_number,
+        .device_address = result.device_address,
+        .interface_fingerprint = MacUsbInterfaceFingerprint{
+            .configuration_value = result.configuration_value,
+            .interface_number = result.interface_number,
+            .alternate_setting = result.alternate_setting,
+            .interface_class = result.interface_class,
+            .interface_subclass = result.interface_subclass,
+            .interface_protocol = result.interface_protocol,
+        },
+        .serial_utf8 = result.serial_utf8,
+        .product_utf8 = std::string{"misleading USB descriptor product"},
+        .registry_path = "IOService:/Mac/device/" + std::to_string(port),
+        .interface_registry_path =
+            "IOService:/Mac/device/interface/" + std::to_string(port),
+        .root_controller_registry_path = "IOService:/Mac/controller",
+    };
+    return result;
+}
+
 [[nodiscard]] DevicePreflightUsbIdentity identity(const UsbDeviceInfo& value) {
-    CHECK(value.linux_topology.has_value());
-    const auto& topology = *value.linux_topology;
+    std::variant<LinuxUsbTopology, WindowsUsbTopology, MacUsbTopology>
+        platform_attestation;
+    std::string physical_port_path;
+    std::string root_controller_id;
+    std::vector<std::uint8_t> hub_port_chain;
+    if (value.linux_topology.has_value()) {
+        platform_attestation = *value.linux_topology;
+        physical_port_path = value.linux_topology->physical_port_path;
+        root_controller_id = value.linux_topology->root_controller_id;
+        hub_port_chain = value.linux_topology->hub_port_chain;
+    } else if (value.windows_topology.has_value()) {
+        platform_attestation = *value.windows_topology;
+        physical_port_path = value.windows_topology->physical_port_path;
+        root_controller_id = value.windows_topology->root_controller_id;
+        hub_port_chain = value.windows_topology->hub_port_chain;
+    } else {
+        CHECK(value.macos_topology.has_value());
+        platform_attestation = *value.macos_topology;
+        physical_port_path = value.macos_topology->physical_port_path;
+        root_controller_id = value.macos_topology->root_controller_id;
+        hub_port_chain = value.macos_topology->hub_port_chain;
+    }
     return {
-        .physical_port_path = topology.physical_port_path,
-        .root_controller_id = topology.root_controller_id,
-        .hub_port_chain = topology.hub_port_chain,
+        .physical_port_path = std::move(physical_port_path),
+        .root_controller_id = std::move(root_controller_id),
+        .hub_port_chain = std::move(hub_port_chain),
         .bus_number = value.bus_number,
+        .device_address = value.device_address,
+        .backend_session_id = value.backend_session_id,
         .serial = value.serial_utf8.empty()
             ? std::nullopt
             : std::optional<std::string>{value.serial_utf8},
@@ -219,6 +322,7 @@ struct TargetSpec final {
             .bulk_in_endpoint = value.bulk_in_endpoint,
             .bulk_in_max_packet_size = value.bulk_in_max_packet_size,
         },
+        .platform_attestation = std::move(platform_attestation),
     };
 }
 
@@ -268,12 +372,16 @@ enum class OpenMutation : std::uint8_t {
     PhysicalPath,
     Serial,
     Fingerprint,
+    DeviceAddress,
+    BackendSession,
+    PlatformGeneration,
 };
 
 class RecordingOpener final : public IDevicePreflightSessionOpener {
 public:
     std::size_t calls{};
     std::optional<std::size_t> throw_bad_alloc_on_call;
+    std::optional<std::size_t> fail_on_call;
     std::optional<DevicePreflightOpenError> failure;
     OpenMutation mutation{OpenMutation::None};
     std::vector<std::string> order;
@@ -288,7 +396,8 @@ public:
         if (throw_bad_alloc_on_call == calls) {
             throw std::bad_alloc{};
         }
-        if (failure.has_value()) {
+        if (failure.has_value() &&
+            (!fail_on_call.has_value() || *fail_on_call == calls)) {
             return std::unexpected(*failure);
         }
         auto opened_identity = identity(value);
@@ -304,6 +413,29 @@ public:
                 break;
             case OpenMutation::Fingerprint:
                 ++opened_identity.usb_fingerprint.product_id;
+                break;
+            case OpenMutation::DeviceAddress:
+                ++opened_identity.device_address;
+                break;
+            case OpenMutation::BackendSession:
+                ++opened_identity.backend_session_id;
+                break;
+            case OpenMutation::PlatformGeneration:
+                std::visit(
+                    [](auto& topology) {
+                        using Topology = std::remove_cvref_t<decltype(topology)>;
+                        if constexpr (std::is_same_v<Topology,
+                                                     LinuxUsbTopology>) {
+                            topology.sysfs_device_path.append(".changed");
+                        } else if constexpr (std::is_same_v<
+                                                 Topology,
+                                                 WindowsUsbTopology>) {
+                            topology.device_instance_id_utf8.append(".changed");
+                        } else {
+                            ++topology.session_id;
+                        }
+                    },
+                    opened_identity.platform_attestation);
                 break;
         }
         auto state = std::make_shared<TransportState>();
@@ -324,6 +456,7 @@ public:
 
     std::size_t calls{};
     std::vector<DevicePreflightProbeResult> results;
+    std::optional<std::size_t> fail_on_call;
     std::optional<DevicePreflightProbeError> failure;
 
     [[nodiscard]] std::expected<DevicePreflightProbeResult,
@@ -331,12 +464,75 @@ public:
     probe(FastbootSession&,
           DevicePreflightTimePoint,
           std::stop_token) override {
-        if (failure.has_value()) {
+        ++calls;
+        if (failure.has_value() &&
+            (!fail_on_call.has_value() || *fail_on_call == calls)) {
             return std::unexpected(*failure);
         }
-        CHECK(calls < results.size());
-        return results[calls++];
+        CHECK(calls <= results.size());
+        return results[calls - 1U];
     }
+};
+
+class StopAtCallProbe final : public IDevicePreflightProbe {
+public:
+    StopAtCallProbe(std::stop_source& cancellation,
+                    const std::size_t stop_on_call) noexcept
+        : cancellation_(&cancellation), stop_on_call_(stop_on_call) {}
+
+    std::size_t calls{};
+
+    [[nodiscard]] std::expected<DevicePreflightProbeResult,
+                                DevicePreflightProbeError>
+    probe(FastbootSession&,
+          DevicePreflightTimePoint,
+          std::stop_token) override {
+        ++calls;
+        if (calls == stop_on_call_) {
+            cancellation_->request_stop();
+        }
+        return DevicePreflightProbeResult{
+            .product = "product-a",
+            .mode = FastbootUsbMode::Bootloader,
+            .product_query_completed = true,
+            .mode_query_completed = true,
+        };
+    }
+
+private:
+    std::stop_source* cancellation_{};
+    std::size_t stop_on_call_{};
+};
+
+class DeadlineAtCallProbe final : public IDevicePreflightProbe {
+public:
+    explicit DeadlineAtCallProbe(const std::size_t expire_on_call) noexcept
+        : expire_on_call_(expire_on_call) {}
+
+    std::size_t calls{};
+
+    [[nodiscard]] std::expected<DevicePreflightProbeResult,
+                                DevicePreflightProbeError>
+    probe(FastbootSession&,
+          const DevicePreflightTimePoint probe_deadline,
+          std::stop_token) override {
+        ++calls;
+        if (calls == expire_on_call_) {
+            while (kairosboot::fleet::DevicePreflightClock::now() <
+                   probe_deadline) {
+                std::this_thread::yield();
+            }
+        }
+        return DevicePreflightProbeResult{
+            .product = "product-a",
+            .mode = FastbootUsbMode::Bootloader,
+            .product_query_completed = true,
+            .mode_query_completed = true,
+        };
+    }
+
+private:
+    std::size_t expire_on_call_{};
 };
 
 [[nodiscard]] DevicePreflightProbeResult live(
@@ -371,6 +567,7 @@ void selectors_are_exact_deduplicated_and_ignore_unrelated_devices() {
     auto result = preflight_fleet_devices(
         job, snapshot, opener, probe, deadline());
     CHECK(result.has_value());
+    CHECK(result->plan_sha256() == job.sha256());
     CHECK(result->devices().size() == 1U);
     CHECK(opener.calls == 1U);
     CHECK(probe.calls == 1U);
@@ -382,16 +579,57 @@ void selectors_are_exact_deduplicated_and_ignore_unrelated_devices() {
           "linux-sysfs:/devices/pci0000:00/controller0");
     CHECK(prepared.usb_identity().hub_port_chain ==
           std::vector<std::uint8_t>{2U});
+    CHECK(prepared.usb_identity().device_address == 2U);
+    CHECK(prepared.usb_identity().backend_session_id == 2U);
 }
 
-void duplicate_physical_and_serial_identities_fail_before_open() {
+void unmatched_invalid_and_duplicate_devices_are_ignored() {
     auto job = plan({TargetSpec{
         .name = "target-a",
         .serials = {"SERIAL-A"},
         .usb_paths = {},
         .product = "product-a",
     }});
+    auto broken = device("BROKEN", "usb:1-9", 9U, 9U);
+    broken.linux_topology.reset();
+    broken.linux_topology_error = kairosboot::transport::LinuxUsbTopologyError{
+        .kind = kairosboot::transport::LinuxUsbTopologyErrorKind::IoError,
+        .stage = kairosboot::transport::LinuxUsbTopologyStage::Lookup,
+        .native_code = 5,
+        .path = "/sys/broken",
+        .message = "unrelated topology error",
+    };
+    std::vector snapshot{
+        device("SERIAL-A", "usb:1-2", 2U, 2U),
+        device("DUPLICATE", "usb:1-8", 8U, 8U),
+        device("DUPLICATE", "usb:1-8", 8U, 10U),
+        std::move(broken),
+    };
+    RecordingOpener opener;
+    SequenceProbe probe{{live("product-a")}};
+
+    auto result = preflight_fleet_devices(
+        job, snapshot, opener, probe, deadline());
+    CHECK(result.has_value());
+    CHECK(result->devices().size() == 1U);
+    CHECK(opener.calls == 1U);
+    CHECK(probe.calls == 1U);
+}
+
+void duplicate_physical_and_serial_identities_fail_before_open() {
+    auto serial_job = plan({TargetSpec{
+        .name = "target-a",
+        .serials = {"SERIAL-A"},
+        .usb_paths = {},
+        .product = "product-a",
+    }});
     {
+        auto path_job = plan({TargetSpec{
+            .name = "target-a",
+            .serials = {},
+            .usb_paths = {"usb:1-2"},
+            .product = "product-a",
+        }});
         std::vector snapshot{
             device("SERIAL-A", "usb:1-2", 2U, 2U),
             device("SERIAL-B", "usb:1-2", 2U, 3U),
@@ -399,7 +637,7 @@ void duplicate_physical_and_serial_identities_fail_before_open() {
         RecordingOpener opener;
         SequenceProbe probe;
         auto result = preflight_fleet_devices(
-            job, snapshot, opener, probe, deadline());
+            path_job, snapshot, opener, probe, deadline());
         CHECK(!result);
         CHECK(result.error().kind ==
               DevicePreflightErrorKind::DuplicatePhysicalPath);
@@ -413,7 +651,7 @@ void duplicate_physical_and_serial_identities_fail_before_open() {
         RecordingOpener opener;
         SequenceProbe probe;
         auto result = preflight_fleet_devices(
-            job, snapshot, opener, probe, deadline());
+            serial_job, snapshot, opener, probe, deadline());
         CHECK(!result);
         CHECK(result.error().kind == DevicePreflightErrorKind::DuplicateSerial);
         CHECK(opener.calls == 0U);
@@ -507,7 +745,12 @@ void product_mismatch_withholds_the_entire_batch_and_reports_outcomes() {
     }));
 }
 
-void thirty_two_device_batch_completes_the_live_barrier_before_failure() {
+struct ThirtyTwoDeviceInput final {
+    JobPlan job;
+    std::vector<UsbDeviceInfo> snapshot;
+};
+
+[[nodiscard]] ThirtyTwoDeviceInput thirty_two_device_input() {
     TargetSpec target{
         .name = "target-a",
         .serials = {},
@@ -515,10 +758,8 @@ void thirty_two_device_batch_completes_the_live_barrier_before_failure() {
         .product = "product-a",
     };
     std::vector<UsbDeviceInfo> snapshot;
-    std::vector<DevicePreflightProbeResult> probe_results;
     snapshot.reserve(32U);
     target.serials.reserve(32U);
-    probe_results.reserve(32U);
     for (std::uint8_t index = 1U; index <= 32U; ++index) {
         auto serial = "SERIAL-" + std::to_string(index);
         target.serials.push_back(serial);
@@ -526,15 +767,26 @@ void thirty_two_device_batch_completes_the_live_barrier_before_failure() {
                                   "usb:1-" + std::to_string(index),
                                   index,
                                   index));
+    }
+    return {
+        .job = plan({std::move(target)}),
+        .snapshot = std::move(snapshot),
+    };
+}
+
+void thirty_two_device_batch_completes_the_live_barrier_before_failure() {
+    auto input = thirty_two_device_input();
+    std::vector<DevicePreflightProbeResult> probe_results;
+    probe_results.reserve(32U);
+    for (std::uint8_t index = 1U; index <= 32U; ++index) {
         probe_results.push_back(live(index == 32U ? "wrong-product"
                                                   : "product-a"));
     }
-    auto job = plan({std::move(target)});
     RecordingOpener opener;
     SequenceProbe probe{std::move(probe_results)};
 
     auto result = preflight_fleet_devices(
-        job, snapshot, opener, probe, deadline());
+        input.job, input.snapshot, opener, probe, deadline());
     CHECK(!result);
     CHECK(result.error().kind == DevicePreflightErrorKind::ProductMismatch);
     CHECK(result.error().outcomes.size() == 32U);
@@ -544,6 +796,104 @@ void thirty_two_device_batch_completes_the_live_barrier_before_failure() {
     CHECK(std::ranges::all_of(opener.states, [](const auto& state) {
         return state->closed.load(std::memory_order_acquire);
     }));
+}
+
+void thirty_two_device_terminal_failures_never_publish_a_gate() {
+    {
+        auto input = thirty_two_device_input();
+        RecordingOpener opener;
+        opener.fail_on_call = 32U;
+        opener.failure = DevicePreflightOpenError{
+            .code = DevicePreflightOpenErrorCode::Busy,
+            .message = "last device open failed",
+            .native_code = 32,
+            .outbound_certainty = TransferCertainty::NotTransferred,
+        };
+        SequenceProbe probe;
+        probe.results.assign(31U, live("product-a"));
+        auto result = preflight_fleet_devices(
+            input.job, input.snapshot, opener, probe, deadline());
+        CHECK(!result);
+        CHECK(result.error().kind == DevicePreflightErrorKind::OpenFailed);
+        CHECK(result.error().open_error->code ==
+              DevicePreflightOpenErrorCode::Busy);
+        CHECK(opener.calls == 32U);
+        CHECK(probe.calls == 31U);
+        CHECK(opener.states.size() == 31U);
+        CHECK(std::ranges::all_of(opener.states, [](const auto& state) {
+            return state->closed.load(std::memory_order_acquire);
+        }));
+    }
+    {
+        auto input = thirty_two_device_input();
+        RecordingOpener opener;
+        SequenceProbe probe;
+        probe.results.assign(31U, live("product-a"));
+        probe.fail_on_call = 32U;
+        probe.failure = DevicePreflightProbeError{
+            .code = DevicePreflightProbeErrorCode::ProtocolFailure,
+            .message = "last device probe failed",
+            .native_code = 64,
+            .outbound_certainty = TransferCertainty::FullyTransferred,
+        };
+        auto result = preflight_fleet_devices(
+            input.job, input.snapshot, opener, probe, deadline());
+        CHECK(!result);
+        CHECK(result.error().kind == DevicePreflightErrorKind::ProbeFailed);
+        CHECK(result.error().probe_error->code ==
+              DevicePreflightProbeErrorCode::ProtocolFailure);
+        CHECK(opener.calls == 32U);
+        CHECK(probe.calls == 32U);
+        CHECK(opener.states.size() == 32U);
+        CHECK(std::ranges::all_of(opener.states, [](const auto& state) {
+            return state->closed.load(std::memory_order_acquire);
+        }));
+    }
+}
+
+void barrier_handoff_stop_and_deadline_never_publish_a_gate() {
+    {
+        auto input = thirty_two_device_input();
+        RecordingOpener opener;
+        std::stop_source cancellation;
+        StopAtCallProbe probe{cancellation, 32U};
+        auto result = preflight_fleet_devices(
+            input.job,
+            input.snapshot,
+            opener,
+            probe,
+            deadline(),
+            cancellation.get_token());
+        CHECK(!result);
+        CHECK(result.error().kind == DevicePreflightErrorKind::Cancelled);
+        CHECK(opener.calls == 32U);
+        CHECK(probe.calls == 32U);
+        CHECK(std::ranges::all_of(opener.states, [](const auto& state) {
+            return state->closed.load(std::memory_order_acquire);
+        }));
+    }
+    {
+        auto input = thirty_two_device_input();
+        RecordingOpener opener;
+        DeadlineAtCallProbe probe{32U};
+        const auto handoff_deadline =
+            kairosboot::fleet::DevicePreflightClock::now() +
+            std::chrono::milliseconds{250};
+        auto result = preflight_fleet_devices(
+            input.job,
+            input.snapshot,
+            opener,
+            probe,
+            handoff_deadline);
+        CHECK(!result);
+        CHECK(result.error().kind ==
+              DevicePreflightErrorKind::DeadlineExceeded);
+        CHECK(opener.calls == 32U);
+        CHECK(probe.calls == 32U);
+        CHECK(std::ranges::all_of(opener.states, [](const auto& state) {
+            return state->closed.load(std::memory_order_acquire);
+        }));
+    }
 }
 
 void open_race_and_probe_contract_violations_never_publish_a_gate() {
@@ -556,7 +906,10 @@ void open_race_and_probe_contract_violations_never_publish_a_gate() {
     std::vector snapshot{device("SERIAL-A", "usb:1-2", 2U, 2U)};
     for (const auto mutation : {OpenMutation::PhysicalPath,
                                 OpenMutation::Serial,
-                                OpenMutation::Fingerprint}) {
+                                OpenMutation::Fingerprint,
+                                OpenMutation::DeviceAddress,
+                                OpenMutation::BackendSession,
+                                OpenMutation::PlatformGeneration}) {
         RecordingOpener opener;
         opener.mutation = mutation;
         SequenceProbe probe{{live("product-a")}};
@@ -577,6 +930,38 @@ void open_race_and_probe_contract_violations_never_publish_a_gate() {
     CHECK(!result);
     CHECK(result.error().kind ==
           DevicePreflightErrorKind::ProbeContractViolation);
+}
+
+void all_platform_generation_attestations_are_retained_and_compared() {
+    auto job = plan({TargetSpec{
+        .name = "target-a",
+        .serials = {"SERIAL-A"},
+        .usb_paths = {},
+        .product = "product-a",
+    }});
+    std::vector platform_devices{
+        device("SERIAL-A", "usb:1-2", 2U, 2U),
+        windows_device("SERIAL-A", "usb:1-2", 2U, 2U),
+        macos_device("SERIAL-A", "usb:1-2", 2U, 2U),
+    };
+    for (const auto& platform_device : platform_devices) {
+        std::vector snapshot{platform_device};
+        RecordingOpener valid_opener;
+        SequenceProbe valid_probe{{live("product-a")}};
+        auto valid = preflight_fleet_devices(
+            job, snapshot, valid_opener, valid_probe, deadline());
+        CHECK(valid.has_value());
+
+        RecordingOpener stale_opener;
+        stale_opener.mutation = OpenMutation::PlatformGeneration;
+        SequenceProbe stale_probe{{live("product-a")}};
+        auto stale = preflight_fleet_devices(
+            job, snapshot, stale_opener, stale_probe, deadline());
+        CHECK(!stale);
+        CHECK(stale.error().kind ==
+              DevicePreflightErrorKind::DeviceChangedDuringOpen);
+        CHECK(stale_probe.calls == 0U);
+    }
 }
 
 void cancellation_deadline_and_exception_preserve_the_barrier() {
@@ -629,6 +1014,95 @@ void cancellation_deadline_and_exception_preserve_the_barrier() {
     }
 }
 
+void transport_and_probe_error_taxonomies_are_preserved() {
+    auto job = plan({TargetSpec{
+        .name = "target-a",
+        .serials = {"SERIAL-A"},
+        .usb_paths = {},
+        .product = "product-a",
+    }});
+    std::vector snapshot{device("SERIAL-A", "usb:1-2", 2U, 2U)};
+    constexpr std::array open_codes{
+        DevicePreflightOpenErrorCode::Cancelled,
+        DevicePreflightOpenErrorCode::DeadlineExceeded,
+        DevicePreflightOpenErrorCode::NotFound,
+        DevicePreflightOpenErrorCode::Busy,
+        DevicePreflightOpenErrorCode::PermissionDenied,
+        DevicePreflightOpenErrorCode::DriverUnavailable,
+        DevicePreflightOpenErrorCode::TransportFailure,
+        DevicePreflightOpenErrorCode::ResourceExhausted,
+        DevicePreflightOpenErrorCode::UnexpectedFailure,
+    };
+    for (const auto code : open_codes) {
+        RecordingOpener opener;
+        opener.failure = DevicePreflightOpenError{
+            .code = code,
+            .message = "typed open failure",
+            .native_code = 123,
+            .outbound_certainty = TransferCertainty::PartialOrUnknown,
+        };
+        SequenceProbe probe;
+        auto result = preflight_fleet_devices(
+            job, snapshot, opener, probe, deadline());
+        CHECK(!result);
+        CHECK(result.error().open_error.has_value());
+        CHECK(!result.error().probe_error.has_value());
+        CHECK(result.error().open_error->code == code);
+        CHECK(result.error().open_error->message == "typed open failure");
+        CHECK(result.error().native_code == 123);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        const auto expected_kind =
+            code == DevicePreflightOpenErrorCode::Cancelled
+            ? DevicePreflightErrorKind::Cancelled
+            : code == DevicePreflightOpenErrorCode::DeadlineExceeded
+            ? DevicePreflightErrorKind::DeadlineExceeded
+            : code == DevicePreflightOpenErrorCode::ResourceExhausted
+            ? DevicePreflightErrorKind::ResourceExhausted
+            : DevicePreflightErrorKind::OpenFailed;
+        CHECK(result.error().kind == expected_kind);
+    }
+
+    constexpr std::array probe_codes{
+        DevicePreflightProbeErrorCode::Cancelled,
+        DevicePreflightProbeErrorCode::DeadlineExceeded,
+        DevicePreflightProbeErrorCode::ProtocolFailure,
+        DevicePreflightProbeErrorCode::DeviceRejected,
+        DevicePreflightProbeErrorCode::InvalidResponse,
+        DevicePreflightProbeErrorCode::ResourceExhausted,
+        DevicePreflightProbeErrorCode::UnexpectedFailure,
+    };
+    for (const auto code : probe_codes) {
+        RecordingOpener opener;
+        SequenceProbe probe;
+        probe.failure = DevicePreflightProbeError{
+            .code = code,
+            .message = "typed probe failure",
+            .native_code = 456,
+            .outbound_certainty = TransferCertainty::PartialOrUnknown,
+        };
+        auto result = preflight_fleet_devices(
+            job, snapshot, opener, probe, deadline());
+        CHECK(!result);
+        CHECK(!result.error().open_error.has_value());
+        CHECK(result.error().probe_error.has_value());
+        CHECK(result.error().probe_error->code == code);
+        CHECK(result.error().probe_error->message == "typed probe failure");
+        CHECK(result.error().native_code == 456);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        const auto expected_kind =
+            code == DevicePreflightProbeErrorCode::Cancelled
+            ? DevicePreflightErrorKind::Cancelled
+            : code == DevicePreflightProbeErrorCode::DeadlineExceeded
+            ? DevicePreflightErrorKind::DeadlineExceeded
+            : code == DevicePreflightProbeErrorCode::ResourceExhausted
+            ? DevicePreflightErrorKind::ResourceExhausted
+            : DevicePreflightErrorKind::ProbeFailed;
+        CHECK(result.error().kind == expected_kind);
+    }
+}
+
 void prepared_order_is_deterministic_across_snapshot_order() {
     auto job = plan({TargetSpec{
         .name = "target-a",
@@ -657,6 +1131,39 @@ void prepared_order_is_deterministic_across_snapshot_order() {
     CHECK(first_opener.order ==
           std::vector<std::string>({"usb:1-2", "usb:1-3"}));
     CHECK(second_opener.order == first_opener.order);
+}
+
+void prepared_gate_is_plan_bound_and_sessions_are_consumed_once() {
+    const std::vector specifications{TargetSpec{
+        .name = "target-a",
+        .serials = {"SERIAL-A"},
+        .usb_paths = {},
+        .product = "product-a",
+    }};
+    auto plan_a = plan(specifications, "metadata");
+    auto plan_b = plan(specifications, "userdata");
+    CHECK(plan_a.sha256() != plan_b.sha256());
+    std::vector snapshot{device("SERIAL-A", "usb:1-2", 2U, 2U)};
+    RecordingOpener opener;
+    SequenceProbe probe{{live("product-a")}};
+
+    auto result = preflight_fleet_devices(
+        plan_a, snapshot, opener, probe, deadline());
+    CHECK(result.has_value());
+    CHECK(result->plan_sha256() == plan_a.sha256());
+    CHECK(result->plan_sha256() != plan_b.sha256());
+
+    PreparedDeviceBatch moved_batch = std::move(*result);
+    CHECK(result->devices().empty());
+    CHECK(moved_batch.plan_sha256() == plan_a.sha256());
+    auto sessions = std::move(moved_batch).take_devices();
+    CHECK(moved_batch.devices().empty());
+    CHECK(std::move(moved_batch).take_devices().empty());
+    CHECK(sessions.size() == 1U);
+    auto session = std::move(sessions.front()).take_session();
+    CHECK(session != nullptr);
+    auto consumed_again = std::move(sessions.front()).take_session();
+    CHECK(consumed_again == nullptr);
 }
 
 class ScriptTransport final : public ITransportSession {
@@ -797,9 +1304,11 @@ void built_in_probe_interrupts_blocking_io_on_deadline_and_stop() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 11U> tests{
+    const std::array<Test, 17U> tests{
         Test{"selectors are exact, deduplicated, and ignore unrelated devices",
              &selectors_are_exact_deduplicated_and_ignore_unrelated_devices},
+        Test{"unmatched invalid and duplicate devices are ignored",
+             &unmatched_invalid_and_duplicate_devices_are_ignored},
         Test{"duplicate physical and serial identities fail before open",
              &duplicate_physical_and_serial_identities_fail_before_open},
         Test{"cross-target multi-namespace match is rejected",
@@ -810,12 +1319,22 @@ int main() {
              &product_mismatch_withholds_the_entire_batch_and_reports_outcomes},
         Test{"32-device batch completes live barrier before failure",
              &thirty_two_device_batch_completes_the_live_barrier_before_failure},
+        Test{"32-device terminal failures never publish a gate",
+             &thirty_two_device_terminal_failures_never_publish_a_gate},
+        Test{"barrier handoff stop and deadline never publish a gate",
+             &barrier_handoff_stop_and_deadline_never_publish_a_gate},
         Test{"open race and probe contract violations withhold the gate",
              &open_race_and_probe_contract_violations_never_publish_a_gate},
+        Test{"all platform generation attestations are retained and compared",
+             &all_platform_generation_attestations_are_retained_and_compared},
         Test{"cancellation, deadline, and exception preserve barrier",
              &cancellation_deadline_and_exception_preserve_the_barrier},
+        Test{"transport and probe error taxonomies are preserved",
+             &transport_and_probe_error_taxonomies_are_preserved},
         Test{"prepared order is deterministic across snapshot order",
              &prepared_order_is_deterministic_across_snapshot_order},
+        Test{"prepared gate is plan bound and sessions are consumed once",
+             &prepared_gate_is_plan_bound_and_sessions_are_consumed_once},
         Test{"built-in probe reads product and mode from Fastboot wire",
              &built_in_probe_reads_product_and_mode_from_fastboot_wire},
         Test{"built-in probe interrupts blocking I/O on deadline and stop",

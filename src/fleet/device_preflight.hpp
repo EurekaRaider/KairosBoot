@@ -15,6 +15,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace kairosboot::fleet {
@@ -47,8 +48,14 @@ struct DevicePreflightUsbIdentity final {
     std::string root_controller_id;
     std::vector<std::uint8_t> hub_port_chain;
     std::uint8_t bus_number{};
+    std::uint8_t device_address{};
+    std::uint64_t backend_session_id{};
     std::optional<std::string> serial;
     DevicePreflightUsbFingerprint usb_fingerprint;
+    std::variant<transport::LinuxUsbTopology,
+                 transport::WindowsUsbTopology,
+                 transport::MacUsbTopology>
+        platform_attestation;
 
     [[nodiscard]] bool operator==(
         const DevicePreflightUsbIdentity&) const = default;
@@ -206,6 +213,8 @@ struct DevicePreflightError final {
     int native_code{};
     protocol::TransferCertainty outbound_certainty{
         protocol::TransferCertainty::NotTransferred};
+    std::optional<DevicePreflightOpenError> open_error;
+    std::optional<DevicePreflightProbeError> probe_error;
     // Populated for ProductMismatch. Ready entries prove that those devices
     // passed live identity validation, but no destructive gate is published
     // when any entry mismatches.
@@ -226,7 +235,8 @@ public:
     [[nodiscard]] std::string_view observed_product() const noexcept;
     [[nodiscard]] fastboot::FastbootUsbMode observed_mode() const noexcept;
     [[nodiscard]] const DevicePreflightUsbIdentity& usb_identity() const noexcept;
-    [[nodiscard]] protocol::FastbootSession& session() noexcept;
+    [[nodiscard]] std::unique_ptr<protocol::FastbootSession>
+    take_session() && noexcept;
 
 private:
     PreparedDeviceSession(std::size_t target_index,
@@ -262,17 +272,20 @@ class PreparedDeviceBatch final {
 public:
     PreparedDeviceBatch(const PreparedDeviceBatch&) = delete;
     PreparedDeviceBatch& operator=(const PreparedDeviceBatch&) = delete;
-    PreparedDeviceBatch(PreparedDeviceBatch&&) noexcept = default;
-    PreparedDeviceBatch& operator=(PreparedDeviceBatch&&) noexcept = default;
+    PreparedDeviceBatch(PreparedDeviceBatch&& other) noexcept;
+    PreparedDeviceBatch& operator=(PreparedDeviceBatch&& other) noexcept;
     ~PreparedDeviceBatch() = default;
 
+    [[nodiscard]] const image::Sha256Digest& plan_sha256() const noexcept;
     [[nodiscard]] std::span<const PreparedDeviceSession> devices() const noexcept;
-    [[nodiscard]] std::span<PreparedDeviceSession> devices() noexcept;
+    [[nodiscard]] std::vector<PreparedDeviceSession> take_devices() && noexcept;
 
 private:
-    explicit PreparedDeviceBatch(
+    PreparedDeviceBatch(
+        image::Sha256Digest plan_sha256,
         std::vector<PreparedDeviceSession> devices) noexcept;
 
+    image::Sha256Digest plan_sha256_{};
     std::vector<PreparedDeviceSession> devices_;
 
     friend std::expected<PreparedDeviceBatch, DevicePreflightError>

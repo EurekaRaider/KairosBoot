@@ -19,6 +19,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -29,12 +30,13 @@ inline constexpr std::size_t kMaximumPreflightDevices = 4'096U;
 
 struct NormalizedSnapshotDevice final {
     const transport::UsbDeviceInfo* source{};
+    std::size_t snapshot_index{};
     DevicePreflightUsbIdentity identity;
 };
 
 struct SelectedDevice final {
     std::size_t target_index{};
-    std::size_t snapshot_index{};
+    std::size_t device_index{};
 };
 
 [[nodiscard]] DevicePreflightError error(
@@ -51,6 +53,8 @@ struct SelectedDevice final {
         .snapshot_index = snapshot_index,
         .native_code = 0,
         .outbound_certainty = protocol::TransferCertainty::NotTransferred,
+        .open_error = std::nullopt,
+        .probe_error = std::nullopt,
         .outcomes = {},
     };
 }
@@ -225,6 +229,10 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
     std::string physical_port_path;
     std::string root_controller_id;
     std::vector<std::uint8_t> hub_port_chain;
+    std::variant<transport::LinuxUsbTopology,
+                 transport::WindowsUsbTopology,
+                 transport::MacUsbTopology>
+        platform_attestation;
     bool topology_matches = false;
     if (device.linux_topology.has_value()) {
         const auto& topology = *device.linux_topology;
@@ -243,6 +251,7 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
         physical_port_path = topology.physical_port_path;
         root_controller_id = topology.root_controller_id;
         hub_port_chain = topology.hub_port_chain;
+        platform_attestation = topology;
     } else if (device.windows_topology.has_value()) {
         const auto& topology = *device.windows_topology;
         topology_matches = common_topology_matches(
@@ -256,12 +265,14 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
             topology.device_address,
             topology.serial_utf8) &&
             windows_interface_matches(device, topology.interface_fingerprint) &&
+            device.backend_session_id != 0U &&
             topology.root_controller_id.starts_with("windows-pnp:") &&
             !topology.device_instance_id_utf8.empty() &&
             !topology.location_path_utf8.empty();
         physical_port_path = topology.physical_port_path;
         root_controller_id = topology.root_controller_id;
         hub_port_chain = topology.hub_port_chain;
+        platform_attestation = topology;
     } else {
         const auto& topology = *device.macos_topology;
         topology_matches = common_topology_matches(
@@ -279,13 +290,16 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
             topology.hub_port_chain.size() <=
                 transport::kMaximumMacUsbTopologyDepth &&
             topology.registry_entry_id != 0U && topology.session_id != 0U &&
+            topology.session_id == device.backend_session_id &&
             topology.interface_registry_entry_id != 0U &&
+            topology.location_id != 0U &&
             !topology.registry_path.empty() &&
             !topology.interface_registry_path.empty() &&
             !topology.root_controller_registry_path.empty();
         physical_port_path = topology.physical_port_path;
         root_controller_id = topology.root_controller_id;
         hub_port_chain = topology.hub_port_chain;
+        platform_attestation = topology;
     }
     if (!topology_matches) {
         return std::unexpected(error(
@@ -301,11 +315,32 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
         .root_controller_id = std::move(root_controller_id),
         .hub_port_chain = std::move(hub_port_chain),
         .bus_number = device.bus_number,
+        .device_address = device.device_address,
+        .backend_session_id = device.backend_session_id,
         .serial = device.serial_utf8.empty()
             ? std::nullopt
             : std::optional<std::string>{device.serial_utf8},
         .usb_fingerprint = fingerprint(device),
+        .platform_attestation = std::move(platform_attestation),
     };
+}
+
+[[nodiscard]] bool raw_selector_candidate(
+    const transport::UsbDeviceInfo& device,
+    const std::unordered_set<std::string_view>& requested_serials,
+    const std::unordered_set<std::string_view>& requested_paths) {
+    if (requested_serials.contains(device.serial_utf8)) {
+        return true;
+    }
+    return (device.linux_topology.has_value() &&
+            requested_paths.contains(
+                device.linux_topology->physical_port_path)) ||
+        (device.windows_topology.has_value() &&
+         requested_paths.contains(
+             device.windows_topology->physical_port_path)) ||
+        (device.macos_topology.has_value() &&
+         requested_paths.contains(
+             device.macos_topology->physical_port_path));
 }
 
 [[nodiscard]] std::string physical_chain_key(
@@ -345,11 +380,12 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
     }
     auto result = error(kind,
                         DevicePreflightStage::Opening,
-                        std::move(source.message),
+                        source.message,
                         target_index,
                         snapshot_index);
     result.native_code = source.native_code;
     result.outbound_certainty = source.outbound_certainty;
+    result.open_error = std::move(source);
     return result;
 }
 
@@ -369,11 +405,12 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
     }
     auto result = error(kind,
                         DevicePreflightStage::LiveIdentity,
-                        std::move(source.message),
+                        source.message,
                         target_index,
                         snapshot_index);
     result.native_code = source.native_code;
     result.outbound_certainty = source.outbound_certainty;
+    result.probe_error = std::move(source);
     return result;
 }
 
@@ -609,21 +646,45 @@ const DevicePreflightUsbIdentity& PreparedDeviceSession::usb_identity() const
     return usb_identity_;
 }
 
-protocol::FastbootSession& PreparedDeviceSession::session() noexcept {
-    return *session_;
+std::unique_ptr<protocol::FastbootSession>
+PreparedDeviceSession::take_session() && noexcept {
+    return std::move(session_);
 }
 
 PreparedDeviceBatch::PreparedDeviceBatch(
+    image::Sha256Digest plan_sha256,
     std::vector<PreparedDeviceSession> devices) noexcept
-    : devices_(std::move(devices)) {}
+    : plan_sha256_(plan_sha256), devices_(std::move(devices)) {}
+
+PreparedDeviceBatch::PreparedDeviceBatch(PreparedDeviceBatch&& other) noexcept
+    : plan_sha256_(other.plan_sha256_), devices_(std::move(other.devices_)) {
+    other.devices_.clear();
+}
+
+PreparedDeviceBatch& PreparedDeviceBatch::operator=(
+    PreparedDeviceBatch&& other) noexcept {
+    if (this != &other) {
+        plan_sha256_ = other.plan_sha256_;
+        devices_ = std::move(other.devices_);
+        other.devices_.clear();
+    }
+    return *this;
+}
+
+const image::Sha256Digest& PreparedDeviceBatch::plan_sha256() const noexcept {
+    return plan_sha256_;
+}
 
 std::span<const PreparedDeviceSession> PreparedDeviceBatch::devices() const
     noexcept {
     return devices_;
 }
 
-std::span<PreparedDeviceSession> PreparedDeviceBatch::devices() noexcept {
-    return devices_;
+std::vector<PreparedDeviceSession>
+PreparedDeviceBatch::take_devices() && noexcept {
+    auto result = std::move(devices_);
+    devices_.clear();
+    return result;
 }
 
 std::expected<PreparedDeviceBatch, DevicePreflightError>
@@ -653,6 +714,17 @@ preflight_fleet_devices(
                 "JobPlan contains no fleet targets"));
         }
 
+        std::unordered_set<std::string_view> requested_serials;
+        std::unordered_set<std::string_view> requested_paths;
+        for (const auto& target : targets) {
+            for (const auto& selector : target.selector.serials) {
+                requested_serials.emplace(selector.value);
+            }
+            for (const auto& selector : target.selector.usb_paths) {
+                requested_paths.emplace(selector.value);
+            }
+        }
+
         std::vector<NormalizedSnapshotDevice> devices;
         devices.reserve(snapshot.size());
         std::unordered_map<std::string, std::size_t> physical_paths;
@@ -666,12 +738,17 @@ preflight_fleet_devices(
                     deadline, cancellation, DevicePreflightStage::Snapshot)) {
                 return std::unexpected(*stopped);
             }
+            if (!raw_selector_candidate(
+                    snapshot[index], requested_serials, requested_paths)) {
+                continue;
+            }
             auto identity = normalize_snapshot_device(snapshot[index], index);
             if (!identity) {
                 return std::unexpected(std::move(identity.error()));
             }
+            const auto device_index = devices.size();
             if (!physical_paths
-                     .emplace(identity->physical_port_path, index)
+                     .emplace(identity->physical_port_path, device_index)
                      .second) {
                 return std::unexpected(error(
                     DevicePreflightErrorKind::DuplicatePhysicalPath,
@@ -681,7 +758,7 @@ preflight_fleet_devices(
                     index));
             }
             const auto chain_key = physical_chain_key(*identity);
-            if (!physical_chains.emplace(chain_key, index).second) {
+            if (!physical_chains.emplace(chain_key, device_index).second) {
                 return std::unexpected(error(
                     DevicePreflightErrorKind::UnreliableTopology,
                     DevicePreflightStage::Snapshot,
@@ -690,7 +767,7 @@ preflight_fleet_devices(
                     index));
             }
             if (identity->serial.has_value() &&
-                !serials.emplace(*identity->serial, index).second) {
+                !serials.emplace(*identity->serial, device_index).second) {
                 return std::unexpected(error(
                     DevicePreflightErrorKind::DuplicateSerial,
                     DevicePreflightStage::Snapshot,
@@ -698,7 +775,8 @@ preflight_fleet_devices(
                     std::nullopt,
                     index));
             }
-            devices.push_back({&snapshot[index], std::move(*identity)});
+            devices.push_back(
+                {&snapshot[index], index, std::move(*identity)});
         }
 
         std::vector<std::optional<std::size_t>> target_owner(devices.size());
@@ -748,18 +826,18 @@ preflight_fleet_devices(
                     "fleet target resolved to no devices",
                     target_index));
             }
-            for (const auto snapshot_index : target_devices) {
-                if (target_owner[snapshot_index].has_value() &&
-                    *target_owner[snapshot_index] != target_index) {
+            for (const auto device_index : target_devices) {
+                if (target_owner[device_index].has_value() &&
+                    *target_owner[device_index] != target_index) {
                     return std::unexpected(error(
                         DevicePreflightErrorKind::DeviceMatchesMultipleTargets,
                         DevicePreflightStage::Selection,
                         "one physical device matches more than one fleet target",
                         target_index,
-                        snapshot_index));
+                        devices[device_index].snapshot_index));
                 }
-                target_owner[snapshot_index] = target_index;
-                selected.push_back({target_index, snapshot_index});
+                target_owner[device_index] = target_index;
+                selected.push_back({target_index, device_index});
             }
         }
 
@@ -768,14 +846,15 @@ preflight_fleet_devices(
             if (left.target_index != right.target_index) {
                 return left.target_index < right.target_index;
             }
-            const auto& left_identity = devices[left.snapshot_index].identity;
-            const auto& right_identity = devices[right.snapshot_index].identity;
+            const auto& left_identity = devices[left.device_index].identity;
+            const auto& right_identity = devices[right.device_index].identity;
             if (left_identity.physical_port_path !=
                 right_identity.physical_port_path) {
                 return left_identity.physical_port_path <
                     right_identity.physical_port_path;
             }
-            return left.snapshot_index < right.snapshot_index;
+            return devices[left.device_index].snapshot_index <
+                devices[right.device_index].snapshot_index;
         });
 
         std::vector<PreparedDeviceSession> prepared;
@@ -788,7 +867,7 @@ preflight_fleet_devices(
                     deadline, cancellation, DevicePreflightStage::Opening)) {
                 return std::unexpected(*stopped);
             }
-            const auto& snapshot_device = devices[selection.snapshot_index];
+            const auto& snapshot_device = devices[selection.device_index];
             const auto& target = targets[selection.target_index];
             auto opened = opener.open(*snapshot_device.source,
                                       deadline,
@@ -797,7 +876,7 @@ preflight_fleet_devices(
                 return std::unexpected(open_error(
                     std::move(opened.error()),
                     selection.target_index,
-                    selection.snapshot_index));
+                    snapshot_device.snapshot_index));
             }
             if (const auto stopped = interrupted(
                     deadline, cancellation, DevicePreflightStage::Opening)) {
@@ -809,7 +888,7 @@ preflight_fleet_devices(
                     DevicePreflightStage::Opening,
                     "exclusive opener returned no Fastboot session",
                     selection.target_index,
-                    selection.snapshot_index));
+                    snapshot_device.snapshot_index));
             }
             if (opened->verified_usb_identity != snapshot_device.identity) {
                 return std::unexpected(error(
@@ -817,7 +896,7 @@ preflight_fleet_devices(
                     DevicePreflightStage::Opening,
                     "serial, physical path, topology, or USB fingerprint changed during exclusive open",
                     selection.target_index,
-                    selection.snapshot_index));
+                    snapshot_device.snapshot_index));
             }
 
             auto live = probe.probe(*opened->session, deadline, cancellation);
@@ -825,7 +904,7 @@ preflight_fleet_devices(
                 return std::unexpected(probe_error(
                     std::move(live.error()),
                     selection.target_index,
-                    selection.snapshot_index));
+                    snapshot_device.snapshot_index));
             }
             if (const auto stopped = interrupted(
                     deadline, cancellation, DevicePreflightStage::LiveIdentity)) {
@@ -839,7 +918,7 @@ preflight_fleet_devices(
                     DevicePreflightStage::LiveIdentity,
                     "identity probe did not prove live Fastboot product and mode",
                     selection.target_index,
-                    selection.snapshot_index));
+                    snapshot_device.snapshot_index));
             }
 
             const bool matches =
@@ -874,7 +953,7 @@ preflight_fleet_devices(
             mismatch.outcomes = std::move(outcomes);
             return std::unexpected(std::move(mismatch));
         }
-        return PreparedDeviceBatch{std::move(prepared)};
+        return PreparedDeviceBatch{plan.sha256(), std::move(prepared)};
     } catch (const std::bad_alloc&) {
         return std::unexpected(DevicePreflightError{
             .kind = DevicePreflightErrorKind::ResourceExhausted,
@@ -884,6 +963,8 @@ preflight_fleet_devices(
             .snapshot_index = std::nullopt,
             .native_code = 0,
             .outbound_certainty = protocol::TransferCertainty::NotTransferred,
+            .open_error = std::nullopt,
+            .probe_error = std::nullopt,
             .outcomes = {},
         });
     } catch (...) {
@@ -895,6 +976,8 @@ preflight_fleet_devices(
             .snapshot_index = std::nullopt,
             .native_code = 0,
             .outbound_certainty = protocol::TransferCertainty::NotTransferred,
+            .open_error = std::nullopt,
+            .probe_error = std::nullopt,
             .outcomes = {},
         });
     }
