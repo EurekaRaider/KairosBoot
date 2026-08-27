@@ -253,7 +253,7 @@ def make_update_package(
     package = directory / name
     package.mkdir()
     (package / "android-info.txt").write_bytes(b"")
-    (package / "fastboot-info.txt").write_text(fastboot_info, encoding="utf-8")
+    (package / "fastboot-info.txt").write_bytes(fastboot_info.encode("utf-8"))
     return package
 
 
