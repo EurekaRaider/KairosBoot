@@ -24,7 +24,7 @@ using DevicePreflightClock = std::chrono::steady_clock;
 using DevicePreflightTimePoint = DevicePreflightClock::time_point;
 
 class FleetDeviceActor;
-class FleetCoordinator;
+class PreparedFleetActorBatch;
 
 // Complete passive USB identity that is stable across the enumeration/open
 // boundary. Product and Fastboot mode deliberately do not belong here.
@@ -261,7 +261,7 @@ private:
     std::unique_ptr<protocol::FastbootSession> session_;
 
     friend class FleetDeviceActor;
-    friend class FleetCoordinator;
+    friend class PreparedFleetActorBatch;
     friend std::expected<class PreparedDeviceBatch, DevicePreflightError>
     preflight_fleet_devices(const JobPlan&,
                             std::span<const transport::UsbDeviceInfo>,
@@ -306,7 +306,7 @@ private:
 
     friend class PreparedDeviceBatch;
     friend class FleetDeviceActor;
-    friend class FleetCoordinator;
+    friend class PreparedFleetActorBatch;
 };
 
 // This move-only batch is the destructive gate. It can be constructed only
