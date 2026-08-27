@@ -2,6 +2,7 @@
 #pragma once
 
 #include "src/image/file_source.hpp"
+#include "src/image/sha256.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -224,6 +225,8 @@ struct FlashJobManifest final {
     ManifestSourceLocation location;
     LocatedManifestString api_version;
     LocatedManifestString kind;
+    // SHA-256 of the exact stable source bytes parsed into this owned AST.
+    image::Sha256Digest source_sha256{};
     std::vector<ManifestArtifact> artifacts;
     std::vector<ManifestTarget> targets;
     ManifestPolicy policy;
