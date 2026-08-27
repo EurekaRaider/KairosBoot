@@ -20,6 +20,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -918,31 +919,29 @@ void update_super_present_failures_abort_the_complete_preflight() {
     CHECK(parse.error().artifact_error->kind ==
           ArtifactSourceErrorKind::InvalidImage);
 
-#if !defined(_WIN32)
-    const auto unreadable = temporary.path() / "unreadable-super";
-    create_directory_package(unreadable, "", "update-super\n");
-    write_bytes(unreadable / "super_empty.img", super_empty);
-    std::error_code permission_error;
-    std::filesystem::permissions(
-        unreadable / "super_empty.img", std::filesystem::perms::none,
-        std::filesystem::perm_options::replace, permission_error);
-    CHECK(!permission_error);
-    ArtifactSourceResolver unreadable_resolver;
-    auto io = preflight_update_package(unreadable_resolver, unreadable, false);
-    std::filesystem::permissions(
-        unreadable / "super_empty.img",
-        std::filesystem::perms::owner_read |
-            std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::replace, permission_error);
-    CHECK(!permission_error);
+    const auto io_package = temporary.path() / "io-super";
+    create_directory_package(io_package, "", "update-super\n");
+    write_bytes(io_package / "super_empty.img", super_empty);
+    std::atomic<std::size_t> io_reservations{};
+    ArtifactSourceLimits io_limits;
+    io_limits.available_space_provider =
+        [&](const std::filesystem::path&)
+        -> std::expected<std::uint64_t, std::error_code> {
+        // The two manifest materializations reserve first; inject EIO only
+        // when the immutable super artifact is materialized.
+        if (io_reservations.fetch_add(1U, std::memory_order_acq_rel) == 2U) {
+            return std::unexpected(
+                std::make_error_code(std::errc::io_error));
+        }
+        return 1ULL << 50U;
+    };
+    ArtifactSourceResolver io_resolver(io_limits);
+    auto io = preflight_update_package(io_resolver, io_package, false);
     CHECK(!io);
     CHECK(io.error().kind == UpdatePackagePreflightErrorKind::Artifact);
-    // The immutable directory snapshot inventories every entry before parsing
-    // the manifest, so an unreadable entry fails at the package boundary.
-    CHECK(io.error().artifact == "update package");
+    CHECK(io.error().artifact == "super_empty.img");
     CHECK(io.error().artifact_error.has_value());
     CHECK(io.error().artifact_error->kind == ArtifactSourceErrorKind::Io);
-#endif
 
     const auto cancelled_package = temporary.path() / "cancelled-super";
     create_directory_package(cancelled_package, "", "update-super\n");
