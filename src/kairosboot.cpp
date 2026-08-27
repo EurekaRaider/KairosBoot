@@ -1089,12 +1089,12 @@ private:
 [[nodiscard]] std::unique_ptr<kairosboot::protocol::ITransportSession>
 with_update_deadline(
     std::unique_ptr<kairosboot::protocol::ITransportSession> transport,
-    const std::optional<UpdateClock::time_point> deadline) {
-  if (!deadline.has_value()) {
+    const UpdateClock::time_point deadline) {
+  if (deadline == UpdateClock::time_point::max()) {
     return transport;
   }
   return std::make_unique<UpdateDeadlineTransport>(std::move(transport),
-                                                   *deadline);
+                                                   deadline);
 }
 
 [[nodiscard]] std::expected<
@@ -1104,8 +1104,8 @@ open_target(
     const PreparedTarget &target,
     const kb_command_options_t &options,
     const std::stop_token cancellation,
-    const std::optional<UpdateClock::time_point> update_deadline =
-        std::nullopt) {
+    const UpdateClock::time_point update_deadline =
+        UpdateClock::time_point::max()) {
   const auto timeout = std::chrono::milliseconds{options.timeout_ms};
   if (target.selector.kind == kairosboot::api::DeviceSelectorKind::Tcp) {
     kairosboot::transport::TcpTransportOptions transport_options;
@@ -1473,13 +1473,9 @@ public:
   kb_command_options_t transport_options{};
   kb_command_options_init(&transport_options);
   transport_options.timeout_ms = *open_timeout;
-  const auto transport_deadline =
-      *deadline == UpdateClock::time_point::max()
-          ? std::optional<UpdateClock::time_point>{}
-          : std::optional<UpdateClock::time_point>{*deadline};
   auto transport = open_target(
       *target, transport_options, task_context.cancellation_token(),
-      transport_deadline);
+      *deadline);
   if (!transport) {
     return operation_failure(std::move(transport.error()));
   }
