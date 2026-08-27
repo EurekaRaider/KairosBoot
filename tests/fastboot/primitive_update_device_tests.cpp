@@ -342,6 +342,7 @@ public:
         }
         return ReconnectWaitResult{
             .status = ReconnectWaitStatus::Elapsed,
+            .message = {},
         };
     }
 };
