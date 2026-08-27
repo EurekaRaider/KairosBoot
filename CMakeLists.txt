@@ -228,6 +228,7 @@ add_library(
   src/fastboot/update_plan.cpp
   src/fleet/canonical_json.cpp
   src/fleet/controller_scheduler.cpp
+  src/fleet/job_plan.cpp
   src/fleet/manifest.cpp
   src/image/artifact_source.cpp
   src/image/file_source.cpp
@@ -454,6 +455,15 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_canonical_json_tests)
   add_test(NAME canonical_json COMMAND kairosboot_canonical_json_tests)
   set_tests_properties(canonical_json PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_job_plan_tests tests/fleet/job_plan_tests.cpp)
+  target_compile_features(kairosboot_job_plan_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_job_plan_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_job_plan_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_job_plan_tests)
+  add_test(NAME job_plan COMMAND kairosboot_job_plan_tests)
+  set_tests_properties(job_plan PROPERTIES TIMEOUT 10)
 
   add_executable(kairosboot_fleet_manifest_tests
                  tests/fleet/manifest_tests.cpp)
