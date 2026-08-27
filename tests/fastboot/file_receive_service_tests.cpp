@@ -163,7 +163,7 @@ void binary_upload_is_published_only_after_terminal_okay() {
     PrimitiveService primitives(session);
     FileReceiveService files(primitives);
     std::vector<std::pair<std::uint64_t, std::uint64_t>> progress;
-    auto observer_token = std::make_shared<std::uint8_t>(0);
+    auto observer_token = std::make_shared<std::uint8_t>(std::uint8_t{0});
     const std::weak_ptr<std::uint8_t> observer_lifetime = observer_token;
     const auto result = files.upload(
         destination,
