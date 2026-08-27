@@ -27,9 +27,9 @@ enum class UpdateDeviceErrorKind : std::uint8_t {
 struct UpdateDeviceError final {
     UpdateDeviceErrorKind kind{UpdateDeviceErrorKind::Failed};
     protocol::ProtocolPhase phase{protocol::ProtocolPhase::Validation};
-    std::string message;
-    std::string device_message;
-    std::vector<protocol::Response> informational;
+    std::string message{};
+    std::string device_message{};
+    std::vector<protocol::Response> informational{};
     protocol::TransportStatus transport_status{protocol::TransportStatus::Ok};
     protocol::TransferCertainty transport_certainty{
         protocol::TransferCertainty::NotTransferred};

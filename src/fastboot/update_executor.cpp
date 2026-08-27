@@ -18,13 +18,13 @@ namespace {
 
 struct PendingFailure final {
     UpdateExecutionErrorKind kind{UpdateExecutionErrorKind::InvalidPreparedPackage};
-    std::optional<std::size_t> requirement_index;
-    std::optional<std::size_t> task_index;
-    std::optional<UpdateSourceLocation> location;
-    std::string name;
-    std::string message;
-    std::optional<UpdateDeviceError> device_error;
-    std::optional<std::string> secondary_observer_error;
+    std::optional<std::size_t> requirement_index{};
+    std::optional<std::size_t> task_index{};
+    std::optional<UpdateSourceLocation> location{};
+    std::string name{};
+    std::string message{};
+    std::optional<UpdateDeviceError> device_error{};
+    std::optional<std::string> secondary_observer_error{};
 };
 
 class ExecutionState final {
