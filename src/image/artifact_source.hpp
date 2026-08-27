@@ -129,6 +129,15 @@ class ArtifactSourceResolver final {
         const std::filesystem::path& archive_or_directory,
         std::stop_token cancellation = {});
 
+    // Applies one caller-owned absolute deadline to inventory and every entry
+    // resolution. The resolver's max_elapsed remains a safety ceiling, so the
+    // effective deadline is the earlier of the two.
+    [[nodiscard]] std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
+    open_package_snapshot(
+        const std::filesystem::path& archive_or_directory,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token cancellation = {});
+
     private:
     struct CacheKey final {
         std::filesystem::path container;

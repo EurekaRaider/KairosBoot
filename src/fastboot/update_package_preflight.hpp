@@ -4,6 +4,7 @@
 #include "src/fastboot/update_plan.hpp"
 #include "src/image/artifact_source.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -104,5 +105,16 @@ preflight_update_package(image::ArtifactSourceResolver& resolver,
                          bool wants_wipe,
                          const UpdatePackagePreflightLimits& limits = {},
                          std::stop_token cancellation = {});
+
+// Uses the same caller-owned absolute deadline for package inventory and every
+// artifact materialization. Callers must pass this unchanged to the executor.
+[[nodiscard]] std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_update_package(
+    image::ArtifactSourceResolver& resolver,
+    const std::filesystem::path& package_directory_or_zip,
+    bool wants_wipe,
+    const UpdatePackagePreflightLimits& limits,
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token cancellation = {});
 
 }  // namespace kairosboot::fastboot
