@@ -37,7 +37,7 @@ using PrimitiveUpdateProgressObserver =
 
 struct PrimitiveUpdateDeviceOptions final {
     std::uint64_t host_resparse_limit{image::kDefaultResparseLimitBytes};
-    PrimitiveUpdateProgressObserver progress;
+    PrimitiveUpdateProgressObserver progress{};
 };
 
 // Copies every transport/protocol diagnostic carried by PrimitiveError into

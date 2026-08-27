@@ -273,7 +273,7 @@ make_hardcoded_update_plan(
 
 struct PreparedUpdateSuper final {
     UpdateSuperPreparationState state{UpdateSuperPreparationState::NotRequired};
-    std::shared_ptr<const PreparedSuperArtifact> artifact;
+    std::shared_ptr<const PreparedSuperArtifact> artifact{};
 };
 
 [[nodiscard]] bool plan_requires_update_super(

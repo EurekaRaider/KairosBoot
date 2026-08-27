@@ -258,11 +258,11 @@ parse_legacy_slot_topology(const std::string_view payload) {
 }
 
 struct PreparedFlash final {
-    UpdateFlashArtifactInput binding;
-    std::shared_ptr<const image::SparseFlashPlan> plan;
-    std::vector<std::shared_ptr<protocol::ITransferSource>> sources;
-    std::string partition;
-    PrimitiveUpdateProgressObserver progress;
+    UpdateFlashArtifactInput binding{};
+    std::shared_ptr<const image::SparseFlashPlan> plan{};
+    std::vector<std::shared_ptr<protocol::ITransferSource>> sources{};
+    std::string partition{};
+    PrimitiveUpdateProgressObserver progress{};
 };
 
 class PreparedFlashTask final : public IPreparedDeviceTask {
