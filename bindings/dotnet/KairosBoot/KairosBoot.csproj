@@ -99,6 +99,9 @@
     <None Include="$(NativeRuntimeRoot)/win-x64/native/licenses/miniz/LICENSE"
           Pack="true"
           PackagePath="licenses/miniz/" />
+    <None Include="$(NativeRuntimeRoot)/win-x64/native/licenses/yaml-cpp/LICENSE"
+          Pack="true"
+          PackagePath="licenses/yaml-cpp/" />
 
     <None Include="build/net48/KairosBoot.targets"
           Pack="true"
@@ -163,11 +166,17 @@
       <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/licenses/miniz/LICENSE" />
       <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/licenses/miniz/LICENSE" />
       <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/licenses/miniz/LICENSE" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-x64/native/licenses/yaml-cpp/LICENSE" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/win-arm64/native/licenses/yaml-cpp/LICENSE" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-x64/native/licenses/yaml-cpp/LICENSE" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/linux-arm64/native/licenses/yaml-cpp/LICENSE" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-x64/native/licenses/yaml-cpp/LICENSE" />
+      <_ExpectedNativeAsset Include="$(NativeRuntimeRoot)/osx-arm64/native/licenses/yaml-cpp/LICENSE" />
       <_MissingNativeAsset Include="@(_ExpectedNativeAsset)"
                            Condition="!Exists('%(Identity)')" />
     </ItemGroup>
 
     <Error Condition="'@(_MissingNativeAsset)' != ''"
-           Text="IncludeNativeRuntimes=true requires complete six-RID native, libusb, Boost, miniz, app-local VC runtime, and redistribution assets. Missing: @(_MissingNativeAsset, ', ')" />
+           Text="IncludeNativeRuntimes=true requires complete six-RID native, libusb, Boost, miniz, yaml-cpp, app-local VC runtime, and redistribution assets. Missing: @(_MissingNativeAsset, ', ')" />
   </Target>
 </Project>

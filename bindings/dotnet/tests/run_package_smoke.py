@@ -61,6 +61,7 @@ def assert_package_licenses(package: Path) -> None:
         "licenses/libusb/COPYING",
         "licenses/miniz/LICENSE",
         "licenses/microsoft-vc-runtime/NOTICE.txt",
+        "licenses/yaml-cpp/LICENSE",
     }
     missing = sorted(required - names)
     if missing:

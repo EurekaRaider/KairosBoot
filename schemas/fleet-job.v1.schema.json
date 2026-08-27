@@ -11,23 +11,26 @@
     "artifacts": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 16384,
       "items": { "$ref": "#/$defs/artifact" }
     },
     "targets": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 256,
       "items": { "$ref": "#/$defs/target" }
     },
     "policy": { "$ref": "#/$defs/policy" }
   },
   "$defs": {
-    "nonEmpty": { "type": "string", "minLength": 1 },
+    "nonEmpty": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 256 },
     "artifact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "path", "sha256"],
       "properties": {
-        "id": { "$ref": "#/$defs/nonEmpty" },
+        "id": { "$ref": "#/$defs/identifier" },
         "path": { "$ref": "#/$defs/nonEmpty" },
         "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
       }
@@ -40,12 +43,14 @@
         "serials": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/nonEmpty" }
         },
         "usbPaths": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/nonEmpty" }
         }
@@ -126,14 +131,15 @@
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "selector", "steps"],
+      "required": ["name", "selector", "expectedProduct", "steps"],
       "properties": {
-        "name": { "$ref": "#/$defs/nonEmpty" },
+        "name": { "$ref": "#/$defs/identifier" },
         "selector": { "$ref": "#/$defs/selector" },
         "expectedProduct": { "$ref": "#/$defs/nonEmpty" },
         "steps": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 16384,
           "items": { "$ref": "#/$defs/step" }
         }
       }
@@ -147,7 +153,7 @@
         "memoryBudget": {
           "oneOf": [
             { "const": "auto" },
-            { "type": "integer", "minimum": 1048576 }
+            { "type": "integer", "minimum": 1048576, "maximum": 2147483648 }
           ]
         }
       }

@@ -10,9 +10,10 @@ Development packages are managed-only by default. A developer using one must
 stage the native SDK library and its dependencies in the operating system's
 native library search path, renaming or aliasing the SDK library to the
 platform's `kairosboot_native` filename. Release packages include validated
-KairosBoot, libusb, and platform runtime assets for all six RIDs. Boost and
-miniz remain internal native dependencies; their license texts are included at
-package root, and miniz adds no runtime library because it is linked statically.
+KairosBoot, libusb, and platform runtime assets for all six RIDs. Boost, miniz,
+and yaml-cpp remain internal native dependencies; their license texts are
+included at package root, and the private static dependencies add no runtime
+library.
 
 Within the .NET/NuGet distribution, the native library is named
 `kairosboot_native` so it cannot collide with the managed `KairosBoot.dll` on

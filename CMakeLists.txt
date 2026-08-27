@@ -131,6 +131,45 @@ foreach(_miniz_file IN ITEMS miniz.c miniz.h LICENSE)
   endif()
 endforeach()
 
+# yaml-cpp is the private, statically linked parser for the versioned Fleet
+# manifest. Keep tools, contrib, tests, and upstream install rules disabled so
+# it cannot grow the public SDK surface or add a runtime dependency.
+string(JSON KAIROSBOOT_LOCKED_YAML_CPP_VERSION GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" yamlCpp requiredVersion)
+string(JSON KAIROSBOOT_LOCKED_YAML_CPP_URL GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" yamlCpp sourceArchive)
+string(JSON KAIROSBOOT_LOCKED_YAML_CPP_SHA256 GET
+       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" yamlCpp sourceArchiveSha256)
+set(KAIROSBOOT_YAML_CPP_VERSION "${KAIROSBOOT_LOCKED_YAML_CPP_VERSION}")
+set(KAIROSBOOT_YAML_CPP_URL "${KAIROSBOOT_LOCKED_YAML_CPP_URL}")
+set(KAIROSBOOT_YAML_CPP_SHA256 "${KAIROSBOOT_LOCKED_YAML_CPP_SHA256}")
+string(LENGTH "${KAIROSBOOT_YAML_CPP_SHA256}"
+       KAIROSBOOT_YAML_CPP_SHA256_LENGTH)
+if(NOT KAIROSBOOT_YAML_CPP_SHA256_LENGTH EQUAL 64
+   OR NOT KAIROSBOOT_YAML_CPP_SHA256 MATCHES "^[0-9a-fA-F]+$")
+  message(FATAL_ERROR "KAIROSBOOT_YAML_CPP_SHA256 must be a SHA-256 digest")
+endif()
+
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+set(YAML_ENABLE_PIC ON CACHE BOOL "" FORCE)
+set(YAML_MSVC_SHARED_RT ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  kairosboot_yaml_cpp
+  URL "${KAIROSBOOT_YAML_CPP_URL}"
+  URL_HASH "SHA256=${KAIROSBOOT_YAML_CPP_SHA256}")
+FetchContent_MakeAvailable(kairosboot_yaml_cpp)
+if(NOT TARGET yaml-cpp::yaml-cpp)
+  message(FATAL_ERROR
+          "yaml-cpp ${KAIROSBOOT_YAML_CPP_VERSION} did not provide its target")
+endif()
+if(NOT EXISTS "${kairosboot_yaml_cpp_SOURCE_DIR}/LICENSE")
+  message(FATAL_ERROR "yaml-cpp release is missing LICENSE")
+endif()
+
 add_library(kairosboot_miniz STATIC
             "${kairosboot_miniz_source_SOURCE_DIR}/miniz.c")
 set_target_properties(
@@ -188,6 +227,7 @@ add_library(
   src/fastboot/update_package_preflight.cpp
   src/fastboot/update_plan.cpp
   src/fleet/controller_scheduler.cpp
+  src/fleet/manifest.cpp
   src/image/artifact_source.cpp
   src/image/file_source.cpp
   src/image/sha256.cpp
@@ -217,7 +257,8 @@ target_include_directories(
          "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(kairosboot_internal
                       PRIVATE kairosboot_libusb kairosboot_miniz
-                              Boost::asio_core Threads::Threads ${CMAKE_DL_LIBS})
+                              yaml-cpp::yaml-cpp Boost::asio_core
+                              Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)
   # Boost.Asio still uses the operating system's Winsock implementation. Keep
   # the platform link dependency explicit for every supported Windows toolchain.
@@ -391,6 +432,17 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_fleet_manifest_tests
+                 tests/fleet/manifest_tests.cpp)
+  target_compile_features(kairosboot_fleet_manifest_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_fleet_manifest_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_fleet_manifest_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_fleet_manifest_tests)
+  add_test(NAME fleet_manifest COMMAND kairosboot_fleet_manifest_tests)
+  set_tests_properties(fleet_manifest PROPERTIES TIMEOUT 30)
+
   add_executable(kairosboot_error_mapping_tests
                  tests/api/error_mapping_tests.cpp)
   target_compile_features(kairosboot_error_mapping_tests PRIVATE cxx_std_23)
@@ -812,6 +864,8 @@ install(FILES "${boost_SOURCE_DIR}/LICENSE_1_0.txt"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/boost")
 install(FILES "${kairosboot_miniz_source_SOURCE_DIR}/LICENSE"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/miniz")
+install(FILES "${kairosboot_yaml_cpp_SOURCE_DIR}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/yaml-cpp")
 
 configure_package_config_file(
   cmake/KairosBootConfig.cmake.in
