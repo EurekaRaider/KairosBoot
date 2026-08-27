@@ -12,6 +12,28 @@
     }                                                                           \
   } while (0)
 
+struct update_progress_probe {
+  int calls;
+  int saw_preflight;
+  int cancel;
+};
+
+static kb_progress_action_t KB_CALL
+observe_update_progress(const kb_progress_t *progress, void *user_data) {
+  struct update_progress_probe *probe =
+      (struct update_progress_probe *)user_data;
+  if (probe == NULL || progress == NULL ||
+      progress->struct_size < sizeof(*progress) ||
+      progress->api_version != KB_API_VERSION) {
+    return KB_PROGRESS_CANCEL;
+  }
+  ++probe->calls;
+  if (progress->stage != NULL && strcmp(progress->stage, "preflight") == 0) {
+    probe->saw_preflight = 1;
+  }
+  return probe->cancel != 0 ? KB_PROGRESS_CANCEL : KB_PROGRESS_CONTINUE;
+}
+
 int main(void) {
   kb_version_t version = {0};
   CHECK(kb_get_version(&version) == KB_E_INVALID_ARGUMENT);
@@ -43,6 +65,14 @@ int main(void) {
   CHECK(flash_options.struct_size == sizeof(flash_options));
   CHECK(flash_options.api_version == KB_API_VERSION);
   CHECK(flash_options.timeout_ms == KB_WAIT_INFINITE);
+
+  kb_update_options_t update_options;
+  kb_update_options_init(&update_options);
+  CHECK(update_options.struct_size == sizeof(update_options));
+  CHECK(update_options.api_version == KB_API_VERSION);
+  CHECK(update_options.timeout_ms == KB_WAIT_INFINITE);
+  CHECK(update_options.wipe == 0);
+  CHECK(update_options.progress_callback == NULL);
 
   kb_command_options_t command_options;
   kb_command_options_init(&command_options);
@@ -92,6 +122,113 @@ int main(void) {
     kb_error_release(error);
     error = NULL;
     kb_command_options_init(&command_options);
+  }
+
+  {
+    struct extended_update_options {
+      kb_update_options_t v1;
+      uint64_t future_field;
+    } extended_options;
+    kb_update_options_init(&extended_options.v1);
+    extended_options.v1.struct_size = sizeof(extended_options);
+    extended_options.future_field = UINT64_C(0xabcddcba12344321);
+    kb_operation_t *update_operation = NULL;
+    CHECK(kb_update_package_async(
+              context, "unknown:device", "unused-update-package",
+              &extended_options.v1, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "unknown scheme") != NULL);
+    CHECK(extended_options.future_field ==
+          UINT64_C(0xabcddcba12344321));
+    kb_error_release(error);
+    error = NULL;
+
+    update_options.struct_size = sizeof(uint32_t);
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "update options") != NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init(&update_options);
+
+    update_options.wipe = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init(&update_options);
+  }
+
+  {
+    const char *missing_package =
+        "kairosboot-hermetic-update-package-does-not-exist";
+    struct update_progress_probe probe = {0, 0, 0};
+    kb_operation_t *update_operation = NULL;
+    update_options.progress_callback = &observe_update_progress;
+    update_options.progress_user_data = &probe;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", missing_package, &update_options,
+              &update_operation, &error) == KB_OK);
+    CHECK(update_operation != NULL);
+    CHECK(error == NULL);
+    CHECK(kb_operation_wait(update_operation, KB_WAIT_INFINITE) == KB_E_IO);
+    CHECK(probe.calls >= 1);
+    CHECK(probe.saw_preflight == 1);
+    CHECK(kb_operation_error(update_operation) != NULL);
+    CHECK(strstr(kb_error_message(kb_operation_error(update_operation)),
+                 "update package") != NULL);
+    CHECK(strcmp(kb_error_device_identifier(
+                     kb_operation_error(update_operation)),
+                 "tcp:127.0.0.1:1") == 0);
+    CHECK(kb_error_transfer_state(kb_operation_error(update_operation)) ==
+          KB_TRANSFER_NOT_SENT);
+    kb_operation_release(update_operation);
+
+    probe.calls = 0;
+    probe.saw_preflight = 0;
+    probe.cancel = 1;
+    update_operation = NULL;
+    CHECK(kb_update_package_async(
+              context, "udp:127.0.0.1:1", missing_package, &update_options,
+              &update_operation, &error) == KB_OK);
+    CHECK(kb_operation_wait(update_operation, KB_WAIT_INFINITE) ==
+          KB_E_CANCELLED);
+    CHECK(probe.calls == 1);
+    CHECK(probe.saw_preflight == 1);
+    kb_operation_release(update_operation);
+
+    kb_update_options_init(&update_options);
+    update_options.timeout_ms = 0;
+    update_operation = NULL;
+    CHECK(kb_update_package_async(
+              context, "usb:1-1", missing_package, &update_options,
+              &update_operation, &error) == KB_OK);
+    CHECK(kb_operation_wait(update_operation, KB_WAIT_INFINITE) ==
+          KB_E_TIMEOUT);
+    CHECK(kb_error_transfer_state(kb_operation_error(update_operation)) ==
+          KB_TRANSFER_NOT_SENT);
+    kb_operation_release(update_operation);
+
+    kb_update_options_init(&update_options);
+    CHECK(kb_update_package(
+              context, "tcp:127.0.0.1:1", missing_package, &update_options,
+              &error) == KB_E_IO);
+    CHECK(error != NULL);
+    CHECK(strcmp(kb_error_device_identifier(error),
+                 "tcp:127.0.0.1:1") == 0);
+    CHECK(strstr(kb_error_message(error), "update package") != NULL);
+    CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+    kb_error_release(error);
+    error = NULL;
   }
 
   {

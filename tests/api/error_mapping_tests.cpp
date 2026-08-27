@@ -2,6 +2,9 @@
 #include "src/api/device_selection.hpp"
 #include "src/api/error_mapping.hpp"
 #include "src/fastboot/primitive_service.hpp"
+#include "src/fastboot/update_executor.hpp"
+#include "src/fastboot/update_package_preflight.hpp"
+#include "src/image/artifact_source.hpp"
 #include "src/image/file_source.hpp"
 #include "src/image/sparse_flash_plan.hpp"
 #include "src/transport/libusb_runtime.hpp"
@@ -26,6 +29,14 @@ using kairosboot::api::normalize_public_error;
 using kairosboot::fastboot::PrimitiveError;
 using kairosboot::fastboot::PrimitiveErrorCode;
 using kairosboot::fastboot::PrimitiveOperation;
+using kairosboot::fastboot::UpdateDeviceError;
+using kairosboot::fastboot::UpdateDeviceErrorKind;
+using kairosboot::fastboot::UpdateExecutionError;
+using kairosboot::fastboot::UpdateExecutionErrorKind;
+using kairosboot::fastboot::UpdatePackagePreflightError;
+using kairosboot::fastboot::UpdatePackagePreflightErrorKind;
+using kairosboot::image::ArtifactSourceError;
+using kairosboot::image::ArtifactSourceErrorKind;
 using kairosboot::image::FileSourceError;
 using kairosboot::image::FileSourceErrorKind;
 using kairosboot::image::ImageSourceError;
@@ -366,6 +377,100 @@ void primitive_error_retains_binary_safe_diagnostics() {
     CHECK(result.session_poisoned);
 }
 
+void update_preflight_retains_artifact_status_and_native_code() {
+    UpdatePackagePreflightError error{};
+    error.kind = UpdatePackagePreflightErrorKind::Artifact;
+    error.message = "package snapshot deadline expired";
+    error.artifact = "system.img";
+    error.artifact_error = ArtifactSourceError{
+        .kind = ArtifactSourceErrorKind::TimedOut,
+        .native_code = 110,
+        .message = "artifact deadline expired",
+    };
+
+    const auto result = normalize_public_error(error, "usb:2-3.1");
+    check_common(result, KB_E_TIMEOUT, 110, KB_TRANSFER_NOT_SENT,
+                 "usb:2-3.1");
+    CHECK(result.message == "package snapshot deadline expired");
+}
+
+void update_execution_maps_contract_and_capability_failures() {
+    UpdateExecutionError invalid{};
+    invalid.kind = UpdateExecutionErrorKind::InvalidPreparedPackage;
+    invalid.message = "prepared mapping is inconsistent";
+    const auto invalid_result =
+        normalize_public_error(invalid, 3U, "SERIAL-U");
+    check_common(invalid_result, KB_E_INVALID_ARGUMENT, 0,
+                 KB_TRANSFER_NOT_SENT, "SERIAL-U");
+
+    UpdateDeviceError unsupported_device{};
+    unsupported_device.kind = UpdateDeviceErrorKind::Unsupported;
+    unsupported_device.message =
+        "verified bootloader-to-fastbootd reconnect is unavailable";
+    UpdateExecutionError unsupported{};
+    unsupported.kind = UpdateExecutionErrorKind::DeviceTaskFailed;
+    unsupported.message = "unable to prepare update device task";
+    unsupported.device_error = std::move(unsupported_device);
+    const auto unsupported_result =
+        normalize_public_error(unsupported, 1U, "usb:4-2");
+    check_common(unsupported_result, KB_E_NOT_SUPPORTED, 0,
+                 KB_TRANSFER_NOT_SENT, "usb:4-2");
+
+    UpdateExecutionError requirement{};
+    requirement.kind = UpdateExecutionErrorKind::RequirementNotMet;
+    requirement.message = "product requirement failed";
+    const auto requirement_result =
+        normalize_public_error(requirement, 4U, "SERIAL-R");
+    check_common(requirement_result, KB_E_DEVICE_FAIL, 0,
+                 KB_TRANSFER_NOT_SENT, "SERIAL-R");
+}
+
+void update_execution_retains_progress_and_wire_diagnostics() {
+    UpdateDeviceError device{};
+    device.kind = UpdateDeviceErrorKind::Failed;
+    device.message = "device rejected flash";
+    device.device_message = std::string("locked\0partition", 16);
+    device.informational = {
+        Response{ResponseKind::Info, "checking slot", std::nullopt},
+        Response{ResponseKind::Text, "locked", std::nullopt},
+    };
+    device.transport_status = kairosboot::protocol::TransportStatus::Ok;
+    device.transport_certainty = TransferCertainty::FullyTransferred;
+    device.outbound_certainty = TransferCertainty::FullyTransferred;
+    device.inbound_expected = 32U;
+    device.inbound_transferred = 9U;
+    device.inbound_certainty = TransferCertainty::PartialOrUnknown;
+    device.session_closed = true;
+    device.native_code = 19;
+    device.task_certainty = TransferCertainty::FullyTransferred;
+    device.completed_actions = 1U;
+    device.total_actions = 1U;
+
+    UpdateExecutionError error{};
+    error.kind = UpdateExecutionErrorKind::DeviceTaskFailed;
+    error.message = "update task failed";
+    error.device_error = std::move(device);
+    error.completed_tasks = 1U;
+    const auto result = normalize_public_error(error, 4U, "SERIAL-D");
+    check_common(result, KB_E_DEVICE_FAIL, 19,
+                 KB_TRANSFER_PARTIAL_OR_UNKNOWN, "SERIAL-D");
+    CHECK(result.device_message == std::string("locked\0partition", 16));
+    CHECK(result.command_messages.size() == 2U);
+    CHECK(result.inbound_expected == 32U);
+    CHECK(result.inbound_transferred == 9U);
+    CHECK(result.inbound_transfer_state == KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+    CHECK(result.session_poisoned);
+
+    UpdateExecutionError complete{};
+    complete.kind = UpdateExecutionErrorKind::Cancelled;
+    complete.message = "cancelled after completion";
+    complete.completed_tasks = 2U;
+    const auto complete_result =
+        normalize_public_error(complete, 2U, "SERIAL-COMPLETE");
+    check_common(complete_result, KB_E_CANCELLED, 0,
+                 KB_TRANSFER_FULLY_TRANSFERRED, "SERIAL-COMPLETE");
+}
+
 }  // namespace
 
 int main() {
@@ -393,6 +498,12 @@ int main() {
          device_fail_message_retains_target_payload},
         {"primitive binary diagnostics",
          primitive_error_retains_binary_safe_diagnostics},
+        {"update preflight normalization",
+         update_preflight_retains_artifact_status_and_native_code},
+        {"update execution contract normalization",
+         update_execution_maps_contract_and_capability_failures},
+        {"update execution wire diagnostics",
+         update_execution_retains_progress_and_wire_diagnostics},
     };
 
     std::size_t failures = 0;

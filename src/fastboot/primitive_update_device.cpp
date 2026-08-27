@@ -1867,7 +1867,7 @@ PrimitiveUpdateDevice::prepare_task(
             }
             if (input.task.apply_vbmeta) {
                 return std::unexpected(local_error(
-                    UpdateDeviceErrorKind::Failed,
+                    UpdateDeviceErrorKind::Unsupported,
                     "apply-vbmeta requires a pre-execution AVB transform that is "
                     "not available in the primitive update adapter"));
             }

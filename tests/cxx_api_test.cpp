@@ -41,6 +41,8 @@ static_assert(std::is_nothrow_move_assignable_v<kairosboot::CommandResult>);
 static_assert(std::is_copy_constructible_v<kairosboot::Error>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
                              std::chrono::milliseconds>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.timeout),
+                             std::chrono::milliseconds>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
@@ -61,12 +63,18 @@ static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
 static_assert(requires(kairosboot::Context &context,
                        kairosboot::DeviceSelector selector,
                        kairosboot::CommandOptions options,
+                       kairosboot::UpdateOptions update_options,
+                       std::filesystem::path package,
                        std::span<const std::byte> bytes,
                        kairosboot::FetchRange range) {
   { context.getvar_async(selector, "product", options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.getvar(selector, "product", options) } ->
       std::same_as<std::expected<kairosboot::CommandResult, kairosboot::Error>>;
+  { context.update_package_async(selector, package, update_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.update_package(selector, package, update_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
   context.erase_async(selector, "userdata", options);
   context.erase(selector, "userdata", options);
   context.set_active_async(selector, "a", options);
@@ -119,6 +127,8 @@ static_assert(requires(kairosboot::Context &context,
 });
 static_assert(requires(kairosboot::Operation &operation,
                        std::stop_token stop_token) {
+  { operation.wait(stop_token) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
   { operation.command_result() } ->
       std::same_as<
           std::expected<kairosboot::CommandResult, kairosboot::Error>>;
@@ -186,6 +196,28 @@ int main() {
   }
 
   {
+    const auto defaults =
+        kairosboot::detail::prepare_update_options(kairosboot::UpdateOptions{});
+    CHECK(defaults.has_value());
+    CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
+    CHECK(defaults->native.wipe == 0);
+    CHECK(defaults->native.progress_callback == nullptr);
+
+    kairosboot::UpdateOptions finite;
+    finite.timeout = 625ms;
+    finite.wipe = true;
+    const auto prepared = kairosboot::detail::prepare_update_options(finite);
+    CHECK(prepared.has_value());
+    CHECK(prepared->native.timeout_ms == 625U);
+    CHECK(prepared->native.wipe == 1);
+
+    finite.timeout = -1ms;
+    const auto negative = kairosboot::detail::prepare_update_options(finite);
+    CHECK(!negative.has_value());
+    CHECK(negative.error().status() == KB_E_INVALID_ARGUMENT);
+  }
+
+  {
     const auto defaults = kairosboot::detail::prepare_command_options(
         kairosboot::CommandOptions{});
     CHECK(defaults.has_value());
@@ -243,6 +275,31 @@ int main() {
   }
 
   {
+    bool callback_called = false;
+    kairosboot::Progress observed;
+    kairosboot::UpdateOptions options;
+    options.progress = [&](const kairosboot::Progress &progress) {
+      callback_called = true;
+      observed = progress;
+      return kairosboot::ProgressAction::Continue;
+    };
+    auto prepared = kairosboot::detail::prepare_update_options(options);
+    CHECK(prepared.has_value());
+    CHECK(prepared->native.progress_callback != nullptr);
+    kb_progress_t native_progress{
+        sizeof(kb_progress_t), KB_API_VERSION, 13, 21, "preflight",
+        "tcp:127.0.0.1:5554"};
+    CHECK(prepared->native.progress_callback(
+              &native_progress, prepared->native.progress_user_data) ==
+          KB_PROGRESS_CONTINUE);
+    CHECK(callback_called);
+    CHECK(observed.bytes_completed == 13);
+    CHECK(observed.bytes_total == 21);
+    CHECK(observed.stage == "preflight");
+    CHECK(observed.device_identifier == "tcp:127.0.0.1:5554");
+  }
+
+  {
     bool destroyed = false;
     {
       auto probe = std::make_shared<LifetimeProbe>(destroyed);
@@ -285,6 +342,23 @@ int main() {
   CHECK(invalid_selector.error().status() == KB_E_INVALID_ARGUMENT);
   CHECK(invalid_selector.error().device_identifier() == "unknown:device");
 
+  const auto invalid_update_selector = context->update_package_async(
+      kairosboot::DeviceSelector{"unknown:device"},
+      std::filesystem::path{"unused-update-package"});
+  CHECK(!invalid_update_selector.has_value());
+  CHECK(invalid_update_selector.error().status() == KB_E_INVALID_ARGUMENT);
+  CHECK(invalid_update_selector.error().device_identifier() ==
+        "unknown:device");
+
+  kairosboot::UpdateOptions invalid_update_timeout;
+  invalid_update_timeout.timeout = -1ms;
+  const auto rejected_update_timeout = context->update_package_async(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      std::filesystem::path{"unused-update-package"},
+      invalid_update_timeout);
+  CHECK(!rejected_update_timeout.has_value());
+  CHECK(rejected_update_timeout.error().status() == KB_E_INVALID_ARGUMENT);
+
   const kairosboot::DeviceSelector invalid_target{"unknown:device"};
   const auto invalid_flashing = context->flashing_async(
       invalid_target, static_cast<kairosboot::FlashingCommand>(INT32_MAX));
@@ -324,6 +398,49 @@ int main() {
     static_cast<void>(devices->usb_path(index));
     static_cast<void>(devices->product(index));
   }
+
+  const auto missing_update_package =
+      std::filesystem::path{"kairosboot-hermetic-update-package-does-not-exist"};
+  auto update_operation = context->update_package_async(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      missing_update_package);
+  CHECK(update_operation.has_value());
+  auto update_waited = update_operation->wait();
+  CHECK(!update_waited.has_value());
+  CHECK(update_waited.error().status() == KB_E_IO);
+  CHECK(update_waited.error().device_identifier() == "tcp:127.0.0.1:1");
+  CHECK(update_waited.error().message().find("update package") !=
+        std::string::npos);
+  CHECK(update_waited.error().transfer_state() == KB_TRANSFER_NOT_SENT);
+
+  bool update_callback_called = false;
+  bool update_callback_stage_valid = false;
+  kairosboot::UpdateOptions cancel_update;
+  cancel_update.progress =
+      [&update_callback_called,
+       &update_callback_stage_valid](const kairosboot::Progress &progress) {
+        update_callback_called = true;
+        update_callback_stage_valid = progress.stage == "preflight";
+        return kairosboot::ProgressAction::Cancel;
+      };
+  auto cancelled_update = context->update_package_async(
+      kairosboot::DeviceSelector{"udp:127.0.0.1:1"},
+      missing_update_package, cancel_update);
+  CHECK(cancelled_update.has_value());
+  auto cancelled_wait = cancelled_update->wait(std::stop_token{});
+  CHECK(!cancelled_wait.has_value());
+  CHECK(cancelled_wait.error().status() == KB_E_CANCELLED);
+  CHECK(update_callback_called);
+  CHECK(update_callback_stage_valid);
+
+  auto blocking_update = context->update_package(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      missing_update_package);
+  CHECK(!blocking_update.has_value());
+  CHECK(blocking_update.error().status() == KB_E_IO);
+  CHECK(blocking_update.error().device_identifier() == "tcp:127.0.0.1:1");
+  CHECK(blocking_update.error().message().find("update package") !=
+        std::string::npos);
 
   auto operation = context->flash_file_async(
       "system", std::filesystem::path{"kairosboot-test-does-not-exist.img"});

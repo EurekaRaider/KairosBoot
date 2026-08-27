@@ -5,12 +5,17 @@
 
 #include <boost/asio.hpp>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <mutex>
@@ -56,6 +61,52 @@ std::string as_string(const std::span<const std::byte> bytes) {
   return std::string(
       reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
+
+class TemporaryUpdatePackage final {
+public:
+  TemporaryUpdatePackage(const std::string_view fastboot_info,
+                         const std::span<const std::byte> image = {}) {
+    static std::uint64_t sequence = 0;
+    const auto nonce = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    path_ = std::filesystem::temp_directory_path() /
+            ("kairosboot-public-update-" + std::to_string(nonce) + "-" +
+             std::to_string(++sequence));
+    CHECK(std::filesystem::create_directory(path_));
+    write(path_ / "android-info.txt", {});
+    write(path_ / "fastboot-info.txt",
+          std::as_bytes(std::span{fastboot_info.data(), fastboot_info.size()}));
+    if (!image.empty()) {
+      write(path_ / "system.img", image);
+    }
+  }
+
+  ~TemporaryUpdatePackage() {
+    std::error_code ignored;
+    static_cast<void>(std::filesystem::remove_all(path_, ignored));
+  }
+
+  TemporaryUpdatePackage(const TemporaryUpdatePackage&) = delete;
+  TemporaryUpdatePackage& operator=(const TemporaryUpdatePackage&) = delete;
+
+  [[nodiscard]] const std::filesystem::path& path() const noexcept {
+    return path_;
+  }
+
+private:
+  static void write(const std::filesystem::path& path,
+                    const std::span<const std::byte> bytes) {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    CHECK(stream.is_open());
+    if (!bytes.empty()) {
+      stream.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+    }
+    CHECK(stream.good());
+  }
+
+  std::filesystem::path path_;
+};
 
 class ScriptedServer final {
 public:
@@ -180,6 +231,52 @@ private:
         CHECK(as_string(read_frame(socket)) == command);
         write_frame(socket, "INFOpolicy");
         write_frame(socket, std::string("FAILdenied\0x", 12));
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+        write_frame(socket, "OKAY0x00100000");
+        CHECK(as_string(read_frame(socket)) == "download:00000010");
+        write_frame(socket, "DATA00000010");
+        const auto payload = read_frame(socket);
+        CHECK(payload.size() == 16U);
+        for (std::size_t index = 0; index < payload.size(); ++index) {
+          CHECK(payload[index] ==
+                std::byte{static_cast<unsigned char>(index)});
+        }
+        write_frame(socket, "OKAYdownloaded");
+        CHECK(as_string(read_frame(socket)) == "flash:system");
+        write_frame(socket, "OKAYflashed");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+        write_frame(socket, "FAILvariable not found");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+        write_frame(socket, "OKAY0x00100000");
+        CHECK(as_string(read_frame(socket)) == "download:00000010");
+        write_frame(socket, "DATA00000010");
+        CHECK(read_frame(socket).size() == 16U);
+        write_frame(socket, "OKAYdownloaded");
+        CHECK(as_string(read_frame(socket)) == "flash:system");
+        write_frame(socket, "INFOpolicy");
+        write_frame(socket, "FAILpartition locked");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "erase:userdata");
+        write_frame(socket, "OKAYwiped");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "erase:cache");
+        std::this_thread::sleep_for(std::chrono::milliseconds{600});
+        write_frame(socket, "OKAYerased cache");
+        CHECK(as_string(read_frame(socket)) == "erase:metadata");
+        std::this_thread::sleep_for(std::chrono::milliseconds{1000});
       }
     } catch (...) {
       failure_ = std::current_exception();
@@ -369,6 +466,52 @@ kb_progress_action_t KB_CALL record_progress(
   return KB_PROGRESS_CONTINUE;
 }
 
+struct CancelOnTaskFailureProbe final {
+  std::size_t execute_callbacks{};
+};
+
+kb_progress_action_t KB_CALL cancel_on_second_execute(
+    const kb_progress_t* progress, void* user_data) {
+  auto& probe = *static_cast<CancelOnTaskFailureProbe*>(user_data);
+  if (progress != nullptr && progress->stage != nullptr &&
+      std::string_view{progress->stage} == "execute" &&
+      ++probe.execute_callbacks == 2U) {
+    return KB_PROGRESS_CANCEL;
+  }
+  return KB_PROGRESS_CONTINUE;
+}
+
+struct ReleaseContextProbe final {
+  kb_context_t* context{};
+  std::atomic<bool> released{false};
+};
+
+kb_progress_action_t KB_CALL release_context_during_preflight(
+    const kb_progress_t* progress, void* user_data) {
+  auto& probe = *static_cast<ReleaseContextProbe*>(user_data);
+  if (progress != nullptr && progress->stage != nullptr &&
+      std::string_view{progress->stage} == "preflight" &&
+      !probe.released.exchange(true, std::memory_order_acq_rel)) {
+    kb_context_release(probe.context);
+  }
+  return KB_PROGRESS_CONTINUE;
+}
+
+struct DelayOpenProbe final {
+  bool delayed{};
+};
+
+kb_progress_action_t KB_CALL delay_transport_open(
+    const kb_progress_t* progress, void* user_data) {
+  auto& probe = *static_cast<DelayOpenProbe*>(user_data);
+  if (progress != nullptr && progress->stage != nullptr &&
+      std::string_view{progress->stage} == "open" && !probe.delayed) {
+    probe.delayed = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds{600});
+  }
+  return KB_PROGRESS_CONTINUE;
+}
+
 void run_contract() {
   ScriptedServer server;
   const auto selector =
@@ -551,8 +694,132 @@ void run_contract() {
   check_management_failure(kb_delete_logical_partition(
       context, selector.c_str(), "system_ext", nullptr, &result, &error));
 
+  std::array<std::byte, 16> update_image{};
+  for (std::size_t index = 0; index < update_image.size(); ++index) {
+    update_image[index] = std::byte{static_cast<unsigned char>(index)};
+  }
+  TemporaryUpdatePackage update_package(
+      "version 1\nflash system system.img\n", update_image);
+  std::vector<std::uint64_t> update_watermarks;
+  kb_update_options_t update_options;
+  kb_update_options_init(&update_options);
+  update_options.progress_callback = record_progress;
+  update_options.progress_user_data = &update_watermarks;
+  const auto package_path = update_package.path().string();
+  CHECK(kb_update_package(context, selector.c_str(), package_path.c_str(),
+                          &update_options, &error) == KB_OK);
+  CHECK(error == nullptr);
+  CHECK(std::ranges::find(update_watermarks, 16U) !=
+        update_watermarks.end());
+
+  TemporaryUpdatePackage fastbootd_package(
+      "version 1\nreboot fastboot\n");
+  const auto fastbootd_path = fastbootd_package.path().string();
+  CHECK(kb_update_package(context, selector.c_str(), fastbootd_path.c_str(),
+                          nullptr, &error) == KB_E_NOT_SUPPORTED);
+  CHECK(error != nullptr);
+  CHECK(kb_error_status(error) == KB_E_NOT_SUPPORTED);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  CHECK(strstr(kb_error_message(error), "fastbootd") != nullptr);
+  kb_error_release(error);
+  error = nullptr;
+
+  CancelOnTaskFailureProbe cancellation_probe;
+  kb_update_options_init(&update_options);
+  update_options.progress_callback = cancel_on_second_execute;
+  update_options.progress_user_data = &cancellation_probe;
+  CHECK(kb_update_package(context, selector.c_str(), package_path.c_str(),
+                          &update_options, &error) == KB_E_DEVICE_FAIL);
+  CHECK(cancellation_probe.execute_callbacks == 2U);
+  CHECK(error != nullptr);
+  CHECK(kb_error_status(error) == KB_E_DEVICE_FAIL);
+  const auto* update_device_message = kb_error_device_message(error, &size);
+  CHECK(std::string(reinterpret_cast<const char*>(update_device_message), size) ==
+        "partition locked");
+  CHECK(kb_error_command_message_count(error) == 1U);
+  kb_error_release(error);
+  error = nullptr;
+
+  TemporaryUpdatePackage wipe_package(
+      "version 1\nif-wipe erase userdata\n");
+  const auto wipe_path = wipe_package.path().string();
+  kb_update_options_init(&update_options);
+  update_options.wipe = 1;
+  CHECK(kb_update_package(context, selector.c_str(), wipe_path.c_str(),
+                          &update_options, &error) == KB_OK);
+  CHECK(error == nullptr);
+
+  TemporaryUpdatePackage deadline_package(
+      "version 1\nerase cache\nerase metadata\n");
+  const auto deadline_path = deadline_package.path().string();
+  kb_update_options_init(&update_options);
+  update_options.timeout_ms = 1000U;
+  const auto deadline_started = std::chrono::steady_clock::now();
+  CHECK(kb_update_package(context, selector.c_str(), deadline_path.c_str(),
+                          &update_options, &error) == KB_E_TIMEOUT);
+  const auto deadline_elapsed = std::chrono::steady_clock::now() -
+                                deadline_started;
+  CHECK(deadline_elapsed < std::chrono::milliseconds{1350});
+  CHECK(error != nullptr);
+  CHECK(kb_error_status(error) == KB_E_TIMEOUT);
+  CHECK(kb_error_transfer_state(error) ==
+        KB_TRANSFER_PARTIAL_OR_UNKNOWN);
+  kb_error_release(error);
+  error = nullptr;
+
   kb_context_release(context);
   server.finish();
+}
+
+void context_release_is_safe_after_async_update_start() {
+  TemporaryUpdatePackage package("version 1\n");
+  kb_context_t* context = nullptr;
+  kb_error_t* error = nullptr;
+  CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+  CHECK(context != nullptr);
+  CHECK(error == nullptr);
+
+  ReleaseContextProbe probe{.context = context, .released = false};
+  kb_update_options_t options;
+  kb_update_options_init(&options);
+  options.progress_callback = release_context_during_preflight;
+  options.progress_user_data = &probe;
+  kb_operation_t* operation = nullptr;
+  const auto package_path = package.path().string();
+  CHECK(kb_update_package_async(
+            context, "usb:255-255", package_path.c_str(), &options,
+            &operation, &error) == KB_OK);
+  CHECK(operation != nullptr);
+  CHECK(error == nullptr);
+  const auto status = kb_operation_wait(operation, KB_WAIT_INFINITE);
+  CHECK(status == KB_E_NO_DEVICE || status == KB_E_IO);
+  CHECK(probe.released.load(std::memory_order_acquire));
+  kb_operation_release(operation);
+}
+
+void whole_update_timeout_includes_progress_callbacks() {
+  TemporaryUpdatePackage package("version 1\n");
+  kb_context_t* context = nullptr;
+  kb_error_t* error = nullptr;
+  CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+
+  DelayOpenProbe probe;
+  kb_update_options_t options;
+  kb_update_options_init(&options);
+  options.timeout_ms = 500U;
+  options.progress_callback = delay_transport_open;
+  options.progress_user_data = &probe;
+  const auto package_path = package.path().string();
+  CHECK(kb_update_package(context, "tcp:127.0.0.1:1",
+                          package_path.c_str(), &options,
+                          &error) == KB_E_TIMEOUT);
+  CHECK(probe.delayed);
+  CHECK(error != nullptr);
+  CHECK(kb_error_status(error) == KB_E_TIMEOUT);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  CHECK(strstr(kb_error_message(error), "transport open") != nullptr);
+  kb_error_release(error);
+  kb_context_release(context);
 }
 
 void run_cxx_contract() {
@@ -679,6 +946,8 @@ void run_cxx_contract() {
 int main() {
   try {
     run_contract();
+    context_release_is_safe_after_async_update_start();
+    whole_update_timeout_includes_progress_callbacks();
     run_cxx_contract();
     std::cout << "PASS: typed C and C++ primitives over Fastboot TCP\n";
     return 0;
