@@ -153,9 +153,7 @@ void invoke_fault(const ManifestParseOptions& options,
     }
 
     auto body = value;
-    bool signed_value = false;
     if (!body.empty() && (body.front() == '+' || body.front() == '-')) {
-        signed_value = true;
         body.remove_prefix(1U);
     }
     if (body == ".inf" || body == ".Inf" || body == ".INF") {
@@ -164,14 +162,14 @@ void invoke_fault(const ManifestParseOptions& options,
     if (body.empty()) {
         return false;
     }
-    if (!signed_value && body.starts_with("0o")) {
+    if (body.starts_with("0o")) {
         const auto digits = body.substr(2U);
         return !digits.empty() &&
                std::ranges::all_of(digits, [](const char character) {
                    return character >= '0' && character <= '7';
                });
     }
-    if (!signed_value && body.starts_with("0x")) {
+    if (body.starts_with("0x")) {
         const auto digits = body.substr(2U);
         return !digits.empty() &&
                std::ranges::all_of(digits, [](const char character) {

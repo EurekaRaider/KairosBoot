@@ -349,8 +349,9 @@ void yaml_core_string_typing_matches_the_json_schema() {
         "~",       "null",    "Null",      "NULL",      "true",
         "True",    "TRUE",    "false",     "False",     "FALSE",
         "0",       "-12",     "+12",       "0o17",      "0x2A",
-        "1.0",     ".5",      "1e3",       "-2.5E-2",   ".inf",
-        "-.Inf",   ".NaN",
+        "+0o17",   "-0o17",   "+0x2A",     "-0x2A",     "1.0",
+        ".5",      "1e3",     "-2.5E-2",   ".inf",      "-.Inf",
+        ".NaN",
     };
     for (const auto& value : core_non_strings) {
         expect_error(replace_once(minimal_manifest(),
