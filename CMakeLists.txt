@@ -742,6 +742,15 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_cxx_api_test)
   add_test(NAME cxx_api COMMAND kairosboot_cxx_api_test)
 
+  add_executable(kairosboot_cxx_fleet_plan_test tests/cxx_fleet_plan_test.cpp)
+  target_compile_features(kairosboot_cxx_fleet_plan_test PRIVATE cxx_std_23)
+  target_compile_definitions(
+    kairosboot_cxx_fleet_plan_test
+    PRIVATE KAIROSBOOT_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_cxx_fleet_plan_test PRIVATE KairosBoot::Cxx)
+  kairosboot_enable_strict_warnings(kairosboot_cxx_fleet_plan_test)
+  add_test(NAME cxx_fleet_plan COMMAND kairosboot_cxx_fleet_plan_test)
+
   add_executable(kairosboot_cxx_primitive_tcp_tests
                  tests/api/cxx_primitive_tcp_tests.cpp)
   target_compile_features(kairosboot_cxx_primitive_tcp_tests PRIVATE cxx_std_23)
