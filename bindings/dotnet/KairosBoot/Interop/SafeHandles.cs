@@ -83,3 +83,17 @@ internal sealed class CommandResultSafeHandle : KairosBootSafeHandle
         return true;
     }
 }
+
+internal sealed class JobPlanSafeHandle : KairosBootSafeHandle
+{
+    internal JobPlanSafeHandle(IntPtr existingHandle)
+        : base(existingHandle)
+    {
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.JobPlanRelease(handle);
+        return true;
+    }
+}

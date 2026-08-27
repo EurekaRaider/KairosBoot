@@ -61,3 +61,11 @@ drains it asynchronously; pending operations do not reserve one ThreadPool
 thread per device. `KairosBootException` includes the binary device message,
 ordered command messages, inbound expected/transferred counts and certainty,
 and whether the native session was poisoned.
+
+`Fleet.ValidateJobFile` and `Fleet.PlanJobFile` validate and plan Fleet job
+manifests without a `Context`; they never initialize USB transport, enumerate
+devices, or open artifact paths. Failures throw `KairosBootException` with the
+manifest path and, when known, its `line:column` diagnostics plus the platform
+native code. `JobPlan` owns an immutable native snapshot; `CanonicalJson`
+returns an owned copy of the canonical SDK JSON without a trailing LF and
+`Sha256Hex` its lowercase hexadecimal digest, and the plan must be disposed.

@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +15,27 @@ using KairosBoot.Interop;
 internal static class Program
 {
     private static int checks;
+
+    private const string kValidManifest =
+        "apiVersion: kairosboot.io/v1\n" +
+        "kind: FlashJob\n" +
+        "artifacts:\n" +
+        "  - id: system\n" +
+        "    path: images/system.img\n" +
+        "    sha256: \"1111111111111111111111111111111111111111111111111111111111111111\"\n" +
+        "targets:\n" +
+        "  - name: product-a\n" +
+        "    selector:\n" +
+        "      serials: [SERIAL-01]\n" +
+        "    expectedProduct: product_a\n" +
+        "    steps:\n" +
+        "      - flash:\n" +
+        "          partition: system\n" +
+        "          artifact: system\n" +
+        "policy:\n" +
+        "  onDeviceFailure: continue\n" +
+        "  maxParallelDevices: 32\n" +
+        "  memoryBudget: auto\n";
 
     private static async Task<int> Main()
     {
@@ -24,6 +48,7 @@ internal static class Program
             CheckUpdateOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
+            CheckFleetPublicSurface();
             CheckExtendedException();
             await CheckCancellationDrain().ConfigureAwait(false);
             await CheckCancellationCompletionRace().ConfigureAwait(false);
@@ -42,6 +67,7 @@ internal static class Program
             }
 
             CheckVersion();
+            CheckFleetJobValidateAndPlan();
             CheckDevicesEnumerate();
             CheckFlashOptions();
             await CheckFlashFailsAccurately().ConfigureAwait(false);
@@ -86,21 +112,26 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 80)
+        if (uniqueEntryPoints.Count != 85)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 80 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 85 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 80, "unique entry points");
+        Check(uniqueEntryPoints.Count == 85, "unique entry points");
         Check(entryPoints.Contains("kb_update_options_init"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
         Check(entryPoints.Contains("kb_command_options_init"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
         Check(entryPoints.Contains("kb_error_session_poisoned"), "extended error import");
+        Check(entryPoints.Contains("kb_validate_job_file"), "fleet validate import");
+        Check(entryPoints.Contains("kb_plan_job_file"), "fleet plan import");
+        Check(entryPoints.Contains("kb_job_plan_canonical_json"), "fleet plan JSON import");
+        Check(entryPoints.Contains("kb_job_plan_sha256_hex"), "fleet plan digest import");
+        Check(entryPoints.Contains("kb_job_plan_release"), "fleet plan release import");
         Check(entryPoints.Contains("kb_flashing_async"), "flashing import");
         Check(entryPoints.Contains("kb_gsi_async"), "GSI import");
         Check(entryPoints.Contains("kb_snapshot_update_async"), "snapshot-update import");
@@ -121,6 +152,13 @@ internal static class Program
         {
             Check(invalid.IsInvalid, "invalid command result handle is inert");
         }
+        Check(
+            typeof(JobPlanSafeHandle).IsSubclassOf(typeof(SafeHandle)),
+            "job plan SafeHandle");
+        using (var invalidPlan = new JobPlanSafeHandle(IntPtr.Zero))
+        {
+            Check(invalidPlan.IsInvalid, "invalid job plan handle is inert");
+        }
     }
 
     private static void CheckInteropCallingConventionAndStrings()
@@ -135,7 +173,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 80, "net48 DllImport count");
+        Check(methods.Count == 85, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -144,7 +182,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 62, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 64, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -162,7 +200,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 80, "net10 LibraryImport count");
+        Check(groups.Count == 85, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -173,7 +211,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 38, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 40, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -601,6 +639,278 @@ internal static class Program
         Check(ScriptedUpdateNativeMethods.CancelCount() == 1, "native update cancellation");
         Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 3, "update operation release");
         Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "update context release");
+    }
+
+    private static void CheckFleetPublicSurface()
+    {
+        Check(typeof(Fleet).IsAbstract && typeof(Fleet).IsSealed, "static fleet entry");
+        var validate = typeof(Fleet).GetMethod("ValidateJobFile", new[] { typeof(string) });
+        Check(validate != null && validate.ReturnType == typeof(void), "fleet validate signature");
+        var plan = typeof(Fleet).GetMethod("PlanJobFile", new[] { typeof(string) });
+        Check(plan != null && plan.ReturnType == typeof(JobPlan), "fleet plan signature");
+        Check(
+            typeof(JobPlan).IsSealed && typeof(JobPlan).GetInterfaces().Contains(typeof(IDisposable)),
+            "sealed disposable job plan");
+        Check(
+            typeof(JobPlan).GetProperty("CanonicalJson")?.PropertyType == typeof(string) &&
+                typeof(JobPlan).GetProperty("CanonicalJson")?.CanRead == true &&
+                typeof(JobPlan).GetProperty("CanonicalJson")?.CanWrite == false,
+            "job plan canonical JSON property");
+        Check(
+            typeof(JobPlan).GetProperty("Sha256Hex")?.PropertyType == typeof(string) &&
+                typeof(JobPlan).GetProperty("Sha256Hex")?.CanRead == true &&
+                typeof(JobPlan).GetProperty("Sha256Hex")?.CanWrite == false,
+            "job plan digest property");
+    }
+
+    private static void CheckFleetJobValidateAndPlan()
+    {
+        Expect<ArgumentException>(() => Fleet.ValidateJobFile(null!));
+        Expect<ArgumentException>(() => Fleet.ValidateJobFile(string.Empty));
+        Expect<ArgumentException>(() => Fleet.PlanJobFile(null!));
+        Expect<ArgumentException>(() => Fleet.PlanJobFile(string.Empty));
+        Expect<ArgumentException>(() => Fleet.PlanJobFile("job\0.yaml"));
+
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kairosboot-csharp-fleet-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var valid = Path.Combine(directory, "kb_fleet_valid.yaml");
+            WriteUtf8(valid, kValidManifest);
+            var syntax = Path.Combine(directory, "kb_fleet_syntax.yaml");
+            WriteUtf8(syntax, "apiVersion: kairosboot.io/v1\nkind: [unclosed\n");
+            var semantic = Path.Combine(directory, "kb_fleet_semantic.yaml");
+            WriteUtf8(
+                semantic,
+                "apiVersion: kairosboot.io/v1\nkind: FlashJob\nbogusField: true\n");
+
+            Fleet.ValidateJobFile(valid);
+            using (var plan = Fleet.PlanJobFile(valid))
+            {
+                var json = plan.CanonicalJson;
+                Check(json.Length > 1, "fleet canonical JSON size");
+                Check(json[0] == '{' && json[json.Length - 1] == '}', "fleet canonical JSON framing");
+                Check(json[json.Length - 1] != '\n', "fleet canonical JSON has no trailing LF");
+                Check(
+                    ContainsOrdinal(json, "\"kind\":\"FlashJob\""),
+                    "fleet canonical kind");
+                Check(
+                    ContainsOrdinal(json, "\"schemaVersion\":1"),
+                    "fleet canonical schema version");
+
+                var digest = plan.Sha256Hex;
+                Check(digest.Length == 64, "fleet digest length");
+                Check(IsLowercaseHex(digest), "fleet digest alphabet");
+                Check(digest == Sha256HexOf(json), "fleet digest matches canonical bytes");
+                Check(plan.CanonicalJson == json, "fleet canonical JSON is stable");
+            }
+
+            var first = Fleet.PlanJobFile(valid);
+            var second = Fleet.PlanJobFile(valid);
+            Check(!ReferenceEquals(first, second), "fleet independent plan instances");
+            Check(first.CanonicalJson == second.CanonicalJson, "fleet independent canonical JSON");
+            Check(first.Sha256Hex == second.Sha256Hex, "fleet independent digests");
+            first.Dispose();
+            first.Dispose();
+            Check(second.CanonicalJson.Length > 1, "fleet surviving plan JSON");
+            Check(second.Sha256Hex.Length == 64, "fleet surviving plan digest");
+            Expect<ObjectDisposedException>(() => { _ = first.CanonicalJson; });
+            Expect<ObjectDisposedException>(() => { _ = first.Sha256Hex; });
+            second.Dispose();
+
+            var missing = Path.Combine(directory, "kb_fleet_missing.yaml");
+            var missingValidate = Expect<KairosBootException>(() => Fleet.ValidateJobFile(missing));
+            Check(missingValidate.Status == KairosBootStatus.Io, "fleet missing validate status");
+            Check(missingValidate.NativeCode == 2, "fleet missing native errno");
+            Check(
+                ContainsOrdinal(missingValidate.Message, "kb_fleet_missing.yaml"),
+                "fleet missing path message");
+            var missingPlan = Expect<KairosBootException>(() => Fleet.PlanJobFile(missing));
+            Check(missingPlan.Status == KairosBootStatus.Io, "fleet missing plan status");
+            Check(missingPlan.NativeCode == 2, "fleet missing plan native errno");
+
+            var syntaxValidate = Expect<KairosBootException>(() => Fleet.ValidateJobFile(syntax));
+            Check(syntaxValidate.Status == KairosBootStatus.InvalidArgument, "fleet syntax status");
+            Check(syntaxValidate.NativeCode == 0, "fleet syntax native code");
+            Check(
+                ContainsOrdinal(syntaxValidate.Message, "kb_fleet_syntax.yaml"),
+                "fleet syntax path message");
+            Check(ContainsLineColumn(syntaxValidate.Message), "fleet syntax line/column message");
+            var syntaxPlan = Expect<KairosBootException>(() => Fleet.PlanJobFile(syntax));
+            Check(syntaxPlan.Status == KairosBootStatus.InvalidArgument, "fleet syntax plan status");
+            Check(
+                ContainsOrdinal(syntaxPlan.Message, "kb_fleet_syntax.yaml"),
+                "fleet syntax plan path message");
+
+            var semanticValidate = Expect<KairosBootException>(() => Fleet.ValidateJobFile(semantic));
+            Check(
+                semanticValidate.Status == KairosBootStatus.InvalidArgument,
+                "fleet semantic status");
+            Check(
+                ContainsOrdinal(semanticValidate.Message, ":3:1:"),
+                "fleet semantic line/column");
+            Check(
+                ContainsOrdinal(semanticValidate.Message, "$.bogusField"),
+                "fleet semantic schema path");
+            var semanticPlan = Expect<KairosBootException>(() => Fleet.PlanJobFile(semantic));
+            Check(
+                semanticPlan.Status == KairosBootStatus.InvalidArgument,
+                "fleet semantic plan status");
+            Check(
+                ContainsOrdinal(semanticPlan.Message, "$.bogusField"),
+                "fleet semantic plan schema path");
+
+            CheckFleetGoldenPlan();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void CheckFleetGoldenPlan()
+    {
+        var sourceRoot = FindTestSourceRoot();
+        var fixture = Path.Combine(sourceRoot, "tests", "contracts", "fleet-job-v1.fixture.yaml");
+        var goldenPath = Path.Combine(sourceRoot, "tests", "contracts", "job-plan-v1.golden.json");
+        var golden = File.ReadAllBytes(goldenPath);
+        Check(golden.Length > 1, "fleet golden size");
+        Check(golden[golden.Length - 1] == (byte)'\n', "fleet golden trailing LF");
+        Check(golden[golden.Length - 2] != (byte)'\n', "fleet golden single trailing LF");
+        var expectedJson = Encoding.UTF8.GetString(golden, 0, golden.Length - 1);
+
+        using (var plan = Fleet.PlanJobFile(fixture))
+        {
+            var json = plan.CanonicalJson;
+            Check(json == expectedJson, "fleet golden canonical JSON");
+            Check(
+                plan.Sha256Hex == Sha256HexOf(expectedJson),
+                "fleet golden digest matches golden bytes");
+            Check(
+                plan.Sha256Hex ==
+                    "992daa21b5ea246910fc5d9ffffafed3e36e883d6a407b70abe3b04def3823f4",
+                "fleet golden frozen digest");
+            Check(
+                ContainsOrdinal(
+                    json,
+                    "58539b1d8a0ba3108ffd0f0ea835d25efca9a6ce85b06cd15f0f1307d4b1c9ef"),
+                "fleet manifest provenance digest");
+        }
+    }
+
+    private static string FindTestSourceRoot()
+    {
+        var configured = Environment.GetEnvironmentVariable("KAIROSBOOT_TEST_SOURCE_DIR");
+        if (!string.IsNullOrEmpty(configured) &&
+            File.Exists(Path.Combine(configured, "tests", "contracts", "job-plan-v1.golden.json")))
+        {
+            return configured;
+        }
+
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory != null;
+             directory = directory.Parent)
+        {
+            if (File.Exists(
+                    Path.Combine(directory.FullName, "tests", "contracts", "job-plan-v1.golden.json")))
+            {
+                return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "KairosBoot contract fixtures were not found above " + AppContext.BaseDirectory +
+                "; set KAIROSBOOT_TEST_SOURCE_DIR to the repository root.");
+    }
+
+    private static void WriteUtf8(string path, string text)
+    {
+        File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static bool ContainsOrdinal(string text, string fragment)
+    {
+        return text.IndexOf(fragment, StringComparison.Ordinal) >= 0;
+    }
+
+    private static bool IsLowercaseHex(string text)
+    {
+        foreach (var character in text)
+        {
+            if ((character < '0' || character > '9') && (character < 'a' || character > 'f'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ContainsLineColumn(string text)
+    {
+        for (var i = 0; i + 1 < text.Length; i++)
+        {
+            if (text[i] != ':')
+            {
+                continue;
+            }
+
+            var lineDigits = 0;
+            while (i + 1 + lineDigits < text.Length &&
+                   text[i + 1 + lineDigits] >= '0' && text[i + 1 + lineDigits] <= '9')
+            {
+                lineDigits++;
+            }
+
+            if (lineDigits == 0)
+            {
+                continue;
+            }
+
+            var columnStart = i + 1 + lineDigits;
+            if (columnStart >= text.Length || text[columnStart] != ':')
+            {
+                continue;
+            }
+
+            var columnDigits = 0;
+            while (columnStart + 1 + columnDigits < text.Length &&
+                   text[columnStart + 1 + columnDigits] >= '0' &&
+                   text[columnStart + 1 + columnDigits] <= '9')
+            {
+                columnDigits++;
+            }
+
+            if (columnDigits == 0)
+            {
+                continue;
+            }
+
+            var after = columnStart + 1 + columnDigits;
+            if (after < text.Length && text[after] == ':')
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string Sha256HexOf(string value)
+    {
+        using (var sha256 = SHA256.Create())
+        {
+            var digest = sha256.ComputeHash(Encoding.UTF8.GetBytes(value));
+            var builder = new StringBuilder(digest.Length * 2);
+            foreach (var digit in digest)
+            {
+                builder.Append(digit.ToString("x2"));
+            }
+
+            return builder.ToString();
+        }
     }
 
     private static void CheckVersion()
