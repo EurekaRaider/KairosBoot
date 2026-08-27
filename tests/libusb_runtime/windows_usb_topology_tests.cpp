@@ -806,6 +806,18 @@ void batch_discovery_is_two_global_passes_and_device_atomic() {
     CHECK(malformed.error().kind ==
           WindowsUsbTopologyErrorKind::MalformedSnapshot);
 
+    BatchNativeBackend reordered_native;
+    auto reordered_pass = stable_pass;
+    std::swap(reordered_pass[0U], reordered_pass[1U]);
+    reordered_native.passes = {stable_pass, std::move(reordered_pass)};
+    SetupApiWindowsUsbTopologyBackend reordered_backend(reordered_native);
+    WindowsUsbTopologyDiscovery reordered_discovery(reordered_backend);
+    const auto reordered = reordered_discovery.discover_batch(
+        queries, deadline, cancellation.get_token());
+    CHECK(!reordered.has_value());
+    CHECK(reordered.error().kind ==
+          WindowsUsbTopologyErrorKind::IdentityMismatch);
+
     std::stop_source stopped;
     BatchNativeBackend cancelled_native;
     cancelled_native.passes = {stable_pass, stable_pass};

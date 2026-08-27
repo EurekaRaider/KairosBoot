@@ -70,6 +70,153 @@ using SteadyClock = std::chrono::steady_clock;
     };
 }
 
+struct WindowsLibusbTransportSnapshot final {
+    std::uint8_t descriptor_length{};
+    std::uint8_t descriptor_type{};
+    std::uint16_t usb_version{};
+    std::uint8_t device_class{};
+    std::uint8_t device_subclass{};
+    std::uint8_t device_protocol{};
+    std::uint8_t endpoint_zero_packet_size{};
+    std::uint16_t vendor_id{};
+    std::uint16_t product_id{};
+    std::uint16_t device_version{};
+    std::uint8_t manufacturer_string_index{};
+    std::uint8_t product_string_index{};
+    std::uint8_t serial_string_index{};
+    std::uint8_t configuration_count{};
+    std::uint8_t config_length{};
+    std::uint8_t config_descriptor_type{};
+    std::uint16_t config_total_length{};
+    std::uint8_t config_interface_count{};
+    std::uint8_t configuration_value{};
+    std::uint8_t configuration_string_index{};
+    std::uint8_t configuration_attributes{};
+    std::uint8_t configuration_max_power{};
+    std::uint8_t interface_length{};
+    std::uint8_t interface_descriptor_type{};
+    std::uint8_t interface_number{};
+    std::uint8_t alternate_setting{};
+    std::uint8_t endpoint_count{};
+    std::uint8_t interface_class{};
+    std::uint8_t interface_subclass{};
+    std::uint8_t interface_protocol{};
+    std::uint8_t interface_string_index{};
+    std::uint8_t bulk_out_endpoint{};
+    std::uint16_t bulk_out_max_packet_size{};
+    std::uint8_t bulk_in_endpoint{};
+    std::uint16_t bulk_in_max_packet_size{};
+
+    [[nodiscard]] bool operator==(
+        const WindowsLibusbTransportSnapshot&) const = default;
+};
+
+[[nodiscard]] WindowsLibusbTransportSnapshot make_windows_transport_snapshot(
+    const libusb_device_descriptor& descriptor,
+    const libusb_config_descriptor& config,
+    const libusb_interface_descriptor& alternate,
+    const libusb_endpoint_descriptor& bulk_out,
+    const libusb_endpoint_descriptor& bulk_in) noexcept {
+    return WindowsLibusbTransportSnapshot{
+        .descriptor_length = descriptor.bLength,
+        .descriptor_type = descriptor.bDescriptorType,
+        .usb_version = descriptor.bcdUSB,
+        .device_class = descriptor.bDeviceClass,
+        .device_subclass = descriptor.bDeviceSubClass,
+        .device_protocol = descriptor.bDeviceProtocol,
+        .endpoint_zero_packet_size = descriptor.bMaxPacketSize0,
+        .vendor_id = descriptor.idVendor,
+        .product_id = descriptor.idProduct,
+        .device_version = descriptor.bcdDevice,
+        .manufacturer_string_index = descriptor.iManufacturer,
+        .product_string_index = descriptor.iProduct,
+        .serial_string_index = descriptor.iSerialNumber,
+        .configuration_count = descriptor.bNumConfigurations,
+        .config_length = config.bLength,
+        .config_descriptor_type = config.bDescriptorType,
+        .config_total_length = config.wTotalLength,
+        .config_interface_count = config.bNumInterfaces,
+        .configuration_value = config.bConfigurationValue,
+        .configuration_string_index = config.iConfiguration,
+        .configuration_attributes = config.bmAttributes,
+        .configuration_max_power = config.MaxPower,
+        .interface_length = alternate.bLength,
+        .interface_descriptor_type = alternate.bDescriptorType,
+        .interface_number = alternate.bInterfaceNumber,
+        .alternate_setting = alternate.bAlternateSetting,
+        .endpoint_count = alternate.bNumEndpoints,
+        .interface_class = alternate.bInterfaceClass,
+        .interface_subclass = alternate.bInterfaceSubClass,
+        .interface_protocol = alternate.bInterfaceProtocol,
+        .interface_string_index = alternate.iInterface,
+        .bulk_out_endpoint = bulk_out.bEndpointAddress,
+        .bulk_out_max_packet_size = static_cast<std::uint16_t>(
+            bulk_out.wMaxPacketSize & 0x07FFU),
+        .bulk_in_endpoint = bulk_in.bEndpointAddress,
+        .bulk_in_max_packet_size = static_cast<std::uint16_t>(
+            bulk_in.wMaxPacketSize & 0x07FFU),
+    };
+}
+
+[[nodiscard]] std::optional<WindowsLibusbTransportSnapshot>
+find_windows_transport_snapshot(
+    const libusb_device_descriptor& descriptor,
+    const libusb_config_descriptor& config,
+    const std::uint8_t interface_number,
+    const std::uint8_t alternate_setting) noexcept {
+    if (config.bNumInterfaces != 0U && config.interface == nullptr) {
+        return std::nullopt;
+    }
+    std::optional<WindowsLibusbTransportSnapshot> result;
+    for (std::uint8_t interface_index = 0U;
+         interface_index < config.bNumInterfaces;
+         ++interface_index) {
+        const auto& interface = config.interface[interface_index];
+        if (interface.num_altsetting > 0 && interface.altsetting == nullptr) {
+            return std::nullopt;
+        }
+        for (int alternate_index = 0;
+             alternate_index < interface.num_altsetting;
+             ++alternate_index) {
+            const auto& alternate = interface.altsetting[alternate_index];
+            if (alternate.bInterfaceNumber != interface_number ||
+                alternate.bAlternateSetting != alternate_setting) {
+                continue;
+            }
+            if (result.has_value() ||
+                (alternate.bNumEndpoints != 0U &&
+                 alternate.endpoint == nullptr)) {
+                return std::nullopt;
+            }
+            const libusb_endpoint_descriptor* bulk_out = nullptr;
+            const libusb_endpoint_descriptor* bulk_in = nullptr;
+            for (std::uint8_t endpoint_index = 0U;
+                 endpoint_index < alternate.bNumEndpoints;
+                 ++endpoint_index) {
+                const auto& endpoint = alternate.endpoint[endpoint_index];
+                if ((endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) !=
+                    LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK) {
+                    continue;
+                }
+                auto*& selected =
+                    (endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN) != 0U
+                    ? bulk_in
+                    : bulk_out;
+                if (selected != nullptr) {
+                    return std::nullopt;
+                }
+                selected = &endpoint;
+            }
+            if (bulk_out == nullptr || bulk_in == nullptr) {
+                return std::nullopt;
+            }
+            result = make_windows_transport_snapshot(
+                descriptor, config, alternate, *bulk_out, *bulk_in);
+        }
+    }
+    return result;
+}
+
 [[nodiscard]] SteadyClock::time_point deadline_after(
     const std::chrono::milliseconds timeout) noexcept {
     const auto now = SteadyClock::now();
@@ -503,12 +650,12 @@ LibusbFunctions LibusbFunctions::system() {
             session, deadline, cancellation);
     };
     functions.resolve_windows_topology = [](
-        const WindowsUsbTopologyQuery& query,
+        const std::span<const WindowsUsbTopologyQuery> queries,
         const SteadyClock::time_point deadline,
         const std::stop_token cancellation) {
         static const SetupApiWindowsUsbTopologyBackend backend;
         const WindowsUsbTopologyDiscovery discovery(backend);
-        return discovery.discover(query, deadline, cancellation);
+        return discovery.discover_batch(queries, deadline, cancellation);
     };
 #endif
 #if defined(__APPLE__)
@@ -1735,6 +1882,8 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         std::optional<unsigned long> windows_session_data;
         std::optional<std::expected<std::string, WindowsUsbTopologyError>>
             windows_session_identity;
+        std::vector<std::pair<std::size_t, WindowsLibusbTransportSnapshot>>
+            windows_transport_snapshots;
         if (state_->functions.resolve_windows_topology) {
             windows_session_data = state_->functions.get_session_data(device);
             if (*windows_session_data == 0UL) {
@@ -1928,6 +2077,16 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                             linux_topology_snapshot->error();
                     }
                 }
+                if (state_->functions.resolve_windows_topology) {
+                    windows_transport_snapshots.emplace_back(
+                        devices.size(),
+                        make_windows_transport_snapshot(
+                            descriptor,
+                            *raw_config,
+                            alternate,
+                            *bulk_out,
+                            *bulk_in));
+                }
                 devices.push_back(std::move(snapshot));
             }
         }
@@ -1942,6 +2101,39 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             if (!windows_session_identity->has_value()) {
                 generation_error = windows_session_identity->error();
             } else {
+                libusb_device_descriptor current_descriptor{};
+                const auto current_descriptor_result =
+                    state_->functions.get_device_descriptor(
+                        device, &current_descriptor);
+                libusb_config_descriptor* current_raw_config = nullptr;
+                auto current_config_result =
+                    state_->functions.get_active_config_descriptor(
+                        device, &current_raw_config);
+                if (current_config_result != LIBUSB_SUCCESS) {
+                    current_config_result =
+                        state_->functions.get_config_descriptor(
+                            device, 0U, &current_raw_config);
+                }
+                ConfigDescriptorGuard current_config_guard{
+                    &state_->functions, current_raw_config};
+                bool transport_snapshot_matches =
+                    current_descriptor_result == LIBUSB_SUCCESS &&
+                    current_config_result == LIBUSB_SUCCESS &&
+                    current_raw_config != nullptr;
+                if (transport_snapshot_matches) {
+                    for (const auto& [snapshot_index, expected] :
+                         windows_transport_snapshots) {
+                        const auto current = find_windows_transport_snapshot(
+                            current_descriptor,
+                            *current_raw_config,
+                            devices[snapshot_index].interface_number,
+                            devices[snapshot_index].alternate_setting);
+                        if (!current.has_value() || *current != expected) {
+                            transport_snapshot_matches = false;
+                            break;
+                        }
+                    }
+                }
                 std::array<std::uint8_t, 16> current_ports{};
                 const auto current_port_count =
                     state_->functions.get_port_numbers(
@@ -1988,11 +2180,12 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     current_bus != first_snapshot.bus_number ||
                     current_address != first_snapshot.device_address ||
                     !ports_match ||
-                    current_serial != first_snapshot.serial_utf8) {
+                    current_serial != first_snapshot.serial_utf8 ||
+                    !transport_snapshot_matches) {
                     generation_error = windows_generation_changed(
                         *windows_session_data,
                         *current_instance,
-                        "the libusb USB identity changed while its PnP generation was captured");
+                        "the complete libusb transport snapshot changed while its PnP generation was captured");
                 }
             }
 
@@ -2024,22 +2217,58 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
     list_guard.reset();
     lifecycle.unlock();
 
-    for (const auto& [snapshot_index, query] : windows_topology_queries) {
+    if (!windows_topology_queries.empty()) {
         if (runtime_stopping()) {
             return std::unexpected(
                 LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
         }
-        auto topology = state_->functions.resolve_windows_topology(
-            query, windows_topology_deadline, topology_cancellation);
+        std::vector<WindowsUsbTopologyQuery> queries;
+        queries.reserve(windows_topology_queries.size());
+        for (const auto& pending : windows_topology_queries) {
+            queries.push_back(pending.second);
+        }
+        auto resolved = state_->functions.resolve_windows_topology(
+            queries, windows_topology_deadline, topology_cancellation);
         if (runtime_stopping()) {
             return std::unexpected(
                 LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
         }
-        auto& snapshot = devices[snapshot_index];
-        if (topology.has_value()) {
-            snapshot.windows_topology = std::move(*topology);
+        if (!resolved.has_value()) {
+            for (const auto& pending : windows_topology_queries) {
+                devices[pending.first].windows_topology_error =
+                    resolved.error();
+            }
+        } else if (resolved->size() != windows_topology_queries.size()) {
+            for (const auto& pending : windows_topology_queries) {
+                devices[pending.first].windows_topology_error =
+                    WindowsUsbTopologyError{
+                        .kind =
+                            WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                        .stage = WindowsUsbTopologyStage::StabilityCheck,
+                        .native_domain = WindowsUsbNativeErrorDomain::None,
+                        .native_code = 0U,
+                        .libusb_session_data =
+                            pending.second.libusb_session_data,
+                        .device_instance_id_utf8 =
+                            pending.second.device_instance_id_utf8,
+                        .message =
+                            "Windows topology batch returned the wrong interface count",
+                    };
+            }
         } else {
-            snapshot.windows_topology_error = std::move(topology.error());
+            for (std::size_t index = 0U;
+                 index < windows_topology_queries.size();
+                 ++index) {
+                auto& snapshot =
+                    devices[windows_topology_queries[index].first];
+                auto& topology = (*resolved)[index];
+                if (topology.has_value()) {
+                    snapshot.windows_topology = std::move(*topology);
+                } else {
+                    snapshot.windows_topology_error =
+                        std::move(topology.error());
+                }
+            }
         }
     }
 

@@ -88,8 +88,9 @@ struct LibusbFunctions final {
     std::function<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>(
         const LinuxUsbTopologyQuery&)>
         resolve_linux_topology;
-    std::function<std::expected<WindowsUsbTopology, WindowsUsbTopologyError>(
-        const WindowsUsbTopologyQuery&,
+    std::function<std::expected<std::vector<WindowsUsbTopologyResult>,
+                                WindowsUsbTopologyError>(
+        std::span<const WindowsUsbTopologyQuery>,
         std::chrono::steady_clock::time_point,
         std::stop_token)>
         resolve_windows_topology;
