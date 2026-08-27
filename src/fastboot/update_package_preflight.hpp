@@ -28,10 +28,10 @@ enum class UpdatePackagePreflightErrorKind : std::uint8_t {
 
 struct UpdatePackagePreflightError final {
     UpdatePackagePreflightErrorKind kind{UpdatePackagePreflightErrorKind::Artifact};
-    std::string message;
-    std::string artifact;
-    std::optional<image::ArtifactSourceError> artifact_error;
-    std::optional<UpdatePlanError> manifest_error;
+    std::string message{};
+    std::string artifact{};
+    std::optional<image::ArtifactSourceError> artifact_error{};
+    std::optional<UpdatePlanError> manifest_error{};
 };
 
 struct UpdatePackagePreflightLimits final {
@@ -41,11 +41,11 @@ struct UpdatePackagePreflightLimits final {
 };
 
 struct PreparedUpdateArtifact final {
-    std::string name;
-    std::shared_ptr<const image::ResolvedArtifact> resolved;
+    std::string name{};
+    std::shared_ptr<const image::ResolvedArtifact> resolved{};
     // Own the complete immutable preflight result. Device execute tokens can
     // retain this object without copying metadata or reparsing sparse images.
-    std::shared_ptr<const image::FlashArtifact> artifact;
+    std::shared_ptr<const image::FlashArtifact> artifact{};
 };
 
 enum class UpdateSuperPreparationState : std::uint8_t {
@@ -74,8 +74,8 @@ private:
 };
 
 struct PreparedUpdatePackage final {
-    DeterministicUpdatePlan plan;
-    std::vector<PreparedUpdateArtifact> artifacts;
+    DeterministicUpdatePlan plan{};
+    std::vector<PreparedUpdateArtifact> artifacts{};
 
     // Invariants:
     //  * NotRequired: no update-super task and no prepared_super_artifact.

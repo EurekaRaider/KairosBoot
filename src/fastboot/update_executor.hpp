@@ -60,16 +60,16 @@ struct UpdateOperationContext final {
 // immutable preflight result, so execution cannot reopen the package, copy a
 // stale metadata view or reparse a sparse image.
 struct UpdateFlashArtifactInput final {
-    std::shared_ptr<const image::ResolvedArtifact> resolved;
-    std::shared_ptr<const image::FlashArtifact> artifact;
+    std::shared_ptr<const image::ResolvedArtifact> resolved{};
+    std::shared_ptr<const image::FlashArtifact> artifact{};
 };
 
 struct UpdateDeviceTaskInput final {
-    PlannedUpdateTask task;
-    std::optional<UpdateFlashArtifactInput> flash_artifact;
+    PlannedUpdateTask task{};
+    std::optional<UpdateFlashArtifactInput> flash_artifact{};
     // Bound only for UpdateSuper tasks and shared directly from the immutable
     // PreparedUpdatePackage snapshot.
-    std::shared_ptr<const PreparedSuperArtifact> super_artifact;
+    std::shared_ptr<const PreparedSuperArtifact> super_artifact{};
 };
 
 // Immutable execute capability returned only after the adapter has validated
@@ -124,12 +124,12 @@ enum class UpdateExecutionEventKind : std::uint8_t {
 
 struct UpdateExecutionEvent final {
     UpdateExecutionEventKind kind{UpdateExecutionEventKind::ValidationStarted};
-    std::optional<std::size_t> requirement_index;
-    std::optional<std::size_t> task_index;
-    std::optional<UpdateSourceLocation> location;
-    std::string name;
-    std::string value;
-    std::string message;
+    std::optional<std::size_t> requirement_index{};
+    std::optional<std::size_t> task_index{};
+    std::optional<UpdateSourceLocation> location{};
+    std::string name{};
+    std::string value{};
+    std::string message{};
 };
 
 using UpdateExecutionObserver = std::function<void(const UpdateExecutionEvent&)>;
@@ -138,17 +138,17 @@ struct UpdateExecutorOptions final {
     // Mirrors the frozen AOSP host image table check used by
     // `require partition-exists=x`. The production planner supplies the exact
     // known partition set; the executor never guesses it from device state.
-    std::vector<std::string> known_partitions;
+    std::vector<std::string> known_partitions{};
     // One absolute package/job deadline, shared unchanged by validation,
     // getvar, preparation and execution. nullopt means no deadline.
-    std::optional<std::chrono::steady_clock::time_point> deadline;
-    UpdateExecutionObserver observer;
+    std::optional<std::chrono::steady_clock::time_point> deadline{};
+    UpdateExecutionObserver observer{};
 };
 
 struct UpdateExecutionReport final {
     std::size_t validated_requirements{};
     std::size_t completed_tasks{};
-    std::vector<UpdateExecutionEvent> trace;
+    std::vector<UpdateExecutionEvent> trace{};
 };
 
 enum class UpdateExecutionErrorKind : std::uint8_t {
@@ -164,18 +164,18 @@ enum class UpdateExecutionErrorKind : std::uint8_t {
 
 struct UpdateExecutionError final {
     UpdateExecutionErrorKind kind{UpdateExecutionErrorKind::InvalidPreparedPackage};
-    std::optional<std::size_t> requirement_index;
-    std::optional<std::size_t> task_index;
-    std::optional<UpdateSourceLocation> location;
-    std::string name;
-    std::string message;
-    std::optional<UpdateDeviceError> device_error;
+    std::optional<std::size_t> requirement_index{};
+    std::optional<std::size_t> task_index{};
+    std::optional<UpdateSourceLocation> location{};
+    std::string name{};
+    std::string message{};
+    std::optional<UpdateDeviceError> device_error{};
     // A TaskFailed observer exception is diagnostic only when a device failure
     // already exists; it must never replace the primary device error.
-    std::optional<std::string> secondary_observer_error;
+    std::optional<std::string> secondary_observer_error{};
     std::size_t validated_requirements{};
     std::size_t completed_tasks{};
-    std::vector<UpdateExecutionEvent> trace;
+    std::vector<UpdateExecutionEvent> trace{};
 };
 
 // Validates the complete prepared mapping and every device requirement before
