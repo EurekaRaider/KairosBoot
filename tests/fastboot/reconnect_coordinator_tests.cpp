@@ -347,6 +347,34 @@ void mode_transition_tolerates_transient_enumeration_jitter() {
           std::vector<std::chrono::milliseconds>({10ms, 20ms, 40ms}));
 }
 
+void zero_numbered_bus_is_a_valid_physical_port() {
+    auto wanted = target();
+    wanted.physical_port = port(0, {2, 3});
+    QueueDiscovery discovery;
+    discovery.steps = {
+        std::vector<ReconnectCandidate>{candidate(wanted.physical_port)},
+    };
+    QueueOpener opener;
+    opener.actions = {
+        OpenAction{
+            .verified_identity = identity(
+                wanted.physical_port,
+                wanted.serial,
+                wanted.product,
+                FastbootUsbMode::Fastbootd),
+        },
+    };
+    ManualWaiter waiter;
+    ReconnectCoordinator coordinator(discovery, opener, waiter);
+
+    const auto result = coordinator.reconnect(
+        wanted, waiter.now() + 1s, options());
+    CHECK(result.has_value());
+    CHECK(result->identity.physical_port == wanted.physical_port);
+    CHECK(result->discovery_attempts == 1U);
+    CHECK(result->open_attempts == 1U);
+}
+
 void duplicate_serials_are_disambiguated_only_by_physical_port() {
     const auto wanted = target();
     QueueDiscovery discovery;
@@ -1199,6 +1227,7 @@ void latest_dependency_failure_replaces_prior_open_failure() {
 int main() {
     const std::vector<std::pair<const char*, std::function<void()>>> tests{
         {"mode transition jitter", mode_transition_tolerates_transient_enumeration_jitter},
+        {"zero-numbered USB bus", zero_numbered_bus_is_a_valid_physical_port},
         {"duplicate serial by port", duplicate_serials_are_disambiguated_only_by_physical_port},
         {"ambiguous physical port", duplicate_entries_at_one_port_fail_closed},
         {"occupied physical port", occupied_port_never_follows_the_expected_serial_elsewhere},
