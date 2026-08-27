@@ -307,14 +307,15 @@ open_relative_windows(const HANDLE directory,
     HANDLE raw_handle{};
     constexpr ULONG file_open = 0x00000001UL;
     constexpr ULONG file_directory_file = 0x00000001UL;
-    constexpr ULONG file_non_directory_file = 0x00000040UL;
     constexpr ULONG file_open_reparse_point = 0x00200000UL;
     const auto desired_access = leaf
         ? static_cast<ACCESS_MASK>(GENERIC_READ | FILE_READ_ATTRIBUTES)
         : static_cast<ACCESS_MASK>(FILE_LIST_DIRECTORY | FILE_TRAVERSE |
                                    FILE_READ_ATTRIBUTES);
+    // Leave the leaf type unconstrained so its opened-handle attributes can
+    // produce the same stable NotRegularFile result on every Windows version.
     const auto create_options = file_open_reparse_point |
-        (leaf ? file_non_directory_file : file_directory_file);
+        (leaf ? 0U : file_directory_file);
     const auto status = api.create_file(
         &raw_handle,
         desired_access,

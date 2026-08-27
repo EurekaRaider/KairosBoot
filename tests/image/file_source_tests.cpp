@@ -232,6 +232,13 @@ void handle_based_open_rejects_leaf_and_intermediate_links() {
     std::filesystem::create_directory(outside_directory);
     write_bytes(outside_directory / "secret.img", "secret");
 
+    const auto directory_leaf =
+        kairosboot::image::FileImageSource::open_beneath(
+            temporary.path(), "package");
+    CHECK(!directory_leaf);
+    CHECK(directory_leaf.error().kind ==
+          kairosboot::image::FileSourceErrorKind::NotRegularFile);
+
     const auto leaf_link = package / "leaf.img";
     std::filesystem::create_symlink(outside, leaf_link);
     const auto leaf = kairosboot::image::FileImageSource::open_beneath(
