@@ -36,6 +36,7 @@ namespace {
 inline constexpr auto kPerBackendDrainWait = std::chrono::milliseconds{250};
 inline constexpr auto kRuntimeDrainWait = std::chrono::milliseconds{250};
 inline constexpr auto kEventThreadExitWait = std::chrono::milliseconds{250};
+inline constexpr auto kWindowsTopologyResolveBudget = std::chrono::seconds{5};
 inline constexpr auto kMacTopologyResolveBudget = std::chrono::seconds{5};
 
 using SteadyClock = std::chrono::steady_clock;
@@ -494,13 +495,20 @@ LibusbFunctions LibusbFunctions::system() {
     };
 #endif
 #if defined(_WIN32)
-    functions.capture_windows_session_identity = [](const unsigned long session) {
-        return read_windows_usb_session_instance_id(session);
+    functions.capture_windows_session_identity = [](
+        const unsigned long session,
+        const SteadyClock::time_point deadline,
+        const std::stop_token cancellation) {
+        return read_windows_usb_session_instance_id(
+            session, deadline, cancellation);
     };
-    functions.resolve_windows_topology = [](const WindowsUsbTopologyQuery& query) {
+    functions.resolve_windows_topology = [](
+        const WindowsUsbTopologyQuery& query,
+        const SteadyClock::time_point deadline,
+        const std::stop_token cancellation) {
         static const SetupApiWindowsUsbTopologyBackend backend;
         const WindowsUsbTopologyDiscovery discovery(backend);
-        return discovery.discover(query);
+        return discovery.discover(query, deadline, cancellation);
     };
 #endif
 #if defined(__APPLE__)
@@ -1689,6 +1697,8 @@ void LibusbRuntime::stop() noexcept {
 
 std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enumerate(
     const UsbInterfaceFilter& filter) const {
+    const auto topology_cancellation =
+        state_->topology_stop_source.get_token();
     std::unique_lock lifecycle(state_->stop_mutex);
     if (!state_->accepting.load(std::memory_order_acquire)) {
         return std::unexpected(
@@ -1705,8 +1715,22 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
     DeviceListGuard list_guard{&state_->functions, list};
     std::vector<UsbDeviceInfo> devices;
     std::vector<std::pair<std::size_t, std::size_t>> macos_device_ranges;
+    std::vector<std::pair<std::size_t, WindowsUsbTopologyQuery>>
+        windows_topology_queries;
+    const auto windows_topology_deadline =
+        state_->functions.resolve_windows_topology
+        ? SteadyClock::now() + kWindowsTopologyResolveBudget
+        : SteadyClock::time_point::max();
+    const auto runtime_stopping = [&]() noexcept {
+        return topology_cancellation.stop_requested() ||
+            !state_->accepting.load(std::memory_order_acquire);
+    };
 
     for (ssize_t index = 0; index < count; ++index) {
+        if (runtime_stopping()) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+        }
         auto* device = list[index];
         std::optional<unsigned long> windows_session_data;
         std::optional<std::expected<std::string, WindowsUsbTopologyError>>
@@ -1728,7 +1752,13 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             } else {
                 windows_session_identity.emplace(
                     state_->functions.capture_windows_session_identity(
-                        *windows_session_data));
+                        *windows_session_data,
+                        windows_topology_deadline,
+                        topology_cancellation));
+                if (runtime_stopping()) {
+                    return std::unexpected(LibusbRuntimeError{
+                        LibusbRuntimeErrorKind::runtime_stopped});
+                }
             }
         }
         const auto device_range_begin = devices.size();
@@ -1931,7 +1961,13 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                               windows_session_identity->value(),
                               "the libusb DEVINST disappeared during generation revalidation"))}
                     : state_->functions.capture_windows_session_identity(
-                          current_session);
+                          current_session,
+                          windows_topology_deadline,
+                          topology_cancellation);
+                if (runtime_stopping()) {
+                    return std::unexpected(LibusbRuntimeError{
+                        LibusbRuntimeErrorKind::runtime_stopped});
+                }
 
                 const auto& first_snapshot = devices[windows_device_begin];
                 const bool ports_match =
@@ -1964,21 +2000,16 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                  snapshot_index < devices.size();
                  ++snapshot_index) {
                 auto& snapshot = devices[snapshot_index];
-                auto topology = generation_error.has_value()
-                    ? std::expected<WindowsUsbTopology,
-                                    WindowsUsbTopologyError>{
-                          std::unexpected(*generation_error)}
-                    : state_->functions.resolve_windows_topology(
-                          make_windows_usb_topology_query(
-                              snapshot,
-                              *windows_session_data,
-                              windows_session_identity->value()));
-                if (topology.has_value()) {
-                    snapshot.windows_topology = std::move(*topology);
-                } else {
-                    snapshot.windows_topology_error =
-                        std::move(topology.error());
+                if (generation_error.has_value()) {
+                    snapshot.windows_topology_error = *generation_error;
+                    continue;
                 }
+                windows_topology_queries.emplace_back(
+                    snapshot_index,
+                    make_windows_usb_topology_query(
+                        snapshot,
+                        *windows_session_data,
+                        windows_session_identity->value()));
             }
         }
         if (devices.size() != device_range_begin) {
@@ -1987,10 +2018,30 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
     }
 
     // Release every libusb-owned snapshot before leaving the lifecycle lock.
-    // IOKit can then be cancelled by stop_all() without allowing libusb_exit()
-    // to race any native libusb enumeration call.
+    // SetupAPI and IOKit resolution can then be cancelled by stop_all()
+    // without allowing libusb_exit() to race any native libusb enumeration
+    // call.
     list_guard.reset();
     lifecycle.unlock();
+
+    for (const auto& [snapshot_index, query] : windows_topology_queries) {
+        if (runtime_stopping()) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+        }
+        auto topology = state_->functions.resolve_windows_topology(
+            query, windows_topology_deadline, topology_cancellation);
+        if (runtime_stopping()) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+        }
+        auto& snapshot = devices[snapshot_index];
+        if (topology.has_value()) {
+            snapshot.windows_topology = std::move(*topology);
+        } else {
+            snapshot.windows_topology_error = std::move(topology.error());
+        }
+    }
 
     if (state_->functions.resolve_macos_topology) {
         const auto deadline = SteadyClock::now() + kMacTopologyResolveBudget;

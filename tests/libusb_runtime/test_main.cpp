@@ -696,7 +696,9 @@ void test_init_failure_version_and_singleton() {
     auto missing_windows_identity_functions =
         missing_windows_identity->functions();
     missing_windows_identity_functions.resolve_windows_topology =
-        [](const WindowsUsbTopologyQuery&) {
+        [](const WindowsUsbTopologyQuery&,
+           std::chrono::steady_clock::time_point,
+           std::stop_token) {
             return std::expected<WindowsUsbTopology,
                                  WindowsUsbTopologyError>{
                 std::unexpected(WindowsUsbTopologyError{})};
@@ -977,18 +979,46 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
         };
     std::vector<WindowsUsbTopologyQuery> windows_queries;
     std::size_t windows_identity_captures = 0U;
+    std::optional<std::chrono::steady_clock::time_point>
+        windows_deadline;
+    std::optional<std::stop_token> windows_cancellation;
+    const auto record_windows_budget =
+        [&windows_deadline, &windows_cancellation](
+            const std::chrono::steady_clock::time_point deadline,
+            const std::stop_token cancellation) {
+            if (!windows_deadline.has_value()) {
+                const auto now = std::chrono::steady_clock::now();
+                KB_CHECK(deadline > now);
+                KB_CHECK(deadline <= now + std::chrono::seconds{5});
+                windows_deadline = deadline;
+                windows_cancellation = cancellation;
+            } else {
+                KB_CHECK(deadline == *windows_deadline);
+                KB_CHECK(cancellation == *windows_cancellation);
+            }
+            KB_CHECK(!cancellation.stop_requested());
+        };
     const std::string windows_instance_id =
         "USB\\VID_18D1&PID_4EE0\\SERIAL";
     functions.capture_windows_session_identity =
         [&windows_identity_captures,
-         &windows_instance_id](const unsigned long session) {
+         &record_windows_budget,
+         &windows_instance_id](
+            const unsigned long session,
+            const std::chrono::steady_clock::time_point deadline,
+            const std::stop_token cancellation) {
             ++windows_identity_captures;
             KB_CHECK(session == 0x101UL);
+            record_windows_budget(deadline, cancellation);
             return std::expected<std::string, WindowsUsbTopologyError>{
                 windows_instance_id};
         };
     functions.resolve_windows_topology =
-        [&windows_queries](const WindowsUsbTopologyQuery& query) {
+        [&windows_queries, &record_windows_budget](
+            const WindowsUsbTopologyQuery& query,
+            const std::chrono::steady_clock::time_point deadline,
+            const std::stop_token cancellation) {
+            record_windows_budget(deadline, cancellation);
             windows_queries.push_back(query);
             return std::expected<WindowsUsbTopology,
                                  WindowsUsbTopologyError>{
@@ -1124,13 +1154,18 @@ void test_zero_windows_session_is_diagnostic_and_never_resolved() {
     std::size_t resolver_calls = 0U;
     std::size_t identity_capture_calls = 0U;
     functions.capture_windows_session_identity =
-        [&identity_capture_calls](const unsigned long) {
+        [&identity_capture_calls](
+            const unsigned long,
+            std::chrono::steady_clock::time_point,
+            std::stop_token) {
             ++identity_capture_calls;
             return std::expected<std::string, WindowsUsbTopologyError>{
                 "USB\\VID_18D1&PID_4EE0\\SHOULD-NOT-BE-CAPTURED"};
         };
     functions.resolve_windows_topology =
-        [&resolver_calls](const WindowsUsbTopologyQuery&) {
+        [&resolver_calls](const WindowsUsbTopologyQuery&,
+                          std::chrono::steady_clock::time_point,
+                          std::stop_token) {
             ++resolver_calls;
             return std::expected<WindowsUsbTopology,
                                  WindowsUsbTopologyError>{
@@ -1173,14 +1208,19 @@ void test_windows_session_identity_capture_failure_is_diagnostic() {
     std::size_t resolver_calls = 0U;
     functions.capture_windows_session_identity =
         [&identity_capture_calls,
-         &identity_error](const unsigned long session) {
+         &identity_error](
+            const unsigned long session,
+            std::chrono::steady_clock::time_point,
+            std::stop_token) {
             ++identity_capture_calls;
             KB_CHECK(session == identity_error.libusb_session_data);
             return std::expected<std::string, WindowsUsbTopologyError>{
                 std::unexpected(identity_error)};
         };
     functions.resolve_windows_topology =
-        [&resolver_calls](const WindowsUsbTopologyQuery&) {
+        [&resolver_calls](const WindowsUsbTopologyQuery&,
+                          std::chrono::steady_clock::time_point,
+                          std::stop_token) {
             ++resolver_calls;
             return std::expected<WindowsUsbTopology,
                                  WindowsUsbTopologyError>{
@@ -1209,7 +1249,10 @@ void test_windows_devinst_reuse_never_publishes_stale_libusb_identity() {
     std::size_t resolver_calls = 0U;
     functions.capture_windows_session_identity =
         [&identity_captures,
-         &generations](const unsigned long session) {
+         &generations](
+            const unsigned long session,
+            std::chrono::steady_clock::time_point,
+            std::stop_token) {
             KB_CHECK(session == 0x101UL);
             const auto index = std::min(identity_captures,
                                         generations.size() - 1U);
@@ -1218,7 +1261,9 @@ void test_windows_devinst_reuse_never_publishes_stale_libusb_identity() {
                 std::string{generations[index]}};
         };
     functions.resolve_windows_topology =
-        [&resolver_calls](const WindowsUsbTopologyQuery&) {
+        [&resolver_calls](const WindowsUsbTopologyQuery&,
+                          std::chrono::steady_clock::time_point,
+                          std::stop_token) {
             ++resolver_calls;
             return std::expected<WindowsUsbTopology,
                                  WindowsUsbTopologyError>{
@@ -1276,14 +1321,19 @@ void test_windows_generation_revalidation_rejects_stale_address_and_serial() {
             };
         functions.capture_windows_session_identity =
             [&identity_captures,
-             &instance_id](const unsigned long session) {
+             &instance_id](
+                const unsigned long session,
+                std::chrono::steady_clock::time_point,
+                std::stop_token) {
                 ++identity_captures;
                 KB_CHECK(session == 0x101UL);
                 return std::expected<std::string,
                                      WindowsUsbTopologyError>{instance_id};
             };
         functions.resolve_windows_topology =
-            [&resolver_calls](const WindowsUsbTopologyQuery&) {
+            [&resolver_calls](const WindowsUsbTopologyQuery&,
+                              std::chrono::steady_clock::time_point,
+                              std::stop_token) {
                 ++resolver_calls;
                 return std::expected<WindowsUsbTopology,
                                      WindowsUsbTopologyError>{
@@ -1307,6 +1357,101 @@ void test_windows_generation_revalidation_rejects_stale_address_and_serial() {
 
     run_case(true, false);
     run_case(false, true);
+}
+
+void test_runtime_stop_cancels_windows_topology_outside_lifecycle_lock() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+    const std::string instance_id =
+        "USB\\VID_18D1&PID_4EE0\\STABLE-GENERATION";
+    std::optional<std::chrono::steady_clock::time_point> captured_deadline;
+    std::optional<std::stop_token> captured_cancellation;
+    std::size_t identity_captures = 0U;
+    functions.capture_windows_session_identity =
+        [&instance_id,
+         &captured_deadline,
+         &captured_cancellation,
+         &identity_captures](
+            const unsigned long session,
+            const std::chrono::steady_clock::time_point deadline,
+            const std::stop_token cancellation) {
+            KB_CHECK(session == 0x101UL);
+            ++identity_captures;
+            if (!captured_deadline.has_value()) {
+                captured_deadline = deadline;
+                captured_cancellation = cancellation;
+            } else {
+                KB_CHECK(deadline == *captured_deadline);
+                KB_CHECK(cancellation == *captured_cancellation);
+            }
+            KB_CHECK(deadline !=
+                     std::chrono::steady_clock::time_point::max());
+            KB_CHECK(!cancellation.stop_requested());
+            return std::expected<std::string,
+                                 WindowsUsbTopologyError>{instance_id};
+        };
+
+    std::promise<void> resolver_entered;
+    auto entered = resolver_entered.get_future();
+    std::mutex wait_mutex;
+    std::condition_variable wait_cv;
+    bool release_resolver = false;
+    functions.resolve_windows_topology = [
+        &resolver_entered,
+        &wait_mutex,
+        &wait_cv,
+        &release_resolver,
+        &captured_deadline,
+        &captured_cancellation,
+        &instance_id](
+            const WindowsUsbTopologyQuery& query,
+            const std::chrono::steady_clock::time_point deadline,
+            const std::stop_token cancellation) {
+        KB_CHECK(query.device_instance_id_utf8 == instance_id);
+        KB_CHECK(captured_deadline.has_value());
+        KB_CHECK(captured_cancellation.has_value());
+        KB_CHECK(deadline == *captured_deadline);
+        KB_CHECK(cancellation == *captured_cancellation);
+        resolver_entered.set_value();
+        std::unique_lock lock(wait_mutex);
+        wait_cv.wait(lock, [&release_resolver] { return release_resolver; });
+        KB_CHECK(cancellation.stop_requested());
+        return std::expected<WindowsUsbTopology,
+                             WindowsUsbTopologyError>{WindowsUsbTopology{}};
+    };
+
+    auto runtime = create_runtime(fake, std::move(functions));
+    auto enumeration = std::async(std::launch::async, [runtime] {
+        UsbInterfaceFilter filter;
+        filter.interface_class = 0xFFU;
+        filter.interface_subclass = 0x42U;
+        filter.interface_protocol = 0x03U;
+        return runtime->enumerate(filter);
+    });
+    KB_CHECK(entered.wait_for(std::chrono::seconds{1}) ==
+             std::future_status::ready);
+
+    auto stopped = std::async(std::launch::async, [runtime] {
+        runtime->stop();
+    });
+    const bool stop_completed_while_resolver_blocked =
+        stopped.wait_for(std::chrono::seconds{1}) ==
+        std::future_status::ready;
+    {
+        std::lock_guard lock(wait_mutex);
+        release_resolver = true;
+    }
+    wait_cv.notify_all();
+    stopped.get();
+    KB_CHECK(stop_completed_while_resolver_blocked);
+    KB_CHECK(identity_captures == 2U);
+    KB_CHECK(captured_cancellation->stop_requested());
+    KB_CHECK(enumeration.wait_for(std::chrono::seconds{1}) ==
+             std::future_status::ready);
+    const auto result = enumeration.get();
+    KB_CHECK(!result.has_value());
+    KB_CHECK(result.error().kind ==
+             LibusbRuntimeErrorKind::runtime_stopped);
 }
 
 void test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock() {
@@ -2791,6 +2936,8 @@ int main() {
          test_windows_devinst_reuse_never_publishes_stale_libusb_identity},
         {"Windows stale address and serial generation gate",
          test_windows_generation_revalidation_rejects_stale_address_and_serial},
+        {"Windows topology stop cancellation and lifecycle lock",
+         test_runtime_stop_cancels_windows_topology_outside_lifecycle_lock},
         {"macOS topology stop cancellation",
          test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock},
         {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
