@@ -20,16 +20,23 @@ canonical profile: UTF-8 without a BOM, fixed ASCII schema keys in ascending
 order, no insignificant whitespace, no floating-point values, and integers in
 the interoperable range `[-(2^53-1), 2^53-1]`. Future SDK JSON getters will not
 include a trailing newline; the CLI will write exactly one trailing newline.
+Strings use the same deterministic escaping as Python `json.dumps` with
+`ensure_ascii=False`: quote, backslash, backspace, form feed, newline, carriage
+return, and tab use their short JSON escapes; other U+0000 through U+001F code
+points use lowercase `\u00xx`; solidus and every other valid Unicode scalar are
+emitted as their original UTF-8. Isolated UTF-16 surrogates are invalid.
 
 Artifact, target, selector, and step arrays preserve manifest order. Every
 artifact, target, and step also carries its zero-based index so structured API
 getters and JSON consumers use the same identity.
 
-Artifact IDs and target names are unique. A serial or USB path may be owned by
-only one target, and every flash step references an artifact ID present in the
-same plan. These reference and ownership rules are semantic validation beyond
-what JSON Schema alone can express. Manifest artifact SHA-256 values accept
-either hex case and are normalized to lowercase in the plan.
+Artifact IDs and target names are unique. Across both serial and USB-path
+namespaces, a selector string may be owned by only one target; the same target
+may list that string in both namespaces. Every flash step references an
+artifact ID present in the same plan. These reference and ownership rules are
+semantic validation beyond what JSON Schema alone can express. Manifest
+artifact SHA-256 values accept either hex case and are normalized to lowercase
+in the plan.
 
 ## JobReport v1
 

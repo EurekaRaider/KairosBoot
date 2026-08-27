@@ -151,6 +151,20 @@ def canonical_plan_sha(plan: dict[str, object]) -> str:
     return hashlib.sha256(canonical_json_bytes(plan)).hexdigest()
 
 
+def validate_canonical_json_profile() -> None:
+    value = {
+        "z": "雪/😀\u2028",
+        "a": "\"\\\b\f\n\r\t\x00\x1f",
+    }
+    expected = (
+        r'{"a":"\"\\\b\f\n\r\t\u0000\u001f","z":"'
+        + "雪/😀\u2028"
+        + '"}'
+    ).encode("utf-8")
+    require(canonical_json_bytes(value) == expected,
+            "canonical JSON string escaping profile")
+
+
 def require_sha256(value: object, name: str) -> None:
     require(isinstance(value, str) and SHA256.fullmatch(value) is not None,
             f"{name} is not a lowercase SHA-256")
@@ -249,8 +263,7 @@ def validate_plan(plan: dict[str, object]) -> None:
     targets = plan["targets"]
     require(isinstance(targets, list) and targets, "plan targets")
     target_names: set[str] = set()
-    owned_serials: set[str] = set()
-    owned_usb_paths: set[str] = set()
+    selector_owners: dict[str, int] = {}
     for target_index, target in enumerate(targets):
         require(isinstance(target, dict), "target object")
         require_keys(target, {"index", "name", "selector", "expectedProduct", "steps"},
@@ -264,11 +277,11 @@ def validate_plan(plan: dict[str, object]) -> None:
         require(bool(selector["serials"] or selector["usbPaths"]), "empty selector")
         serials = set(selector["serials"])
         usb_paths = set(selector["usbPaths"])
-        require(not (serials & owned_serials), "serial owned by multiple targets")
-        require(not (usb_paths & owned_usb_paths),
-                "USB path owned by multiple targets")
-        owned_serials.update(serials)
-        owned_usb_paths.update(usb_paths)
+        for selector_value in serials | usb_paths:
+            owner = selector_owners.get(selector_value)
+            require(owner is None or owner == target_index,
+                    "selector value is owned by multiple targets")
+            selector_owners[selector_value] = target_index
         steps = target["steps"]
         require(isinstance(steps, list) and steps, "target steps")
         for step_index, step in enumerate(steps):
@@ -1272,6 +1285,22 @@ def validate_negative_cases(
         "device matching selectors in two target namespaces",
     )
 
+    repeated_cross_namespace_value = copy.deepcopy(plan)
+    repeated_value_target = copy.deepcopy(
+        repeated_cross_namespace_value["targets"][0]
+    )
+    repeated_value_target["index"] = 1
+    repeated_value_target["name"] = "cross-namespace-value"
+    repeated_value_target["selector"] = {
+        "serials": [], "usbPaths": ["SERIAL-01"]
+    }
+    repeated_cross_namespace_value["targets"].append(repeated_value_target)
+    validate(repeated_cross_namespace_value, plan_schema)
+    expect_plan_semantic_rejected(
+        repeated_cross_namespace_value,
+        "selector value repeated across namespaces",
+    )
+
     missing_artifact = copy.deepcopy(plan)
     missing_artifact["targets"][0]["steps"][0]["artifact"] = "missing"
     validate(missing_artifact, plan_schema)
@@ -1372,6 +1401,7 @@ def main() -> None:
     manifest_schema = load_json(SCHEMAS / "fleet-job.v1.schema.json")
     plan_schema = load_json(SCHEMAS / "job-plan.v1.schema.json")
     report_schema = load_json(SCHEMAS / "job-report.v1.schema.json")
+    validate_canonical_json_profile()
     validate_schema_contracts(manifest_schema, plan_schema, report_schema)
     validate_manifest_schema(manifest_schema)
     validate_normalization_branches(manifest_schema, plan_schema)
@@ -1386,6 +1416,21 @@ def main() -> None:
     validate_plan(plan)
     validate_report(report)
     validate_report_against_plan(report, plan)
+    same_target_cross_namespace = copy.deepcopy(plan)
+    same_target_cross_namespace["targets"][0]["selector"]["usbPaths"] = [
+        "SERIAL-01"
+    ]
+    validate(same_target_cross_namespace, plan_schema)
+    validate_plan(same_target_cross_namespace)
+    same_target_report = copy.deepcopy(report)
+    same_target_report["planSha256"] = canonical_plan_sha(
+        same_target_cross_namespace
+    )
+    same_target_report["devices"][0]["usbPath"] = "SERIAL-01"
+    validate_report_against_plan(
+        same_target_report,
+        same_target_cross_namespace,
+    )
     failed_product_preflight = copy.deepcopy(report)
     preflight_device = failed_product_preflight["devices"][1]
     preflight_device["observedProduct"] = "product_b"
