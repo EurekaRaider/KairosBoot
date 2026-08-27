@@ -847,6 +847,10 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_hil_evidence.py")
   add_test(
+    NAME fleet_contract_schemas
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_fleet_contracts.py")
+  add_test(
     NAME release_tooling
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_release_tools.py")
