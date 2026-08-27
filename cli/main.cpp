@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <span>
@@ -216,6 +217,7 @@ enum class CommandKind : std::uint8_t {
   Doctor,
   Devices,
   Flash,
+  Update,
   Getvar,
   Erase,
   SetActive,
@@ -249,6 +251,7 @@ struct Invocation {
       kairosboot::SnapshotUpdateCommand::Cancel};
   kairosboot::FetchRange fetch_range;
   std::uint64_t logical_partition_size{};
+  bool wipe{};
 };
 
 struct ParseError {
@@ -498,6 +501,30 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "update") {
+    result.kind = CommandKind::Update;
+    if (index >= argc) {
+      return error("update requires <package>");
+    }
+    result.first = argv[index++];
+    if (result.first.empty()) {
+      return error("update package must not be empty");
+    }
+    while (index < argc) {
+      const std::string_view option{argv[index++]};
+      if (option != "--wipe") {
+        return error("update supports only --wipe after <package>");
+      }
+      if (result.wipe) {
+        return error("update option --wipe may only be specified once");
+      }
+      result.wipe = true;
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for update");
+    }
+    return result;
+  }
 
   const auto parse_single_operand = [&](const CommandKind kind,
                                         const std::string_view description)
@@ -733,6 +760,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "devices";
   case CommandKind::Flash:
     return "flash";
+  case CommandKind::Update:
+    return "update";
   case CommandKind::Getvar:
     return "getvar";
   case CommandKind::Erase:
@@ -945,6 +974,14 @@ kairosboot::CommandOptions command_options(const GlobalOptions &options) {
 
 kairosboot::FlashOptions flash_options(const GlobalOptions &options) {
   kairosboot::FlashOptions result;
+  if (options.timeout_ms.has_value()) {
+    result.timeout = std::chrono::milliseconds{*options.timeout_ms};
+  }
+  return result;
+}
+
+kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
+  kairosboot::UpdateOptions result;
   if (options.timeout_ms.has_value()) {
     result.timeout = std::chrono::milliseconds{*options.timeout_ms};
   }
@@ -1267,6 +1304,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Doctor:
   case CommandKind::Devices:
   case CommandKind::Flash:
+  case CommandKind::Update:
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
@@ -1308,6 +1346,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Doctor:
   case CommandKind::Devices:
   case CommandKind::Flash:
+  case CommandKind::Update:
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
@@ -1412,6 +1451,82 @@ int flash_file(const Invocation &invocation) {
   return 0;
 }
 
+class UpdateProgressReporter final {
+public:
+  explicit UpdateProgressReporter(const bool json) noexcept : json_(json) {}
+
+  kairosboot::ProgressAction operator()(const kairosboot::Progress &progress) {
+    std::scoped_lock lock(mutex_);
+    const std::string stage{progress.stage};
+    const std::string device{progress.device_identifier};
+    if (!json_ &&
+        (stage != stage_ || device != device_ ||
+         progress.bytes_completed != completed_ ||
+         progress.bytes_total != total_)) {
+      std::cerr << "update: " << stage;
+      if (progress.bytes_total != 0U) {
+        std::cerr << ' ' << progress.bytes_completed << '/'
+                  << progress.bytes_total << " bytes";
+      }
+      if (!device.empty()) {
+        std::cerr << " [" << device << ']';
+      }
+      std::cerr << '\n';
+    }
+    stage_ = stage;
+    device_ = device;
+    completed_ = progress.bytes_completed;
+    total_ = progress.bytes_total;
+    return kairosboot::ProgressAction::Continue;
+  }
+
+private:
+  bool json_{};
+  std::mutex mutex_;
+  std::string stage_;
+  std::string device_;
+  std::uint64_t completed_{};
+  std::uint64_t total_{};
+};
+
+int update_package(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+
+  InterruptCancellation cancellation;
+  UpdateProgressReporter progress{invocation.global.json};
+  auto options = update_options(invocation.global);
+  options.wipe = invocation.wipe;
+  options.progress = [&progress](const kairosboot::Progress &value) {
+    return progress(value);
+  };
+  auto operation = context->update_package_async(
+      selector_view(invocation.global), path_from_utf8(invocation.first),
+      options);
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"update\",\"package\":\""
+              << json_escape(invocation.first) << "\",\"wipe\":"
+              << (invocation.wipe ? "true" : "false") << "}\n";
+  } else {
+    std::cout << "Updated from " << invocation.first;
+    if (invocation.wipe) {
+      std::cout << " (wipe requested)";
+    }
+    std::cout << '\n';
+  }
+  return 0;
+}
+
 int run_typed_command(const Invocation &invocation) {
   std::vector<std::byte> stage_data;
   if (invocation.kind == CommandKind::Stage) {
@@ -1471,6 +1586,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot doctor [--json]\n"
                "  kairosboot devices [--json]\n"
                "  kairosboot [global options] flash <partition> <file>\n"
+               "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] getvar <variable>\n"
                "  kairosboot [global options] erase <partition>\n"
                "  kairosboot [global options] set-active <slot>\n"
@@ -1577,6 +1693,8 @@ int run_cli(const int argc, char **argv) {
     return print_devices(invocation->global.json);
   case CommandKind::Flash:
     return flash_file(*invocation);
+  case CommandKind::Update:
+    return update_package(*invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
