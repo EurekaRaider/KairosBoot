@@ -845,6 +845,7 @@ void source_error_never_masks_post_call_cancel() {
         .kind = MacUsbTopologyErrorKind::IoError,
         .stage = MacUsbTopologyStage::DeviceEnumeration,
         .native_code = -1,
+        .registry_path = {},
         .message = "scripted native failure",
     };
 
@@ -871,6 +872,7 @@ void backend_error_never_masks_crossed_deadline() {
         .kind = MacUsbTopologyErrorKind::IoError,
         .stage = MacUsbTopologyStage::DeviceEnumeration,
         .native_code = -1,
+        .registry_path = {},
         .message = "scripted backend failure",
     };
 

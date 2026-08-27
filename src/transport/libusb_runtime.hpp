@@ -105,7 +105,8 @@ struct LibusbFunctions final {
         capture_windows_session_identity;
 
     // Optional macOS topology enrichment. One call receives every selected
-    // Each batch entry contains every selected interface of one libusb device.
+    // device; each batch entry contains all selected interfaces for that
+    // libusb device.
     // The resolver must preserve device/interface order and publish each
     // device from one consistent generation. Tests may inject this on any
     // host; production installs the IOKit-backed resolver only on Apple.

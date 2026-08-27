@@ -82,6 +82,7 @@ add_executable(kairosboot_libusb_runtime_tests
     ../../src/transport/macos_usb_topology.cpp
     ../../src/transport/transfer_ring.cpp
     ../../src/transport/usb_fastboot.cpp
+    ../../src/transport/windows_usb_topology.cpp
     test_main.cpp
 )
 
@@ -92,6 +93,16 @@ target_link_libraries(kairosboot_libusb_runtime_tests PRIVATE
     ${CMAKE_DL_LIBS}
     Threads::Threads
 )
+if(WIN32)
+    target_compile_definitions(kairosboot_libusb_runtime_tests PRIVATE
+        _WIN32_WINNT=0x0A00
+        WINVER=0x0A00
+    )
+    target_link_libraries(kairosboot_libusb_runtime_tests PRIVATE
+        setupapi
+        cfgmgr32
+    )
+endif()
 if(APPLE)
     find_library(KAIROSBOOT_IOKIT_FRAMEWORK IOKit REQUIRED)
     find_library(KAIROSBOOT_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)

@@ -666,6 +666,13 @@ if(BUILD_TESTING)
   target_compile_features(kairosboot_cxx_primitive_tcp_tests PRIVATE cxx_std_23)
   target_link_libraries(kairosboot_cxx_primitive_tcp_tests
                         PRIVATE KairosBoot::Cxx Boost::asio_core Threads::Threads)
+  if(WIN32)
+    target_compile_definitions(kairosboot_cxx_primitive_tcp_tests
+                               PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    # Boost.Asio remains the networking API. ws2_32 is its required Windows
+    # system import library and is intentionally private to this test target.
+    target_link_libraries(kairosboot_cxx_primitive_tcp_tests PRIVATE ws2_32)
+  endif()
   kairosboot_enable_strict_warnings(kairosboot_cxx_primitive_tcp_tests)
   add_test(NAME cxx_primitive_tcp COMMAND kairosboot_cxx_primitive_tcp_tests)
   set_tests_properties(cxx_primitive_tcp PROPERTIES TIMEOUT 15)
