@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "src/api/device_selector.hpp"
+#include "src/transport/macos_usb_topology.hpp"
 
 #include <exception>
 #include <iostream>
@@ -14,6 +15,7 @@ namespace {
 using kairosboot::api::DeviceSelectorKind;
 using kairosboot::api::parse_device_selector;
 using kairosboot::api::select_usb_device;
+using kairosboot::transport::canonical_macos_usb_port_path;
 using kairosboot::transport::UsbDeviceInfo;
 
 #define CHECK(condition)                                                         \
@@ -45,6 +47,17 @@ void parses_public_selector_grammar() {
     CHECK(path->usb_bus == 3);
     CHECK(path->usb_ports == std::vector<std::uint8_t>({2, 4, 1}));
 
+    const auto darwin_path = parse_device_selector("usb:0-2.3");
+    CHECK(darwin_path.has_value());
+    CHECK(darwin_path->kind == DeviceSelectorKind::UsbPath);
+    CHECK(darwin_path->usb_bus == 0);
+    CHECK(darwin_path->usb_ports == std::vector<std::uint8_t>({2, 3}));
+
+    const auto maximum_path = parse_device_selector("usb:255-255");
+    CHECK(maximum_path.has_value());
+    CHECK(maximum_path->usb_bus == 255);
+    CHECK(maximum_path->usb_ports == std::vector<std::uint8_t>({255}));
+
     const auto tcp = parse_device_selector("tcp:flash-host:5554");
     CHECK(tcp.has_value());
     CHECK(tcp->kind == DeviceSelectorKind::Tcp);
@@ -62,7 +75,7 @@ void parses_public_selector_grammar() {
 void rejects_ambiguous_or_unsafe_selector_text() {
     const std::vector<std::string> invalid{
         "", "serial:ABC", "usb:serial:%", "usb:serial:%00",
-        "usb:0-1", "usb:1-0", "usb:1-01", "usb:1-1.",
+        "usb:00-1", "usb:256-1", "usb:1-0", "usb:1-01", "usb:1-1.",
         "tcp:host/path", "tcp:host?query", "udp:host#fragment",
         std::string("tcp:host\n", 9),
     };
@@ -101,6 +114,24 @@ void selects_usb_by_unique_serial_or_physical_path() {
     const auto no_match = select_usb_device(devices, *missing);
     CHECK(!no_match.has_value());
     CHECK(no_match.error().status == KB_E_NO_DEVICE);
+
+    UsbDeviceInfo darwin{};
+    darwin.bus_number = 0;
+    darwin.port_path = {2, 3};
+    darwin.serial_utf8 = "DUPLICATE";
+    UsbDeviceInfo elsewhere = darwin;
+    elsewhere.port_path = {2, 4};
+    const std::vector darwin_devices{darwin, elsewhere};
+
+    const auto enumerated_path =
+        canonical_macos_usb_port_path(darwin.bus_number, darwin.port_path);
+    CHECK(enumerated_path.has_value());
+    const auto round_trip = parse_device_selector(*enumerated_path);
+    CHECK(round_trip.has_value());
+    const auto path_selected = select_usb_device(darwin_devices, *round_trip);
+    CHECK(path_selected.has_value());
+    CHECK(path_selected->bus_number == 0);
+    CHECK(path_selected->port_path == darwin.port_path);
 }
 
 }  // namespace

@@ -126,7 +126,8 @@ parse_usb_path(const std::string_view text) {
         return invalid("USB path selector must use usb:<bus>-<port>[.<port>...]");
     }
 
-    const auto parse_component = [](const std::string_view component)
+    const auto parse_component = [](const std::string_view component,
+                                    const bool allow_zero)
         -> std::optional<std::uint8_t> {
         if (component.empty() ||
             (component.size() > 1 && component.front() == '0')) {
@@ -136,14 +137,17 @@ parse_usb_path(const std::string_view text) {
         const auto result = std::from_chars(
             component.data(), component.data() + component.size(), parsed);
         if (result.ec != std::errc{} ||
-            result.ptr != component.data() + component.size() || parsed == 0 ||
+            result.ptr != component.data() + component.size() ||
+            (!allow_zero && parsed == 0) ||
             parsed > std::numeric_limits<std::uint8_t>::max()) {
             return std::nullopt;
         }
         return static_cast<std::uint8_t>(parsed);
     };
 
-    auto bus = parse_component(text.substr(0, dash));
+    // Darwin/libusb derives the bus from locationID's high byte, which can be
+    // zero. Ports remain one-based on every platform.
+    auto bus = parse_component(text.substr(0, dash), true);
     if (!bus) {
         return invalid("USB path selector has an invalid bus number");
     }
@@ -152,7 +156,7 @@ parse_usb_path(const std::string_view text) {
     while (start <= text.size()) {
         const auto dot = text.find('.', start);
         const auto end = dot == std::string_view::npos ? text.size() : dot;
-        auto port = parse_component(text.substr(start, end - start));
+        auto port = parse_component(text.substr(start, end - start), false);
         if (!port) {
             return invalid("USB path selector has an invalid port number");
         }
