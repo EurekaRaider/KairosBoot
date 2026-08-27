@@ -2093,21 +2093,7 @@ kb_status_t KB_CALL kb_flash_file(
   if (start != KB_OK) {
     return start;
   }
-
-  const kb_status_t result = kb_operation_wait(operation, KB_WAIT_INFINITE);
-  if (result != KB_OK && error != nullptr) {
-    const kb_error_t *operation_error = kb_operation_error(operation);
-    if (operation_error == nullptr) {
-      (void)fail(error, result, kb_status_string(result));
-    } else {
-      (void)fail(error, result, kb_error_message(operation_error),
-                 kb_error_device_identifier(operation_error),
-                 kb_error_native_code(operation_error),
-                 kb_error_transfer_state(operation_error));
-    }
-  }
-  kb_operation_release(operation);
-  return result;
+  return finish_blocking_operation(operation, error);
 }
 
 kb_status_t KB_CALL kb_update_package_async(

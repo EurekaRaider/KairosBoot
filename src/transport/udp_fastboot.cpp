@@ -1325,11 +1325,16 @@ std::expected<UdpSocketConnection, UdpError> connect_native_udp_socket(
     const UdpEndpoint& endpoint,
     const std::chrono::milliseconds timeout,
     const std::stop_token cancellation) {
-    if (endpoint.host.empty() || endpoint.port == 0 ||
-        timeout <= std::chrono::milliseconds::zero()) {
+    if (endpoint.host.empty() || endpoint.port == 0) {
         return std::unexpected(UdpError{
             .kind = UdpErrorKind::InvalidEndpoint,
-            .message = "native UDP endpoint or timeout is invalid",
+            .message = "native UDP endpoint is invalid",
+        });
+    }
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return std::unexpected(UdpError{
+            .kind = UdpErrorKind::Timeout,
+            .message = "UDP connect deadline expired before name resolution",
         });
     }
 

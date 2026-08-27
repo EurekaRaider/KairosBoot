@@ -64,6 +64,62 @@ std::string as_string(const std::span<const std::byte> bytes) {
       reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
+struct ErrorSnapshot {
+  kb_status_t status{KB_OK};
+  std::string message;
+  std::string device_identifier;
+  int32_t native_code{0};
+  kb_transfer_state_t transfer_state{KB_TRANSFER_NOT_SENT};
+  std::string device_message;
+  std::vector<kb_command_message_kind_t> message_kinds;
+  std::vector<std::string> message_payloads;
+  std::uint64_t inbound_expected_bytes{0};
+  std::uint64_t inbound_transferred_bytes{0};
+  kb_transfer_state_t inbound_transfer_state{KB_TRANSFER_NOT_SENT};
+  int32_t session_poisoned{0};
+
+  [[nodiscard]] bool operator==(const ErrorSnapshot&) const = default;
+};
+
+ErrorSnapshot snapshot_error(const kb_error_t* error) {
+  CHECK(error != nullptr);
+  ErrorSnapshot snapshot{
+      .status = kb_error_status(error),
+      .message = kb_error_message(error),
+      .device_identifier = kb_error_device_identifier(error),
+      .native_code = kb_error_native_code(error),
+      .transfer_state = kb_error_transfer_state(error),
+      .device_message = {},
+      .message_kinds = {},
+      .message_payloads = {},
+      .inbound_expected_bytes = kb_error_inbound_expected_bytes(error),
+      .inbound_transferred_bytes = kb_error_inbound_transferred_bytes(error),
+      .inbound_transfer_state = kb_error_inbound_transfer_state(error),
+      .session_poisoned = kb_error_session_poisoned(error),
+  };
+  std::size_t size = 0;
+  const auto* device_message = kb_error_device_message(error, &size);
+  if (size != 0U) {
+    snapshot.device_message.assign(
+        reinterpret_cast<const char*>(device_message), size);
+  }
+  const auto message_count = kb_error_command_message_count(error);
+  snapshot.message_kinds.reserve(message_count);
+  snapshot.message_payloads.reserve(message_count);
+  for (std::size_t index = 0; index < message_count; ++index) {
+    snapshot.message_kinds.push_back(
+        kb_error_command_message_kind(error, index));
+    const auto* payload = kb_error_command_message_payload(error, index, &size);
+    if (size == 0U) {
+      snapshot.message_payloads.emplace_back();
+    } else {
+      snapshot.message_payloads.emplace_back(
+          reinterpret_cast<const char*>(payload), size);
+    }
+  }
+  return snapshot;
+}
+
 class TemporaryUpdatePackage final {
 public:
   TemporaryUpdatePackage(const std::string_view fastboot_info,
@@ -165,6 +221,24 @@ private:
     write_frame(socket, "OKAYflashed");
   }
 
+  void serve_flash_failure() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+    write_frame(socket, "OKAY0x00100000");
+    CHECK(as_string(read_frame(socket)) == "download:00000010");
+    write_frame(socket, "DATA00000010");
+    const auto payload = read_frame(socket);
+    CHECK(payload.size() == 16U);
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+      CHECK(payload[index] == std::byte{static_cast<unsigned char>(index)});
+    }
+    write_frame(socket, "OKAYdownloaded");
+    CHECK(as_string(read_frame(socket)) == "flash:system");
+    write_frame(socket, "INFOpolicy");
+    write_frame(socket, "TEXTlocked partition");
+    write_frame(socket, "FAILpartition locked");
+  }
+
   void serve_cancelled_flash() {
     auto socket = accept();
     CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
@@ -262,6 +336,8 @@ private:
       }
       serve_flash_success();
       serve_flash_success();
+      serve_flash_failure();
+      serve_flash_failure();
       serve_cancelled_flash();
       {
         auto socket = accept();
@@ -546,10 +622,11 @@ std::array<std::byte, 4> udp_initialization(
 
 class ScriptedUdpFlashServer final {
 public:
-  explicit ScriptedUdpFlashServer(const std::size_t operation_count)
+  explicit ScriptedUdpFlashServer(std::vector<bool> failure_sequence)
       : socket_(context_, udp::endpoint(udp::v4(), 0)),
         port_(socket_.local_endpoint().port()),
-        operation_count_(operation_count), worker_([this] { run(); }) {}
+        failure_sequence_(std::move(failure_sequence)),
+        worker_([this] { run(); }) {}
 
   ~ScriptedUdpFlashServer() {
     if (worker_.joinable()) {
@@ -590,7 +667,7 @@ private:
     CHECK(socket_.send_to(boost::asio::buffer(packet), peer) == packet.size());
   }
 
-  void serve_flash() {
+  void serve_flash(const bool fail) {
     using kairosboot::transport::UdpPacketId;
     const auto query = udp_packet(UdpPacketId::Query, 0);
     const auto peer = receive(query);
@@ -607,16 +684,22 @@ private:
          peer);
 
     std::uint16_t sequence = 101;
-    const auto exchange = [&](const std::span<const std::byte> request,
-                              const std::span<const std::byte> response) {
+    const auto send_request = [&](const std::span<const std::byte> request) {
       static_cast<void>(receive(
           udp_packet(UdpPacketId::Fastboot, sequence, request), peer));
       send(udp_packet(UdpPacketId::Fastboot, sequence), peer);
       ++sequence;
+    };
+    const auto respond = [&](const std::span<const std::byte> response) {
       static_cast<void>(
           receive(udp_packet(UdpPacketId::Fastboot, sequence), peer));
       send(udp_packet(UdpPacketId::Fastboot, sequence, response), peer);
       ++sequence;
+    };
+    const auto exchange = [&](const std::span<const std::byte> request,
+                              const std::span<const std::byte> response) {
+      send_request(request);
+      respond(response);
     };
 
     exchange(udp_bytes("getvar:max-download-size"),
@@ -627,13 +710,20 @@ private:
       image[index] = std::byte{static_cast<unsigned char>(index)};
     }
     exchange(image, udp_bytes("OKAYdownloaded"));
-    exchange(udp_bytes("flash:system"), udp_bytes("OKAYflashed"));
+    send_request(udp_bytes("flash:system"));
+    if (fail) {
+      respond(udp_bytes("INFOpolicy"));
+      respond(udp_bytes("TEXTlocked partition"));
+      respond(udp_bytes("FAILpartition locked"));
+    } else {
+      respond(udp_bytes("OKAYflashed"));
+    }
   }
 
   void run() noexcept {
     try {
-      for (std::size_t index = 0; index < operation_count_; ++index) {
-        serve_flash();
+      for (const auto fail : failure_sequence_) {
+        serve_flash(fail);
       }
     } catch (...) {
       failure_ = std::current_exception();
@@ -643,7 +733,7 @@ private:
   boost::asio::io_context context_;
   udp::socket socket_;
   std::uint16_t port_;
-  std::size_t operation_count_;
+  std::vector<bool> failure_sequence_;
   std::thread worker_;
   std::exception_ptr failure_;
 };
@@ -939,6 +1029,34 @@ void run_contract() {
   CHECK(error == nullptr);
   CHECK(flash_watermarks ==
         std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
+
+  kb_flash_options_init(&flash_options);
+  flash_operation = nullptr;
+  CHECK(kb_flash_file_async(
+            context, selector.c_str(), "system", image_path.c_str(),
+            &flash_options, &flash_operation, &error) == KB_OK);
+  CHECK(flash_operation != nullptr);
+  CHECK(error == nullptr);
+  CHECK(kb_operation_wait(flash_operation, KB_WAIT_INFINITE) ==
+        KB_E_DEVICE_FAIL);
+  CHECK(kb_operation_state(flash_operation) == KB_OPERATION_FAILED);
+  const auto asynchronous_flash_error =
+      snapshot_error(kb_operation_error(flash_operation));
+  kb_operation_release(flash_operation);
+  CHECK(asynchronous_flash_error.device_message == "partition locked");
+  CHECK(asynchronous_flash_error.message_kinds ==
+        std::vector<kb_command_message_kind_t>(
+            {KB_COMMAND_MESSAGE_INFO, KB_COMMAND_MESSAGE_TEXT}));
+  CHECK(asynchronous_flash_error.message_payloads ==
+        std::vector<std::string>({"policy", "locked partition"}));
+  CHECK(asynchronous_flash_error.session_poisoned == 0);
+
+  CHECK(kb_flash_file(context, selector.c_str(), "system", image_path.c_str(),
+                      &flash_options, &error) == KB_E_DEVICE_FAIL);
+  const auto blocking_flash_error = snapshot_error(error);
+  kb_error_release(error);
+  error = nullptr;
+  CHECK(blocking_flash_error == asynchronous_flash_error);
 
   kb_flash_options_init(&flash_options);
   flash_options.progress_callback = cancel_flash_at_download;
@@ -1240,7 +1358,8 @@ void run_cxx_contract() {
 }
 
 void run_udp_flash_contract() {
-  ScriptedUdpFlashServer server(4U);
+  ScriptedUdpFlashServer server(
+      {false, false, true, true, false, false});
   const auto selector_text =
       "udp:127.0.0.1:" + std::to_string(server.port());
   std::array<std::byte, 16> image{};
@@ -1269,6 +1388,50 @@ void run_udp_flash_contract() {
   CHECK(kb_flash_file(c_context, selector_text.c_str(), "system",
                       image_path.c_str(), &c_options, &error) == KB_OK);
   CHECK(error == nullptr);
+
+  operation = nullptr;
+  CHECK(kb_flash_file_async(
+            c_context, selector_text.c_str(), "system", image_path.c_str(),
+            &c_options, &operation, &error) == KB_OK);
+  CHECK(operation != nullptr);
+  CHECK(error == nullptr);
+  CHECK(kb_operation_wait(operation, KB_WAIT_INFINITE) == KB_E_DEVICE_FAIL);
+  CHECK(kb_operation_state(operation) == KB_OPERATION_FAILED);
+  const auto asynchronous_flash_error =
+      snapshot_error(kb_operation_error(operation));
+  kb_operation_release(operation);
+  CHECK(asynchronous_flash_error.device_message == "partition locked");
+  CHECK(asynchronous_flash_error.message_kinds ==
+        std::vector<kb_command_message_kind_t>(
+            {KB_COMMAND_MESSAGE_INFO, KB_COMMAND_MESSAGE_TEXT}));
+  CHECK(asynchronous_flash_error.message_payloads ==
+        std::vector<std::string>({"policy", "locked partition"}));
+  CHECK(asynchronous_flash_error.session_poisoned == 0);
+
+  CHECK(kb_flash_file(c_context, selector_text.c_str(), "system",
+                      image_path.c_str(), &c_options, &error) ==
+        KB_E_DEVICE_FAIL);
+  const auto blocking_flash_error = snapshot_error(error);
+  kb_error_release(error);
+  error = nullptr;
+  CHECK(blocking_flash_error == asynchronous_flash_error);
+
+  kb_flash_options_init(&c_options);
+  c_options.timeout_ms = 0U;
+  operation = nullptr;
+  CHECK(kb_flash_file_async(
+            c_context, selector_text.c_str(), "system", image_path.c_str(),
+            &c_options, &operation, &error) == KB_OK);
+  CHECK(operation != nullptr);
+  CHECK(error == nullptr);
+  CHECK(kb_operation_wait(operation, KB_WAIT_INFINITE) == KB_E_TIMEOUT);
+  const auto* timeout_error = kb_operation_error(operation);
+  CHECK(timeout_error != nullptr);
+  CHECK(kb_error_status(timeout_error) == KB_E_TIMEOUT);
+  CHECK(kb_error_transfer_state(timeout_error) == KB_TRANSFER_NOT_SENT);
+  CHECK(std::strcmp(kb_error_device_identifier(timeout_error),
+                    selector_text.c_str()) == 0);
+  kb_operation_release(operation);
 
   operation = nullptr;
   CHECK(kb_flash_file_async(

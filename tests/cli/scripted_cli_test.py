@@ -250,6 +250,7 @@ def invoke_flash_without_server(
     cli: pathlib.Path,
     scheme: str,
     image: pathlib.Path,
+    timeout_ms: int = 100,
 ) -> dict[str, object]:
     socket_type = socket.SOCK_STREAM if scheme == "tcp" else socket.SOCK_DGRAM
     with socket.socket(socket.AF_INET, socket_type) as reservation:
@@ -262,7 +263,7 @@ def invoke_flash_without_server(
             "--device",
             f"{scheme}:127.0.0.1:{port}",
             "--timeout-ms",
-            "100",
+            str(timeout_ms),
             "--json",
             "flash",
             "system",
@@ -784,6 +785,11 @@ def run(cli: pathlib.Path) -> None:
         udp_unavailable = invoke_flash_without_server(cli, "udp", stage_file)
         assert udp_unavailable["status"] in {"io", "timeout"}
         assert udp_unavailable["transferState"] == "not_sent"
+        udp_zero_timeout = invoke_flash_without_server(
+            cli, "udp", stage_file, timeout_ms=0
+        )
+        assert udp_zero_timeout["status"] == "timeout"
+        assert udp_zero_timeout["transferState"] == "not_sent"
 
         def staged_download(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"download:00000010"
