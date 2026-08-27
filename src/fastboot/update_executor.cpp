@@ -156,6 +156,7 @@ device_failure_kind(const UpdateDeviceErrorKind kind,
     case UpdateDeviceErrorKind::TimedOut:
         return UpdateExecutionErrorKind::TimedOut;
     case UpdateDeviceErrorKind::Failed:
+    case UpdateDeviceErrorKind::Unsupported:
         return fallback;
     default:
         return fallback;
