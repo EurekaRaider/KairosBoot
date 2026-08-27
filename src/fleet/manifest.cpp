@@ -869,6 +869,8 @@ selector_values(const YAML::Node& node,
         ManifestFlashStep result{
             .partition = std::move(*partition),
             .artifact = std::move(*artifact),
+            .slot = {},
+            .slot_location = {},
         };
         if (const auto* slot = fields->find("slot")) {
             auto parsed = flash_slot(slot->value, action_path + ".slot");
@@ -1099,6 +1101,9 @@ selector_values(const YAML::Node& node,
         .location = required_location(root),
         .api_version = std::move(*api_version),
         .kind = std::move(*kind),
+        .artifacts = {},
+        .targets = {},
+        .policy = {},
     };
     const auto& artifacts_node = root_fields->find("artifacts")->value;
     if (!artifacts_node.IsSequence()) {
@@ -1251,6 +1256,8 @@ selector_values(const YAML::Node& node,
         }
         ManifestSelector selector{
             .location = required_location(selector_node),
+            .serials = {},
+            .usb_paths = {},
         };
         if (const auto* serials = selector_map->find("serials")) {
             auto values = selector_values(serials->value,
