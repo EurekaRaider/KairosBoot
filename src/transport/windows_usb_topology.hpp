@@ -31,6 +31,10 @@ struct WindowsUsbInterfaceFingerprint final {
 // intentionally treated as snapshot data, while controller + hub/port chain is
 // the physical reconnect identity.
 struct WindowsUsbTopologyQuery final {
+    // libusb 1.0.30 defines this as the WinUSB backend's exact DEVINST. A zero
+    // value is never accepted because no other Windows property is a proven
+    // substitute for this bridge.
+    unsigned long libusb_session_data{};
     std::uint16_t vendor_id{};
     std::uint16_t product_id{};
     std::uint8_t bus_number{};
@@ -40,18 +44,46 @@ struct WindowsUsbTopologyQuery final {
     WindowsUsbInterfaceFingerprint interface_fingerprint;
 };
 
+// Raw, read-only Configuration Manager snapshot seam. Production populates it
+// from one exact DEVINST and its parent chain; tests can inject it on any host.
+// The chain is ordered leaf-to-root and is deliberately truncated at the first
+// host-controller device-interface node.
+struct WindowsUsbNativeNodeSnapshot final {
+    unsigned long system_node{};
+    std::optional<unsigned long> parent_system_node;
+    std::string device_instance_id_utf8;
+    bool present{};
+    bool exposes_usb_hub_interface{};
+    bool exposes_usb_host_controller_interface{};
+    std::vector<std::string> hardware_ids_utf8;
+    std::vector<std::string> location_paths_utf8;
+
+    [[nodiscard]] bool operator==(
+        const WindowsUsbNativeNodeSnapshot&) const = default;
+};
+
+struct WindowsUsbNativeSnapshot final {
+    unsigned long requested_system_node{};
+    std::vector<WindowsUsbNativeNodeSnapshot> chain_leaf_to_root;
+
+    [[nodiscard]] bool operator==(const WindowsUsbNativeSnapshot&) const =
+        default;
+};
+
 struct WindowsUsbLocationPath final {
     std::string controller_prefix_utf8;
     std::uint32_t root_hub_index{};
     std::vector<std::uint8_t> port_numbers;
+    std::optional<std::uint8_t> interface_number;
 
     [[nodiscard]] bool operator==(const WindowsUsbLocationPath&) const = default;
 };
 
 // Backend-owned immutable record produced from one present-device snapshot.
-// The production backend only emits records whose VID/PID/interface descriptor
-// compatible IDs matched the query. Discovery still revalidates every field.
+// Bus/address/serial/interface data remain copied from the same libusb
+// snapshot; PnP properties are not treated as equivalent sources for them.
 struct WindowsUsbTopologyNode final {
+    unsigned long libusb_session_data{};
     std::string device_instance_id_utf8;
     std::string root_controller_instance_id_utf8;
     std::vector<std::string> hub_instance_ids_utf8;
@@ -64,6 +96,10 @@ struct WindowsUsbTopologyNode final {
     std::vector<std::uint8_t> port_numbers;
     std::optional<std::string> serial_utf8;
     WindowsUsbInterfaceFingerprint interface_fingerprint;
+    // Included in the double-snapshot equality check so an otherwise hidden
+    // composite/proxy devnode replacement cannot pass the TOCTOU gate.
+    std::vector<unsigned long> validation_chain_system_nodes;
+    std::vector<std::string> validation_chain_instance_ids_utf8;
 
     [[nodiscard]] bool operator==(const WindowsUsbTopologyNode&) const = default;
 };
@@ -121,6 +157,7 @@ struct WindowsUsbTopologyError final {
     WindowsUsbTopologyStage stage{WindowsUsbTopologyStage::Validation};
     WindowsUsbNativeErrorDomain native_domain{WindowsUsbNativeErrorDomain::None};
     std::uint32_t native_code{};
+    unsigned long libusb_session_data{};
     std::string device_instance_id_utf8;
     std::string message;
 
@@ -138,17 +175,49 @@ public:
                     std::stop_token stop_token) const = 0;
 };
 
+class IWindowsUsbTopologyNativeBackend {
+public:
+    virtual ~IWindowsUsbTopologyNativeBackend() = default;
+
+    [[nodiscard]] virtual std::expected<WindowsUsbNativeSnapshot,
+                                        WindowsUsbTopologyError>
+    read_snapshot(unsigned long libusb_session_data,
+                  std::chrono::steady_clock::time_point deadline,
+                  std::stop_token stop_token) const = 0;
+};
+
+// Uses only read-only SetupAPI/Configuration Manager queries. It never opens a
+// USB transfer handle and never installs, updates, or replaces a driver.
+class SetupApiWindowsUsbNativeBackend final
+    : public IWindowsUsbTopologyNativeBackend {
+public:
+    [[nodiscard]] std::expected<WindowsUsbNativeSnapshot,
+                                WindowsUsbTopologyError>
+    read_snapshot(unsigned long libusb_session_data,
+                  std::chrono::steady_clock::time_point deadline,
+                  std::stop_token stop_token) const override;
+};
+
 // Read-only production adapter. On Windows it enumerates present USB devnodes
 // with SetupAPI and resolves the parent chain with Configuration Manager. It
 // never installs, updates, or replaces a device driver.
 class SetupApiWindowsUsbTopologyBackend final
     : public IWindowsUsbTopologyBackend {
 public:
+    SetupApiWindowsUsbTopologyBackend() noexcept = default;
+
+    // The injected backend must outlive this adapter.
+    explicit SetupApiWindowsUsbTopologyBackend(
+        const IWindowsUsbTopologyNativeBackend& native_backend) noexcept;
+
     [[nodiscard]] std::expected<std::vector<WindowsUsbTopologyNode>,
                                 WindowsUsbTopologyError>
     read_candidates(const WindowsUsbTopologyQuery& query,
                     std::chrono::steady_clock::time_point deadline,
                     std::stop_token stop_token) const override;
+
+private:
+    const IWindowsUsbTopologyNativeBackend* native_backend_{};
 };
 
 using WindowsUsbTopologyNow = std::chrono::steady_clock::time_point (*)(
@@ -175,7 +244,8 @@ private:
 };
 
 [[nodiscard]] WindowsUsbTopologyQuery make_windows_usb_topology_query(
-    const UsbDeviceInfo& device);
+    const UsbDeviceInfo& device,
+    unsigned long libusb_session_data);
 
 [[nodiscard]] std::expected<WindowsUsbLocationPath, WindowsUsbTopologyError>
 parse_windows_usb_location_path(std::string_view location_path_utf8);
