@@ -418,7 +418,10 @@ set(CLI_UPDATE_PACKAGE
     "${CMAKE_CURRENT_BINARY_DIR}/kairosboot-cli-update-package")
 file(MAKE_DIRECTORY "${CLI_UPDATE_PACKAGE}")
 file(WRITE "${CLI_UPDATE_PACKAGE}/android-info.txt" "")
-file(WRITE "${CLI_UPDATE_PACKAGE}/fastboot-info.txt" "version 1\n")
+# Keep the fixture byte-identical on every host. CMake may translate the final
+# newline to CRLF on Windows, while the frozen AOSP lexer intentionally treats
+# only a literal space as a token separator.
+file(WRITE "${CLI_UPDATE_PACKAGE}/fastboot-info.txt" "version 1")
 file(WRITE "${CLI_STAGE_FILE}" "stage-data")
 file(WRITE "${CLI_EMPTY_STAGE_FILE}" "")
 file(REMOVE "${CLI_UPLOAD_FILE}" "${CLI_FETCH_FILE}")
