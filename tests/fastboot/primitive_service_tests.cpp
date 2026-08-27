@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/slot_planner.hpp"
+#include "src/fastboot/update_executor.hpp"
 #include "src/image/flash_artifact.hpp"
 #include "src/image/sparse_flash_plan.hpp"
 #include "src/transport/image_transfer_source.hpp"
@@ -8,7 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -16,11 +19,13 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -38,8 +43,10 @@ using kairosboot::fastboot::SlotErrorCode;
 using kairosboot::fastboot::SlotPlanner;
 using kairosboot::fastboot::SlotSelectionKind;
 using kairosboot::fastboot::SlotTopologySource;
+using kairosboot::fastboot::UpdateOperationContext;
 using kairosboot::fastboot::parse_slot_selection;
 using kairosboot::fastboot::validate_download_size;
+using kairosboot::fastboot::validate_oem_command_suffix;
 using kairosboot::image::FlashArtifact;
 using kairosboot::image::IImageSource;
 using kairosboot::image::ImageSourceError;
@@ -259,6 +266,138 @@ public:
 
     std::size_t wire_calls{0};
     bool closed{false};
+};
+
+class BlockingGetvarTransport final : public ITransportSession {
+public:
+    [[nodiscard]] TransferResult write(
+        const std::span<const std::byte> bytes,
+        std::chrono::milliseconds /*timeout*/) override {
+        {
+            std::lock_guard lock(mutex_);
+            command_.assign(
+                reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            write_started_ = true;
+        }
+        changed_.notify_all();
+
+        std::unique_lock lock(mutex_);
+        changed_.wait(lock, [this] { return cancelled_; });
+        return {
+            .status = TransportStatus::Cancelled,
+            .certainty = TransferCertainty::NotTransferred,
+            .detail = "slot query cancelled by caller",
+        };
+    }
+
+    [[nodiscard]] TransferResult read(
+        std::span<std::byte> /*destination*/,
+        std::chrono::milliseconds /*timeout*/) override {
+        return {
+            .status = TransportStatus::IoError,
+            .certainty = TransferCertainty::NotTransferred,
+            .detail = "unexpected slot-query read",
+        };
+    }
+
+    [[nodiscard]] TransferResult read_data(
+        const std::span<std::byte> destination,
+        const std::chrono::milliseconds timeout) override {
+        return read(destination, timeout);
+    }
+
+    void request_cancel() noexcept override {
+        {
+            std::lock_guard lock(mutex_);
+            cancelled_ = true;
+            ++cancel_calls_;
+        }
+        changed_.notify_all();
+    }
+
+    void close() noexcept override { request_cancel(); }
+
+    void wait_until_write_started() {
+        std::unique_lock lock(mutex_);
+        changed_.wait(lock, [this] { return write_started_; });
+    }
+
+    [[nodiscard]] std::string command() const {
+        std::lock_guard lock(mutex_);
+        return command_;
+    }
+
+    [[nodiscard]] std::size_t cancel_calls() const {
+        std::lock_guard lock(mutex_);
+        return cancel_calls_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable changed_;
+    std::string command_;
+    std::size_t cancel_calls_{};
+    bool write_started_{};
+    bool cancelled_{};
+};
+
+class DeadlineCrossingGetvarTransport final : public ITransportSession {
+public:
+    explicit DeadlineCrossingGetvarTransport(
+        const std::chrono::steady_clock::time_point release) noexcept
+        : release_(release) {}
+
+    [[nodiscard]] TransferResult write(
+        const std::span<const std::byte> bytes,
+        std::chrono::milliseconds /*timeout*/) override {
+        command_.assign(
+            reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        return {
+            .status = TransportStatus::Ok,
+            .transferred = bytes.size(),
+            .certainty = TransferCertainty::FullyTransferred,
+        };
+    }
+
+    [[nodiscard]] TransferResult read(
+        const std::span<std::byte> destination,
+        std::chrono::milliseconds /*timeout*/) override {
+        std::this_thread::sleep_until(release_);
+        constexpr std::string_view reply{"OKAY2"};
+        if (destination.size() < reply.size()) {
+            return {
+                .status = TransportStatus::IoError,
+                .certainty = TransferCertainty::NotTransferred,
+                .detail = "slot-query response buffer is too small",
+            };
+        }
+        for (std::size_t index = 0U; index < reply.size(); ++index) {
+            destination[index] = std::byte{
+                static_cast<unsigned char>(reply[index])};
+        }
+        return {
+            .status = TransportStatus::Ok,
+            .transferred = reply.size(),
+            .certainty = TransferCertainty::FullyTransferred,
+        };
+    }
+
+    [[nodiscard]] TransferResult read_data(
+        const std::span<std::byte> destination,
+        const std::chrono::milliseconds timeout) override {
+        return read(destination, timeout);
+    }
+
+    void request_cancel() noexcept override { cancelled_ = true; }
+    void close() noexcept override {}
+
+    [[nodiscard]] std::string_view command() const noexcept { return command_; }
+    [[nodiscard]] bool cancelled() const noexcept { return cancelled_; }
+
+private:
+    std::chrono::steady_clock::time_point release_;
+    std::string command_;
+    bool cancelled_{};
 };
 
 [[nodiscard]] std::string accepted_text(const ScriptedTransport& script) {
@@ -1899,6 +2038,121 @@ void slot_selection_validation_has_no_wire_effects() {
     CHECK(script->complete());
 }
 
+void oem_preflight_validation_is_pure_and_enforces_wire_limits() {
+    constexpr auto prefix_size = std::string_view{"oem "}.size();
+    const std::string maximum(
+        kairosboot::protocol::kDefaultMaxCommandBytes - prefix_size, 'x');
+    const auto accepted = validate_oem_command_suffix(maximum);
+    CHECK(accepted.has_value());
+    CHECK(accepted->size() == kairosboot::protocol::kDefaultMaxCommandBytes);
+    CHECK(accepted->starts_with("oem "));
+
+    const auto oversized = validate_oem_command_suffix(maximum + "x");
+    CHECK(!oversized);
+    CHECK(oversized.error().code == PrimitiveErrorCode::InvalidArgument);
+    CHECK(oversized.error().phase == ProtocolPhase::Validation);
+    CHECK(oversized.error().outbound_certainty ==
+          TransferCertainty::NotTransferred);
+    CHECK(!validate_oem_command_suffix(""));
+    CHECK(!validate_oem_command_suffix(std::string_view{"bad\ncommand", 11U}));
+    CHECK(!validate_oem_command_suffix(
+        std::string_view{"bad\x7f" "command", 11U}));
+    CHECK(!validate_oem_command_suffix(
+        std::string_view{"bad\x80" "command", 11U}));
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    CHECK(!service.oem(maximum + "x"));
+    CHECK(!service.oem(std::string_view{"bad\tcommand", 11U}));
+    CHECK(accepted_text(*script).empty());
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void slot_operation_context_checks_and_forwards_cancellation() {
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+        std::stop_source cancellation;
+        cancellation.request_stop();
+        const auto result = planner.query_topology(UpdateOperationContext{
+            .cancellation = cancellation.get_token(),
+        });
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::Cancelled);
+        CHECK(accepted_text(*script).empty());
+        CHECK(!script->cancellation_requested());
+        CHECK(session.state() == SessionState::Ready);
+    }
+
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+        const auto result = planner.query_topology(UpdateOperationContext{
+            .deadline = std::chrono::steady_clock::now() -
+                std::chrono::milliseconds(1),
+        });
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::TimedOut);
+        CHECK(accepted_text(*script).empty());
+        CHECK(session.state() == SessionState::Ready);
+    }
+
+    {
+        auto transport = std::make_unique<BlockingGetvarTransport>();
+        auto* blocking = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+        std::stop_source cancellation;
+        std::optional<std::expected<
+            kairosboot::fastboot::SlotTopology,
+            kairosboot::fastboot::SlotError>> result;
+        std::thread query([&] {
+            result.emplace(planner.query_topology(UpdateOperationContext{
+                .cancellation = cancellation.get_token(),
+            }));
+        });
+        blocking->wait_until_write_started();
+        cancellation.request_stop();
+        query.join();
+
+        CHECK(result.has_value());
+        CHECK(!*result);
+        CHECK(result->error().code == SlotErrorCode::Cancelled);
+        CHECK(blocking->command() == "getvar:slot-count");
+        CHECK(blocking->cancel_calls() == 1U);
+        CHECK(session.state() == SessionState::Poisoned);
+    }
+
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+        auto transport = std::make_unique<DeadlineCrossingGetvarTransport>(
+            deadline + std::chrono::milliseconds(20));
+        auto* delayed = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        SlotPlanner planner(service);
+        const auto result = planner.query_topology(UpdateOperationContext{
+            .deadline = deadline,
+        });
+        CHECK(!result);
+        CHECK(result.error().code == SlotErrorCode::TimedOut);
+        CHECK(delayed->command() == "getvar:slot-count");
+        CHECK(!delayed->cancelled());
+        CHECK(session.state() == SessionState::Ready);
+    }
+}
+
 void modern_slot_queries_generate_deterministic_plans() {
     auto transport = std::make_unique<ScriptedTransport>();
     auto* script = transport.get();
@@ -2263,6 +2517,10 @@ int main() {
         {"source cancellation and failure", source_cancel_and_failure_poison_with_native_codes},
         {"source preflight and capability", source_preflight_and_capability_fail_without_wire_io},
         {"slot selection validation", slot_selection_validation_has_no_wire_effects},
+        {"OEM preflight validation",
+         oem_preflight_validation_is_pure_and_enforces_wire_limits},
+        {"slot operation context",
+         slot_operation_context_checks_and_forwards_cancellation},
         {"modern slot planning", modern_slot_queries_generate_deterministic_plans},
         {"legacy slot suffixes", legacy_suffixes_are_normalized_and_sorted},
         {"non-slotted partition planning", non_slotted_partitions_are_not_silently_forced},

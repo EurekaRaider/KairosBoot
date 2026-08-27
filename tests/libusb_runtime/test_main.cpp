@@ -1,5 +1,6 @@
 #include "src/transport/libusb_runtime.hpp"
 #include "src/transport/usb_fastboot.hpp"
+#include "src/protocol/fastboot_protocol.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,6 +82,7 @@ using kairosboot::transport::WindowsUsbTopologyResult;
 using kairosboot::transport::WindowsUsbTopologyStage;
 using kairosboot::transport::ZeroPacketPolicy;
 using kairosboot::protocol::TransferCertainty;
+using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::TransportStatus;
 
 class TestFailure final : public std::runtime_error {
@@ -3172,6 +3174,92 @@ void test_legacy_open_delegates_complete_verified_path() {
     runtime->stop();
 }
 
+void test_verified_transport_adoption_consumes_one_verified_owner() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    auto verified = runtime->open_bulk_out_verified(snapshot);
+    KB_CHECK(verified.has_value());
+    const auto expected_identity = verified->verified_identity();
+    const auto lists_before_adoption = fake->free_device_list_calls.load();
+    const auto opens_before_adoption = fake->open_calls.load();
+    const auto claims_before_adoption = fake->claim_calls.load();
+
+    auto adopted = UsbFastbootTransport::adopt_verified(std::move(*verified));
+    KB_CHECK(adopted.has_value());
+    KB_CHECK((*adopted)->is_open());
+    const auto& adopted_identity = (*adopted)->verified_identity();
+    KB_CHECK(adopted_identity.vendor_id == expected_identity.vendor_id);
+    KB_CHECK(adopted_identity.product_id == expected_identity.product_id);
+    KB_CHECK(adopted_identity.bus_number == expected_identity.bus_number);
+    KB_CHECK(adopted_identity.device_address == expected_identity.device_address);
+    KB_CHECK(adopted_identity.backend_session_id ==
+             expected_identity.backend_session_id);
+    KB_CHECK(adopted_identity.port_path == expected_identity.port_path);
+    KB_CHECK(adopted_identity.serial_utf8 == expected_identity.serial_utf8);
+    KB_CHECK(adopted_identity.interface_number ==
+             expected_identity.interface_number);
+    KB_CHECK(adopted_identity.alternate_setting ==
+             expected_identity.alternate_setting);
+    KB_CHECK(adopted_identity.bulk_out_endpoint ==
+             expected_identity.bulk_out_endpoint);
+    KB_CHECK(adopted_identity.bulk_in_endpoint ==
+             expected_identity.bulk_in_endpoint);
+    KB_CHECK(fake->free_device_list_calls == lists_before_adoption);
+    KB_CHECK(fake->open_calls == opens_before_adoption);
+    KB_CHECK(fake->claim_calls == claims_before_adoption);
+
+    const auto consumed_again =
+        UsbFastbootTransport::adopt_verified(std::move(*verified));
+    KB_CHECK(!consumed_again.has_value());
+    KB_CHECK(consumed_again.error().kind ==
+             LibusbRuntimeErrorKind::invalid_device);
+    KB_CHECK(fake->free_device_list_calls == lists_before_adoption);
+    KB_CHECK(fake->open_calls == opens_before_adoption);
+    KB_CHECK(fake->claim_calls == claims_before_adoption);
+
+    {
+        FastbootSession session(std::move(*adopted));
+        session.request_cancel();
+        session.close();
+        KB_CHECK(fake->release_calls == 1);
+        KB_CHECK(fake->close_calls == 1);
+    }
+    KB_CHECK(fake->release_calls == 1);
+    KB_CHECK(fake->close_calls == 1);
+    runtime->stop();
+}
+
+void test_verified_transport_adoption_error_does_not_leak_or_consume() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    auto verified = runtime->open_bulk_out_verified(snapshot);
+    KB_CHECK(verified.has_value());
+
+    UsbFastbootTransportOptions invalid_options;
+    invalid_options.data_ring.chunk_size = 0U;
+    const auto invalid = UsbFastbootTransport::adopt_verified(
+        std::move(*verified), invalid_options);
+    KB_CHECK(!invalid.has_value());
+    KB_CHECK(invalid.error().kind == LibusbRuntimeErrorKind::invalid_device);
+    KB_CHECK(fake->release_calls == 0);
+    KB_CHECK(fake->close_calls == 0);
+
+    auto adopted = UsbFastbootTransport::adopt_verified(std::move(*verified));
+    KB_CHECK(adopted.has_value());
+    adopted->reset();
+    KB_CHECK(fake->release_calls == 1);
+    KB_CHECK(fake->close_calls == 1);
+
+    auto reopened = runtime->open_bulk_out_verified(snapshot);
+    KB_CHECK(reopened.has_value());
+    reopened->backend().stop();
+    KB_CHECK(fake->release_calls == 2);
+    KB_CHECK(fake->close_calls == 2);
+    runtime->stop();
+}
+
 void test_out_of_order_completion_and_payload_lifetime() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -4375,6 +4463,10 @@ int main() {
          test_verified_open_concurrent_same_interface_is_busy},
         {"legacy open delegates verified path",
          test_legacy_open_delegates_complete_verified_path},
+        {"verified transport adoption consumes one owner",
+         test_verified_transport_adoption_consumes_one_verified_owner},
+        {"verified transport adoption error ownership",
+         test_verified_transport_adoption_error_does_not_leak_or_consume},
         {"out-of-order completion and payload lifetime", test_out_of_order_completion_and_payload_lifetime},
         {"submit and completion error classification", test_submit_and_completion_error_classification},
         {"submit allocation failures", test_submit_allocation_failures_do_not_throw_or_leak},

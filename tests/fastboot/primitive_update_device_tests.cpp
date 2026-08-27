@@ -614,6 +614,9 @@ void ordinary_flash_erase_and_reboot_are_complete() {
         {});
     CHECK(reboot);
 
+    CHECK((*flash)->host_to_device_data_bytes() == payload.size());
+    CHECK((*erase)->host_to_device_data_bytes() == 0U);
+    CHECK((*reboot)->host_to_device_data_bytes() == 0U);
     CHECK((*flash)->execute({}));
     CHECK((*erase)->execute({}));
     CHECK((*reboot)->execute({}));
@@ -982,6 +985,7 @@ void multipart_flash_failure_preserves_primitive_and_task_evidence() {
     PrimitiveUpdateDevice device(service);
     auto token = device.prepare_task(flash_input(bound), {});
     CHECK(token);
+    CHECK((*token)->host_to_device_data_bytes() == oracle->transfer_size());
     auto result = (*token)->execute({});
     CHECK(!result);
     const auto& error = result.error();
@@ -1192,6 +1196,7 @@ void sparse_token_retains_identity_and_does_not_reparse() {
     PrimitiveUpdateDevice device(service);
     auto token = device.prepare_task(flash_input(bound), {});
     CHECK(token);
+    CHECK((*token)->host_to_device_data_bytes() == sparse_bytes.size());
     const auto reads_after_prepare = source->read_count();
 
     bound.resolved.reset();
@@ -1245,6 +1250,7 @@ void update_super_success_binds_wipe_and_immutable_sparse_source() {
         });
     auto token = device.prepare_task(update_super_input(bound, true), {});
     CHECK(token);
+    CHECK((*token)->host_to_device_data_bytes() == payload.size());
     const auto reads_after_prepare = source->read_count();
 
     bound.resolved.reset();

@@ -129,6 +129,12 @@ struct FetchRange final {
 [[nodiscard]] std::expected<void, PrimitiveError> validate_download_size(
     std::uint64_t size);
 
+// Pure host-side validation used by fleet preparation before the global
+// destructive barrier. A success returns the exact canonical wire command but
+// performs no session or transport I/O.
+[[nodiscard]] std::expected<std::string, PrimitiveError>
+validate_oem_command_suffix(std::string_view raw_suffix);
+
 // Internal operation layer over one already-selected transport session. It
 // intentionally excludes device discovery, image planning and public ABI
 // concerns. Calls are serialized by FastbootSession.

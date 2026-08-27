@@ -345,6 +345,11 @@ private:
         Token(ScriptedUpdateDevice& owner, UpdateDeviceTaskInput input)
             : owner_(owner), input_(std::move(input)) {}
 
+        [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+            const noexcept override {
+            return 0U;
+        }
+
         [[nodiscard]] std::expected<void, UpdateDeviceError>
         execute(const UpdateOperationContext& context) const override {
             return owner_.destructive(input_, context);

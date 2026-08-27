@@ -916,6 +916,11 @@ public:
         : session_actor_(std::move(session_actor)),
           prepared_(std::move(prepared)) {}
 
+    [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+        const noexcept override {
+        return prepared_.source->size();
+    }
+
     [[nodiscard]] std::expected<void, UpdateDeviceError>
     execute(const UpdateOperationContext& context) const override {
         std::size_t total_actions = 1U;
@@ -1159,6 +1164,11 @@ public:
         : session_actor_(std::move(session_actor)),
           prepared_(std::move(prepared)) {}
 
+    [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+        const noexcept override {
+        return prepared_.plan->transfer_size();
+    }
+
     [[nodiscard]] std::expected<void, UpdateDeviceError>
     execute(const UpdateOperationContext& context) const override {
         const auto total_actions = prepared_.sources.size();
@@ -1380,6 +1390,11 @@ public:
         : session_actor_(std::move(session_actor)),
           partition_(std::move(partition)) {}
 
+    [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+        const noexcept override {
+        return 0U;
+    }
+
     [[nodiscard]] std::expected<void, UpdateDeviceError>
     execute(const UpdateOperationContext& context) const override {
         if (auto stopped = interruption(
@@ -1418,6 +1433,11 @@ public:
     PreparedRebootTask(std::shared_ptr<PrimitiveUpdateSessionActor> session_actor,
                        const RebootTarget target) noexcept
         : session_actor_(std::move(session_actor)), target_(target) {}
+
+    [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+        const noexcept override {
+        return 0U;
+    }
 
     [[nodiscard]] std::expected<void, UpdateDeviceError>
     execute(const UpdateOperationContext& context) const override {

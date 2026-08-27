@@ -296,12 +296,59 @@ UsbFastbootTransport::open(
             return std::unexpected(
                 LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
         }
-        auto backend = runtime->open_bulk_out(device, options.bulk_out);
-        if (!backend.has_value()) {
-            return std::unexpected(backend.error());
+        auto verified = runtime->open_bulk_out_verified(
+            device,
+            Clock::time_point::max(),
+            {},
+            options.bulk_out);
+        if (!verified.has_value()) {
+            return std::unexpected(verified.error());
+        }
+        auto verified_identity = verified->verified_identity();
+        auto backend = verified->take_backend();
+        return std::unique_ptr<UsbFastbootTransport>(new UsbFastbootTransport(
+            std::move(backend),
+            std::move(verified_identity),
+            std::move(options),
+            std::move(budget)));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(LibusbRuntimeError{
+            LibusbRuntimeErrorKind::open_failed, LIBUSB_ERROR_NO_MEM});
+    }
+}
+
+std::expected<std::unique_ptr<UsbFastbootTransport>, LibusbRuntimeError>
+UsbFastbootTransport::adopt_verified(
+    LibusbVerifiedOpenResult&& verified,
+    UsbFastbootTransportOptions options) {
+    if (options.data_ring.chunk_size == 0 || options.data_ring.depth == 0 ||
+        options.data_ring.chunk_size >
+            std::numeric_limits<std::size_t>::max() / options.data_ring.depth) {
+        return std::unexpected(
+            LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
+    }
+
+    try {
+        auto budget = options.buffer_budget;
+        if (budget == nullptr) {
+            budget = process_usb_buffer_budget();
+        }
+        if (options.data_ring.chunk_size > budget->limit()) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
+        }
+
+        auto verified_identity = verified.verified_identity();
+        auto backend = verified.take_backend();
+        if (backend == nullptr) {
+            return std::unexpected(
+                LibusbRuntimeError{LibusbRuntimeErrorKind::invalid_device});
         }
         return std::unique_ptr<UsbFastbootTransport>(new UsbFastbootTransport(
-            std::move(*backend), std::move(options), std::move(budget)));
+            std::move(backend),
+            std::move(verified_identity),
+            std::move(options),
+            std::move(budget)));
     } catch (const std::bad_alloc&) {
         return std::unexpected(LibusbRuntimeError{
             LibusbRuntimeErrorKind::open_failed, LIBUSB_ERROR_NO_MEM});
@@ -310,9 +357,11 @@ UsbFastbootTransport::open(
 
 UsbFastbootTransport::UsbFastbootTransport(
     std::unique_ptr<LibusbBulkOutBackend> backend,
+    UsbDeviceInfo verified_identity,
     UsbFastbootTransportOptions options,
     std::shared_ptr<BufferBudget> budget)
     : backend_(std::move(backend)),
+      verified_identity_(std::move(verified_identity)),
       options_(std::move(options)),
       budget_(std::move(budget)),
       data_telemetry_(options_.data_telemetry) {}
@@ -596,6 +645,10 @@ void UsbFastbootTransport::close() noexcept {
 
 bool UsbFastbootTransport::is_open() const noexcept {
     return open_.load(std::memory_order_acquire);
+}
+
+const UsbDeviceInfo& UsbFastbootTransport::verified_identity() const noexcept {
+    return verified_identity_;
 }
 
 void UsbFastbootTransport::poison_and_stop() noexcept {

@@ -12,12 +12,16 @@
 
 namespace kairosboot::fastboot {
 
+struct UpdateOperationContext;
+
 enum class SlotErrorCode : std::uint8_t {
     InvalidArgument,
     Unsupported,
     Ambiguous,
     InvalidDeviceResponse,
     QueryFailed,
+    Cancelled,
+    TimedOut,
 };
 
 struct SlotError final {
@@ -68,10 +72,15 @@ public:
     explicit SlotPlanner(PrimitiveService& primitives) noexcept;
 
     [[nodiscard]] std::expected<SlotTopology, SlotError> query_topology();
+    [[nodiscard]] std::expected<SlotTopology, SlotError> query_topology(
+        const UpdateOperationContext& context);
 
     // Resolves one slot suitable for set_active. "all" is invalid here.
     [[nodiscard]] std::expected<std::string, SlotError> resolve_active_slot(
         std::string_view requested_slot);
+    [[nodiscard]] std::expected<std::string, SlotError> resolve_active_slot(
+        std::string_view requested_slot,
+        const UpdateOperationContext& context);
 
     // An empty requested_slot selects the current slot for a slotted partition,
     // while a non-slotted partition is returned unchanged. Explicit slot,
@@ -80,17 +89,27 @@ public:
     [[nodiscard]] std::expected<PartitionSlotPlan, SlotError> plan_partition(
         std::string_view partition,
         std::string_view requested_slot = {});
+    [[nodiscard]] std::expected<PartitionSlotPlan, SlotError> plan_partition(
+        std::string_view partition,
+        std::string_view requested_slot,
+        const UpdateOperationContext& context);
 
 private:
+    [[nodiscard]] std::expected<PrimitiveReply, SlotError> query_variable(
+        std::string_view name,
+        const UpdateOperationContext& context);
     [[nodiscard]] std::expected<bool, SlotError> query_has_slot(
-        std::string_view partition);
+        std::string_view partition,
+        const UpdateOperationContext& context);
     [[nodiscard]] std::expected<std::string, SlotError> query_current_slot(
-        const SlotTopology& topology);
+        const SlotTopology& topology,
+        const UpdateOperationContext& context);
     [[nodiscard]] std::expected<std::vector<std::string>, SlotError>
     resolve_slots(
         const SlotTopology& topology,
         const SlotSelection& selection,
-        bool allow_all);
+        bool allow_all,
+        const UpdateOperationContext& context);
 
     PrimitiveService& primitives_;
 };
