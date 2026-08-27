@@ -1505,14 +1505,14 @@ IokitMacUsbRegistryBackend::snapshot(
                 "IOKit USB topology discovery is unavailable on this platform"));
 #endif
         }
-        if (!result.has_value()) {
-            return std::unexpected(result.error());
-        }
         if (const auto interrupted = interruption_error(
                 deadline,
                 cancellation,
                 MacUsbTopologyStage::FinalValidation)) {
             return std::unexpected(*interrupted);
+        }
+        if (!result.has_value()) {
+            return std::unexpected(result.error());
         }
         if (result->size() > kMaximumRegistryCandidates) {
             return std::unexpected(make_error(
@@ -1615,20 +1615,20 @@ MacUsbTopologyDiscovery::discover_device(
         }
 
         auto first = backend_.snapshot(device_query, deadline, cancellation);
+        if (const auto interrupted = interruption_error(
+                deadline, cancellation, MacUsbTopologyStage::FinalValidation)) {
+            return std::unexpected(*interrupted);
+        }
         if (!first.has_value()) {
             return std::unexpected(first.error());
         }
+        auto second = backend_.snapshot(device_query, deadline, cancellation);
         if (const auto interrupted = interruption_error(
                 deadline, cancellation, MacUsbTopologyStage::FinalValidation)) {
             return std::unexpected(*interrupted);
         }
-        auto second = backend_.snapshot(device_query, deadline, cancellation);
         if (!second.has_value()) {
             return std::unexpected(second.error());
-        }
-        if (const auto interrupted = interruption_error(
-                deadline, cancellation, MacUsbTopologyStage::FinalValidation)) {
-            return std::unexpected(*interrupted);
         }
         if (first->size() > kMaximumRegistryCandidates ||
             second->size() > kMaximumRegistryCandidates) {

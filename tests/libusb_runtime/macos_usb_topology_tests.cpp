@@ -15,6 +15,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -667,6 +668,60 @@ void injectable_native_source_handles_empty_iterator_and_final_cancel() {
     CHECK(untouched.calls == 0U);
 }
 
+void source_error_never_masks_post_call_cancel() {
+    const auto wanted = query();
+    const MacUsbTopologyError source_error{
+        .kind = MacUsbTopologyErrorKind::IoError,
+        .stage = MacUsbTopologyStage::DeviceEnumeration,
+        .native_code = -1,
+        .message = "scripted native failure",
+    };
+
+    std::stop_source cancellation;
+    ScriptedSource cancelled_source;
+    cancelled_source.result = std::unexpected(source_error);
+    cancelled_source.before_return = [&cancellation] {
+        cancellation.request_stop();
+    };
+    IokitMacUsbRegistryBackend cancelled_backend(cancelled_source);
+    const auto cancelled = cancelled_backend.snapshot(
+        wanted,
+        MacUsbTopologyClock::now() + 1h,
+        cancellation.get_token());
+    CHECK(!cancelled.has_value());
+    CHECK(cancelled.error().kind == MacUsbTopologyErrorKind::Cancelled);
+    CHECK(cancelled.error().stage == MacUsbTopologyStage::FinalValidation);
+    CHECK(cancelled_source.calls == 1U);
+}
+
+void backend_error_never_masks_crossed_deadline() {
+    const auto wanted = query();
+    const MacUsbTopologyError backend_error{
+        .kind = MacUsbTopologyErrorKind::IoError,
+        .stage = MacUsbTopologyStage::DeviceEnumeration,
+        .native_code = -1,
+        .message = "scripted backend failure",
+    };
+
+    ScriptedBackend timed_backend;
+    timed_backend.results = {
+        snapshot_result({node(wanted)}),
+        std::unexpected(backend_error),
+    };
+    const auto deadline = MacUsbTopologyClock::now() + 100ms;
+    timed_backend.after_call = [deadline](const std::size_t calls) {
+        if (calls == 2U) {
+            std::this_thread::sleep_until(deadline);
+        }
+    };
+    MacUsbTopologyDiscovery timed_discovery(timed_backend);
+    const auto timed_out = timed_discovery.discover(wanted, deadline);
+    CHECK(!timed_out.has_value());
+    CHECK(timed_out.error().kind == MacUsbTopologyErrorKind::Timeout);
+    CHECK(timed_out.error().stage == MacUsbTopologyStage::FinalValidation);
+    CHECK(timed_backend.calls == 2U);
+}
+
 }  // namespace
 
 int main() {
@@ -687,6 +742,8 @@ int main() {
         {"invalid contracts", malformed_backend_nodes_and_invalid_queries_never_pass},
         {"modern and Intel ancestry", modern_and_intel_controller_ancestry_allow_root_hubs},
         {"native source interruption", injectable_native_source_handles_empty_iterator_and_final_cancel},
+        {"source error cancellation", source_error_never_masks_post_call_cancel},
+        {"backend error deadline", backend_error_never_masks_crossed_deadline},
     };
 
     int failures = 0;
