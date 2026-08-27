@@ -298,6 +298,16 @@ void product_mismatch_is_all_skipped() {
     mismatch.observed_product = "product_b";
     auto builder = make_builder({std::move(mismatch)});
     CHECK(!builder.running_snapshot());
+    const auto generic_mismatch = builder.fail_device_preflight(
+        0U,
+        std::optional<std::string>{"product_b"},
+        "2026-08-27T06:00:01Z",
+        ReportError{.code = KB_E_DEVICE_FAIL,
+                    .message = "generic preflight cannot classify mismatch",
+                    .transfer_certainty = KB_TRANSFER_NOT_SENT});
+    CHECK(!generic_mismatch);
+    CHECK(generic_mismatch.error().kind ==
+          JobReportErrorKind::InvalidTransition);
     const auto matching_product = builder.fail_product_preflight(
         0U,
         std::optional<std::string>{"product_a"},

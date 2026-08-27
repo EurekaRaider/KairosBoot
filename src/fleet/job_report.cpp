@@ -1887,6 +1887,14 @@ JobReportBuilder::fail_device_preflight_with_reason(
                            "matching product cannot be published as product "
                            "mismatch"))};
         }
+        if (reason == ReportSkipReason::DevicePreflightFailure &&
+            observed_product &&
+            *observed_product != device.expected_product) {
+            return std::expected<void, JobReportError>{std::unexpected(
+                make_error(JobReportErrorKind::InvalidTransition,
+                           "observed product mismatch must use product "
+                           "preflight failure"))};
+        }
         device.observed_product = std::move(observed_product);
         auto scoped = scoped_error(std::move(error), device.identifier);
         device.state = ReportWorkState::Failed;
