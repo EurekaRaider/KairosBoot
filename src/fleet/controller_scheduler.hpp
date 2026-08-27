@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/transport/buffer_budget.hpp"
+#include "src/transport/transfer_ring.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +26,15 @@ struct DeviceFlowSpec final {
     std::string controller_id;
     std::uint32_t weight{1};
     std::uint64_t bytes_remaining{};
+    // Bounds simultaneous grants for this flow; ring users normally set this
+    // to their configured transfer depth.
+    std::size_t max_outstanding{1};
+};
+
+enum class FleetDispatchSettlement : std::uint8_t {
+    fully_transferred,
+    not_submitted,
+    partial_or_unknown,
 };
 
 class FleetDispatch final {
@@ -58,8 +67,8 @@ private:
     transport::BufferLease memory_;
 };
 
-// Weighted deficit round-robin within each USB controller and round-robin
-// across controllers. Calls are serialized by the fleet coordinator.
+// Thread-safe weighted deficit round-robin within each USB controller and
+// round-robin across controllers.
 class WeightedControllerScheduler final {
 public:
     explicit WeightedControllerScheduler(std::shared_ptr<transport::BufferBudget> budget,
@@ -74,10 +83,25 @@ public:
     [[nodiscard]] bool add_flow(DeviceFlowSpec flow);
     [[nodiscard]] std::optional<FleetDispatch> next(std::size_t maximum_bytes);
 
-    // Releases the memory reservation. bytes_not_sent is requeued only when the
-    // caller can prove those bytes never reached the transport.
+    // Releases the memory reservation. bytes_not_sent must be either zero or
+    // the complete dispatch size; only the latter is safely requeued.
     [[nodiscard]] bool finish(FleetDispatch&& dispatch,
                               std::size_t bytes_not_sent = 0) noexcept;
+    [[nodiscard]] bool finish(FleetDispatch&& dispatch,
+                              FleetDispatchSettlement result) noexcept;
+
+    // Returns a provider bound to one flow. The provider feeds scheduler-owned
+    // BufferLease storage directly into TransferRing and conservatively settles
+    // dropped permits. The scheduler may be destroyed before the provider.
+    // A non-zero override replaces the flow's max_outstanding bound.
+    [[nodiscard]] std::shared_ptr<transport::TransferPermitProvider>
+    make_permit_provider(std::string_view device_id,
+                         std::size_t max_outstanding = 0);
+
+    // Retired/cancelled flows receive no new grants. Accepted permits remain
+    // charged until their backend completions settle them.
+    [[nodiscard]] bool retire_flow(std::string_view device_id) noexcept;
+    [[nodiscard]] bool cancel_flow(std::string_view device_id) noexcept;
 
     [[nodiscard]] std::uint64_t remaining(std::string_view device_id) const noexcept;
     [[nodiscard]] std::size_t flow_count() const noexcept;
@@ -85,7 +109,7 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::shared_ptr<Impl> impl_;
 };
 
 }  // namespace kairosboot::fleet

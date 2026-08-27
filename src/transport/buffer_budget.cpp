@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,73 @@ struct BufferBudgetState final {
     BufferBudgetReleaseObserver* const release_observer;
     std::atomic<std::size_t> used{0};
     std::atomic<std::size_t> peak{0};
+    std::mutex availability_mutex;
+    std::vector<std::weak_ptr<BufferBudgetAvailabilityObserver>>
+        availability_observers;
+
+    [[nodiscard]] static bool same_owner(
+        const std::weak_ptr<BufferBudgetAvailabilityObserver>& left,
+        const std::weak_ptr<BufferBudgetAvailabilityObserver>& right) noexcept {
+        return !left.owner_before(right) && !right.owner_before(left);
+    }
+
+    void observe_availability(
+        std::weak_ptr<BufferBudgetAvailabilityObserver> observer) {
+        if (observer.expired()) {
+            return;
+        }
+        std::scoped_lock lock(availability_mutex);
+        auto existing = availability_observers.begin();
+        while (existing != availability_observers.end()) {
+            if (existing->expired()) {
+                existing = availability_observers.erase(existing);
+                continue;
+            }
+            if (same_owner(*existing, observer)) {
+                *existing = std::move(observer);
+                return;
+            }
+            ++existing;
+        }
+        availability_observers.push_back(std::move(observer));
+    }
+
+    void release_charge(const std::size_t bytes) noexcept {
+        used.fetch_sub(bytes, std::memory_order_acq_rel);
+
+        std::size_t callback_capacity{};
+        {
+            std::scoped_lock lock(availability_mutex);
+            callback_capacity = availability_observers.size();
+        }
+
+        // Reserve without the registry lock. Once capacity is fixed, copying a
+        // shared_ptr below cannot allocate or destroy a live observer while the
+        // registry is locked.
+        std::vector<std::shared_ptr<BufferBudgetAvailabilityObserver>> callbacks;
+        callbacks.reserve(callback_capacity);
+        {
+            std::scoped_lock lock(availability_mutex);
+            const auto callback_count =
+                std::min(callback_capacity, availability_observers.size());
+            for (std::size_t index = 0; index < callback_count; ++index) {
+                auto active = availability_observers[index].lock();
+                if (active != nullptr) {
+                    callbacks.push_back(std::move(active));
+                }
+            }
+            std::erase_if(availability_observers,
+                          [](const auto& registered) {
+                              return registered.expired();
+                          });
+        }
+        for (const auto& callback : callbacks) {
+            callback->on_buffer_budget_available();
+        }
+        // Observer destruction may re-enter registration. Keep it outside the
+        // availability lock just like callback execution.
+        callbacks.clear();
+    }
 };
 
 struct BufferLeaseStorage final {
@@ -55,7 +123,7 @@ struct BufferLeaseStorage final {
         if (budget->release_observer != nullptr) {
             budget->release_observer->on_buffer_released();
         }
-        budget->used.fetch_sub(reserved_bytes, std::memory_order_acq_rel);
+        budget->release_charge(reserved_bytes);
     }
 
     std::shared_ptr<BufferBudgetState> budget;
@@ -235,7 +303,7 @@ std::optional<BufferLease> BufferBudget::try_acquire(const std::size_t bytes) co
         auto storage = std::make_shared<detail::BufferLeaseStorage>(state_, bytes);
         return BufferLease{std::move(storage)};
     } catch (...) {
-        state_->used.fetch_sub(bytes, std::memory_order_acq_rel);
+        state_->release_charge(bytes);
         throw;
     }
 }
@@ -253,6 +321,11 @@ std::size_t BufferBudget::available() const noexcept {
 
 std::size_t BufferBudget::peak_used() const noexcept {
     return state_->peak.load(std::memory_order_relaxed);
+}
+
+void BufferBudget::observe_availability(
+    std::weak_ptr<BufferBudgetAvailabilityObserver> observer) const {
+    state_->observe_availability(std::move(observer));
 }
 
 PhysicalMemoryResult query_physical_memory(void*) noexcept {
