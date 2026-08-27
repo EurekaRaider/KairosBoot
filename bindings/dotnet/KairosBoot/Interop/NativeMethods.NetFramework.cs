@@ -400,6 +400,26 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_validate_job_file", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int ValidateJobFile(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_plan_job_file", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int PlanJobFile(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
+        out IntPtr plan,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_job_plan_canonical_json", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr JobPlanCanonicalJson(JobPlanSafeHandle plan, out UIntPtr size);
+
+    [DllImport(LibraryName, EntryPoint = "kb_job_plan_sha256_hex", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr JobPlanSha256Hex(JobPlanSafeHandle plan);
+
+    [DllImport(LibraryName, EntryPoint = "kb_job_plan_release", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void JobPlanRelease(IntPtr plan);
+
     [DllImport(LibraryName, EntryPoint = "kb_operation_wait", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int OperationWait(OperationSafeHandle operation, uint timeoutMilliseconds);
 

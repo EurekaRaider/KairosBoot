@@ -454,6 +454,26 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_validate_job_file", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ValidateJobFile(string filePath, out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_plan_job_file", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int PlanJobFile(string filePath, out IntPtr plan, out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_plan_canonical_json")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr JobPlanCanonicalJson(JobPlanSafeHandle plan, out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_plan_sha256_hex")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr JobPlanSha256Hex(JobPlanSafeHandle plan);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_plan_release")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void JobPlanRelease(IntPtr plan);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_operation_wait")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int OperationWait(OperationSafeHandle operation, uint timeoutMilliseconds);
