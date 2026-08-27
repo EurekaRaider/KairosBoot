@@ -1483,7 +1483,6 @@ parse_fleet_manifest_source(const image::FileImageSource& source,
                 "fleet manifest source identity does not match its snapshotted size",
                 "$"));
         }
-        invoke_fault(options, ManifestFaultPoint::InputBuffer);
         std::string input(static_cast<std::size_t>(source.size()), '\0');
         std::size_t completed = 0U;
         while (completed < input.size()) {
@@ -1511,6 +1510,47 @@ parse_fleet_manifest_source(const image::FileImageSource& source,
                     "$"));
             }
             completed += *read;
+        }
+
+        // Metadata timestamps are not a reliable same-size mutation signal on
+        // every supported filesystem. Read the bounded manifest a second time
+        // and require byte-for-byte stability before parsing it.
+        invoke_fault(options, ManifestFaultPoint::InputBuffer);
+        std::string verification(input.size(), '\0');
+        completed = 0U;
+        while (completed < verification.size()) {
+            if (const auto interrupted = interruption_error(options, "$")) {
+                return std::unexpected(*interrupted);
+            }
+            const auto amount =
+                std::min(kReadChunkBytes, verification.size() - completed);
+            auto bytes = std::span<std::byte>{
+                reinterpret_cast<std::byte*>(verification.data() + completed),
+                amount};
+            auto read = source.read_at(completed, bytes);
+            if (const auto interrupted = interruption_error(options, "$")) {
+                return std::unexpected(*interrupted);
+            }
+            if (!read) {
+                return std::unexpected(error(
+                    ManifestErrorKind::Io,
+                    "unable to verify fleet manifest snapshot: " +
+                        read.error().message,
+                    "$"));
+            }
+            if (*read == 0U || *read > amount) {
+                return std::unexpected(error(
+                    ManifestErrorKind::Io,
+                    "fleet manifest snapshot changed during verification",
+                    "$"));
+            }
+            completed += *read;
+        }
+        if (verification != input) {
+            return std::unexpected(error(
+                ManifestErrorKind::Io,
+                "fleet manifest contents changed while its snapshot was read",
+                "$"));
         }
         auto final_identity = source.snapshot_identity();
         if (const auto interrupted = interruption_error(options, "$")) {
