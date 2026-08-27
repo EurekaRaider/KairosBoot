@@ -36,6 +36,7 @@ using kairosboot::fleet::kMaximumManifestBytes;
 using kairosboot::fleet::load_fleet_manifest_file;
 using kairosboot::fleet::parse_fleet_manifest_source;
 using kairosboot::image::FileImageSource;
+using kairosboot::image::sha256_hex;
 
 class CheckFailure final : public std::runtime_error {
 public:
@@ -237,6 +238,37 @@ void happy_path_preserves_order_and_locations() {
     CHECK(!first->policy.memory_budget.automatic);
     CHECK(first->policy.memory_budget.bytes == 1048576U);
     CHECK(first->policy.location.has_value());
+}
+
+void source_sha256_binds_the_stable_original_bytes() {
+    const auto fixture_path =
+        std::filesystem::path{__FILE__}.parent_path().parent_path() /
+        "contracts" / "fleet-job-v1.fixture.yaml";
+    auto first = load_fleet_manifest_file(fixture_path, long_options());
+    auto second = load_fleet_manifest_file(fixture_path, long_options());
+    CHECK(first);
+    CHECK(second);
+    CHECK(*first == *second);
+    CHECK(first->source_sha256 == second->source_sha256);
+    CHECK(sha256_hex(first->source_sha256) ==
+          "58539b1d8a0ba3108ffd0f0ea835d25efca9a6ce85b06cd15f0f1307d4b1c9ef");
+
+    std::ifstream input(fixture_path, std::ios::binary);
+    CHECK(input.good());
+    const std::string fixture{
+        std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    CHECK(!input.bad());
+    const auto changed = replace_once(fixture, "SERIAL-02", "SERIAL-03");
+    CHECK(changed.size() == fixture.size());
+    std::size_t changed_bytes = 0U;
+    for (std::size_t index = 0U; index < fixture.size(); ++index) {
+        changed_bytes += fixture[index] == changed[index] ? 0U : 1U;
+    }
+    CHECK(changed_bytes == 1U);
+
+    auto changed_manifest = parse_text(changed);
+    CHECK(changed_manifest);
+    CHECK(changed_manifest->source_sha256 != first->source_sha256);
 }
 
 void defaults_are_owned_and_deterministic() {
@@ -826,6 +858,8 @@ int main() {
     try {
         run("happy_path_preserves_order_and_locations",
             happy_path_preserves_order_and_locations);
+        run("source_sha256_binds_the_stable_original_bytes",
+            source_sha256_binds_the_stable_original_bytes);
         run("defaults_are_owned_and_deterministic",
             defaults_are_owned_and_deterministic);
         run("document_and_yaml_graph_security_is_strict",

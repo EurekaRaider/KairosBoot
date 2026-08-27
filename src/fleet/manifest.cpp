@@ -1054,6 +1054,7 @@ selector_values(const YAML::Node& node,
 
 [[nodiscard]] std::expected<FlashJobManifest, ManifestError> parse_ast(
     const YAML::Node& root,
+    const image::Sha256Digest& source_sha256,
     const ManifestParseOptions& options) {
     invoke_fault(options, ManifestFaultPoint::AstConstruction);
     if (const auto interrupted = interruption_error(options, "$")) {
@@ -1101,6 +1102,7 @@ selector_values(const YAML::Node& node,
         .location = required_location(root),
         .api_version = std::move(*api_version),
         .kind = std::move(*kind),
+        .source_sha256 = source_sha256,
         .artifacts = {},
         .targets = {},
         .policy = {},
@@ -1355,6 +1357,7 @@ selector_values(const YAML::Node& node,
 
 [[nodiscard]] std::expected<FlashJobManifest, ManifestError>
 parse_manifest_text(const std::string& input,
+                    const image::Sha256Digest& source_sha256,
                     const ManifestParseOptions& options) {
     if (const auto interrupted = interruption_error(options, "$")) {
         return std::unexpected(*interrupted);
@@ -1384,7 +1387,7 @@ parse_manifest_text(const std::string& input,
         if (auto graph = validate_node_graph(root, traversal, options); !graph) {
             return std::unexpected(graph.error());
         }
-        return parse_ast(root, options);
+        return parse_ast(root, source_sha256, options);
     } catch (const YAML::Exception& exception) {
         if (const auto interrupted = interruption_error(options, "$")) {
             return std::unexpected(*interrupted);
@@ -1484,6 +1487,7 @@ parse_fleet_manifest_source(const image::FileImageSource& source,
                 "$"));
         }
         std::string input(static_cast<std::size_t>(source.size()), '\0');
+        image::Sha256Accumulator source_sha256;
         std::size_t completed = 0U;
         while (completed < input.size()) {
             if (const auto interrupted = interruption_error(options, "$")) {
@@ -1509,6 +1513,7 @@ parse_fleet_manifest_source(const image::FileImageSource& source,
                     "fleet manifest snapshot changed or returned an invalid short read",
                     "$"));
             }
+            source_sha256.update(std::span<const std::byte>{bytes.data(), *read});
             completed += *read;
         }
 
@@ -1571,7 +1576,8 @@ parse_fleet_manifest_source(const image::FileImageSource& source,
                 "fleet manifest snapshot identity changed while it was read",
                 "$"));
         }
-        return parse_manifest_text(input, options);
+        const auto stable_source_sha256 = source_sha256.finish();
+        return parse_manifest_text(input, stable_source_sha256, options);
     } catch (const std::bad_alloc&) {
         return std::unexpected(out_of_memory_error());
     } catch (const YAML::Exception& exception) {
