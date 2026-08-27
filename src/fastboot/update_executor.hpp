@@ -22,6 +22,9 @@ enum class UpdateDeviceErrorKind : std::uint8_t {
     Failed,
     Cancelled,
     TimedOut,
+    // The prepared operation is valid, but this actor lacks a required safe
+    // capability such as verified bootloader-to-fastbootd reconnection.
+    Unsupported,
 };
 
 struct UpdateDeviceError final {

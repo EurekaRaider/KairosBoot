@@ -520,9 +520,17 @@ void update_super_three_state_contract_and_unique_mapping() {
           prepared->prepared_super_artifact->artifact());
     CHECK(prepared->artifacts.front().artifact->sparse_image() ==
           prepared->prepared_super_artifact->artifact()->sparse_image());
+    CHECK(!prepared->prepared_super_artifact->wants_wipe());
     CHECK(super_resolutions == 1U);
     CHECK(prepared->prepared_super_artifact->artifact()->metadata().transfer_size ==
           super_empty.size());
+
+    ArtifactSourceResolver wipe_resolver;
+    auto prepared_with_wipe = preflight_update_package(
+        wipe_resolver, present, true, exact_limits);
+    CHECK(prepared_with_wipe);
+    CHECK(prepared_with_wipe->prepared_super_artifact);
+    CHECK(prepared_with_wipe->prepared_super_artifact->wants_wipe());
 
     UpdatePackagePreflightLimits no_unique_artifact;
     no_unique_artifact.maximum_unique_artifacts = 0U;

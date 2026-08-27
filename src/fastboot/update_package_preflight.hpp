@@ -61,16 +61,19 @@ class PreparedSuperArtifact final {
 public:
     PreparedSuperArtifact(
         std::shared_ptr<const image::ResolvedArtifact> resolved,
-        std::shared_ptr<const image::FlashArtifact> artifact) noexcept;
+        std::shared_ptr<const image::FlashArtifact> artifact,
+        bool wants_wipe = false) noexcept;
 
     [[nodiscard]] const std::shared_ptr<const image::ResolvedArtifact>& resolved()
         const noexcept;
     [[nodiscard]] const std::shared_ptr<const image::FlashArtifact>& artifact()
         const noexcept;
+    [[nodiscard]] bool wants_wipe() const noexcept;
 
 private:
     std::shared_ptr<const image::ResolvedArtifact> resolved_;
     std::shared_ptr<const image::FlashArtifact> artifact_;
+    bool wants_wipe_{};
 };
 
 struct PreparedUpdatePackage final {

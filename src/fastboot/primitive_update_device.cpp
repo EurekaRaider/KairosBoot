@@ -241,6 +241,156 @@ parse_legacy_slot_topology(const std::string_view payload) {
     }
 }
 
+inline constexpr std::string_view kSuperEmptyName{"super_empty.img"};
+inline constexpr std::string_view kUpdateSuperPrefix{"update-super:"};
+inline constexpr std::string_view kUpdateSuperWipeSuffix{":wipe"};
+
+[[nodiscard]] bool valid_super_partition_name(
+    const std::string_view value) noexcept {
+    if (value.empty() ||
+        kUpdateSuperPrefix.size() + value.size() +
+                kUpdateSuperWipeSuffix.size() >
+            protocol::kDefaultMaxCommandBytes) {
+        return false;
+    }
+    return std::ranges::all_of(value, [](const unsigned char character) {
+        const bool ascii_alphanumeric =
+            (character >= 'a' && character <= 'z') ||
+            (character >= 'A' && character <= 'Z') ||
+            (character >= '0' && character <= '9');
+        return ascii_alphanumeric || character == '_' || character == '-' ||
+               character == '.';
+    });
+}
+
+[[nodiscard]] bool complete_super_binding(
+    const PreparedSuperArtifact& binding) noexcept {
+    return complete_flash_binding(
+        UpdateFlashArtifactInput{
+            .resolved = binding.resolved(),
+            .artifact = binding.artifact(),
+        },
+        kSuperEmptyName);
+}
+
+[[nodiscard]] std::expected<void, UpdateDeviceError>
+require_userspace_fastboot(
+    PrimitiveService& service,
+    const UpdateOperationContext& context,
+    const std::string_view phase) {
+    if (auto stopped = interruption(
+            context,
+            "update-super was interrupted before " + std::string(phase))) {
+        return std::unexpected(std::move(*stopped));
+    }
+
+    std::atomic<bool> cancellation_forwarded{false};
+    auto result = invoke_with_cancellation(
+        service, context.cancellation, cancellation_forwarded,
+        [&service] { return service.getvar("is-userspace"); });
+    if (!result) {
+        const bool device_did_not_report_mode =
+            result.error().code == PrimitiveErrorCode::DeviceFail;
+        auto mapped = map_primitive_update_error(
+            std::move(result.error()), context);
+        retain_quarantine_if_forwarded(mapped, cancellation_forwarded);
+        if (device_did_not_report_mode &&
+            mapped.kind == UpdateDeviceErrorKind::Failed &&
+            !cancellation_forwarded.load(std::memory_order_acquire)) {
+            mapped.kind = UpdateDeviceErrorKind::Unsupported;
+            mapped.message =
+                "update-super requires reboot-fastboot and verified "
+                "physical-port reconnect when is-userspace is unavailable; "
+                "this transaction supports only an already-open fastbootd "
+                "session";
+        }
+        return std::unexpected(std::move(mapped));
+    }
+    if (auto stopped = interruption_after_reply(
+            context,
+            "update-super was interrupted after " + std::string(phase),
+            *result)) {
+        retain_quarantine_if_forwarded(*stopped, cancellation_forwarded);
+        return std::unexpected(std::move(*stopped));
+    }
+    if (result->terminal.payload != "yes") {
+        auto error = local_error(
+            UpdateDeviceErrorKind::Unsupported,
+            "update-super requires reboot-fastboot and verified physical-port "
+            "reconnect when is-userspace is not 'yes'; this transaction "
+            "supports only an already-open fastbootd session",
+            result->phase, result->outbound_certainty);
+        error.informational = std::move(result->informational);
+        error.inbound_expected = result->inbound_expected;
+        error.inbound_transferred = result->inbound_transferred;
+        error.inbound_certainty = result->inbound_certainty;
+        return std::unexpected(std::move(error));
+    }
+    return {};
+}
+
+[[nodiscard]] std::expected<std::string, UpdateDeviceError>
+resolve_super_partition_name(
+    PrimitiveService& service,
+    const UpdateOperationContext& context) {
+    if (auto stopped = interruption(
+            context,
+            "update-super was interrupted before super-partition-name")) {
+        return std::unexpected(std::move(*stopped));
+    }
+
+    std::atomic<bool> cancellation_forwarded{false};
+    auto result = invoke_with_cancellation(
+        service, context.cancellation, cancellation_forwarded,
+        [&service] { return service.getvar("super-partition-name"); });
+    if (!result) {
+        const bool device_fail =
+            result.error().code == PrimitiveErrorCode::DeviceFail;
+        const bool interrupted = context.cancellation.stop_requested() ||
+            (context.deadline &&
+             std::chrono::steady_clock::now() >= *context.deadline) ||
+            cancellation_forwarded.load(std::memory_order_acquire);
+        if (device_fail && !interrupted) {
+            // Frozen AOSP 37.0.1 uses "super" only for a well-formed device
+            // FAIL. Transport/protocol failures never select a fallback.
+            return std::string{"super"};
+        }
+        auto mapped = map_primitive_update_error(
+            std::move(result.error()), context);
+        retain_quarantine_if_forwarded(mapped, cancellation_forwarded);
+        return std::unexpected(std::move(mapped));
+    }
+    if (auto stopped = interruption_after_reply(
+            context,
+            "update-super was interrupted after super-partition-name",
+            *result)) {
+        retain_quarantine_if_forwarded(*stopped, cancellation_forwarded);
+        return std::unexpected(std::move(*stopped));
+    }
+    if (!valid_super_partition_name(result->terminal.payload)) {
+        auto error = local_error(
+            UpdateDeviceErrorKind::Failed,
+            "Fastboot super-partition-name is not one valid partition name",
+            result->phase, result->outbound_certainty);
+        error.informational = std::move(result->informational);
+        error.inbound_expected = result->inbound_expected;
+        error.inbound_transferred = result->inbound_transferred;
+        error.inbound_certainty = result->inbound_certainty;
+        return std::unexpected(std::move(error));
+    }
+    return std::move(result->terminal.payload);
+}
+
+void quarantine_update_super(
+    PrimitiveService& service,
+    UpdateDeviceError& error) noexcept {
+    // request_cancel is sticky in FastbootSession. The next attempted command
+    // transitions a superficially Ready session to Poisoned, so callers cannot
+    // reuse a session after a failed transaction or cancellation race.
+    service.request_cancel();
+    error.session_poisoned = true;
+}
+
 [[nodiscard]] std::optional<RebootTarget> reboot_target(
     const PlannedRebootTarget target) noexcept {
     switch (target) {
@@ -263,6 +413,194 @@ struct PreparedFlash final {
     std::vector<std::shared_ptr<protocol::ITransferSource>> sources{};
     std::string partition{};
     PrimitiveUpdateProgressObserver progress{};
+};
+
+struct PreparedUpdateSuper final {
+    std::shared_ptr<const PreparedSuperArtifact> binding;
+    std::shared_ptr<protocol::ITransferSource> source;
+    std::string command;
+    PrimitiveUpdateProgressObserver progress;
+};
+
+class PreparedUpdateSuperTask final : public IPreparedDeviceTask {
+public:
+    PreparedUpdateSuperTask(
+        PrimitiveService& service,
+        PreparedUpdateSuper prepared) noexcept
+        : service_(service), prepared_(std::move(prepared)) {}
+
+    [[nodiscard]] std::expected<void, UpdateDeviceError>
+    execute(const UpdateOperationContext& context) const override {
+        constexpr std::size_t total_actions = 1U;
+        std::size_t completed_actions = 0U;
+        const auto task_error = [&](UpdateDeviceError error,
+                                    const bool current_action_started = false) {
+            describe_task_failure(error, completed_actions, total_actions,
+                                  current_action_started);
+            return error;
+        };
+
+        if (auto stopped = interruption(
+                context,
+                "update-super was interrupted before the transaction")) {
+            return std::unexpected(task_error(std::move(*stopped)));
+        }
+        // Preparation happens before any task executes. Recheck immediately
+        // before DATA so an earlier prepared reboot cannot make the mode proof
+        // stale.
+        if (auto userspace = require_userspace_fastboot(
+                service_, context, "the execution mode check");
+            !userspace) {
+            auto error = task_error(std::move(userspace.error()));
+            // The exact query diagnostics remain above, but the one DATA +
+            // update-super action has not started.
+            error.task_certainty =
+                protocol::TransferCertainty::NotTransferred;
+            return std::unexpected(std::move(error));
+        }
+
+        const auto total_bytes = prepared_.source->size();
+        if (prepared_.progress) {
+            try {
+                if (prepared_.progress(PrimitiveUpdateProgress{
+                        .part_count = 1U,
+                        .total_bytes = total_bytes,
+                    }) == PrimitiveUpdateProgressAction::Cancel) {
+                    return std::unexpected(task_error(local_error(
+                        UpdateDeviceErrorKind::Cancelled,
+                        "update-super was cancelled by the progress observer "
+                        "before DATA")));
+                }
+            } catch (...) {
+                return std::unexpected(task_error(local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "update-super progress observer threw before DATA")));
+            }
+        }
+        if (auto stopped = interruption(
+                context,
+                "update-super was interrupted after initial progress")) {
+            return std::unexpected(task_error(std::move(*stopped)));
+        }
+
+        bool observer_threw = false;
+        bool observer_cancelled = false;
+        bool deadline_expired = false;
+        const protocol::TransferProgressObserver observer =
+            [this, &context, &observer_threw, &observer_cancelled,
+             &deadline_expired, total_bytes](
+                const std::uint64_t completed,
+                const std::uint64_t) {
+                if (context.cancellation.stop_requested()) {
+                    observer_cancelled = true;
+                    return protocol::TransferProgressAction::cancel;
+                }
+                if (context.deadline &&
+                    std::chrono::steady_clock::now() >= *context.deadline) {
+                    deadline_expired = true;
+                    return protocol::TransferProgressAction::cancel;
+                }
+                if (prepared_.progress) {
+                    try {
+                        if (prepared_.progress(PrimitiveUpdateProgress{
+                                .part_count = 1U,
+                                .part_completed_bytes = completed,
+                                .part_total_bytes = total_bytes,
+                                .completed_bytes = completed,
+                                .total_bytes = total_bytes,
+                            }) == PrimitiveUpdateProgressAction::Cancel) {
+                            observer_cancelled = true;
+                            return protocol::TransferProgressAction::cancel;
+                        }
+                    } catch (...) {
+                        observer_threw = true;
+                        return protocol::TransferProgressAction::cancel;
+                    }
+                }
+                if (context.cancellation.stop_requested()) {
+                    observer_cancelled = true;
+                    return protocol::TransferProgressAction::cancel;
+                }
+                if (context.deadline &&
+                    std::chrono::steady_clock::now() >= *context.deadline) {
+                    deadline_expired = true;
+                    return protocol::TransferProgressAction::cancel;
+                }
+                return protocol::TransferProgressAction::continue_transfer;
+            };
+
+        std::atomic<bool> download_cancel_forwarded{false};
+        auto downloaded = invoke_with_cancellation(
+            service_, context.cancellation, download_cancel_forwarded,
+            [this, &observer] {
+                return service_.download_source(prepared_.source, observer);
+            });
+        if (!downloaded) {
+            auto mapped = map_primitive_update_error(
+                std::move(downloaded.error()), context);
+            retain_quarantine_if_forwarded(mapped,
+                                            download_cancel_forwarded);
+            if (observer_threw) {
+                mapped.kind = UpdateDeviceErrorKind::Failed;
+                mapped.message =
+                    "update-super progress observer threw during DATA";
+            } else if (deadline_expired &&
+                       !context.cancellation.stop_requested()) {
+                mapped.kind = UpdateDeviceErrorKind::TimedOut;
+            } else if (observer_cancelled) {
+                mapped.kind = UpdateDeviceErrorKind::Cancelled;
+            }
+            const bool transaction_started =
+                mapped.outbound_certainty !=
+                protocol::TransferCertainty::NotTransferred;
+            quarantine_update_super(service_, mapped);
+            return std::unexpected(task_error(
+                std::move(mapped), transaction_started));
+        }
+
+        if (auto stopped = interruption_after_reply(
+                context,
+                "update-super was interrupted after DATA and before the "
+                "update-super command",
+                *downloaded)) {
+            retain_quarantine_if_forwarded(*stopped,
+                                            download_cancel_forwarded);
+            quarantine_update_super(service_, *stopped);
+            return std::unexpected(task_error(std::move(*stopped), true));
+        }
+
+        std::atomic<bool> command_cancel_forwarded{false};
+        auto updated = invoke_with_cancellation(
+            service_, context.cancellation, command_cancel_forwarded,
+            [this] { return service_.raw_command(prepared_.command); });
+        if (!updated) {
+            auto mapped = map_primitive_update_error(
+                std::move(updated.error()), context);
+            retain_quarantine_if_forwarded(mapped,
+                                            command_cancel_forwarded);
+            quarantine_update_super(service_, mapped);
+            return std::unexpected(task_error(std::move(mapped), true));
+        }
+
+        ++completed_actions;
+        if (auto stopped = interruption_after_reply(
+                context,
+                "update-super was interrupted after the update-super command",
+                *updated)) {
+            retain_quarantine_if_forwarded(*stopped,
+                                            command_cancel_forwarded);
+            quarantine_update_super(service_, *stopped);
+            return std::unexpected(task_error(std::move(*stopped)));
+        }
+        return {};
+    }
+
+private:
+    PrimitiveService& service_;
+    // Retains the immutable package snapshot and the one exact transfer source.
+    // update-super consumes one DATA object; splitting it into independent
+    // sparse flash parts would change the frozen AOSP protocol.
+    PreparedUpdateSuper prepared_;
 };
 
 class PreparedFlashTask final : public IPreparedDeviceTask {
@@ -522,6 +860,8 @@ UpdateDeviceError map_primitive_update_error(
         kind = UpdateDeviceErrorKind::Cancelled;
     } else if (error.code == PrimitiveErrorCode::Timeout) {
         kind = UpdateDeviceErrorKind::TimedOut;
+    } else if (error.code == PrimitiveErrorCode::Unsupported) {
+        kind = UpdateDeviceErrorKind::Unsupported;
     }
     if (context.cancellation.stop_requested()) {
         kind = UpdateDeviceErrorKind::Cancelled;
@@ -977,11 +1317,90 @@ PrimitiveUpdateDevice::prepare_task(
                 std::make_unique<PreparedRebootTask>(service_, *target);
             return token;
         }
-        case UpdateTaskKind::UpdateSuper:
-            return std::unexpected(local_error(
-                UpdateDeviceErrorKind::Failed,
-                "update-super is unavailable until the dedicated immutable "
-                "super_empty.img transaction adapter is integrated"));
+        case UpdateTaskKind::UpdateSuper: {
+            if (input.flash_artifact || !input.super_artifact ||
+                !input.task.partition.empty() || !input.task.artifact.empty() ||
+                input.task.slot != PlannedSlot::Default ||
+                input.task.apply_vbmeta ||
+                input.task.reboot_target != PlannedRebootTarget::System ||
+                !complete_super_binding(*input.super_artifact)) {
+                return std::unexpected(local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "update-super task and complete immutable "
+                    "super_empty.img binding are inconsistent"));
+            }
+
+            if (auto userspace = require_userspace_fastboot(
+                    service_, context, "the preparation mode check");
+                !userspace) {
+                return std::unexpected(std::move(userspace.error()));
+            }
+            auto partition = resolve_super_partition_name(service_, context);
+            if (!partition) {
+                return std::unexpected(std::move(partition.error()));
+            }
+            auto maximum = maximum_download_size(context);
+            if (!maximum) {
+                return std::unexpected(std::move(maximum.error()));
+            }
+
+            const auto& artifact = input.super_artifact->artifact();
+            if (artifact->metadata().transfer_size > *maximum) {
+                return std::unexpected(local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "prepared super_empty.img exceeds max-download-size; "
+                    "update-super consumes one exact DATA object and cannot "
+                    "use independent sparse flash parts"));
+            }
+            if (auto valid = validate_download_size(
+                    artifact->metadata().transfer_size);
+                !valid) {
+                return std::unexpected(map_primitive_update_error(
+                    std::move(valid.error()), context));
+            }
+            if (auto stopped = interruption(
+                    context,
+                    "update-super preparation was interrupted before binding "
+                    "the transfer source")) {
+                return std::unexpected(std::move(*stopped));
+            }
+            auto source = transport::ImageTransferSource::create(
+                artifact->transfer_source());
+            if (!source) {
+                return std::unexpected(local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "unable to bind update-super transfer source: " +
+                        source.error().message));
+            }
+            if ((*source)->size() != artifact->metadata().transfer_size) {
+                return std::unexpected(local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "bound update-super transfer source changed size"));
+            }
+
+            std::string command{kUpdateSuperPrefix};
+            command.append(*partition);
+            if (input.super_artifact->wants_wipe()) {
+                command.append(kUpdateSuperWipeSuffix);
+            }
+            if (auto stopped = interruption(
+                    context,
+                    "update-super preparation was interrupted after binding "
+                    "the transaction")) {
+                return std::unexpected(std::move(*stopped));
+            }
+
+            PreparedUpdateSuper prepared{
+                .binding = std::move(input.super_artifact),
+                .source = std::move(*source),
+                .command = std::move(command),
+                .progress = options_.progress,
+            };
+            std::unique_ptr<IPreparedDeviceTask> token =
+                std::make_unique<PreparedUpdateSuperTask>(
+                    service_, std::move(prepared));
+            return token;
+        }
         default:
             return std::unexpected(local_error(
                 UpdateDeviceErrorKind::Failed,

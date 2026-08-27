@@ -287,6 +287,7 @@ struct PreparedUpdateSuper final {
 prepare_update_super(
     image::ArtifactPackageSnapshot& snapshot,
     DeterministicUpdatePlan* plan,
+    const bool wants_wipe,
     const std::stop_token cancellation) {
     if (!plan_requires_update_super(*plan)) {
         return PreparedUpdateSuper{};
@@ -326,7 +327,7 @@ prepare_update_super(
     auto flash = std::make_shared<const image::FlashArtifact>(
         std::move(preflight->artifact));
     auto prepared = std::make_shared<const PreparedSuperArtifact>(
-        std::move(preflight->resolved), std::move(flash));
+        std::move(preflight->resolved), std::move(flash), wants_wipe);
     return PreparedUpdateSuper{
         .state = UpdateSuperPreparationState::Prepared,
         .artifact = std::move(prepared),
@@ -364,8 +365,11 @@ add_to_aggregate_bytes(
 
 PreparedSuperArtifact::PreparedSuperArtifact(
     std::shared_ptr<const image::ResolvedArtifact> resolved,
-    std::shared_ptr<const image::FlashArtifact> artifact) noexcept
-    : resolved_(std::move(resolved)), artifact_(std::move(artifact)) {}
+    std::shared_ptr<const image::FlashArtifact> artifact,
+    const bool wants_wipe) noexcept
+    : resolved_(std::move(resolved)),
+      artifact_(std::move(artifact)),
+      wants_wipe_(wants_wipe) {}
 
 const std::shared_ptr<const image::ResolvedArtifact>&
 PreparedSuperArtifact::resolved() const noexcept {
@@ -375,6 +379,10 @@ PreparedSuperArtifact::resolved() const noexcept {
 const std::shared_ptr<const image::FlashArtifact>&
 PreparedSuperArtifact::artifact() const noexcept {
     return artifact_;
+}
+
+bool PreparedSuperArtifact::wants_wipe() const noexcept {
+    return wants_wipe_;
 }
 
 std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
@@ -469,7 +477,7 @@ preflight_update_package(
         }
 
         auto prepared_super = prepare_update_super(
-            snapshot, &plan, cancellation);
+            snapshot, &plan, wants_wipe, cancellation);
         if (!prepared_super) {
             return std::unexpected(std::move(prepared_super.error()));
         }
