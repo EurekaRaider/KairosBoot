@@ -2073,6 +2073,8 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                 const MacUsbTopologyError malformed_result{
                     .kind = MacUsbTopologyErrorKind::MalformedRegistry,
                     .stage = MacUsbTopologyStage::FinalValidation,
+                    .native_code = 0,
+                    .registry_path = {},
                     .message =
                         "macOS topology resolver returned the wrong interface count",
                 };
