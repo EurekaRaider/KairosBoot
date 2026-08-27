@@ -2029,7 +2029,10 @@ void test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock() {
         KB_CHECK(queries.front().session_id == expected_session);
         KB_CHECK(deadline != std::chrono::steady_clock::time_point::max());
         resolver_entered.set_value();
-        std::stop_callback wake(cancellation, [&wait_cv] { wait_cv.notify_all(); });
+        std::stop_callback wake(cancellation, [&wait_mutex, &wait_cv] {
+            std::lock_guard guard(wait_mutex);
+            wait_cv.notify_all();
+        });
         std::unique_lock lock(wait_mutex);
         wait_cv.wait_until(lock, deadline, [&cancellation] {
             return cancellation.stop_requested();
