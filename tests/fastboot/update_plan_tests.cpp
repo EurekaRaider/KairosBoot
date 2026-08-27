@@ -24,9 +24,11 @@ using kairosboot::fastboot::UpdateManifestKind;
 using kairosboot::fastboot::UpdatePlanError;
 using kairosboot::fastboot::UpdatePlanErrorCode;
 using kairosboot::fastboot::UpdatePlanLimits;
+using kairosboot::fastboot::UpdatePlanParseWork;
 using kairosboot::fastboot::UpdateTaskKind;
 using kairosboot::fastboot::make_update_plan;
 using kairosboot::fastboot::parse_update_manifest;
+using kairosboot::fastboot::parse_update_manifest_with_work;
 
 class CheckFailure final : public std::runtime_error {
 public:
@@ -429,33 +431,103 @@ void every_declared_bound_fails_without_partial_output() {
     return result;
 }
 
-[[nodiscard]] std::chrono::nanoseconds parse_duration(
+[[nodiscard]] UpdatePlanParseWork parse_work(
     const std::string& fastboot_info,
-    const UpdatePlanLimits& limits) {
+    const UpdatePlanLimits& limits,
+    std::chrono::nanoseconds* elapsed = nullptr) {
+    UpdatePlanParseWork work{
+        .nul_characters = 17U,
+        .line_characters = 17U,
+        .token_characters = 17U,
+        .lines_visited = 17U,
+        .tokens_emitted = 17U,
+    };
     const auto start = std::chrono::steady_clock::now();
-    auto parsed = parse_update_manifest({}, fastboot_info, limits);
-    const auto elapsed = std::chrono::steady_clock::now() - start;
+    auto parsed = parse_update_manifest_with_work(
+        {}, fastboot_info, work, limits);
+    const auto duration = std::chrono::steady_clock::now() - start;
+    if (elapsed != nullptr) {
+        *elapsed = duration;
+    }
     CHECK(parsed);
     CHECK(parsed->tasks.empty());
     CHECK(parsed->fastboot_info_version == std::uint32_t{1});
-    return elapsed;
+    return work;
 }
 
 void hundred_thousand_lines_remain_near_linear() {
+    constexpr std::uint64_t small_comments = 25'000;
+    constexpr std::uint64_t large_comments = 100'000;
+    constexpr std::uint64_t comment_bytes = 10;
+    constexpr std::uint64_t token_visits_per_line = 12;
+    constexpr std::uint64_t tokens_per_line = 2;
     UpdatePlanLimits limits;
     limits.maximum_file_bytes = 2U * 1024U * 1024U;
     limits.maximum_lines = 100'010;
-    const auto small = large_comment_manifest(25'000);
-    const auto large = large_comment_manifest(100'000);
+    const auto small = large_comment_manifest(small_comments);
+    const auto large = large_comment_manifest(large_comments);
 
-    const auto small_time = parse_duration(small, limits);
-    const auto large_time = parse_duration(large, limits);
-    CHECK(large_time <= small_time * 8 + std::chrono::milliseconds(50));
+    const auto small_work = parse_work(small, limits);
+    std::chrono::nanoseconds large_time{};
+    const auto large_work = parse_work(large, limits, &large_time);
+
+    const auto check_exact_work = [](const UpdatePlanParseWork& work,
+                                     const std::string& manifest,
+                                     const std::uint64_t comment_lines) {
+        CHECK(work.nul_characters == manifest.size());
+        CHECK(work.line_characters == manifest.size());
+        // Includes the empty android-info line, every Fastboot line, and the
+        // trailing empty line after the final newline.
+        CHECK(work.lines_visited == comment_lines + 3U);
+        CHECK(work.token_characters ==
+              (comment_lines + 1U) * token_visits_per_line);
+        CHECK(work.tokens_emitted ==
+              (comment_lines + 1U) * tokens_per_line);
+    };
+    check_exact_work(small_work, small, small_comments);
+    check_exact_work(large_work, large, large_comments);
+
+    const auto additional_comments = large_comments - small_comments;
+    CHECK(large_work.nul_characters ==
+          small_work.nul_characters + additional_comments * comment_bytes);
+    CHECK(large_work.line_characters ==
+          small_work.line_characters + additional_comments * comment_bytes);
+    CHECK(large_work.lines_visited ==
+          small_work.lines_visited + additional_comments);
+    CHECK(large_work.token_characters ==
+          small_work.token_characters +
+              additional_comments * token_visits_per_line);
+    CHECK(large_work.tokens_emitted ==
+          small_work.tokens_emitted + additional_comments * tokens_per_line);
+
     std::cout << "METRIC: 100k update-plan lines "
               << std::chrono::duration_cast<std::chrono::milliseconds>(
                      large_time)
                      .count()
-              << " ms\n";
+              << " ms, " << large_work.nul_characters +
+                     large_work.line_characters +
+                     large_work.token_characters
+              << " scanner character visits\n";
+}
+
+void maximum_length_line_has_linear_token_work() {
+    constexpr std::uint64_t line_bytes = 8U * 1024U;
+    std::string fastboot_info(line_bytes, '#');
+    fastboot_info += "\nversion 1\n";
+
+    UpdatePlanLimits limits;
+    limits.maximum_file_bytes = fastboot_info.size();
+    limits.maximum_line_bytes = line_bytes;
+    limits.maximum_field_bytes = line_bytes;
+    const auto work = parse_work(fastboot_info, limits);
+
+    CHECK(work.nul_characters == fastboot_info.size());
+    CHECK(work.line_characters == fastboot_info.size());
+    CHECK(work.lines_visited == 4U);
+    // The first non-space character is inspected by both the leading-space
+    // check and the token scan. The fixed version line contributes 12 visits.
+    CHECK(work.token_characters == line_bytes + 1U + 12U);
+    CHECK(work.tokens_emitted == 3U);
 }
 
 [[nodiscard]] std::string summarize(const DeterministicUpdatePlan& plan) {
@@ -519,6 +591,7 @@ int main() {
         {"source diagnostics", diagnostics_report_original_byte_line_and_column},
         {"bounded inputs", every_declared_bound_fails_without_partial_output},
         {"100k line scale", hundred_thousand_lines_remain_near_linear},
+        {"maximum line scale", maximum_length_line_has_linear_token_work},
         {"concurrent determinism", pure_planning_is_deterministic_under_concurrency},
     };
 

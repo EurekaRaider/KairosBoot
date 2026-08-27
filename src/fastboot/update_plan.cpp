@@ -45,6 +45,86 @@ struct ParserState final {
     std::unordered_map<std::string, UpdateSourceLocation> flash_targets;
 };
 
+struct NoParseWork final {
+    static constexpr bool records = false;
+};
+
+struct CountingParseWork final {
+    static constexpr bool records = true;
+    UpdatePlanParseWork* value;
+};
+
+template <typename Work>
+constexpr void record_nul_character([[maybe_unused]] Work& work) noexcept {
+    if constexpr (Work::records) {
+        ++work.value->nul_characters;
+    }
+}
+
+template <typename Work>
+constexpr void record_line_character([[maybe_unused]] Work& work) noexcept {
+    if constexpr (Work::records) {
+        ++work.value->line_characters;
+    }
+}
+
+template <typename Work>
+constexpr void record_token_character([[maybe_unused]] Work& work) noexcept {
+    if constexpr (Work::records) {
+        ++work.value->token_characters;
+    }
+}
+
+template <typename Work>
+constexpr void record_line([[maybe_unused]] Work& work) noexcept {
+    if constexpr (Work::records) {
+        ++work.value->lines_visited;
+    }
+}
+
+template <typename Work>
+constexpr void record_token([[maybe_unused]] Work& work) noexcept {
+    if constexpr (Work::records) {
+        ++work.value->tokens_emitted;
+    }
+}
+
+template <typename Work>
+[[nodiscard]] std::size_t find_nul(
+    const std::string_view value,
+    Work& work) noexcept {
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        record_nul_character(work);
+        if (value[index] == '\0') {
+            return index;
+        }
+    }
+    return std::string_view::npos;
+}
+
+template <typename Work>
+[[nodiscard]] std::size_t find_newline(
+    const std::string_view value,
+    const std::size_t offset,
+    Work& work) noexcept {
+    for (std::size_t index = offset; index < value.size(); ++index) {
+        record_line_character(work);
+        if (value[index] == '\n') {
+            return index;
+        }
+    }
+    return std::string_view::npos;
+}
+
+template <typename Work>
+[[nodiscard]] bool token_character_is_space(
+    const std::string_view value,
+    const std::size_t offset,
+    Work& work) noexcept {
+    record_token_character(work);
+    return value[offset] == ' ';
+}
+
 [[nodiscard]] constexpr bool is_ascii_space(const char value) noexcept {
     return value == ' ' || value == '\t' || value == '\n' || value == '\r' ||
            value == '\f' || value == '\v';
@@ -102,12 +182,13 @@ struct ParserState final {
     });
 }
 
-template <typename Callback>
+template <typename Callback, typename Work>
 [[nodiscard]] std::expected<void, UpdatePlanError> for_each_line(
     const UpdateManifestKind manifest,
     const std::string_view input,
     const UpdatePlanLimits& limits,
-    Callback&& callback) {
+    Callback&& callback,
+    Work& work) {
     if (input.size() > limits.maximum_file_bytes) {
         return fail(
             UpdatePlanErrorCode::LimitExceeded,
@@ -115,7 +196,8 @@ template <typename Callback>
             "manifest exceeds maximum byte size");
     }
 
-    if (const auto nul = input.find('\0'); nul != std::string_view::npos) {
+    if (const auto nul = find_nul(input, work);
+        nul != std::string_view::npos) {
         return fail(
             UpdatePlanErrorCode::EmbeddedNul,
             location_at_offset(manifest, input, nul),
@@ -137,7 +219,7 @@ template <typename Callback>
                 "manifest exceeds maximum line count");
         }
 
-        const auto newline = input.find('\n', line_offset);
+        const auto newline = find_newline(input, line_offset, work);
         const auto line_end =
             newline == std::string_view::npos ? input.size() : newline;
         const auto line_size = line_end - line_offset;
@@ -147,6 +229,7 @@ template <typename Callback>
             .byte_offset = line_offset,
             .text = input.substr(line_offset, line_size),
         };
+        record_line(work);
         if (line_size > limits.maximum_line_bytes) {
             return fail(
                 UpdatePlanErrorCode::LimitExceeded,
@@ -166,21 +249,25 @@ template <typename Callback>
     return {};
 }
 
+template <typename Work>
 [[nodiscard]] std::expected<std::vector<Token>, UpdatePlanError>
 tokenize_fastboot_line(
     const Line& line,
-    const UpdatePlanLimits& limits) {
+    const UpdatePlanLimits& limits,
+    Work& work) {
     std::vector<Token> result;
     std::size_t offset = 0;
     while (offset < line.text.size()) {
-        while (offset < line.text.size() && line.text[offset] == ' ') {
+        while (offset < line.text.size() &&
+               token_character_is_space(line.text, offset, work)) {
             ++offset;
         }
         if (offset == line.text.size()) {
             break;
         }
         const auto start = offset;
-        while (offset < line.text.size() && line.text[offset] != ' ') {
+        while (offset < line.text.size() &&
+               !token_character_is_space(line.text, offset, work)) {
             ++offset;
         }
         const auto size = offset - start;
@@ -200,6 +287,7 @@ tokenize_fastboot_line(
             .text = line.text.substr(start, size),
             .column = start + 1,
         });
+        record_token(work);
     }
     return result;
 }
@@ -745,11 +833,13 @@ parse_requirement_options(
         "unknown fastboot-info command");
 }
 
+template <typename Work>
 [[nodiscard]] std::expected<void, UpdatePlanError> parse_fastboot_line(
     const Line& line,
     const UpdatePlanLimits& limits,
-    ParserState* state) {
-    auto token_result = tokenize_fastboot_line(line, limits);
+    ParserState* state,
+    Work& work) {
+    auto token_result = tokenize_fastboot_line(line, limits, work);
     if (!token_result) {
         return std::unexpected(std::move(token_result.error()));
     }
@@ -809,10 +899,15 @@ parse_requirement_options(
 
 }  // namespace
 
-std::expected<ParsedUpdateManifest, UpdatePlanError> parse_update_manifest(
+namespace {
+
+template <typename Work>
+std::expected<ParsedUpdateManifest, UpdatePlanError>
+parse_update_manifest_impl(
     const std::string_view android_info,
     const std::string_view fastboot_info,
-    const UpdatePlanLimits& limits) {
+    const UpdatePlanLimits& limits,
+    Work& work) {
     ParserState state;
     if (auto parsed = for_each_line(
             UpdateManifestKind::AndroidInfo,
@@ -820,7 +915,8 @@ std::expected<ParsedUpdateManifest, UpdatePlanError> parse_update_manifest(
             limits,
             [&](const Line& line) {
                 return parse_android_line(line, limits, &state);
-            });
+            },
+            work);
         !parsed) {
         return std::unexpected(std::move(parsed.error()));
     }
@@ -829,12 +925,36 @@ std::expected<ParsedUpdateManifest, UpdatePlanError> parse_update_manifest(
             fastboot_info,
             limits,
             [&](const Line& line) {
-                return parse_fastboot_line(line, limits, &state);
-            });
+                return parse_fastboot_line(line, limits, &state, work);
+            },
+            work);
         !parsed) {
         return std::unexpected(std::move(parsed.error()));
     }
     return std::move(state.manifest);
+}
+
+}  // namespace
+
+std::expected<ParsedUpdateManifest, UpdatePlanError> parse_update_manifest(
+    const std::string_view android_info,
+    const std::string_view fastboot_info,
+    const UpdatePlanLimits& limits) {
+    NoParseWork work;
+    return parse_update_manifest_impl(
+        android_info, fastboot_info, limits, work);
+}
+
+std::expected<ParsedUpdateManifest, UpdatePlanError>
+parse_update_manifest_with_work(
+    const std::string_view android_info,
+    const std::string_view fastboot_info,
+    UpdatePlanParseWork& work,
+    const UpdatePlanLimits& limits) {
+    work = {};
+    CountingParseWork counting{.value = &work};
+    return parse_update_manifest_impl(
+        android_info, fastboot_info, limits, counting);
 }
 
 DeterministicUpdatePlan make_update_plan(

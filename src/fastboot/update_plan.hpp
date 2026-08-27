@@ -114,6 +114,17 @@ struct DeterministicUpdatePlan final {
     std::optional<std::uint32_t> fastboot_info_version{};
 };
 
+// Deterministic work counters for internal parser complexity tests. These
+// count actual character inspections in the shared NUL, line and Fastboot
+// token scanners. They are intentionally outside the installed C/C++ API.
+struct UpdatePlanParseWork final {
+    std::uint64_t nul_characters{};
+    std::uint64_t line_characters{};
+    std::uint64_t token_characters{};
+    std::uint64_t lines_visited{};
+    std::uint64_t tokens_emitted{};
+};
+
 // Parses the grammar used by frozen AOSP Platform-Tools 37.0.1. Security
 // deviations are deliberate: malformed android-info lines are fatal, inactive
 // if-wipe bodies are still validated, executable reboot targets are checked at
@@ -123,6 +134,16 @@ struct DeterministicUpdatePlan final {
 parse_update_manifest(
     std::string_view android_info,
     std::string_view fastboot_info,
+    const UpdatePlanLimits& limits = {});
+
+// Uses the exact production parser implementation while recording scanner
+// work. `work` is reset before parsing. The production entry point instantiates
+// the same templates with compile-time-disabled recording.
+[[nodiscard]] std::expected<ParsedUpdateManifest, UpdatePlanError>
+parse_update_manifest_with_work(
+    std::string_view android_info,
+    std::string_view fastboot_info,
+    UpdatePlanParseWork& work,
     const UpdatePlanLimits& limits = {});
 
 // Applies the only device-independent condition in fastboot-info.txt while
