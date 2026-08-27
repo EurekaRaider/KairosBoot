@@ -473,7 +473,10 @@ preflight_fleet_artifacts(const JobPlan& plan,
             invoke_fault(options,
                          ArtifactPreflightFaultPoint::BeforeArtifactResolve,
                          index);
-            auto resolved = resolver.resolve(source_paths[index], {}, stopped.token());
+            auto resolved = resolver.resolve_file_beneath(
+                normalized_root,
+                utf8_path(artifact.path.value),
+                stopped.token());
             if (!resolved) {
                 auto kind = mapped_source_kind(resolved.error().kind);
                 kind = stopped_kind(stopped, kind);

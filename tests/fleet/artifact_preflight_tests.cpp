@@ -345,6 +345,52 @@ void missing_directory_and_unsafe_symlink_fail_closed() {
     }
 }
 
+void root_boundary_rejects_child_escape_and_parent_replacement() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directories(root / "images");
+    std::filesystem::create_directory(outside);
+    write_bytes(root / "images/system.img", "inside");
+    write_bytes(outside / "system.img", "outside");
+
+    const auto jump = root / "jump";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, jump, link_error);
+    if (link_error) {
+        return;
+    }
+
+    auto escape_plan = plan_for(
+        {artifact("system", "jump/system.img", digest_for("outside"))});
+    auto escaped = preflight_fleet_artifacts(escape_plan, root);
+    CHECK(!escaped);
+    CHECK(escaped.error().kind == ArtifactPreflightErrorKind::UnsafePath);
+    CHECK(escaped.error().source_kind == ArtifactSourceErrorKind::UnsafePath);
+
+    const auto root_alias = temporary.path() / "root-alias";
+    std::filesystem::create_directory_symlink(root, root_alias, link_error);
+    CHECK(!link_error);
+    auto alias_plan = plan_for(
+        {artifact("system", "images/system.img", digest_for("inside"))});
+    auto through_root_alias = preflight_fleet_artifacts(alias_plan, root_alias);
+    CHECK(through_root_alias);
+    CHECK(read_prepared(through_root_alias->at(0U)) == "inside");
+
+    const auto original_parent = root / "images-original";
+    ArtifactPreflightOptions race_options;
+    race_options.source_limits.package_entry_observer = [&](std::string_view) {
+        std::filesystem::rename(root / "images", original_parent);
+        std::filesystem::create_directory_symlink(outside, root / "images");
+    };
+    auto race_plan = plan_for(
+        {artifact("system", "images/system.img", digest_for("outside"))});
+    auto replaced =
+        preflight_fleet_artifacts(race_plan, root, race_options);
+    CHECK(!replaced);
+    CHECK(replaced.error().kind == ArtifactPreflightErrorKind::UnsafePath);
+}
+
 void cancellation_wins_and_absolute_deadline_stops_resolution() {
     TemporaryDirectory temporary;
     const std::string bytes = "deadline fixture";
@@ -436,7 +482,7 @@ void invalid_sparse_image_and_spool_budget_are_rejected() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    constexpr std::array<Test, 8U> tests{{
+    constexpr std::array<Test, 9U> tests{{
         {"immutable snapshot survives source replacement",
          &immutable_snapshot_survives_in_place_and_rename_replacement},
         {"order, lookup, and verified digest sharing",
@@ -447,6 +493,8 @@ int main() {
          &hash_mismatch_is_closed_and_identifies_the_artifact},
         {"missing, directory, and symlink",
          &missing_directory_and_unsafe_symlink_fail_closed},
+        {"root boundary confinement",
+         &root_boundary_rejects_child_escape_and_parent_replacement},
         {"cancellation and deadline",
          &cancellation_wins_and_absolute_deadline_stops_resolution},
         {"deterministic failure and atomic publication",

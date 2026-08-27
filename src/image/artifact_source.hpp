@@ -63,8 +63,9 @@ struct ArtifactSourceLimits final {
     // Internal observation seam used to prove the per-resolver archive-reader
     // concurrency ceiling without exposing miniz state.
     std::function<void()> archive_reader_observer{};
-    // Internal deterministic test seam. Package snapshots invoke it immediately
-    // before revalidating and resolving one exact entry name.
+    // Internal deterministic test seam. Package snapshots and root-relative
+    // direct-file resolution invoke it immediately before revalidating and
+    // opening one exact entry name.
     std::function<void(std::string_view)> package_entry_observer{};
 };
 
@@ -122,6 +123,17 @@ class ArtifactSourceResolver final {
     resolve(const std::filesystem::path& archive_directory_or_file,
             std::string_view entry_name = {}, std::stop_token cancellation = {});
 
+    // Resolves one direct file below a caller-selected root. The root itself is
+    // canonicalized once, so a root symlink selects its target as the boundary.
+    // Every child component is then opened handle-relative by
+    // FileImageSource::open_beneath(); child symlinks/reparse points and parent
+    // replacement races cannot escape that boundary.
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    resolve_file_beneath(const std::filesystem::path& root,
+                         const std::filesystem::path& relative_path,
+                         std::stop_token cancellation = {});
+
     // Opens one package snapshot with a single absolute deadline shared by
     // inventory and every subsequent entry materialization.
     [[nodiscard]] std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
@@ -139,7 +151,13 @@ class ArtifactSourceResolver final {
         std::stop_token cancellation = {});
 
     private:
+    enum class ResolveMode : std::uint8_t {
+        General,
+        DirectFileBeneath,
+    };
+
     struct CacheKey final {
+        ResolveMode mode{ResolveMode::General};
         std::filesystem::path container;
         std::string entry;
 
@@ -158,6 +176,13 @@ class ArtifactSourceResolver final {
         std::condition_variable ready;
         std::uint64_t reserved_spool_bytes{};
     };
+
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    resolve_impl(const std::filesystem::path& container,
+                 std::string_view entry_name,
+                 std::stop_token cancellation,
+                 ResolveMode mode);
 
     ArtifactSourceLimits limits_;
     std::mutex cache_mutex_;
