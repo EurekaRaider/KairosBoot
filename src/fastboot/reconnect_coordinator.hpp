@@ -235,9 +235,23 @@ struct ReconnectError final {
 struct ReconnectedSession final {
     ReconnectDeviceIdentity identity;
     std::unique_ptr<protocol::FastbootSession> session;
+    // Aggregate certainty for the successful open/identity probe. This stays
+    // authoritative if cancellation or expiry wins before a higher-level actor
+    // publishes the replacement session.
+    protocol::TransferCertainty outbound_certainty{
+        protocol::TransferCertainty::PartialOrUnknown};
     std::size_t discovery_attempts{};
     std::size_t open_attempts{};
 };
+
+// Performs the coordinator's complete side-effect-free request validation.
+// Transition actors call this before emitting a reboot command so an invalid
+// physical identity or retry policy can never be discovered only after the
+// original session has been retired.
+[[nodiscard]] std::expected<void, ReconnectError>
+validate_reconnect_request(
+    const ReconnectTarget& target,
+    ReconnectOptions options = {});
 
 // Coordinates one USB re-enumeration. It does not own a public operation and
 // does not execute Fastboot commands. Selection always starts at the exact

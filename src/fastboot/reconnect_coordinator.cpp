@@ -206,13 +206,10 @@ ReconnectCoordinator::ReconnectCoordinator(
     IReconnectWaiter& waiter) noexcept
     : discovery_(discovery), opener_(opener), waiter_(waiter) {}
 
-std::expected<ReconnectedSession, ReconnectError>
-ReconnectCoordinator::reconnect(
+std::expected<void, ReconnectError> validate_reconnect_request(
     const ReconnectTarget& target,
-    const IReconnectWaiter::TimePoint deadline,
-    const ReconnectOptions options,
-    const std::stop_token cancellation) {
-    AttemptState state;
+    const ReconnectOptions options) {
+    const AttemptState state;
     if (!valid_physical_port(target.physical_port)) {
         return std::unexpected(make_error(
             ReconnectErrorCode::InvalidArgument,
@@ -261,6 +258,19 @@ ReconnectCoordinator::reconnect(
             "Fastboot reconnect refused an uncertain preceding operation; no offset or protocol state will be guessed",
             target,
             state));
+    }
+    return {};
+}
+
+std::expected<ReconnectedSession, ReconnectError>
+ReconnectCoordinator::reconnect(
+    const ReconnectTarget& target,
+    const IReconnectWaiter::TimePoint deadline,
+    const ReconnectOptions options,
+    const std::stop_token cancellation) {
+    AttemptState state;
+    if (auto valid = validate_reconnect_request(target, options); !valid) {
+        return std::unexpected(std::move(valid.error()));
     }
 
     auto backoff = options.initial_backoff;
@@ -684,6 +694,7 @@ ReconnectCoordinator::reconnect(
                         return ReconnectedSession{
                             .identity = std::move(opened->verified_identity),
                             .session = std::move(opened->session),
+                            .outbound_certainty = certainty,
                             .discovery_attempts = state.discovery_attempts,
                             .open_attempts = state.open_attempts,
                         };
