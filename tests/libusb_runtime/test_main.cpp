@@ -760,7 +760,7 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     KB_CHECK(device.product_id == 0x4EE0);
     KB_CHECK(device.bus_number == 2);
     KB_CHECK(device.device_address == 5);
-    KB_CHECK(device.backend_session_id == 0x1234U);
+    KB_CHECK(device.backend_session_id == fake->session_data);
     KB_CHECK(device.configuration_value == 1);
     KB_CHECK(device.port_path == std::vector<std::uint8_t>({3, 4}));
     KB_CHECK(device.serial_utf8 == "serial-\xCE\xB1");
@@ -1316,14 +1316,16 @@ void test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock() {
     auto entered = resolver_entered.get_future();
     std::mutex wait_mutex;
     std::condition_variable wait_cv;
+    const auto expected_session = fake->session_data;
     functions.resolve_macos_topology = [
         &resolver_entered,
         &wait_mutex,
-        &wait_cv](const std::span<const MacUsbTopologyQuery> queries,
+        &wait_cv,
+        expected_session](const std::span<const MacUsbTopologyQuery> queries,
                   const auto deadline,
                   const std::stop_token cancellation) {
         KB_CHECK(queries.size() == 1U);
-        KB_CHECK(queries.front().session_id == 0x1234U);
+        KB_CHECK(queries.front().session_id == expected_session);
         KB_CHECK(deadline != std::chrono::steady_clock::time_point::max());
         resolver_entered.set_value();
         std::stop_callback wake(cancellation, [&wait_cv] { wait_cv.notify_all(); });

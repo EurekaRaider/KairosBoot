@@ -1756,8 +1756,14 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         const auto bus_number = state_->functions.get_bus_number(device);
         const auto device_address =
             state_->functions.get_device_address(device);
+        // Windows already sampled libusb's backend generation before reading
+        // the remaining identity fields. Reuse that exact value for the
+        // cross-platform snapshot so Windows and macOS enrichment cannot
+        // observe different initial generations for the same device.
         const auto backend_session_id = static_cast<std::uint64_t>(
-            state_->functions.get_session_data(device));
+            windows_session_data.has_value()
+                ? *windows_session_data
+                : state_->functions.get_session_data(device));
         std::optional<std::vector<std::uint8_t>> port_path;
         std::optional<std::string> serial;
         std::optional<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>>
