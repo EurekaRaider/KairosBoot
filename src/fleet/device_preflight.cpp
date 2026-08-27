@@ -651,6 +651,45 @@ PreparedDeviceSession::take_session() && noexcept {
     return std::move(session_);
 }
 
+PreparedDeviceBatchConsumption::PreparedDeviceBatchConsumption(
+    image::Sha256Digest plan_sha256,
+    std::vector<PreparedDeviceSession> devices) noexcept
+    : plan_sha256_(plan_sha256), devices_(std::move(devices)) {}
+
+PreparedDeviceBatchConsumption::PreparedDeviceBatchConsumption(
+    PreparedDeviceBatchConsumption&& other) noexcept
+    : plan_sha256_(other.plan_sha256_), devices_(std::move(other.devices_)) {
+    other.devices_.clear();
+}
+
+PreparedDeviceBatchConsumption&
+PreparedDeviceBatchConsumption::operator=(
+    PreparedDeviceBatchConsumption&& other) noexcept {
+    if (this != &other) {
+        plan_sha256_ = other.plan_sha256_;
+        devices_ = std::move(other.devices_);
+        other.devices_.clear();
+    }
+    return *this;
+}
+
+const image::Sha256Digest&
+PreparedDeviceBatchConsumption::plan_sha256() const noexcept {
+    return plan_sha256_;
+}
+
+std::span<const PreparedDeviceSession>
+PreparedDeviceBatchConsumption::devices() const noexcept {
+    return devices_;
+}
+
+std::vector<PreparedDeviceSession>
+PreparedDeviceBatchConsumption::take_sessions_for_actor() && noexcept {
+    auto result = std::move(devices_);
+    devices_.clear();
+    return result;
+}
+
 PreparedDeviceBatch::PreparedDeviceBatch(
     image::Sha256Digest plan_sha256,
     std::vector<PreparedDeviceSession> devices) noexcept
@@ -680,9 +719,20 @@ std::span<const PreparedDeviceSession> PreparedDeviceBatch::devices() const
     return devices_;
 }
 
-std::vector<PreparedDeviceSession>
-PreparedDeviceBatch::take_devices() && noexcept {
-    auto result = std::move(devices_);
+std::expected<PreparedDeviceBatchConsumption,
+              PreparedDeviceBatchConsumptionError>
+PreparedDeviceBatch::consume(
+    const image::Sha256Digest& expected_plan_sha256) && noexcept {
+    if (expected_plan_sha256 != plan_sha256_) {
+        return std::unexpected(
+            PreparedDeviceBatchConsumptionError::PlanDigestMismatch);
+    }
+    if (devices_.empty()) {
+        return std::unexpected(
+            PreparedDeviceBatchConsumptionError::AlreadyConsumed);
+    }
+    auto result = PreparedDeviceBatchConsumption{
+        plan_sha256_, std::move(devices_)};
     devices_.clear();
     return result;
 }
@@ -699,12 +749,6 @@ preflight_fleet_devices(
         if (const auto stopped = interrupted(
                 deadline, cancellation, DevicePreflightStage::Validation)) {
             return std::unexpected(*stopped);
-        }
-        if (snapshot.size() > kMaximumPreflightDevices) {
-            return std::unexpected(error(
-                DevicePreflightErrorKind::SnapshotLimitExceeded,
-                DevicePreflightStage::Validation,
-                "USB snapshot exceeds the fleet preflight device limit"));
         }
         const auto& targets = plan.manifest().targets;
         if (targets.empty()) {
@@ -726,13 +770,15 @@ preflight_fleet_devices(
         }
 
         std::vector<NormalizedSnapshotDevice> devices;
-        devices.reserve(snapshot.size());
+        const auto candidate_capacity =
+            std::min(snapshot.size(), kMaximumPreflightDevices);
+        devices.reserve(candidate_capacity);
         std::unordered_map<std::string, std::size_t> physical_paths;
         std::unordered_map<std::string, std::size_t> physical_chains;
         std::unordered_map<std::string, std::size_t> serials;
-        physical_paths.reserve(snapshot.size());
-        physical_chains.reserve(snapshot.size());
-        serials.reserve(snapshot.size());
+        physical_paths.reserve(candidate_capacity);
+        physical_chains.reserve(candidate_capacity);
+        serials.reserve(candidate_capacity);
         for (std::size_t index = 0U; index < snapshot.size(); ++index) {
             if (const auto stopped = interrupted(
                     deadline, cancellation, DevicePreflightStage::Snapshot)) {
@@ -741,6 +787,14 @@ preflight_fleet_devices(
             if (!raw_selector_candidate(
                     snapshot[index], requested_serials, requested_paths)) {
                 continue;
+            }
+            if (devices.size() >= kMaximumPreflightDevices) {
+                return std::unexpected(error(
+                    DevicePreflightErrorKind::SnapshotLimitExceeded,
+                    DevicePreflightStage::Snapshot,
+                    "matching USB candidates exceed the fleet preflight device limit",
+                    std::nullopt,
+                    index));
             }
             auto identity = normalize_snapshot_device(snapshot[index], index);
             if (!identity) {

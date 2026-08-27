@@ -55,6 +55,8 @@ using kairosboot::fleet::ManifestStep;
 using kairosboot::fleet::ManifestTarget;
 using kairosboot::fleet::OpenedDevicePreflightSession;
 using kairosboot::fleet::PreparedDeviceBatch;
+using kairosboot::fleet::PreparedDeviceBatchConsumption;
+using kairosboot::fleet::PreparedDeviceBatchConsumptionError;
 using kairosboot::fleet::PreparedDeviceSession;
 using kairosboot::fleet::make_job_plan;
 using kairosboot::fleet::preflight_fleet_devices;
@@ -88,6 +90,20 @@ static_assert(!std::is_copy_assignable_v<PreparedDeviceBatch>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedDeviceBatch>);
 static_assert(!std::is_copy_constructible_v<PreparedDeviceSession>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedDeviceSession>);
+
+template <typename Value>
+concept HasPublicTakeSession = requires(Value&& value) {
+    std::move(value).take_session();
+};
+
+template <typename Value>
+concept HasPublicTakeDevices = requires(Value&& value) {
+    std::move(value).take_devices();
+};
+
+static_assert(!HasPublicTakeSession<PreparedDeviceSession>);
+static_assert(!HasPublicTakeDevices<PreparedDeviceBatch>);
+static_assert(!HasPublicTakeDevices<PreparedDeviceBatchConsumption>);
 
 inline constexpr ManifestSourceLocation kLocation{1U, 1U};
 inline constexpr auto kDeadlineBudget = std::chrono::seconds{5};
@@ -614,6 +630,96 @@ void unmatched_invalid_and_duplicate_devices_are_ignored() {
     CHECK(result->devices().size() == 1U);
     CHECK(opener.calls == 1U);
     CHECK(probe.calls == 1U);
+}
+
+void unmatched_snapshot_size_does_not_consume_candidate_budget() {
+    auto job = plan({TargetSpec{
+        .name = "target-a",
+        .serials = {"SERIAL-A"},
+        .usb_paths = {},
+        .product = "product-a",
+    }});
+    const auto unrelated = device("UNRELATED", "usb:1-9", 9U, 9U);
+    std::vector<UsbDeviceInfo> snapshot;
+    snapshot.reserve(4'098U);
+    for (std::size_t index = 0U; index < 4'097U; ++index) {
+        snapshot.push_back(unrelated);
+    }
+    snapshot.push_back(device("SERIAL-A", "usb:1-2", 2U, 2U));
+    RecordingOpener opener;
+    SequenceProbe probe{{live("product-a")}};
+
+    auto result = preflight_fleet_devices(
+        job, snapshot, opener, probe, deadline());
+    CHECK(result.has_value());
+    CHECK(result->devices().size() == 1U);
+    CHECK(opener.calls == 1U);
+    CHECK(probe.calls == 1U);
+}
+
+void matching_candidate_budget_is_enforced() {
+    std::vector<TargetSpec> targets;
+    std::vector<UsbDeviceInfo> snapshot;
+    targets.reserve(17U);
+    snapshot.reserve(4'097U);
+    std::size_t next_device = 0U;
+    for (std::size_t target_index = 0U;
+         target_index < 17U;
+         ++target_index) {
+        TargetSpec target{
+            .name = "target-" + std::to_string(target_index),
+            .serials = {},
+            .usb_paths = {},
+            .product = "product-a",
+        };
+        const auto target_count =
+            std::min<std::size_t>(256U, 4'097U - next_device);
+        target.serials.reserve(target_count);
+        for (std::size_t offset = 0U;
+             offset < target_count;
+             ++offset, ++next_device) {
+            auto serial = "SERIAL-" + std::to_string(next_device);
+            target.serials.push_back(serial);
+            const auto first_port = static_cast<std::uint8_t>(
+                next_device / 255U + 1U);
+            const auto second_port = static_cast<std::uint8_t>(
+                next_device % 255U + 1U);
+            const auto physical_path = "usb:1-" +
+                std::to_string(first_port) + "." +
+                std::to_string(second_port);
+            auto value = device(
+                std::move(serial),
+                physical_path,
+                second_port,
+                static_cast<std::uint8_t>(next_device % 127U + 1U));
+            value.backend_session_id = next_device + 1U;
+            value.port_path = {first_port, second_port};
+            value.linux_topology->hub_port_chain = value.port_path;
+            value.linux_topology->sysfs_device_path =
+                "/sys/bus/usb/devices/1-" +
+                std::to_string(first_port) + "." +
+                std::to_string(second_port);
+            snapshot.push_back(std::move(value));
+        }
+        targets.push_back(std::move(target));
+    }
+    CHECK(snapshot.size() == 4'097U);
+    auto job = plan(std::move(targets));
+    RecordingOpener opener;
+    SequenceProbe probe;
+
+    auto result = preflight_fleet_devices(
+        job,
+        snapshot,
+        opener,
+        probe,
+        kairosboot::fleet::DevicePreflightClock::now() +
+            std::chrono::seconds{30});
+    CHECK(!result);
+    CHECK(result.error().kind ==
+          DevicePreflightErrorKind::SnapshotLimitExceeded);
+    CHECK(opener.calls == 0U);
+    CHECK(probe.calls == 0U);
 }
 
 void duplicate_physical_and_serial_identities_fail_before_open() {
@@ -1156,14 +1262,31 @@ void prepared_gate_is_plan_bound_and_sessions_are_consumed_once() {
     PreparedDeviceBatch moved_batch = std::move(*result);
     CHECK(result->devices().empty());
     CHECK(moved_batch.plan_sha256() == plan_a.sha256());
-    auto sessions = std::move(moved_batch).take_devices();
+    auto wrong_plan =
+        std::move(moved_batch).consume(plan_b.sha256());
+    CHECK(!wrong_plan);
+    CHECK(wrong_plan.error() ==
+          PreparedDeviceBatchConsumptionError::PlanDigestMismatch);
+    CHECK(moved_batch.devices().size() == 1U);
+
+    auto consumption =
+        std::move(moved_batch).consume(plan_a.sha256());
+    CHECK(consumption.has_value());
     CHECK(moved_batch.devices().empty());
-    CHECK(std::move(moved_batch).take_devices().empty());
-    CHECK(sessions.size() == 1U);
-    auto session = std::move(sessions.front()).take_session();
-    CHECK(session != nullptr);
-    auto consumed_again = std::move(sessions.front()).take_session();
-    CHECK(consumed_again == nullptr);
+    auto consumed_again =
+        std::move(moved_batch).consume(plan_a.sha256());
+    CHECK(!consumed_again);
+    CHECK(consumed_again.error() ==
+          PreparedDeviceBatchConsumptionError::AlreadyConsumed);
+
+    {
+        PreparedDeviceBatchConsumption token = std::move(*consumption);
+        CHECK(consumption->devices().empty());
+        CHECK(token.plan_sha256() == plan_a.sha256());
+        CHECK(token.devices().size() == 1U);
+    }
+    CHECK(opener.states.size() == 1U);
+    CHECK(opener.states[0]->closed.load(std::memory_order_acquire));
 }
 
 class ScriptTransport final : public ITransportSession {
@@ -1304,11 +1427,15 @@ void built_in_probe_interrupts_blocking_io_on_deadline_and_stop() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 17U> tests{
+    const std::array<Test, 19U> tests{
         Test{"selectors are exact, deduplicated, and ignore unrelated devices",
              &selectors_are_exact_deduplicated_and_ignore_unrelated_devices},
         Test{"unmatched invalid and duplicate devices are ignored",
              &unmatched_invalid_and_duplicate_devices_are_ignored},
+        Test{"unmatched snapshot size does not consume candidate budget",
+             &unmatched_snapshot_size_does_not_consume_candidate_budget},
+        Test{"matching candidate budget is enforced",
+             &matching_candidate_budget_is_enforced},
         Test{"duplicate physical and serial identities fail before open",
              &duplicate_physical_and_serial_identities_fail_before_open},
         Test{"cross-target multi-namespace match is rejected",

@@ -23,6 +23,9 @@ namespace kairosboot::fleet {
 using DevicePreflightClock = std::chrono::steady_clock;
 using DevicePreflightTimePoint = DevicePreflightClock::time_point;
 
+class FleetDeviceActor;
+class FleetCoordinator;
+
 // Complete passive USB identity that is stable across the enumeration/open
 // boundary. Product and Fastboot mode deliberately do not belong here.
 struct DevicePreflightUsbFingerprint final {
@@ -235,10 +238,11 @@ public:
     [[nodiscard]] std::string_view observed_product() const noexcept;
     [[nodiscard]] fastboot::FastbootUsbMode observed_mode() const noexcept;
     [[nodiscard]] const DevicePreflightUsbIdentity& usb_identity() const noexcept;
+
+private:
     [[nodiscard]] std::unique_ptr<protocol::FastbootSession>
     take_session() && noexcept;
 
-private:
     PreparedDeviceSession(std::size_t target_index,
                           std::string target_name,
                           std::string expected_product,
@@ -256,6 +260,8 @@ private:
     DevicePreflightUsbIdentity usb_identity_;
     std::unique_ptr<protocol::FastbootSession> session_;
 
+    friend class FleetDeviceActor;
+    friend class FleetCoordinator;
     friend std::expected<class PreparedDeviceBatch, DevicePreflightError>
     preflight_fleet_devices(const JobPlan&,
                             std::span<const transport::UsbDeviceInfo>,
@@ -263,6 +269,44 @@ private:
                             IDevicePreflightProbe&,
                             DevicePreflightTimePoint,
                             std::stop_token) noexcept;
+};
+
+enum class PreparedDeviceBatchConsumptionError : std::uint8_t {
+    PlanDigestMismatch,
+    AlreadyConsumed,
+};
+
+// Plan-bound handoff token. Public callers can inspect the proven identities,
+// but only the fleet actor/coordinator may unwrap protocol sessions.
+class PreparedDeviceBatchConsumption final {
+public:
+    PreparedDeviceBatchConsumption(
+        const PreparedDeviceBatchConsumption&) = delete;
+    PreparedDeviceBatchConsumption& operator=(
+        const PreparedDeviceBatchConsumption&) = delete;
+    PreparedDeviceBatchConsumption(
+        PreparedDeviceBatchConsumption&& other) noexcept;
+    PreparedDeviceBatchConsumption& operator=(
+        PreparedDeviceBatchConsumption&& other) noexcept;
+    ~PreparedDeviceBatchConsumption() = default;
+
+    [[nodiscard]] const image::Sha256Digest& plan_sha256() const noexcept;
+    [[nodiscard]] std::span<const PreparedDeviceSession> devices() const noexcept;
+
+private:
+    PreparedDeviceBatchConsumption(
+        image::Sha256Digest plan_sha256,
+        std::vector<PreparedDeviceSession> devices) noexcept;
+
+    [[nodiscard]] std::vector<PreparedDeviceSession>
+    take_sessions_for_actor() && noexcept;
+
+    image::Sha256Digest plan_sha256_{};
+    std::vector<PreparedDeviceSession> devices_;
+
+    friend class PreparedDeviceBatch;
+    friend class FleetDeviceActor;
+    friend class FleetCoordinator;
 };
 
 // This move-only batch is the destructive gate. It can be constructed only
@@ -278,7 +322,9 @@ public:
 
     [[nodiscard]] const image::Sha256Digest& plan_sha256() const noexcept;
     [[nodiscard]] std::span<const PreparedDeviceSession> devices() const noexcept;
-    [[nodiscard]] std::vector<PreparedDeviceSession> take_devices() && noexcept;
+    [[nodiscard]] std::expected<PreparedDeviceBatchConsumption,
+                                PreparedDeviceBatchConsumptionError>
+    consume(const image::Sha256Digest& expected_plan_sha256) && noexcept;
 
 private:
     PreparedDeviceBatch(
