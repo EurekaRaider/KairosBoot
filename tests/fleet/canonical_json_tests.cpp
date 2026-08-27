@@ -190,15 +190,16 @@ void out_of_range_integers_leave_output_unchanged() {
 }  // namespace
 
 int main() {
-    const std::array tests{
-        std::pair{"valid scalars and frozen escaping",
-                  valid_scalars_and_frozen_escaping},
-        std::pair{"invalid UTF-8 has transactional output",
-                  invalid_utf8_is_rejected_without_output_mutation},
-        std::pair{"safe integers are locale independent",
-                  safe_integers_are_locale_independent},
-        std::pair{"integer range errors have transactional output",
-                  out_of_range_integers_leave_output_unchanged},
+    using Test = std::pair<std::string_view, void (*)()>;
+    const std::array<Test, 4U> tests{
+        Test{"valid scalars and frozen escaping",
+             &valid_scalars_and_frozen_escaping},
+        Test{"invalid UTF-8 has transactional output",
+             &invalid_utf8_is_rejected_without_output_mutation},
+        Test{"safe integers are locale independent",
+             &safe_integers_are_locale_independent},
+        Test{"integer range errors have transactional output",
+             &out_of_range_integers_leave_output_unchanged},
     };
 
     try {
