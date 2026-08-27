@@ -377,6 +377,25 @@ void root_boundary_rejects_child_escape_and_parent_replacement() {
     CHECK(through_root_alias);
     CHECK(read_prepared(through_root_alias->at(0U)) == "inside");
 
+    const auto trusted_anchor = temporary.path() / "trusted-anchor";
+    const auto outside_anchor = temporary.path() / "outside-anchor";
+    std::filesystem::create_directories(trusted_anchor / "root/images");
+    std::filesystem::create_directories(outside_anchor / "root/images");
+    write_bytes(trusted_anchor / "root/images/system.img", "inside");
+    write_bytes(outside_anchor / "root/images/system.img", "outside");
+    ArtifactPreflightOptions ancestor_options;
+    ancestor_options.source_limits.package_entry_observer =
+        [&](std::string_view) {
+            std::filesystem::rename(
+                trusted_anchor, temporary.path() / "retained-anchor");
+            std::filesystem::create_directory_symlink(
+                outside_anchor, trusted_anchor);
+        };
+    auto after_ancestor_replacement = preflight_fleet_artifacts(
+        alias_plan, trusted_anchor / "root", ancestor_options);
+    CHECK(after_ancestor_replacement);
+    CHECK(read_prepared(after_ancestor_replacement->at(0U)) == "inside");
+
     const auto original_parent = root / "images-original";
     ArtifactPreflightOptions race_options;
     race_options.source_limits.package_entry_observer = [&](std::string_view) {

@@ -248,6 +248,148 @@ void handle_based_open_rejects_leaf_and_intermediate_links() {
     CHECK(!intermediate);
     CHECK(intermediate.error().kind ==
           kairosboot::image::FileSourceErrorKind::UnsafePath);
+
+    const auto linked_root = temporary.path() / "linked-root";
+    std::filesystem::create_directory_symlink(package, linked_root);
+    const auto strict_root = kairosboot::image::FileImageSource::open_beneath(
+        linked_root, "leaf.img");
+    CHECK(!strict_root);
+    CHECK(strict_root.error().kind ==
+          kairosboot::image::FileSourceErrorKind::UnsafePath);
+}
+
+void directory_boundary_survives_root_and_ancestor_replacement() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directories(root / "images");
+    std::filesystem::create_directories(outside / "images");
+    write_bytes(root / "images/system.img", "inside");
+    write_bytes(outside / "images/system.img", "outside");
+
+    auto boundary = kairosboot::image::FileDirectoryBoundary::capture(root);
+    CHECK(boundary);
+    const auto retained_root = temporary.path() / "retained-root";
+    std::filesystem::rename(root, retained_root);
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, root, link_error);
+    if (link_error) {
+        return;
+    }
+    auto opened = kairosboot::image::FileImageSource::open_beneath(
+        *boundary, std::filesystem::path("images") / "system.img");
+    CHECK(opened);
+    std::array<std::byte, 6U> contents{};
+    auto read = (*opened)->read_at(0U, contents);
+    CHECK(read && *read == contents.size());
+    CHECK(as_string(contents) == "inside");
+
+    const auto trusted_anchor = temporary.path() / "trusted-anchor";
+    const auto outside_anchor = temporary.path() / "outside-anchor";
+    std::filesystem::create_directories(trusted_anchor / "root/images");
+    std::filesystem::create_directories(outside_anchor / "root/images");
+    write_bytes(trusted_anchor / "root/images/system.img", "inside");
+    write_bytes(outside_anchor / "root/images/system.img", "outside");
+    auto ancestor_boundary =
+        kairosboot::image::FileDirectoryBoundary::capture(
+            trusted_anchor / "root");
+    CHECK(ancestor_boundary);
+    const auto retained_anchor = temporary.path() / "retained-anchor";
+    std::filesystem::rename(trusted_anchor, retained_anchor);
+    std::filesystem::create_directory_symlink(
+        outside_anchor, trusted_anchor, link_error);
+    CHECK(!link_error);
+    auto after_ancestor_replacement =
+        kairosboot::image::FileImageSource::open_beneath(
+            *ancestor_boundary,
+            std::filesystem::path("images") / "system.img");
+    CHECK(after_ancestor_replacement);
+    read = (*after_ancestor_replacement)->read_at(0U, contents);
+    CHECK(read && *read == contents.size());
+    CHECK(as_string(contents) == "inside");
+
+    const auto root_alias = temporary.path() / "root-alias";
+    std::filesystem::create_directory_symlink(
+        retained_anchor / "root", root_alias, link_error);
+    CHECK(!link_error);
+    auto alias_boundary =
+        kairosboot::image::FileDirectoryBoundary::capture(root_alias);
+    CHECK(alias_boundary);
+    std::filesystem::remove(root_alias);
+    std::filesystem::create_directory_symlink(outside, root_alias, link_error);
+    CHECK(!link_error);
+    auto after_alias_retarget =
+        kairosboot::image::FileImageSource::open_beneath(
+            *alias_boundary,
+            std::filesystem::path("images") / "system.img");
+    CHECK(after_alias_retarget);
+    read = (*after_alias_retarget)->read_at(0U, contents);
+    CHECK(read && *read == contents.size());
+    CHECK(as_string(contents) == "inside");
+}
+
+void concurrent_root_swaps_cannot_redirect_a_directory_boundary() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    const auto retained = temporary.path() / "retained";
+    std::filesystem::create_directories(root / "images");
+    std::filesystem::create_directories(outside / "images");
+    write_bytes(root / "images/system.img", "inside");
+    write_bytes(outside / "images/system.img", "outside");
+
+    const auto probe = temporary.path() / "link-probe";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, probe, link_error);
+    if (link_error) {
+        return;
+    }
+    std::filesystem::remove(probe);
+
+    auto boundary = kairosboot::image::FileDirectoryBoundary::capture(root);
+    CHECK(boundary);
+    std::atomic<bool> finished{};
+    std::atomic<std::size_t> completed_swaps{};
+    std::thread attacker([&] {
+        for (std::size_t iteration = 0U; iteration < 1'000U; ++iteration) {
+            std::error_code ignored;
+            std::filesystem::rename(root, retained, ignored);
+            if (ignored) {
+                continue;
+            }
+            std::filesystem::create_directory_symlink(outside, root, ignored);
+            if (!ignored) {
+                completed_swaps.fetch_add(1U, std::memory_order_relaxed);
+                std::this_thread::yield();
+                std::filesystem::remove(root, ignored);
+            }
+            std::filesystem::rename(retained, root, ignored);
+        }
+        finished.store(true, std::memory_order_release);
+    });
+
+    std::size_t successful_opens = 0U;
+    std::exception_ptr reader_error;
+    try {
+        while (!finished.load(std::memory_order_acquire)) {
+            auto opened = kairosboot::image::FileImageSource::open_beneath(
+                *boundary, std::filesystem::path("images") / "system.img");
+            CHECK(opened);
+            std::array<std::byte, 6U> contents{};
+            const auto read = (*opened)->read_at(0U, contents);
+            CHECK(read && *read == contents.size());
+            CHECK(as_string(contents) == "inside");
+            ++successful_opens;
+        }
+    } catch (...) {
+        reader_error = std::current_exception();
+    }
+    attacker.join();
+    if (reader_error) {
+        std::rethrow_exception(reader_error);
+    }
+    CHECK(completed_swaps.load(std::memory_order_relaxed) != 0U);
+    CHECK(successful_opens != 0U);
 }
 
 #if !defined(_WIN32)
@@ -515,6 +657,10 @@ int main() {
         Test{"native Unicode paths", native_unicode_paths_are_supported},
         Test{"handle-based symlink rejection",
              handle_based_open_rejects_leaf_and_intermediate_links},
+        Test{"directory boundary root and ancestor replacement",
+             directory_boundary_survives_root_and_ancestor_replacement},
+        Test{"directory boundary concurrent root replacement",
+             concurrent_root_swaps_cannot_redirect_a_directory_boundary},
 #if !defined(_WIN32)
         Test{"handle-based race confinement",
              concurrent_leaf_swaps_never_escape_the_directory_handle},

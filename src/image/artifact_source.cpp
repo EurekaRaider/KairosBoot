@@ -1660,7 +1660,7 @@ resolve_directory(const std::filesystem::path& directory,
 
 [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
                             ArtifactSourceError>
-resolve_direct_file_beneath(const std::filesystem::path& root,
+resolve_direct_file_beneath(const FileDirectoryBoundary& boundary,
                             const std::string_view relative_name,
                             const ArtifactSourceLimits& limits,
                             const Budget& budget,
@@ -1671,20 +1671,11 @@ resolve_direct_file_beneath(const std::filesystem::path& root,
     if (limits.package_entry_observer) {
         limits.package_entry_observer(relative_name);
     }
-    auto root_identity = FileImageSource::inspect_snapshot_identity(root);
-    if (!root_identity) {
-        return std::unexpected(from_file_error(root_identity.error()));
-    }
-    if (!root_identity->directory) {
-        return std::unexpected(make_error(
-            ArtifactSourceErrorKind::UnsafePath,
-            "artifact root is not a directory"));
-    }
     if (auto stopped = budget.check()) {
         return std::unexpected(std::move(*stopped));
     }
     auto source = FileImageSource::open_beneath(
-        root, portable_utf8_path(relative_name), &*root_identity);
+        boundary, portable_utf8_path(relative_name));
     if (!source) {
         return std::unexpected(from_file_error(source.error()));
     }
@@ -2469,24 +2460,13 @@ ArtifactSourceResolver::resolve_impl(
         }
 
         std::error_code filesystem_error;
-        auto normalized = mode == ResolveMode::DirectFileBeneath
-            ? std::filesystem::canonical(
-                  archive_directory_or_file, filesystem_error)
-            : std::filesystem::absolute(
-                  archive_directory_or_file, filesystem_error);
+        auto normalized = std::filesystem::absolute(
+            archive_directory_or_file, filesystem_error);
         if (filesystem_error) {
-            const auto kind =
-                filesystem_error == std::errc::no_such_file_or_directory
-                    ? ArtifactSourceErrorKind::NotFound
-                : filesystem_error == std::errc::too_many_symbolic_link_levels
-                    ? ArtifactSourceErrorKind::UnsafePath
-                : mode == ResolveMode::DirectFileBeneath
-                    ? ArtifactSourceErrorKind::Io
-                    : ArtifactSourceErrorKind::InvalidArgument;
             return std::unexpected(make_error(
-                kind,
+                ArtifactSourceErrorKind::InvalidArgument,
                 mode == ResolveMode::DirectFileBeneath
-                    ? "unable to resolve artifact root boundary"
+                    ? "unable to normalize artifact root display path"
                     : "unable to normalize artifact container path",
                 filesystem_error.value()));
         }
@@ -2494,7 +2474,38 @@ ArtifactSourceResolver::resolve_impl(
         if (auto stopped = budget.check()) {
             return std::unexpected(std::move(*stopped));
         }
-        CacheKey key{mode, normalized, std::string(entry_name)};
+        std::shared_ptr<const FileDirectoryBoundary> boundary;
+        if (mode == ResolveMode::DirectFileBeneath) {
+            {
+                std::lock_guard lock(cache_mutex_);
+                const auto position = boundaries_.find(normalized);
+                if (position != boundaries_.end()) {
+                    boundary = position->second;
+                }
+            }
+            if (!boundary) {
+                auto captured = FileDirectoryBoundary::capture(normalized);
+                if (!captured) {
+                    return std::unexpected(from_file_error(captured.error()));
+                }
+                auto candidate = std::make_shared<const FileDirectoryBoundary>(
+                    std::move(*captured));
+                if (auto stopped = budget.check()) {
+                    return std::unexpected(std::move(*stopped));
+                }
+                std::lock_guard lock(cache_mutex_);
+                const auto [position, inserted] =
+                    boundaries_.emplace(normalized, candidate);
+                boundary = inserted ? std::move(candidate) : position->second;
+            }
+        }
+        const auto boundary_device = boundary ? boundary->identity().device : 0U;
+        const auto boundary_object = boundary ? boundary->identity().object : 0U;
+        CacheKey key{mode,
+                     normalized,
+                     boundary_device,
+                     boundary_object,
+                     std::string(entry_name)};
         for (;;) {
             std::shared_ptr<CacheEntry> cache_entry;
             bool owner = false;
@@ -2504,6 +2515,7 @@ ArtifactSourceResolver::resolve_impl(
                 const auto position = cache_.find(key);
                 if (position == cache_.end()) {
                     auto candidate = std::make_shared<CacheEntry>();
+                    candidate->boundary = boundary;
                     const auto [inserted_position, inserted] =
                         cache_.emplace(key, candidate);
                     cache_entry = inserted_position->second;
@@ -2545,7 +2557,7 @@ ArtifactSourceResolver::resolve_impl(
                 resolved.emplace(
                     mode == ResolveMode::DirectFileBeneath
                         ? resolve_direct_file_beneath(
-                              normalized,
+                              *cache_entry->boundary,
                               entry_name,
                               limits_,
                               budget,
