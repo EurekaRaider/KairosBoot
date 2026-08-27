@@ -82,6 +82,9 @@ private:
 [[nodiscard]] ManifestParseOptions long_options() {
     return ManifestParseOptions{
         .deadline = kairosboot::fleet::ManifestClock::now() + 1h,
+        .cancellation = {},
+        .fault_hook = {},
+        .fault_context = {},
     };
 }
 
