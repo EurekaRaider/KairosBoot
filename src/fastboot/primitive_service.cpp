@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/slot_planner.hpp"
+#include "src/fastboot/update_executor.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
+#include <chrono>
 #include <limits>
+#include <stop_token>
 #include <system_error>
 #include <utility>
 
@@ -44,6 +48,32 @@ namespace {
         (character >= '0' && character <= '9');
     return ascii_alphanumeric || character == '_' || character == '-' ||
         character == '.';
+}
+
+[[nodiscard]] std::expected<std::string, PrimitiveError>
+validated_parameter_command(
+    const PrimitiveOperation operation,
+    const std::string_view prefix,
+    const std::string_view parameter) {
+    if (parameter.empty()) {
+        return std::unexpected(invalid_argument(
+            operation, "Fastboot command parameter must not be empty"));
+    }
+    if (!is_printable_ascii(parameter)) {
+        return std::unexpected(invalid_argument(
+            operation, "Fastboot command parameter must contain printable ASCII only"));
+    }
+    if (prefix.size() > protocol::kDefaultMaxCommandBytes ||
+        parameter.size() > protocol::kDefaultMaxCommandBytes - prefix.size()) {
+        return std::unexpected(invalid_argument(
+            operation, "Fastboot command exceeds the 4096-byte protocol limit"));
+    }
+
+    std::string result;
+    result.reserve(prefix.size() + parameter.size());
+    result.append(prefix);
+    result.append(parameter);
+    return result;
 }
 
 [[nodiscard]] std::expected<void, PrimitiveError> validate_download_source(
@@ -131,6 +161,23 @@ namespace {
         .message = std::move(context),
         .query_error = std::move(error),
     };
+}
+
+[[nodiscard]] std::optional<SlotError> slot_interruption(
+    const UpdateOperationContext& context,
+    const std::string_view position) {
+    if (context.cancellation.stop_requested()) {
+        return slot_error(
+            SlotErrorCode::Cancelled,
+            "Fastboot slot query was cancelled " + std::string(position));
+    }
+    if (context.deadline &&
+        std::chrono::steady_clock::now() >= *context.deadline) {
+        return slot_error(
+            SlotErrorCode::TimedOut,
+            "Fastboot slot query deadline expired " + std::string(position));
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] bool is_valid_partition_name(
@@ -318,6 +365,12 @@ std::expected<void, PrimitiveError> validate_download_size(const std::uint64_t s
             "Fastboot download payload exceeds the protocol's 32-bit size limit"));
     }
     return {};
+}
+
+std::expected<std::string, PrimitiveError> validate_oem_command_suffix(
+    const std::string_view raw_suffix) {
+    return validated_parameter_command(
+        PrimitiveOperation::Oem, "oem ", raw_suffix);
 }
 
 PrimitiveService::PrimitiveService(protocol::FastbootSession& session) noexcept
@@ -649,8 +702,7 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::continue_boot() 
 
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::oem(
     const std::string_view raw_suffix) {
-    auto command_text = parameter_command(
-        PrimitiveOperation::Oem, "oem ", raw_suffix);
+    auto command_text = validate_oem_command_suffix(raw_suffix);
     if (!command_text) {
         return std::unexpected(std::move(command_text.error()));
     }
@@ -675,24 +727,7 @@ std::expected<std::string, PrimitiveError> PrimitiveService::parameter_command(
     const PrimitiveOperation operation,
     const std::string_view prefix,
     const std::string_view parameter) const {
-    if (parameter.empty()) {
-        return std::unexpected(invalid_argument(
-            operation, "Fastboot command parameter must not be empty"));
-    }
-    if (!is_printable_ascii(parameter)) {
-        return std::unexpected(invalid_argument(
-            operation, "Fastboot command parameter must contain printable ASCII only"));
-    }
-    if (parameter.size() > protocol::kDefaultMaxCommandBytes - prefix.size()) {
-        return std::unexpected(invalid_argument(
-            operation, "Fastboot command exceeds the 4096-byte protocol limit"));
-    }
-
-    std::string result;
-    result.reserve(prefix.size() + parameter.size());
-    result.append(prefix);
-    result.append(parameter);
-    return result;
+    return validated_parameter_command(operation, prefix, parameter);
 }
 
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::command(
@@ -859,7 +894,39 @@ SlotPlanner::SlotPlanner(PrimitiveService& primitives) noexcept
     : primitives_(primitives) {}
 
 std::expected<SlotTopology, SlotError> SlotPlanner::query_topology() {
-    auto count_reply = primitives_.getvar("slot-count");
+    return query_topology(UpdateOperationContext{});
+}
+
+std::expected<PrimitiveReply, SlotError> SlotPlanner::query_variable(
+    const std::string_view name,
+    const UpdateOperationContext& context) {
+    if (auto stopped = slot_interruption(context, "before getvar")) {
+        return std::unexpected(std::move(*stopped));
+    }
+
+    std::atomic<bool> active{true};
+    std::stop_callback cancel_active(context.cancellation, [this, &active] {
+        if (active.exchange(false, std::memory_order_acq_rel)) {
+            primitives_.request_cancel();
+        }
+    });
+    auto reply = primitives_.getvar(name);
+    active.store(false, std::memory_order_release);
+
+    if (auto stopped = slot_interruption(context, "after getvar")) {
+        return std::unexpected(std::move(*stopped));
+    }
+    if (!reply) {
+        return std::unexpected(slot_query_error(
+            "Failed to query Fastboot " + std::string(name),
+            std::move(reply.error())));
+    }
+    return std::move(*reply);
+}
+
+std::expected<SlotTopology, SlotError> SlotPlanner::query_topology(
+    const UpdateOperationContext& context) {
+    auto count_reply = query_variable("slot-count", context);
     if (count_reply) {
         const auto& payload = count_reply->terminal.payload;
         unsigned int count = 0;
@@ -891,21 +958,24 @@ std::expected<SlotTopology, SlotError> SlotPlanner::query_topology() {
             .source = SlotTopologySource::SlotCount,
         };
     }
-    if (count_reply.error().code != PrimitiveErrorCode::DeviceFail) {
-        return std::unexpected(slot_query_error(
-            "Failed to query Fastboot slot-count",
-            std::move(count_reply.error())));
+    if (!count_reply.error().query_error ||
+        count_reply.error().query_error->code != PrimitiveErrorCode::DeviceFail) {
+        return std::unexpected(std::move(count_reply.error()));
     }
 
     // The frozen AOSP baseline (a3b721a32242006b59cb12bd62c9133632af3a2d)
     // uses slot-suffixes only as a legacy fallback when the modern slot-count
     // getvar is rejected. KairosBoot retains that query order, while rejecting
     // malformed metadata instead of inventing a topology.
-    auto suffix_reply = primitives_.getvar("slot-suffixes");
+    auto suffix_reply = query_variable("slot-suffixes", context);
     if (!suffix_reply) {
-        return std::unexpected(slot_query_error(
-            "Device does not expose Fastboot slot-count or slot-suffixes",
-            std::move(suffix_reply.error())));
+        auto error = std::move(suffix_reply.error());
+        if (error.query_error &&
+            error.query_error->code == PrimitiveErrorCode::DeviceFail) {
+            error.message =
+                "Device does not expose Fastboot slot-count or slot-suffixes";
+        }
+        return std::unexpected(std::move(error));
     }
     auto slots = parse_legacy_slot_suffixes(suffix_reply->terminal.payload);
     if (!slots) {
@@ -918,14 +988,18 @@ std::expected<SlotTopology, SlotError> SlotPlanner::query_topology() {
 }
 
 std::expected<bool, SlotError> SlotPlanner::query_has_slot(
-    const std::string_view partition) {
+    const std::string_view partition,
+    const UpdateOperationContext& context) {
     std::string key("has-slot:");
     key.append(partition);
-    auto reply = primitives_.getvar(key);
+    auto reply = query_variable(key, context);
     if (!reply) {
-        return std::unexpected(slot_query_error(
-            "Device does not expose Fastboot " + key,
-            std::move(reply.error())));
+        auto error = std::move(reply.error());
+        if (error.query_error &&
+            error.query_error->code == PrimitiveErrorCode::DeviceFail) {
+            error.message = "Device does not expose Fastboot " + key;
+        }
+        return std::unexpected(std::move(error));
     }
     if (reply->terminal.payload == "yes") {
         return true;
@@ -939,12 +1013,16 @@ std::expected<bool, SlotError> SlotPlanner::query_has_slot(
 }
 
 std::expected<std::string, SlotError> SlotPlanner::query_current_slot(
-    const SlotTopology& topology) {
-    auto reply = primitives_.getvar("current-slot");
+    const SlotTopology& topology,
+    const UpdateOperationContext& context) {
+    auto reply = query_variable("current-slot", context);
     if (!reply) {
-        return std::unexpected(slot_query_error(
-            "Device does not expose Fastboot current-slot",
-            std::move(reply.error())));
+        auto error = std::move(reply.error());
+        if (error.query_error &&
+            error.query_error->code == PrimitiveErrorCode::DeviceFail) {
+            error.message = "Device does not expose Fastboot current-slot";
+        }
+        return std::unexpected(std::move(error));
     }
     auto current = normalize_slot_name(
         reply->terminal.payload,
@@ -964,7 +1042,8 @@ std::expected<std::string, SlotError> SlotPlanner::query_current_slot(
 std::expected<std::vector<std::string>, SlotError> SlotPlanner::resolve_slots(
     const SlotTopology& topology,
     const SlotSelection& selection,
-    const bool allow_all) {
+    const bool allow_all,
+    const UpdateOperationContext& context) {
     switch (selection.kind) {
         case SlotSelectionKind::Explicit:
             if (std::ranges::find(topology.slots, selection.name) ==
@@ -982,7 +1061,7 @@ std::expected<std::vector<std::string>, SlotError> SlotPlanner::resolve_slots(
             }
             return topology.slots;
         case SlotSelectionKind::Current: {
-            auto current = query_current_slot(topology);
+            auto current = query_current_slot(topology, context);
             if (!current) {
                 return std::unexpected(std::move(current.error()));
             }
@@ -994,7 +1073,7 @@ std::expected<std::vector<std::string>, SlotError> SlotPlanner::resolve_slots(
                     SlotErrorCode::Ambiguous,
                     "Fastboot slot 'other' is unambiguous only on a two-slot device"));
             }
-            auto current = query_current_slot(topology);
+            auto current = query_current_slot(topology, context);
             if (!current) {
                 return std::unexpected(std::move(current.error()));
             }
@@ -1011,6 +1090,12 @@ std::expected<std::vector<std::string>, SlotError> SlotPlanner::resolve_slots(
 
 std::expected<std::string, SlotError> SlotPlanner::resolve_active_slot(
     const std::string_view requested_slot) {
+    return resolve_active_slot(requested_slot, UpdateOperationContext{});
+}
+
+std::expected<std::string, SlotError> SlotPlanner::resolve_active_slot(
+    const std::string_view requested_slot,
+    const UpdateOperationContext& context) {
     auto selection = parse_slot_selection(requested_slot);
     if (!selection) {
         return std::unexpected(std::move(selection.error()));
@@ -1020,11 +1105,11 @@ std::expected<std::string, SlotError> SlotPlanner::resolve_active_slot(
             SlotErrorCode::InvalidArgument,
             "Fastboot set_active cannot target every slot"));
     }
-    auto topology = query_topology();
+    auto topology = query_topology(context);
     if (!topology) {
         return std::unexpected(std::move(topology.error()));
     }
-    auto slots = resolve_slots(*topology, *selection, false);
+    auto slots = resolve_slots(*topology, *selection, false, context);
     if (!slots) {
         return std::unexpected(std::move(slots.error()));
     }
@@ -1034,6 +1119,14 @@ std::expected<std::string, SlotError> SlotPlanner::resolve_active_slot(
 std::expected<PartitionSlotPlan, SlotError> SlotPlanner::plan_partition(
     const std::string_view partition,
     const std::string_view requested_slot) {
+    return plan_partition(
+        partition, requested_slot, UpdateOperationContext{});
+}
+
+std::expected<PartitionSlotPlan, SlotError> SlotPlanner::plan_partition(
+    const std::string_view partition,
+    const std::string_view requested_slot,
+    const UpdateOperationContext& context) {
     if (!is_valid_partition_name(partition)) {
         return std::unexpected(slot_error(
             SlotErrorCode::InvalidArgument,
@@ -1044,7 +1137,7 @@ std::expected<PartitionSlotPlan, SlotError> SlotPlanner::plan_partition(
         return std::unexpected(std::move(selection.error()));
     }
 
-    auto has_slot = query_has_slot(partition);
+    auto has_slot = query_has_slot(partition, context);
     if (!has_slot) {
         return std::unexpected(std::move(has_slot.error()));
     }
@@ -1061,11 +1154,11 @@ std::expected<PartitionSlotPlan, SlotError> SlotPlanner::plan_partition(
         };
     }
 
-    auto topology = query_topology();
+    auto topology = query_topology(context);
     if (!topology) {
         return std::unexpected(std::move(topology.error()));
     }
-    auto slots = resolve_slots(*topology, *selection, true);
+    auto slots = resolve_slots(*topology, *selection, true, context);
     if (!slots) {
         return std::unexpected(std::move(slots.error()));
     }
