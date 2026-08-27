@@ -1,0 +1,1086 @@
+// SPDX-License-Identifier: MIT
+#include "src/fastboot/primitive_update_device.hpp"
+#include "tests/protocol/scripted_transport.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <expected>
+#include <functional>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <ranges>
+#include <span>
+#include <sstream>
+#include <stdexcept>
+#include <stop_token>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using kairosboot::fastboot::execute_prepared_update;
+using kairosboot::fastboot::IPreparedDeviceTask;
+using kairosboot::fastboot::map_primitive_update_error;
+using kairosboot::fastboot::PlannedRebootTarget;
+using kairosboot::fastboot::PlannedSlot;
+using kairosboot::fastboot::PlannedUpdateTask;
+using kairosboot::fastboot::PreparedSuperArtifact;
+using kairosboot::fastboot::PreparedUpdateArtifact;
+using kairosboot::fastboot::PreparedUpdatePackage;
+using kairosboot::fastboot::PrimitiveError;
+using kairosboot::fastboot::PrimitiveErrorCode;
+using kairosboot::fastboot::PrimitiveOperation;
+using kairosboot::fastboot::PrimitiveService;
+using kairosboot::fastboot::PrimitiveUpdateDevice;
+using kairosboot::fastboot::PrimitiveUpdateDeviceOptions;
+using kairosboot::fastboot::PrimitiveUpdateProgress;
+using kairosboot::fastboot::PrimitiveUpdateProgressAction;
+using kairosboot::fastboot::UpdateDeviceErrorKind;
+using kairosboot::fastboot::UpdateDeviceTaskInput;
+using kairosboot::fastboot::UpdateExecutionErrorKind;
+using kairosboot::fastboot::UpdateOperationContext;
+using kairosboot::fastboot::UpdateSuperPreparationState;
+using kairosboot::fastboot::UpdateTaskKind;
+using kairosboot::image::ArtifactSourceOrigin;
+using kairosboot::image::FlashArtifact;
+using kairosboot::image::IImageSource;
+using kairosboot::image::ImageSourceError;
+using kairosboot::image::ResolvedArtifact;
+using kairosboot::image::SparseFlashPlan;
+using kairosboot::protocol::FastbootSession;
+using kairosboot::protocol::ProtocolPhase;
+using kairosboot::protocol::Response;
+using kairosboot::protocol::ResponseKind;
+using kairosboot::protocol::SessionState;
+using kairosboot::protocol::TransferCertainty;
+using kairosboot::protocol::TransportStatus;
+using kairosboot::protocol::test::ScriptedTransport;
+using kairosboot::protocol::test::to_bytes;
+
+class CheckFailure final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+#define CHECK(condition)                                                               \
+    do {                                                                               \
+        if (!(condition)) {                                                            \
+            throw CheckFailure(std::string("check failed at line ") +                  \
+                               std::to_string(__LINE__) + ": " #condition);            \
+        }                                                                              \
+    } while (false)
+
+class MemorySource : public IImageSource {
+public:
+    explicit MemorySource(std::vector<std::byte> bytes)
+        : bytes_(std::move(bytes)) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return bytes_.size();
+    }
+
+    [[nodiscard]] std::expected<std::size_t, ImageSourceError> read_at(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) const override {
+        ++read_count_;
+        if (destination.empty() || offset >= bytes_.size()) {
+            return std::size_t{0};
+        }
+        const auto amount = std::min(
+            destination.size(), bytes_.size() - static_cast<std::size_t>(offset));
+        std::ranges::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset), amount,
+            destination.begin());
+        return amount;
+    }
+
+    [[nodiscard]] std::size_t read_count() const noexcept { return read_count_; }
+
+private:
+    std::vector<std::byte> bytes_;
+    mutable std::size_t read_count_{};
+};
+
+class DeclaredSizeSource final : public IImageSource {
+public:
+    explicit DeclaredSizeSource(const std::uint64_t size) : size_(size) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
+
+    [[nodiscard]] std::expected<std::size_t, ImageSourceError> read_at(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) const override {
+        if (offset >= size_ || destination.empty()) {
+            return std::size_t{0};
+        }
+        const auto available = size_ - offset;
+        const auto amount = static_cast<std::size_t>(
+            std::min<std::uint64_t>(available, destination.size()));
+        std::fill_n(destination.begin(), amount, std::byte{0});
+        return amount;
+    }
+
+private:
+    std::uint64_t size_{};
+};
+
+class StopAfterReadTransport final
+    : public kairosboot::protocol::ITransportSession,
+      public kairosboot::protocol::IStreamingTransportSession {
+public:
+    StopAfterReadTransport(std::stop_source& cancellation,
+                           const std::size_t trigger_read) noexcept
+        : cancellation_(cancellation), trigger_read_(trigger_read) {}
+
+    [[nodiscard]] ScriptedTransport& script() noexcept { return script_; }
+
+    [[nodiscard]] kairosboot::protocol::TransferResult write(
+        const std::span<const std::byte> bytes,
+        const std::chrono::milliseconds timeout) override {
+        return script_.write(bytes, timeout);
+    }
+
+    [[nodiscard]] kairosboot::protocol::TransferResult read(
+        const std::span<std::byte> destination,
+        const std::chrono::milliseconds timeout) override {
+        auto result = script_.read(destination, timeout);
+        ++read_count_;
+        if (read_count_ == trigger_read_) {
+            cancellation_.request_stop();
+        }
+        return result;
+    }
+
+    [[nodiscard]] kairosboot::protocol::TransferResult read_data(
+        const std::span<std::byte> destination,
+        const std::chrono::milliseconds timeout) override {
+        return script_.read_data(destination, timeout);
+    }
+
+    [[nodiscard]] kairosboot::protocol::TransferResult write_source(
+        std::shared_ptr<kairosboot::protocol::ITransferSource> source,
+        const std::chrono::milliseconds timeout,
+        const kairosboot::protocol::TransferProgressObserver& observer = {})
+        override {
+        return script_.write_source(std::move(source), timeout, observer);
+    }
+
+    void request_cancel() noexcept override { script_.request_cancel(); }
+    void close() noexcept override { script_.close(); }
+
+private:
+    ScriptedTransport script_;
+    std::stop_source& cancellation_;
+    std::size_t trigger_read_{};
+    std::size_t read_count_{};
+};
+
+void append_u16(std::vector<std::byte>& bytes, const std::uint16_t value) {
+    bytes.push_back(static_cast<std::byte>(value & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xffU));
+}
+
+void append_u32(std::vector<std::byte>& bytes, const std::uint32_t value) {
+    bytes.push_back(static_cast<std::byte>(value & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 8U) & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 16U) & 0xffU));
+    bytes.push_back(static_cast<std::byte>((value >> 24U) & 0xffU));
+}
+
+[[nodiscard]] std::vector<std::byte> one_block_sparse_image() {
+    constexpr std::uint32_t block_size = 4096U;
+    std::vector<std::byte> bytes;
+    bytes.reserve(28U + 12U + block_size);
+    append_u32(bytes, kairosboot::image::kAndroidSparseMagic);
+    append_u16(bytes, kairosboot::image::kAndroidSparseMajorVersion);
+    append_u16(bytes, 0U);
+    append_u16(bytes, 28U);
+    append_u16(bytes, 12U);
+    append_u32(bytes, block_size);
+    append_u32(bytes, 1U);
+    append_u32(bytes, 1U);
+    append_u32(bytes, 0U);
+    append_u16(bytes, kairosboot::image::kSparseChunkRaw);
+    append_u16(bytes, 0U);
+    append_u32(bytes, 1U);
+    append_u32(bytes, 12U + block_size);
+    for (std::uint32_t index = 0U; index < block_size; ++index) {
+        bytes.push_back(static_cast<std::byte>((index * 13U + 7U) % 251U));
+    }
+    return bytes;
+}
+
+[[nodiscard]] std::vector<std::byte> three_block_raw_image() {
+    std::vector<std::byte> bytes(3U * 4096U);
+    for (std::size_t index = 0U; index < bytes.size(); ++index) {
+        bytes[index] = std::byte{
+            static_cast<unsigned char>((index * 17U + 3U) % 251U)};
+    }
+    return bytes;
+}
+
+[[nodiscard]] std::vector<std::byte> read_image_source(
+    const IImageSource& source) {
+    CHECK(source.size() <= std::numeric_limits<std::size_t>::max());
+    std::vector<std::byte> bytes(static_cast<std::size_t>(source.size()));
+    std::size_t completed = 0U;
+    while (completed < bytes.size()) {
+        auto read = source.read_at(completed, std::span(bytes).subspan(completed));
+        CHECK(read);
+        CHECK(*read != 0U);
+        CHECK(*read <= bytes.size() - completed);
+        completed += *read;
+    }
+    return bytes;
+}
+
+struct BoundArtifact final {
+    std::shared_ptr<const ResolvedArtifact> resolved;
+    std::shared_ptr<const FlashArtifact> artifact;
+};
+
+[[nodiscard]] BoundArtifact bind_artifact(
+    std::string name,
+    std::shared_ptr<const IImageSource> source) {
+    auto inspected = FlashArtifact::inspect(source);
+    CHECK(inspected);
+    auto resolved = std::make_shared<const ResolvedArtifact>(ResolvedArtifact{
+        .source = source,
+        .origin = ArtifactSourceOrigin::DirectoryEntry,
+        .logical_name = std::move(name),
+    });
+    auto artifact =
+        std::make_shared<const FlashArtifact>(std::move(*inspected));
+    return {
+        .resolved = std::move(resolved),
+        .artifact = std::move(artifact),
+    };
+}
+
+[[nodiscard]] UpdateDeviceTaskInput flash_input(
+    const BoundArtifact& artifact,
+    std::string partition = "system",
+    std::string name = "system.img",
+    const PlannedSlot slot = PlannedSlot::Default) {
+    return {
+        .task =
+            {
+                .kind = UpdateTaskKind::Flash,
+                .partition = std::move(partition),
+                .artifact = std::move(name),
+                .slot = slot,
+            },
+        .flash_artifact =
+            kairosboot::fastboot::UpdateFlashArtifactInput{
+                .resolved = artifact.resolved,
+                .artifact = artifact.artifact,
+            },
+    };
+}
+
+[[nodiscard]] std::string download_command(const std::uint64_t size) {
+    std::ostringstream stream;
+    stream << "download:" << std::hex << std::setw(8) << std::setfill('0')
+           << size;
+    return stream.str();
+}
+
+void expect_flash(
+    ScriptedTransport& script,
+    const std::string_view partition,
+    const std::span<const std::byte> payload,
+    std::vector<ScriptedTransport::SourceRead> reads = {}) {
+    if (reads.empty()) {
+        reads.push_back({
+            .size = payload.size(),
+            .progress_watermark = payload.size(),
+        });
+    }
+    const auto command = download_command(payload.size());
+    script.expect_write(command);
+    script.respond(std::string{"DATA"} + command.substr(9U));
+    script.expect_source_write(payload, std::move(reads));
+    script.respond("OKAYdownloaded");
+    script.expect_write(std::string{"flash:"} + std::string(partition));
+    script.respond("OKAYflashed");
+}
+
+void ordinary_flash_erase_and_reboot_are_complete() {
+    const std::vector<std::byte> payload{
+        std::byte{0x00}, std::byte{0x7f}, std::byte{0x80}, std::byte{0xff},
+        std::byte{0x42}, std::byte{0x00}, std::byte{0x19},
+    };
+    auto bound = bind_artifact(
+        "system.img", std::make_shared<MemorySource>(payload));
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY4096");
+    expect_flash(*script, "system", payload,
+                 {{.offset = 3U, .size = 4U, .progress_watermark = 4U},
+                  {.offset = 0U, .size = 3U, .progress_watermark = 7U}});
+    script->expect_write("erase:userdata");
+    script->respond("OKAYerased");
+    script->expect_write("reboot-bootloader");
+    script->respond("OKAYrebooting");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+
+    auto flash = device.prepare_task(flash_input(bound), {});
+    CHECK(flash);
+    auto erase = device.prepare_task(
+        UpdateDeviceTaskInput{
+            .task =
+                {
+                    .kind = UpdateTaskKind::Erase,
+                    .partition = "userdata",
+                },
+        },
+        {});
+    CHECK(erase);
+    auto reboot = device.prepare_task(
+        UpdateDeviceTaskInput{
+            .task =
+                {
+                    .kind = UpdateTaskKind::Reboot,
+                    .reboot_target = PlannedRebootTarget::Bootloader,
+                },
+        },
+        {});
+    CHECK(reboot);
+
+    CHECK((*flash)->execute({}));
+    CHECK((*erase)->execute({}));
+    CHECK((*reboot)->execute({}));
+    CHECK(script->complete());
+    CHECK(script->closed());
+    CHECK(session.state() == SessionState::Closed);
+}
+
+void slot_other_is_fully_resolved_during_prepare() {
+    const auto payload = to_bytes("slot-image");
+    auto bound = bind_artifact(
+        "boot.img", std::make_shared<MemorySource>(payload));
+    const auto userdata_payload = to_bytes("userdata-image");
+    auto userdata = bind_artifact(
+        "userdata.img", std::make_shared<MemorySource>(userdata_payload));
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:has-slot:boot");
+    script->respond("OKAYyes");
+    script->expect_write("getvar:slot-count");
+    script->respond("OKAY2");
+    script->expect_write("getvar:current-slot");
+    script->respond("OKAYa");
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY4096");
+    script->expect_write("getvar:has-slot:userdata");
+    script->respond("OKAYno");
+    expect_flash(*script, "boot_b", payload);
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+    auto token = device.prepare_task(
+        flash_input(bound, "boot", "boot.img", PlannedSlot::Other), {});
+    CHECK(token);
+    auto non_slotted = device.prepare_task(
+        flash_input(userdata, "userdata", "userdata.img", PlannedSlot::Other),
+        {});
+    CHECK(!non_slotted);
+    CHECK(non_slotted.error().task_certainty ==
+          TransferCertainty::NotTransferred);
+    CHECK(non_slotted.error().completed_actions == 0U);
+    CHECK(non_slotted.error().total_actions == 0U);
+    CHECK((*token)->execute({}));
+    CHECK(script->complete());
+}
+
+void slot_other_legacy_fallback_and_ambiguous_topology_fail_closed() {
+    const auto payload = to_bytes("slot-image");
+    auto bound = bind_artifact(
+        "boot.img", std::make_shared<MemorySource>(payload));
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond("OKAYyes");
+        script->expect_write("getvar:slot-count");
+        script->respond("FAILunknown variable");
+        script->expect_write("getvar:slot-suffixes");
+        script->respond("OKAY_a,_b");
+        script->expect_write("getvar:current-slot");
+        script->respond("OKAY_a");
+        script->expect_write("getvar:max-download-size");
+        script->respond("OKAY4096");
+        expect_flash(*script, "boot_b", payload);
+
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(
+            flash_input(bound, "boot", "boot.img", PlannedSlot::Other), {});
+        CHECK(token);
+        CHECK((*token)->execute({}));
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:has-slot:boot");
+        script->respond("OKAYyes");
+        script->expect_write("getvar:slot-count");
+        script->respond("OKAY3");
+
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(
+            flash_input(bound, "boot", "boot.img", PlannedSlot::Other), {});
+        CHECK(!token);
+        CHECK(token.error().outbound_certainty ==
+              TransferCertainty::FullyTransferred);
+        CHECK(token.error().task_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(script->complete());
+        CHECK(session.state() == SessionState::Ready);
+    }
+}
+
+[[nodiscard]] PreparedUpdateArtifact package_artifact(
+    std::string name,
+    std::string_view contents) {
+    auto bound = bind_artifact(
+        name, std::make_shared<MemorySource>(to_bytes(contents)));
+    return {
+        .name = std::move(name),
+        .resolved = std::move(bound.resolved),
+        .artifact = std::move(bound.artifact),
+    };
+}
+
+void later_prepare_failure_sends_zero_destructive_commands() {
+    auto system = package_artifact("system.img", "system-image");
+    auto super = package_artifact("super_empty.img", "super-image");
+    PreparedUpdatePackage package{
+        .plan =
+            {
+                .tasks =
+                    {
+                        PlannedUpdateTask{
+                            .kind = UpdateTaskKind::Flash,
+                            .partition = "system",
+                            .artifact = "system.img",
+                        },
+                        PlannedUpdateTask{
+                            .kind = UpdateTaskKind::UpdateSuper,
+                        },
+                    },
+            },
+        .artifacts = {system},
+        .update_super_state = UpdateSuperPreparationState::Prepared,
+        .prepared_super_artifact =
+            std::make_shared<const PreparedSuperArtifact>(super.resolved,
+                                                          super.artifact),
+        .requires_device_validation = false,
+    };
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY4096");
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+
+    auto result = execute_prepared_update(package, device);
+    CHECK(!result);
+    CHECK(result.error().kind == UpdateExecutionErrorKind::DeviceTaskFailed);
+    CHECK(result.error().task_index == 1U);
+    CHECK(result.error().completed_tasks == 0U);
+    CHECK(result.error().device_error);
+    CHECK(result.error().device_error->outbound_certainty ==
+          TransferCertainty::NotTransferred);
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void primitive_error_mapping_preserves_every_diagnostic() {
+    PrimitiveError primitive{
+        .code = PrimitiveErrorCode::Poisoned,
+        .operation = PrimitiveOperation::Fetch,
+        .phase = ProtocolPhase::DataRead,
+        .message = "transport failed",
+        .device_message = "device detail",
+        .informational =
+            {
+                Response{.kind = ResponseKind::Info, .payload = "one"},
+                Response{.kind = ResponseKind::Text, .payload = "two"},
+            },
+        .transport_status = TransportStatus::IoError,
+        .transport_certainty = TransferCertainty::PartialOrUnknown,
+        .outbound_certainty = TransferCertainty::FullyTransferred,
+        .inbound_expected = 8192U,
+        .inbound_transferred = 1024U,
+        .inbound_certainty = TransferCertainty::PartialOrUnknown,
+        .native_code = 73,
+        .session_poisoned = true,
+    };
+    auto mapped = map_primitive_update_error(std::move(primitive));
+    CHECK(mapped.kind == UpdateDeviceErrorKind::Failed);
+    CHECK(mapped.phase == ProtocolPhase::DataRead);
+    CHECK(mapped.message == "transport failed");
+    CHECK(mapped.device_message == "device detail");
+    CHECK(mapped.informational.size() == 2U);
+    CHECK(mapped.informational[0].payload == "one");
+    CHECK(mapped.informational[1].kind == ResponseKind::Text);
+    CHECK(mapped.transport_status == TransportStatus::IoError);
+    CHECK(mapped.transport_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(mapped.outbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(mapped.inbound_expected == 8192U);
+    CHECK(mapped.inbound_transferred == 1024U);
+    CHECK(mapped.inbound_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(mapped.session_poisoned);
+    CHECK(!mapped.session_closed);
+    CHECK(mapped.native_code == 73);
+
+    auto closed = map_primitive_update_error(PrimitiveError{
+        .code = PrimitiveErrorCode::Closed,
+        .operation = PrimitiveOperation::Reboot,
+        .message = "closed",
+    });
+    CHECK(closed.session_closed);
+}
+
+void actual_device_fail_preserves_info_and_device_message() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:product");
+    script->respond("INFOchecking");
+    script->respond("FAILdenied");
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+
+    auto result = device.getvar("product", {});
+    CHECK(!result);
+    CHECK(result.error().kind == UpdateDeviceErrorKind::Failed);
+    CHECK(result.error().phase == ProtocolPhase::FinalResponse);
+    CHECK(result.error().device_message == "denied");
+    CHECK(result.error().informational.size() == 1U);
+    CHECK(result.error().informational[0].payload == "checking");
+    CHECK(result.error().transport_status == TransportStatus::Ok);
+    CHECK(result.error().transport_certainty == TransferCertainty::FullyTransferred);
+    CHECK(result.error().outbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(!result.error().session_poisoned);
+    CHECK(result.error().task_certainty == TransferCertainty::NotTransferred);
+    CHECK(result.error().completed_actions == 0U);
+    CHECK(result.error().total_actions == 0U);
+    CHECK(script->complete());
+}
+
+void single_primitive_task_certainty_tracks_exact_outbound() {
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("erase:userdata");
+    script->respond("FAILerase denied");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+    auto token = device.prepare_task(
+        UpdateDeviceTaskInput{
+            .task = {
+                .kind = UpdateTaskKind::Erase,
+                .partition = "userdata",
+            },
+        },
+        {});
+    CHECK(token);
+    auto result = (*token)->execute({});
+    CHECK(!result);
+    CHECK(result.error().device_message == "erase denied");
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::FullyTransferred);
+    CHECK(result.error().task_certainty ==
+          result.error().outbound_certainty);
+    CHECK(result.error().completed_actions == 0U);
+    CHECK(result.error().total_actions == 1U);
+    CHECK(script->complete());
+}
+
+void multipart_flash_failure_preserves_primitive_and_task_evidence() {
+    const auto raw = three_block_raw_image();
+    auto bound = bind_artifact(
+        "system.img", std::make_shared<MemorySource>(raw));
+    auto oracle = SparseFlashPlan::create(*bound.artifact, 4200U);
+    CHECK(oracle);
+    CHECK(oracle->parts().size() == 3U);
+    std::vector<std::vector<std::byte>> encoded_parts;
+    encoded_parts.reserve(oracle->parts().size());
+    for (const auto& part : oracle->parts()) {
+        encoded_parts.push_back(read_image_source(*part.source));
+    }
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY4200");
+    expect_flash(*script, "system", encoded_parts[0]);
+
+    const auto second_download = download_command(encoded_parts[1].size());
+    script->expect_write(second_download);
+    script->respond(std::string{"DATA"} + second_download.substr(9U));
+    script->expect_source_write(
+        encoded_parts[1],
+        {{.size = encoded_parts[1].size(),
+          .progress_watermark = encoded_parts[1].size()}});
+    script->respond("OKAYstaged");
+    script->expect_write("flash:system");
+    script->respond("INFOchecking partition");
+    script->respond("FAILpartition denied");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+    auto token = device.prepare_task(flash_input(bound), {});
+    CHECK(token);
+    auto result = (*token)->execute({});
+    CHECK(!result);
+    const auto& error = result.error();
+    CHECK(error.kind == UpdateDeviceErrorKind::Failed);
+    CHECK(error.phase == ProtocolPhase::FinalResponse);
+    CHECK(error.device_message == "partition denied");
+    CHECK(error.informational.size() == 1U);
+    CHECK(error.informational[0].payload == "checking partition");
+    CHECK(error.transport_status == TransportStatus::Ok);
+    CHECK(error.transport_certainty == TransferCertainty::FullyTransferred);
+    CHECK(error.outbound_certainty == TransferCertainty::FullyTransferred);
+    CHECK(error.task_certainty == TransferCertainty::PartialOrUnknown);
+    CHECK(error.completed_actions == 1U);
+    CHECK(error.total_actions == 3U);
+    CHECK(!error.session_poisoned);
+    CHECK(!error.session_closed);
+    CHECK(error.native_code == 0);
+    CHECK(script->complete());
+    CHECK(session.state() == SessionState::Ready);
+}
+
+void cancellation_and_absolute_deadline_are_fail_closed() {
+    const auto payload = to_bytes("cancel-payload");
+    auto bound = bind_artifact(
+        "system.img", std::make_shared<MemorySource>(payload));
+    {
+        std::stop_source stop;
+        auto transport =
+            std::make_unique<StopAfterReadTransport>(stop, 1U);
+        auto* scripted = &transport->script();
+        scripted->expect_write("erase:userdata");
+        scripted->respond("OKAYerased");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(
+            UpdateDeviceTaskInput{
+                .task = {
+                    .kind = UpdateTaskKind::Erase,
+                    .partition = "userdata",
+                },
+            },
+            {});
+        CHECK(token);
+        auto result = (*token)->execute(
+            UpdateOperationContext{.cancellation = stop.get_token()});
+        CHECK(!result);
+        CHECK(result.error().kind == UpdateDeviceErrorKind::Cancelled);
+        CHECK(result.error().session_poisoned);
+        CHECK(result.error().task_certainty ==
+              TransferCertainty::FullyTransferred);
+        CHECK(result.error().completed_actions == 1U);
+        CHECK(result.error().total_actions == 1U);
+        CHECK(scripted->cancellation_requested());
+        CHECK(scripted->complete());
+        // The cancellation raced after the reply but is sticky in the session.
+        // The quarantine bit prevents callers from treating Ready as reusable.
+        CHECK(session.state() == SessionState::Ready);
+        auto unavailable = service.getvar("product");
+        CHECK(!unavailable);
+        CHECK(unavailable.error().code == PrimitiveErrorCode::Cancelled);
+        CHECK(session.state() == SessionState::Poisoned);
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        std::stop_source stopped;
+        stopped.request_stop();
+        auto result = device.prepare_task(
+            flash_input(bound),
+            UpdateOperationContext{.cancellation = stopped.get_token()});
+        CHECK(!result);
+        CHECK(result.error().kind == UpdateDeviceErrorKind::Cancelled);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto result = device.prepare_task(
+            flash_input(bound),
+            UpdateOperationContext{
+                .deadline = std::chrono::steady_clock::now(),
+            });
+        CHECK(!result);
+        CHECK(result.error().kind == UpdateDeviceErrorKind::TimedOut);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:max-download-size");
+        script->respond("OKAY4096");
+        const auto command = download_command(payload.size());
+        script->expect_write(command);
+        script->respond(std::string{"DATA"} + command.substr(9U));
+        script->expect_source_write(
+            payload,
+            {{.size = 2U, .progress_watermark = 2U},
+             {.offset = 2U,
+              .size = payload.size() - 2U,
+              .progress_watermark = payload.size()}});
+
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        std::stop_source stop;
+        PrimitiveUpdateDevice device(
+            service,
+            PrimitiveUpdateDeviceOptions{
+                .progress = [&stop](const PrimitiveUpdateProgress& value) {
+                    if (value.part_completed_bytes != 0U) {
+                        stop.request_stop();
+                    }
+                    return PrimitiveUpdateProgressAction::Continue;
+                },
+            });
+        auto token = device.prepare_task(flash_input(bound), {});
+        CHECK(token);
+        auto result = (*token)->execute(
+            UpdateOperationContext{.cancellation = stop.get_token()});
+        CHECK(!result);
+        CHECK(result.error().kind == UpdateDeviceErrorKind::Cancelled);
+        CHECK(result.error().transport_status == TransportStatus::Cancelled);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().session_poisoned);
+        CHECK(result.error().task_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().completed_actions == 0U);
+        CHECK(result.error().total_actions == 1U);
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:max-download-size");
+        script->respond("OKAY4096");
+        const auto command = download_command(payload.size());
+        script->expect_write(command);
+        script->respond(std::string{"DATA"} + command.substr(9U));
+        script->expect_source_write(
+            payload,
+            {{.size = 2U, .progress_watermark = 2U},
+             {.offset = 2U,
+              .size = payload.size() - 2U,
+              .progress_watermark = payload.size()}});
+
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(
+            service,
+            PrimitiveUpdateDeviceOptions{
+                .progress = [](const PrimitiveUpdateProgress& value) {
+                    if (value.part_completed_bytes != 0U) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(750));
+                    }
+                    return PrimitiveUpdateProgressAction::Continue;
+                },
+            });
+        auto token = device.prepare_task(flash_input(bound), {});
+        CHECK(token);
+        auto result = (*token)->execute(UpdateOperationContext{
+            .deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(500),
+        });
+        CHECK(!result);
+        CHECK(result.error().kind == UpdateDeviceErrorKind::TimedOut);
+        CHECK(result.error().transport_status == TransportStatus::Cancelled);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().session_poisoned);
+        CHECK(result.error().task_certainty ==
+              TransferCertainty::PartialOrUnknown);
+        CHECK(result.error().completed_actions == 0U);
+        CHECK(result.error().total_actions == 1U);
+        CHECK(session.state() == SessionState::Poisoned);
+        CHECK(script->complete());
+    }
+}
+
+void sparse_token_retains_identity_and_does_not_reparse() {
+    const auto sparse_bytes = one_block_sparse_image();
+    auto source = std::make_shared<MemorySource>(sparse_bytes);
+    auto bound = bind_artifact("system.img", source);
+    CHECK(bound.artifact->sparse_image() != nullptr);
+    std::weak_ptr<const IImageSource> weak_source = source;
+    std::weak_ptr<const ResolvedArtifact> weak_resolved = bound.resolved;
+    std::weak_ptr<const FlashArtifact> weak_artifact = bound.artifact;
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY0x100000");
+    expect_flash(*script, "system", sparse_bytes);
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(service);
+    auto token = device.prepare_task(flash_input(bound), {});
+    CHECK(token);
+    const auto reads_after_prepare = source->read_count();
+
+    bound.resolved.reset();
+    bound.artifact.reset();
+    source.reset();
+    CHECK(!weak_source.expired());
+    CHECK(!weak_resolved.expired());
+    CHECK(!weak_artifact.expired());
+
+    CHECK((*token)->execute({}));
+    auto retained_source = std::dynamic_pointer_cast<const MemorySource>(
+        weak_source.lock());
+    CHECK(retained_source);
+    // ScriptedTransport requested exactly one full transfer read. Any sparse
+    // reparse in execute would add metadata reads before that transfer.
+    CHECK(retained_source->read_count() == reads_after_prepare + 1U);
+    retained_source.reset();
+    token->reset();
+    CHECK(weak_source.expired());
+    CHECK(weak_resolved.expired());
+    CHECK(weak_artifact.expired());
+    CHECK(script->complete());
+}
+
+void progress_observer_exception_is_contained() {
+    const auto payload = to_bytes("observer-payload");
+    auto bound = bind_artifact(
+        "system.img", std::make_shared<MemorySource>(payload));
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY4096");
+    const auto command = download_command(payload.size());
+    script->expect_write(command);
+    script->respond(std::string{"DATA"} + command.substr(9U));
+    script->expect_source_write(
+        payload,
+        {{.size = 3U, .progress_watermark = 3U},
+         {.offset = 3U,
+          .size = payload.size() - 3U,
+          .progress_watermark = payload.size()}});
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(
+        service,
+        PrimitiveUpdateDeviceOptions{
+            .progress = [](const PrimitiveUpdateProgress& value) {
+                if (value.part_completed_bytes != 0U) {
+                    throw std::runtime_error("observer failure");
+                }
+                return PrimitiveUpdateProgressAction::Continue;
+            },
+        });
+    auto token = device.prepare_task(flash_input(bound), {});
+    CHECK(token);
+    auto result = (*token)->execute({});
+    CHECK(!result);
+    CHECK(result.error().kind == UpdateDeviceErrorKind::Failed);
+    CHECK(result.error().message ==
+          "flash progress observer threw during image transfer");
+    CHECK(result.error().transport_status == TransportStatus::Cancelled);
+    CHECK(result.error().outbound_certainty ==
+          TransferCertainty::PartialOrUnknown);
+    CHECK(result.error().session_poisoned);
+    CHECK(session.state() == SessionState::Poisoned);
+    CHECK(script->complete());
+}
+
+void invalid_commands_artifacts_and_wire_limits_fail_in_prepare() {
+    auto regular = bind_artifact(
+        "system.img", std::make_shared<MemorySource>(to_bytes("image")));
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+
+        auto invalid_partition = flash_input(regular);
+        invalid_partition.task.partition = std::string{"bad\nname", 8U};
+        CHECK(!device.prepare_task(std::move(invalid_partition), {}));
+
+        auto invalid_slot = flash_input(regular);
+        invalid_slot.task.slot = static_cast<PlannedSlot>(0xffU);
+        CHECK(!device.prepare_task(std::move(invalid_slot), {}));
+
+        auto mismatched = flash_input(regular);
+        mismatched.flash_artifact->resolved =
+            bind_artifact("other.img",
+                          std::make_shared<MemorySource>(to_bytes("other")))
+                .resolved;
+        CHECK(!device.prepare_task(std::move(mismatched), {}));
+
+        auto vbmeta = flash_input(regular);
+        vbmeta.task.apply_vbmeta = true;
+        CHECK(!device.prepare_task(std::move(vbmeta), {}));
+
+        auto malformed_flash = flash_input(regular);
+        malformed_flash.task.reboot_target = PlannedRebootTarget::Recovery;
+        CHECK(!device.prepare_task(std::move(malformed_flash), {}));
+
+        auto malformed_erase = UpdateDeviceTaskInput{
+            .task = {
+                .kind = UpdateTaskKind::Erase,
+                .partition = "userdata",
+                .slot = PlannedSlot::Other,
+            },
+        };
+        CHECK(!device.prepare_task(std::move(malformed_erase), {}));
+
+        auto malformed_reboot = UpdateDeviceTaskInput{
+            .task = {
+                .kind = UpdateTaskKind::Reboot,
+                .apply_vbmeta = true,
+            },
+        };
+        CHECK(!device.prepare_task(std::move(malformed_reboot), {}));
+
+        auto update_super = device.prepare_task(
+            UpdateDeviceTaskInput{
+                .task = {.kind = UpdateTaskKind::UpdateSuper},
+            },
+            {});
+        CHECK(!update_super);
+        CHECK(update_super.error().outbound_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(update_super.error().task_certainty ==
+              TransferCertainty::NotTransferred);
+        CHECK(update_super.error().completed_actions == 0U);
+        CHECK(update_super.error().total_actions == 0U);
+        CHECK(script->complete());
+    }
+    {
+        auto empty = bind_artifact(
+            "empty.img", std::make_shared<MemorySource>(std::vector<std::byte>{}));
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        CHECK(!device.prepare_task(
+            flash_input(empty, "empty", "empty.img"), {}));
+        CHECK(script->complete());
+    }
+    {
+        const auto wire_max =
+            static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
+        auto exact = bind_artifact(
+            "huge.img", std::make_shared<DeclaredSizeSource>(wire_max));
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:max-download-size");
+        script->respond("OKAY0x100000000");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(
+            flash_input(exact, "huge", "huge.img"), {});
+        CHECK(token);
+        CHECK(script->complete());
+    }
+    {
+        auto transport = std::make_unique<ScriptedTransport>();
+        auto* script = transport.get();
+        script->expect_write("getvar:max-download-size");
+        script->respond("OKAY0");
+        FastbootSession session(std::move(transport));
+        PrimitiveService service(session);
+        PrimitiveUpdateDevice device(service);
+        auto token = device.prepare_task(flash_input(regular), {});
+        CHECK(!token);
+        CHECK(token.error().phase == ProtocolPhase::FinalResponse);
+        CHECK(token.error().outbound_certainty ==
+              TransferCertainty::FullyTransferred);
+        CHECK(script->complete());
+    }
+}
+
+}  // namespace
+
+int main() {
+    const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
+        {"ordinary tasks", ordinary_flash_erase_and_reboot_are_complete},
+        {"slot other prepare", slot_other_is_fully_resolved_during_prepare},
+        {"slot topology compatibility",
+         slot_other_legacy_fallback_and_ambiguous_topology_fail_closed},
+        {"two phase fail closed",
+         later_prepare_failure_sends_zero_destructive_commands},
+        {"error bridge", primitive_error_mapping_preserves_every_diagnostic},
+        {"actual device fail",
+         actual_device_fail_preserves_info_and_device_message},
+        {"single primitive task certainty",
+         single_primitive_task_certainty_tracks_exact_outbound},
+        {"multipart task certainty",
+         multipart_flash_failure_preserves_primitive_and_task_evidence},
+        {"cancellation and deadline",
+         cancellation_and_absolute_deadline_are_fail_closed},
+        {"sparse token identity",
+         sparse_token_retains_identity_and_does_not_reparse},
+        {"observer exception", progress_observer_exception_is_contained},
+        {"prepare validation",
+         invalid_commands_artifacts_and_wire_limits_fail_in_prepare},
+    };
+
+    std::size_t failures = 0U;
+    for (const auto& [name, test] : tests) {
+        try {
+            test();
+            std::cout << "PASS " << name << '\n';
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << "FAIL " << name << ": " << error.what() << '\n';
+        }
+    }
+    return failures == 0U ? 0 : 1;
+}
