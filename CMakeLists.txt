@@ -179,6 +179,7 @@ add_library(
   src/api/device_selector.cpp
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
+  src/fastboot/file_receive_service.cpp
   src/fastboot/primitive_service.cpp
   src/fastboot/reconnect_coordinator.cpp
   src/fastboot/update_plan.cpp
@@ -421,6 +422,19 @@ if(BUILD_TESTING)
   add_test(NAME reconnect_coordinator
            COMMAND kairosboot_reconnect_coordinator_tests)
   set_tests_properties(reconnect_coordinator PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_file_receive_service_tests
+                 tests/fastboot/file_receive_service_tests.cpp
+                 tests/protocol/scripted_transport.cpp)
+  target_compile_features(kairosboot_file_receive_service_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_file_receive_service_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                     "${CMAKE_CURRENT_SOURCE_DIR}/src/protocol")
+  target_link_libraries(kairosboot_file_receive_service_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_file_receive_service_tests)
+  add_test(NAME file_receive_service COMMAND kairosboot_file_receive_service_tests)
+  set_tests_properties(file_receive_service PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_variable_parser_tests
                  tests/fastboot/variable_parser_tests.cpp)
