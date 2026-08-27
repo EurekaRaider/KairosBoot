@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import pathlib
+import re
 import signal
 import socket
 import struct
@@ -401,9 +403,163 @@ def make_update_package(
     return package
 
 
+def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
+    """Context-free validate/plan contract: fixed bytes and exit codes."""
+    contracts = pathlib.Path(__file__).resolve().parent.parent / "contracts"
+    fixture = contracts / "fleet-job-v1.fixture.yaml"
+    golden = (contracts / "job-plan-v1.golden.json").read_bytes()
+    if not golden.endswith(b"\n") or b"\n" in golden[:-1]:
+        raise AssertionError(f"golden plan contract is not one line: {golden!r}")
+
+    syntax_manifest = directory / "fleet-syntax.yaml"
+    syntax_manifest.write_text(
+        "apiVersion: kairosboot.io/v1\nkind: [unclosed\n", encoding="utf-8"
+    )
+    semantic_manifest = directory / "fleet-semantic.yaml"
+    semantic_manifest.write_text(
+        "apiVersion: kairosboot.io/v1\nkind: FlashJob\nbogusField: true\n",
+        encoding="utf-8",
+    )
+    missing_manifest = directory / "fleet-missing.yaml"
+
+    def local(
+        arguments: Sequence[str], expected_exit: int
+    ) -> tuple[bytes, bytes]:
+        completed = subprocess.run(
+            [str(cli), *arguments],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=False,
+        )
+        if completed.returncode != expected_exit:
+            raise AssertionError(
+                f"unexpected exit for {arguments!r}: "
+                f"{completed.returncode} != {expected_exit}, "
+                f"stdout={completed.stdout!r}, stderr={completed.stderr!r}"
+            )
+        # The CLI follows the platform text-mode line endings (CRLF on
+        # Windows); compare the logical content by normalizing CRLF to LF.
+        return (
+            completed.stdout.replace(b"\r\n", b"\n"),
+            completed.stderr.replace(b"\r\n", b"\n"),
+        )
+
+    # validate: deterministic one-line success summary on stdout.
+    stdout, stderr = local(["validate", str(fixture)], 0)
+    if stdout != f"OK {fixture}\n".encode("utf-8") or stderr != b"":
+        raise AssertionError(f"validate success output changed: {stdout!r}")
+
+    stdout, stderr = local(["--json", "validate", str(fixture)], 0)
+    document = parse_success_json(stdout, stderr)
+    if document != {
+        "ok": True,
+        "command": "validate",
+        "manifest": str(fixture),
+    }:
+        raise AssertionError(f"unexpected validate JSON: {document!r}")
+
+    # validate: YAML syntax failure carries the path, line, and column.
+    stdout, stderr = local(["validate", str(syntax_manifest)], 4)
+    if stdout != b"" or not stderr.startswith(b"kairosboot: "):
+        raise AssertionError(f"syntax failure output changed: {stderr!r}")
+    if f"{syntax_manifest}:".encode("utf-8") not in stderr:
+        raise AssertionError(f"syntax failure lost the path: {stderr!r}")
+    if re.search(rb":\d+:\d+: ", stderr) is None:
+        raise AssertionError(f"syntax failure lost line/column: {stderr!r}")
+    if b"(native error 0)" not in stderr:
+        raise AssertionError(f"syntax failure lost native code: {stderr!r}")
+
+    # validate: semantic failure pins the offending line and column.
+    stdout, stderr = local(["validate", str(semantic_manifest)], 4)
+    if stdout != b"" or not stderr.startswith(b"kairosboot: "):
+        raise AssertionError(f"semantic failure output changed: {stderr!r}")
+    if f"{semantic_manifest}:3:1: ".encode("utf-8") not in stderr:
+        raise AssertionError(f"semantic failure lost 3:1 mark: {stderr!r}")
+    if b"manifest map contains an unknown field" not in stderr:
+        raise AssertionError(f"semantic failure lost the reason: {stderr!r}")
+    if b"(native error 0)" not in stderr:
+        raise AssertionError(f"semantic failure lost native code: {stderr!r}")
+
+    # validate: a missing file reports the preserved platform native code.
+    stdout, stderr = local(["validate", str(missing_manifest)], 4)
+    if stdout != b"":
+        raise AssertionError(f"missing file wrote stdout: {stdout!r}")
+    if f"{missing_manifest}".encode("utf-8") not in stderr:
+        raise AssertionError(f"missing file lost the path: {stderr!r}")
+    if b"(native error 2)" not in stderr:
+        raise AssertionError(f"missing file lost native code: {stderr!r}")
+
+    # plan: stdout is the golden canonical JSON byte-for-byte, one trailing LF.
+    stdout, stderr = local(["plan", str(fixture)], 0)
+    if stdout != golden or stderr != b"":
+        raise AssertionError(
+            f"plan output is not the golden contract: {stdout[:80]!r}..."
+        )
+
+    # plan --digest: SHA-256 hex of the canonical JSON bytes.
+    digest = hashlib.sha256(golden[:-1]).hexdigest()
+    if digest != (
+        "992daa21b5ea246910fc5d9ffffafed3e36e883d6a407b70abe3b04def3823f4"
+    ):
+        raise AssertionError(f"golden digest drifted: {digest}")
+    stdout, stderr = local(["plan", str(fixture), "--digest"], 0)
+    if stdout != f"{digest}\n".encode("ascii") or stderr != b"":
+        raise AssertionError(f"plan --digest output changed: {stdout!r}")
+
+    # plan: failures never emit partial JSON on stdout.
+    stdout, stderr = local(["plan", str(semantic_manifest)], 4)
+    if stdout != b"":
+        raise AssertionError(f"failed plan wrote stdout: {stdout!r}")
+    if f"{semantic_manifest}:3:1: ".encode("utf-8") not in stderr:
+        raise AssertionError(f"failed plan lost 3:1 mark: {stderr!r}")
+
+    # Usage errors follow the repository's exit-2 parse contract.
+    stdout, stderr = local(["validate"], 2)
+    if stdout != b"" or not stderr.startswith(
+        b"kairosboot: validate requires exactly <manifest>\nUsage:\n"
+    ):
+        raise AssertionError(f"validate arity error changed: {stderr!r}")
+
+    stdout, stderr = local(["plan"], 2)
+    if stdout != b"" or not stderr.startswith(
+        b"kairosboot: plan requires exactly <manifest>\nUsage:\n"
+    ):
+        raise AssertionError(f"plan arity error changed: {stderr!r}")
+
+    stdout, stderr = local(["plan", "job.yaml", "extra.yaml"], 2)
+    if b"plan supports only --digest after <manifest>" not in stderr:
+        raise AssertionError(f"plan operand error changed: {stderr!r}")
+
+    stdout, stderr = local(["plan", "job.yaml", "--digest", "--digest"], 2)
+    if b"plan option --digest may only be specified once" not in stderr:
+        raise AssertionError(f"plan digest error changed: {stderr!r}")
+
+    stdout, stderr = local(["--json", "plan", "job.yaml"], 2)
+    if stdout != (
+        b'{"ok":false,"status":"invalid_argument",'
+        b'"message":"option --json is not valid for plan"}\n'
+    ) or stderr != b"":
+        raise AssertionError(f"plan json rejection changed: {stdout!r}")
+
+    stdout, stderr = local(
+        ["--device", "tcp:127.0.0.1:9", "validate", "job.yaml"], 2
+    )
+    if b"option --device is not valid for validate" not in stderr:
+        raise AssertionError(f"validate device rejection changed: {stderr!r}")
+
+    stdout, stderr = local(["frobnicate"], 2)
+    if stdout != b"" or not stderr.startswith(
+        b"kairosboot: unknown command\nUsage:\n"
+    ):
+        raise AssertionError(f"unknown command error changed: {stderr!r}")
+
+
 def run(cli: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="kairosboot-cli-") as raw_directory:
         directory = pathlib.Path(raw_directory)
+
+        run_fleet_commands(cli, directory)
 
         def binary_getvar(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"getvar:binary"
