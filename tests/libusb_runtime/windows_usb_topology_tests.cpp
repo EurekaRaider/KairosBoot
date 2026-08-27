@@ -26,6 +26,7 @@ using kairosboot::transport::WindowsUsbInterfaceFingerprint;
 using kairosboot::transport::WindowsUsbNativeErrorDomain;
 using kairosboot::transport::WindowsUsbNativeNodeSnapshot;
 using kairosboot::transport::WindowsUsbNativeSnapshot;
+using kairosboot::transport::WindowsUsbNativeSnapshotResult;
 using kairosboot::transport::WindowsUsbTopologyDiscovery;
 using kairosboot::transport::WindowsUsbTopologyError;
 using kairosboot::transport::WindowsUsbTopologyErrorKind;
@@ -145,6 +146,31 @@ constexpr std::string_view kDeviceInstanceId =
     };
 }
 
+[[nodiscard]] WindowsUsbTopologyQuery batch_query(
+    const std::size_t device_index,
+    const std::uint8_t interface_number) {
+    auto wanted = query(
+        0x1000UL + static_cast<unsigned long>(device_index),
+        1U,
+        static_cast<std::uint8_t>(device_index + 1U),
+        {static_cast<std::uint8_t>(device_index + 1U), 1U});
+    wanted.device_instance_id_utf8 =
+        "USB\\VID_18D1&PID_4EE0\\PORT-" +
+        std::to_string(device_index + 1U);
+    wanted.serial_utf8 = std::string{"DUPLICATE-SERIAL"};
+    wanted.interface_fingerprint.interface_number = interface_number;
+    return wanted;
+}
+
+[[nodiscard]] WindowsUsbNativeSnapshot batch_native_snapshot(
+    const WindowsUsbTopologyQuery& wanted) {
+    auto snapshot = native_snapshot(wanted);
+    auto& leaf = snapshot.chain_leaf_to_root.front();
+    leaf.hardware_ids_utf8 = {"USB\\VID_18D1&PID_4EE0&REV_0100"};
+    leaf.location_paths_utf8 = {location_path(wanted.port_numbers)};
+    return snapshot;
+}
+
 [[nodiscard]] WindowsUsbTopologyNode node(
     const WindowsUsbTopologyQuery& wanted,
     const unsigned long session = kSession,
@@ -209,6 +235,26 @@ public:
         }
         return results[index];
     }
+
+    [[nodiscard]] std::expected<
+        std::vector<kairosboot::transport::
+                        WindowsUsbTopologyDeviceCandidatesResult>,
+        WindowsUsbTopologyError>
+    read_candidate_batch(
+        std::span<const WindowsUsbTopologyQuery> queries,
+        std::chrono::steady_clock::time_point,
+        std::stop_token) const override {
+        return std::unexpected(WindowsUsbTopologyError{
+            .kind = WindowsUsbTopologyErrorKind::InvalidArgument,
+            .stage = WindowsUsbTopologyStage::Validation,
+            .native_domain = WindowsUsbNativeErrorDomain::None,
+            .native_code = 0U,
+            .libusb_session_data =
+                queries.empty() ? 0UL : queries.front().libusb_session_data,
+            .device_instance_id_utf8 = {},
+            .message = "single-query fake does not provide batch snapshots",
+        });
+    }
 };
 
 class FakeNativeBackend final : public IWindowsUsbTopologyNativeBackend {
@@ -234,6 +280,47 @@ public:
             (void)stop_source->request_stop();
         }
         return results[index];
+    }
+};
+
+class BatchNativeBackend final : public IWindowsUsbTopologyNativeBackend {
+public:
+    std::vector<std::vector<WindowsUsbNativeSnapshotResult>> passes;
+    mutable std::size_t batch_calls{};
+    mutable std::vector<std::vector<unsigned long>> requested_batches;
+    mutable std::vector<std::chrono::steady_clock::time_point> deadlines;
+    mutable std::vector<std::stop_token> cancellations;
+    std::size_t request_stop_after_call{};
+    std::stop_source* stop_source{};
+
+    [[nodiscard]] NativeResult read_snapshot(
+        unsigned long,
+        std::chrono::steady_clock::time_point,
+        std::stop_token) const override {
+        throw std::runtime_error(
+            "batch native backend must not receive per-device reads");
+    }
+
+    [[nodiscard]] std::expected<
+        std::vector<WindowsUsbNativeSnapshotResult>,
+        WindowsUsbTopologyError>
+    read_snapshots(
+        const std::span<const unsigned long> sessions,
+        const std::chrono::steady_clock::time_point deadline,
+        const std::stop_token cancellation) const override {
+        if (passes.empty()) {
+            throw std::runtime_error("batch native backend has no pass");
+        }
+        requested_batches.emplace_back(sessions.begin(), sessions.end());
+        deadlines.push_back(deadline);
+        cancellations.push_back(cancellation);
+        const auto index = std::min(batch_calls, passes.size() - 1U);
+        ++batch_calls;
+        if (batch_calls == request_stop_after_call &&
+            stop_source != nullptr) {
+            (void)stop_source->request_stop();
+        }
+        return passes[index];
     }
 };
 
@@ -609,6 +696,144 @@ void duplicate_serial_on_other_session_cannot_shadow_exact_devinst() {
     CHECK(result->device_instance_id_utf8 == correct.device_instance_id_utf8);
 }
 
+void batch_discovery_is_two_global_passes_and_device_atomic() {
+    constexpr std::size_t kDeviceCount = 32U;
+    constexpr std::size_t kInterfacesPerDevice = 2U;
+    std::vector<WindowsUsbTopologyQuery> queries;
+    std::vector<WindowsUsbNativeSnapshotResult> stable_pass;
+    queries.reserve(kDeviceCount * kInterfacesPerDevice);
+    stable_pass.reserve(kDeviceCount);
+    for (std::size_t device = 0U; device < kDeviceCount; ++device) {
+        auto first = batch_query(device, 0U);
+        auto second = batch_query(device, 1U);
+        stable_pass.push_back(batch_native_snapshot(first));
+        queries.push_back(std::move(first));
+        queries.push_back(std::move(second));
+    }
+
+    BatchNativeBackend native;
+    native.passes = {stable_pass, stable_pass};
+    SetupApiWindowsUsbTopologyBackend backend(native);
+    WindowsUsbTopologyDiscovery discovery(backend);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    const std::stop_source cancellation;
+    const auto resolved = discovery.discover_batch(
+        queries, deadline, cancellation.get_token());
+    CHECK(resolved.has_value());
+    CHECK(resolved->size() == queries.size());
+    CHECK(native.batch_calls == 2U);
+    CHECK(native.requested_batches.size() == 2U);
+    CHECK(native.requested_batches[0].size() == kDeviceCount);
+    CHECK(native.requested_batches[0] == native.requested_batches[1]);
+    CHECK(native.deadlines.size() == 2U);
+    CHECK(native.deadlines[0] == deadline);
+    CHECK(native.deadlines[1] == deadline);
+    CHECK(native.cancellations.size() == 2U);
+    CHECK(native.cancellations[0] == cancellation.get_token());
+    CHECK(native.cancellations[1] == cancellation.get_token());
+    for (std::size_t index = 0U; index < resolved->size(); ++index) {
+        CHECK((*resolved)[index].has_value());
+        CHECK((*resolved)[index]->serial_utf8 ==
+              std::optional<std::string>{"DUPLICATE-SERIAL"});
+        CHECK((*resolved)[index]->interface_fingerprint ==
+              queries[index].interface_fingerprint);
+        CHECK((*resolved)[index]->device_instance_id_utf8 ==
+              queries[index].device_instance_id_utf8);
+    }
+
+    auto mutated_pass = stable_pass;
+    mutated_pass[7U]
+        .value()
+        .chain_leaf_to_root.front()
+        .hardware_ids_utf8.push_back("USB\\VID_18D1&PID_4EE0");
+    BatchNativeBackend mutated_native;
+    mutated_native.passes = {stable_pass, std::move(mutated_pass)};
+    SetupApiWindowsUsbTopologyBackend mutated_backend(mutated_native);
+    WindowsUsbTopologyDiscovery mutated_discovery(mutated_backend);
+    const auto mutated = mutated_discovery.discover_batch(
+        queries, deadline, cancellation.get_token());
+    CHECK(mutated.has_value());
+    CHECK(mutated->size() == queries.size());
+    CHECK(mutated_native.batch_calls == 2U);
+    for (std::size_t index = 0U; index < mutated->size(); ++index) {
+        const bool changed_device = index / kInterfacesPerDevice == 7U;
+        CHECK((*mutated)[index].has_value() != changed_device);
+        if (changed_device) {
+            CHECK((*mutated)[index].error().kind ==
+                  WindowsUsbTopologyErrorKind::IdentityChanged);
+            CHECK((*mutated)[index].error().stage ==
+                  WindowsUsbTopologyStage::StabilityCheck);
+        }
+    }
+
+    auto failed_pass = stable_pass;
+    const auto failed_session = queries[6U].libusb_session_data;
+    const WindowsUsbTopologyError device_failure{
+        .kind = WindowsUsbTopologyErrorKind::PermissionDenied,
+        .stage = WindowsUsbTopologyStage::PropertyRead,
+        .native_domain = WindowsUsbNativeErrorDomain::ConfigurationManager,
+        .native_code = 5U,
+        .libusb_session_data = failed_session,
+        .device_instance_id_utf8 = queries[6U].device_instance_id_utf8,
+        .message = "injected device-scoped failure",
+    };
+    failed_pass[3U] = std::unexpected(device_failure);
+    BatchNativeBackend failed_native;
+    failed_native.passes = {failed_pass, failed_pass};
+    SetupApiWindowsUsbTopologyBackend failed_backend(failed_native);
+    WindowsUsbTopologyDiscovery failed_discovery(failed_backend);
+    const auto failed = failed_discovery.discover_batch(
+        queries, deadline, cancellation.get_token());
+    CHECK(failed.has_value());
+    for (std::size_t index = 0U; index < failed->size(); ++index) {
+        const bool failed_device = index / kInterfacesPerDevice == 3U;
+        CHECK((*failed)[index].has_value() != failed_device);
+        if (failed_device) {
+            CHECK((*failed)[index].error() == device_failure);
+        }
+    }
+
+    BatchNativeBackend malformed_native;
+    auto short_pass = stable_pass;
+    short_pass.pop_back();
+    malformed_native.passes = {stable_pass, std::move(short_pass)};
+    SetupApiWindowsUsbTopologyBackend malformed_backend(malformed_native);
+    WindowsUsbTopologyDiscovery malformed_discovery(malformed_backend);
+    const auto malformed = malformed_discovery.discover_batch(
+        queries, deadline, cancellation.get_token());
+    CHECK(!malformed.has_value());
+    CHECK(malformed.error().kind ==
+          WindowsUsbTopologyErrorKind::MalformedSnapshot);
+
+    std::stop_source stopped;
+    BatchNativeBackend cancelled_native;
+    cancelled_native.passes = {stable_pass, stable_pass};
+    cancelled_native.request_stop_after_call = 1U;
+    cancelled_native.stop_source = &stopped;
+    SetupApiWindowsUsbTopologyBackend cancelled_backend(cancelled_native);
+    WindowsUsbTopologyDiscovery cancelled_discovery(cancelled_backend);
+    const auto cancelled = cancelled_discovery.discover_batch(
+        queries,
+        std::chrono::steady_clock::time_point::max(),
+        stopped.get_token());
+    CHECK(!cancelled.has_value());
+    CHECK(cancelled.error().kind ==
+          WindowsUsbTopologyErrorKind::Cancelled);
+    CHECK(cancelled_native.batch_calls == 1U);
+
+    BatchNativeBackend timed_native;
+    timed_native.passes = {stable_pass, stable_pass};
+    SetupApiWindowsUsbTopologyBackend timed_backend(timed_native);
+    WindowsUsbTopologyDiscovery timed_discovery(timed_backend);
+    const auto timed_out = timed_discovery.discover_batch(
+        queries, std::chrono::steady_clock::now() - 1ms, {});
+    CHECK(!timed_out.has_value());
+    CHECK(timed_out.error().kind ==
+          WindowsUsbTopologyErrorKind::TimedOut);
+    CHECK(timed_native.batch_calls == 0U);
+}
+
 void duplicate_candidates_for_exact_session_fail_closed() {
     const auto wanted = query();
     auto first = node(wanted);
@@ -891,6 +1116,8 @@ int main() {
         {"property read unplug",
          unplug_during_native_property_read_is_identity_change},
         {"duplicate serial isolation", duplicate_serial_on_other_session_cannot_shadow_exact_devinst},
+        {"batch two-pass device atomicity",
+         batch_discovery_is_two_global_passes_and_device_atomic},
         {"duplicate exact session", duplicate_candidates_for_exact_session_fail_closed},
         {"cancellation", cancellation_before_and_between_snapshots_is_deterministic},
         {"post-call interruption precedence", interruption_wins_over_backend_failure},

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -168,6 +169,23 @@ struct WindowsUsbTopologyError final {
     [[nodiscard]] bool operator==(const WindowsUsbTopologyError&) const = default;
 };
 
+struct WindowsUsbTopologyDeviceCandidates final {
+    unsigned long libusb_session_data{};
+    WindowsUsbNativeSnapshot native_snapshot;
+    std::vector<WindowsUsbTopologyNode> interface_candidates;
+
+    [[nodiscard]] bool operator==(
+        const WindowsUsbTopologyDeviceCandidates&) const = default;
+};
+
+using WindowsUsbNativeSnapshotResult =
+    std::expected<WindowsUsbNativeSnapshot, WindowsUsbTopologyError>;
+using WindowsUsbTopologyDeviceCandidatesResult =
+    std::expected<WindowsUsbTopologyDeviceCandidates,
+                  WindowsUsbTopologyError>;
+using WindowsUsbTopologyResult =
+    std::expected<WindowsUsbTopology, WindowsUsbTopologyError>;
+
 class IWindowsUsbTopologyBackend {
 public:
     virtual ~IWindowsUsbTopologyBackend() = default;
@@ -177,6 +195,16 @@ public:
     read_candidates(const WindowsUsbTopologyQuery& query,
                     std::chrono::steady_clock::time_point deadline,
                     std::stop_token stop_token) const = 0;
+
+    // One result per distinct session, in first-query order. A device-scoped
+    // error covers every interface query for that session.
+    [[nodiscard]] virtual std::expected<
+        std::vector<WindowsUsbTopologyDeviceCandidatesResult>,
+        WindowsUsbTopologyError>
+    read_candidate_batch(
+        std::span<const WindowsUsbTopologyQuery> queries,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token stop_token) const = 0;
 };
 
 class IWindowsUsbTopologyNativeBackend {
@@ -188,6 +216,16 @@ public:
     read_snapshot(unsigned long libusb_session_data,
                   std::chrono::steady_clock::time_point deadline,
                   std::stop_token stop_token) const = 0;
+
+    // One immutable result per requested session, in input order. Production
+    // performs one platform-global enumeration pass for the whole span.
+    [[nodiscard]] virtual std::expected<
+        std::vector<WindowsUsbNativeSnapshotResult>,
+        WindowsUsbTopologyError>
+    read_snapshots(
+        std::span<const unsigned long> libusb_session_data,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token stop_token) const;
 };
 
 // Uses only read-only SetupAPI/Configuration Manager queries. It never opens a
@@ -200,6 +238,14 @@ public:
     read_snapshot(unsigned long libusb_session_data,
                   std::chrono::steady_clock::time_point deadline,
                   std::stop_token stop_token) const override;
+
+    [[nodiscard]] std::expected<
+        std::vector<WindowsUsbNativeSnapshotResult>,
+        WindowsUsbTopologyError>
+    read_snapshots(
+        std::span<const unsigned long> libusb_session_data,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token stop_token) const override;
 };
 
 // Read-only production adapter. On Windows it enumerates present USB devnodes
@@ -220,6 +266,14 @@ public:
                     std::chrono::steady_clock::time_point deadline,
                     std::stop_token stop_token) const override;
 
+    [[nodiscard]] std::expected<
+        std::vector<WindowsUsbTopologyDeviceCandidatesResult>,
+        WindowsUsbTopologyError>
+    read_candidate_batch(
+        std::span<const WindowsUsbTopologyQuery> queries,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token stop_token) const override;
+
 private:
     const IWindowsUsbTopologyNativeBackend* native_backend_{};
 };
@@ -237,6 +291,17 @@ public:
     [[nodiscard]] std::expected<WindowsUsbTopology, WindowsUsbTopologyError>
     discover(
         const WindowsUsbTopologyQuery& query,
+        std::chrono::steady_clock::time_point deadline =
+            std::chrono::steady_clock::time_point::max(),
+        std::stop_token stop_token = {}) const;
+
+    // Output is exactly aligned with queries. Cancellation, timeout, malformed
+    // batch shape, or another batch-global failure returns unexpected and no
+    // per-interface result is published.
+    [[nodiscard]] std::expected<std::vector<WindowsUsbTopologyResult>,
+                                WindowsUsbTopologyError>
+    discover_batch(
+        std::span<const WindowsUsbTopologyQuery> queries,
         std::chrono::steady_clock::time_point deadline =
             std::chrono::steady_clock::time_point::max(),
         std::stop_token stop_token = {}) const;

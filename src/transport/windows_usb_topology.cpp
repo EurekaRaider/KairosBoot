@@ -13,6 +13,7 @@
 #include "src/transport/libusb_runtime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstring>
 #include <limits>
@@ -1602,9 +1603,174 @@ read_windows_usb_session_instance_id(
 #endif
 }
 
-std::expected<WindowsUsbNativeSnapshot, WindowsUsbTopologyError>
-SetupApiWindowsUsbNativeBackend::read_snapshot(
+std::expected<std::vector<WindowsUsbNativeSnapshotResult>,
+              WindowsUsbTopologyError>
+IWindowsUsbTopologyNativeBackend::read_snapshots(
+    const std::span<const unsigned long> libusb_session_data,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token stop_token) const {
+    std::vector<WindowsUsbNativeSnapshotResult> results;
+    results.reserve(libusb_session_data.size());
+    for (const auto session : libusb_session_data) {
+        results.push_back(read_snapshot(session, deadline, stop_token));
+    }
+    return results;
+}
+
+#if defined(_WIN32)
+[[nodiscard]] std::expected<WindowsUsbNativeSnapshot,
+                            WindowsUsbTopologyError>
+read_snapshot_from_global_nodes(
     const unsigned long libusb_session_data,
+    const std::vector<unsigned long>& present_nodes,
+    const std::vector<unsigned long>& hub_nodes,
+    const std::vector<unsigned long>& controller_nodes,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token stop_token) {
+    WindowsUsbNativeSnapshot snapshot{
+        .requested_system_node = libusb_session_data,
+        .chain_leaf_to_root = {},
+    };
+    auto current = static_cast<DEVINST>(libusb_session_data);
+    for (std::size_t depth = 0U; depth < kMaximumNativeParentDepth; ++depth) {
+        if (const auto stop = native_interrupted(
+                WindowsUsbTopologyStage::ParentTraversal,
+                deadline,
+                stop_token,
+                libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+
+        ULONG status = 0U;
+        ULONG problem = 0U;
+        const auto current_value = static_cast<unsigned long>(current);
+        if (!contains_system_node(present_nodes, current_value)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::ParentTraversal,
+                "a DEVINST in the libusb parent chain is no longer present",
+                {},
+                WindowsUsbNativeErrorDomain::None,
+                0U,
+                libusb_session_data));
+        }
+        const auto status_result =
+            CM_Get_DevNode_Status(&status, &problem, current, 0U);
+        if (config_node_missing(status_result)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::ParentTraversal,
+                "the libusb DEVINST disappeared during parent traversal",
+                {},
+                WindowsUsbNativeErrorDomain::ConfigurationManager,
+                static_cast<std::uint32_t>(status_result),
+                libusb_session_data));
+        }
+        if (status_result != CR_SUCCESS) {
+            return std::unexpected(config_error(
+                WindowsUsbTopologyStage::ParentTraversal,
+                status_result,
+                "failed to query DEVINST status",
+                libusb_session_data));
+        }
+        if ((status & DN_WILL_BE_REMOVED) != 0U ||
+            ((status & DN_HAS_PROBLEM) != 0U && problem == CM_PROB_PHANTOM)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::ParentTraversal,
+                "a DEVINST in the libusb parent chain is being removed",
+                {},
+                WindowsUsbNativeErrorDomain::None,
+                0U,
+                libusb_session_data));
+        }
+
+        auto id = device_instance_id(
+            current,
+            WindowsUsbTopologyStage::ParentTraversal,
+            libusb_session_data);
+        if (!id.has_value()) {
+            return std::unexpected(id.error());
+        }
+        auto hardware_ids = property_string_list(
+            current,
+            DEVPKEY_Device_HardwareIds,
+            WindowsUsbTopologyStage::PropertyRead,
+            libusb_session_data,
+            *id);
+        if (!hardware_ids.has_value()) {
+            return std::unexpected(hardware_ids.error());
+        }
+        auto location_paths = property_string_list(
+            current,
+            DEVPKEY_Device_LocationPaths,
+            WindowsUsbTopologyStage::PropertyRead,
+            libusb_session_data,
+            *id);
+        if (!location_paths.has_value()) {
+            return std::unexpected(location_paths.error());
+        }
+
+        const bool host_controller =
+            contains_system_node(controller_nodes, current_value);
+        std::optional<unsigned long> parent_value;
+        DEVINST parent = 0U;
+        if (!host_controller) {
+            const auto parent_result = CM_Get_Parent(&parent, current, 0U);
+            if (config_node_missing(parent_result)) {
+                return std::unexpected(make_error(
+                    WindowsUsbTopologyErrorKind::IdentityChanged,
+                    WindowsUsbTopologyStage::ParentTraversal,
+                    "DEVINST parent disappeared during traversal",
+                    *id,
+                    WindowsUsbNativeErrorDomain::ConfigurationManager,
+                    static_cast<std::uint32_t>(parent_result),
+                    libusb_session_data));
+            }
+            if (parent_result != CR_SUCCESS) {
+                return std::unexpected(config_error(
+                    WindowsUsbTopologyStage::ParentTraversal,
+                    parent_result,
+                    "failed to read a DEVINST parent",
+                    libusb_session_data,
+                    *id));
+            }
+            parent_value = static_cast<unsigned long>(parent);
+        }
+
+        snapshot.chain_leaf_to_root.push_back(
+            WindowsUsbNativeNodeSnapshot{
+                .system_node = current_value,
+                .parent_system_node = parent_value,
+                .device_instance_id_utf8 = std::move(*id),
+                .present = true,
+                .exposes_usb_hub_interface =
+                    contains_system_node(hub_nodes, current_value),
+                .exposes_usb_host_controller_interface = host_controller,
+                .hardware_ids_utf8 = std::move(*hardware_ids),
+                .location_paths_utf8 = std::move(*location_paths),
+            });
+        if (host_controller) {
+            return snapshot;
+        }
+        current = parent;
+    }
+    return std::unexpected(make_error(
+        WindowsUsbTopologyErrorKind::TopologyTooDeep,
+        WindowsUsbTopologyStage::ParentTraversal,
+        "Windows devnode ancestry does not reach a USB host controller",
+        {},
+        WindowsUsbNativeErrorDomain::None,
+        0U,
+        libusb_session_data));
+}
+#endif
+
+std::expected<std::vector<WindowsUsbNativeSnapshotResult>,
+              WindowsUsbTopologyError>
+SetupApiWindowsUsbNativeBackend::read_snapshots(
+    const std::span<const unsigned long> libusb_session_data,
     const std::chrono::steady_clock::time_point deadline,
     const std::stop_token stop_token) const {
 #if !defined(_WIN32)
@@ -1617,31 +1783,45 @@ SetupApiWindowsUsbNativeBackend::read_snapshot(
         {},
         WindowsUsbNativeErrorDomain::None,
         0U,
-        libusb_session_data));
+        libusb_session_data.empty() ? 0UL : libusb_session_data.front()));
 #else
     try {
         static_assert(sizeof(DEVINST) == sizeof(unsigned long));
-        if (libusb_session_data == 0UL) {
-            return std::unexpected(make_error(
-                WindowsUsbTopologyErrorKind::InvalidArgument,
-                WindowsUsbTopologyStage::Validation,
-                "libusb WinUSB session data must contain a non-zero DEVINST"));
+        std::vector<unsigned long> sessions;
+        sessions.reserve(libusb_session_data.size());
+        for (const auto session : libusb_session_data) {
+            if (session == 0UL ||
+                std::ranges::find(sessions, session) != sessions.end()) {
+                return std::unexpected(make_error(
+                    WindowsUsbTopologyErrorKind::InvalidArgument,
+                    WindowsUsbTopologyStage::Validation,
+                    "Windows topology batch requires unique non-zero DEVINST values",
+                    {},
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    session));
+            }
+            sessions.push_back(session);
         }
+        if (sessions.empty()) {
+            return std::vector<WindowsUsbNativeSnapshotResult>{};
+        }
+
+        const auto correlation_session = sessions.front();
         if (const auto stop = native_interrupted(
                 WindowsUsbTopologyStage::Enumeration,
                 deadline,
                 stop_token,
-                libusb_session_data);
+                correlation_session);
             stop.has_value()) {
             return std::unexpected(*stop);
         }
-
         auto present_nodes = enumerate_present_device_nodes(
             nullptr,
             DIGCF_PRESENT | DIGCF_ALLCLASSES,
             deadline,
             stop_token,
-            libusb_session_data);
+            correlation_session);
         if (!present_nodes.has_value()) {
             return std::unexpected(present_nodes.error());
         }
@@ -1650,7 +1830,7 @@ SetupApiWindowsUsbNativeBackend::read_snapshot(
             DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
             deadline,
             stop_token,
-            libusb_session_data);
+            correlation_session);
         if (!hub_nodes.has_value()) {
             return std::unexpected(hub_nodes.error());
         }
@@ -1659,169 +1839,73 @@ SetupApiWindowsUsbNativeBackend::read_snapshot(
             DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
             deadline,
             stop_token,
-            libusb_session_data);
+            correlation_session);
         if (!controller_nodes.has_value()) {
             return std::unexpected(controller_nodes.error());
         }
 
-        WindowsUsbNativeSnapshot snapshot{
-            .requested_system_node = libusb_session_data,
-            .chain_leaf_to_root = {},
-        };
-        auto current = static_cast<DEVINST>(libusb_session_data);
-        for (std::size_t depth = 0U; depth < kMaximumNativeParentDepth;
-             ++depth) {
-            if (const auto stop = native_interrupted(
-                    WindowsUsbTopologyStage::ParentTraversal,
-                    deadline,
-                    stop_token,
-                    libusb_session_data);
-                stop.has_value()) {
-                return std::unexpected(*stop);
+        std::vector<WindowsUsbNativeSnapshotResult> results;
+        results.reserve(sessions.size());
+        for (const auto session : sessions) {
+            auto snapshot = read_snapshot_from_global_nodes(
+                session,
+                *present_nodes,
+                *hub_nodes,
+                *controller_nodes,
+                deadline,
+                stop_token);
+            if (!snapshot.has_value() &&
+                (snapshot.error().kind == WindowsUsbTopologyErrorKind::Cancelled ||
+                 snapshot.error().kind == WindowsUsbTopologyErrorKind::TimedOut ||
+                 snapshot.error().kind ==
+                     WindowsUsbTopologyErrorKind::ResourceExhausted)) {
+                return std::unexpected(snapshot.error());
             }
-
-            ULONG status = 0U;
-            ULONG problem = 0U;
-            const auto current_value = static_cast<unsigned long>(current);
-            if (!contains_system_node(*present_nodes, current_value)) {
-                return std::unexpected(make_error(
-                    WindowsUsbTopologyErrorKind::IdentityChanged,
-                    WindowsUsbTopologyStage::ParentTraversal,
-                    "a DEVINST in the libusb parent chain is no longer present",
-                    {},
-                    WindowsUsbNativeErrorDomain::None,
-                    0U,
-                    libusb_session_data));
-            }
-            const auto status_result =
-                CM_Get_DevNode_Status(&status, &problem, current, 0U);
-            if (config_node_missing(status_result)) {
-                return std::unexpected(make_error(
-                    WindowsUsbTopologyErrorKind::IdentityChanged,
-                    WindowsUsbTopologyStage::ParentTraversal,
-                    "the libusb DEVINST disappeared during parent traversal",
-                    {},
-                    WindowsUsbNativeErrorDomain::ConfigurationManager,
-                    static_cast<std::uint32_t>(status_result),
-                    libusb_session_data));
-            }
-            if (status_result != CR_SUCCESS) {
-                return std::unexpected(config_error(
-                    WindowsUsbTopologyStage::ParentTraversal,
-                    status_result,
-                    "failed to query DEVINST status",
-                    libusb_session_data));
-            }
-            if ((status & DN_WILL_BE_REMOVED) != 0U ||
-                ((status & DN_HAS_PROBLEM) != 0U &&
-                 problem == CM_PROB_PHANTOM)) {
-                return std::unexpected(make_error(
-                    WindowsUsbTopologyErrorKind::IdentityChanged,
-                    WindowsUsbTopologyStage::ParentTraversal,
-                    "a DEVINST in the libusb parent chain is being removed",
-                    {},
-                    WindowsUsbNativeErrorDomain::None,
-                    0U,
-                    libusb_session_data));
-            }
-
-            auto id = device_instance_id(
-                current,
-                WindowsUsbTopologyStage::ParentTraversal,
-                libusb_session_data);
-            if (!id.has_value()) {
-                return std::unexpected(id.error());
-            }
-            auto hardware_ids = property_string_list(
-                current,
-                DEVPKEY_Device_HardwareIds,
-                WindowsUsbTopologyStage::PropertyRead,
-                libusb_session_data,
-                *id);
-            if (!hardware_ids.has_value()) {
-                return std::unexpected(hardware_ids.error());
-            }
-            auto location_paths = property_string_list(
-                current,
-                DEVPKEY_Device_LocationPaths,
-                WindowsUsbTopologyStage::PropertyRead,
-                libusb_session_data,
-                *id);
-            if (!location_paths.has_value()) {
-                return std::unexpected(location_paths.error());
-            }
-
-            const bool host_controller =
-                contains_system_node(*controller_nodes, current_value);
-            std::optional<unsigned long> parent_value;
-            DEVINST parent = 0U;
-            if (!host_controller) {
-                const auto parent_result = CM_Get_Parent(&parent, current, 0U);
-                if (config_node_missing(parent_result)) {
-                    return std::unexpected(make_error(
-                        WindowsUsbTopologyErrorKind::IdentityChanged,
-                        WindowsUsbTopologyStage::ParentTraversal,
-                        "DEVINST parent disappeared during traversal",
-                        *id,
-                        WindowsUsbNativeErrorDomain::ConfigurationManager,
-                        static_cast<std::uint32_t>(parent_result),
-                        libusb_session_data));
-                }
-                if (parent_result != CR_SUCCESS) {
-                    return std::unexpected(config_error(
-                        WindowsUsbTopologyStage::ParentTraversal,
-                        parent_result,
-                        "failed to read a DEVINST parent",
-                        libusb_session_data,
-                        *id));
-                }
-                parent_value = static_cast<unsigned long>(parent);
-            }
-
-            snapshot.chain_leaf_to_root.push_back(
-                WindowsUsbNativeNodeSnapshot{
-                    .system_node = current_value,
-                    .parent_system_node = parent_value,
-                    .device_instance_id_utf8 = std::move(*id),
-                    .present = true,
-                    .exposes_usb_hub_interface =
-                        contains_system_node(*hub_nodes, current_value),
-                    .exposes_usb_host_controller_interface = host_controller,
-                    .hardware_ids_utf8 = std::move(*hardware_ids),
-                    .location_paths_utf8 = std::move(*location_paths),
-                });
-            if (host_controller) {
-                if (const auto stop = native_interrupted(
-                        WindowsUsbTopologyStage::ParentTraversal,
-                        deadline,
-                        stop_token,
-                        libusb_session_data);
-                    stop.has_value()) {
-                    return std::unexpected(*stop);
-                }
-                return snapshot;
-            }
-            current = parent;
+            results.push_back(std::move(snapshot));
         }
-        return std::unexpected(make_error(
-            WindowsUsbTopologyErrorKind::TopologyTooDeep,
-            WindowsUsbTopologyStage::ParentTraversal,
-            "Windows devnode ancestry does not reach a USB host controller",
-            {},
-            WindowsUsbNativeErrorDomain::None,
-            0U,
-            libusb_session_data));
+        if (const auto stop = native_interrupted(
+                WindowsUsbTopologyStage::StabilityCheck,
+                deadline,
+                stop_token,
+                correlation_session);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+        return results;
     } catch (const std::bad_alloc&) {
         return std::unexpected(make_error(
             WindowsUsbTopologyErrorKind::ResourceExhausted,
             WindowsUsbTopologyStage::Enumeration,
-            "memory allocation failed during SetupAPI USB enumeration",
+            "memory allocation failed during SetupAPI USB batch enumeration",
+            {},
+            WindowsUsbNativeErrorDomain::None,
+            0U,
+            libusb_session_data.empty() ? 0UL : libusb_session_data.front()));
+    }
+#endif
+}
+
+std::expected<WindowsUsbNativeSnapshot, WindowsUsbTopologyError>
+SetupApiWindowsUsbNativeBackend::read_snapshot(
+    const unsigned long libusb_session_data,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token stop_token) const {
+    const std::array sessions{libusb_session_data};
+    auto results = read_snapshots(sessions, deadline, stop_token);
+    if (!results.has_value()) {
+        return std::unexpected(results.error());
+    }
+    if (results->size() != 1U) {
+        return std::unexpected(make_error(
+            WindowsUsbTopologyErrorKind::MalformedSnapshot,
+            WindowsUsbTopologyStage::Enumeration,
+            "Windows native batch returned the wrong result count",
             {},
             WindowsUsbNativeErrorDomain::None,
             0U,
             libusb_session_data));
     }
-#endif
+    return std::move(results->front());
 }
 
 SetupApiWindowsUsbTopologyBackend::SetupApiWindowsUsbTopologyBackend(
@@ -1833,18 +1917,90 @@ SetupApiWindowsUsbTopologyBackend::read_candidates(
     const WindowsUsbTopologyQuery& query,
     const std::chrono::steady_clock::time_point deadline,
     const std::stop_token stop_token) const {
+    const std::array queries{query};
+    auto batch = read_candidate_batch(queries, deadline, stop_token);
+    if (!batch.has_value()) {
+        return std::unexpected(batch.error());
+    }
+    if (batch->size() != 1U) {
+        return std::unexpected(make_error(
+            WindowsUsbTopologyErrorKind::MalformedSnapshot,
+            WindowsUsbTopologyStage::Enumeration,
+            "Windows topology batch returned the wrong device count",
+            {},
+            WindowsUsbNativeErrorDomain::None,
+            0U,
+            query.libusb_session_data));
+    }
+    if (!batch->front().has_value()) {
+        return std::unexpected(batch->front().error());
+    }
+    return std::move(batch->front()->interface_candidates);
+}
+
+std::expected<std::vector<WindowsUsbTopologyDeviceCandidatesResult>,
+              WindowsUsbTopologyError>
+SetupApiWindowsUsbTopologyBackend::read_candidate_batch(
+    const std::span<const WindowsUsbTopologyQuery> queries,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token stop_token) const {
     try {
-        if (!query_is_valid(query)) {
-            return std::unexpected(make_error(
-                query.port_numbers.size() > kMaximumWindowsUsbTopologyDepth
-                    ? WindowsUsbTopologyErrorKind::TopologyTooDeep
-                    : WindowsUsbTopologyErrorKind::InvalidArgument,
-                WindowsUsbTopologyStage::Validation,
-                "invalid libusb identity for Windows topology discovery",
-                {},
-                WindowsUsbNativeErrorDomain::None,
-                0U,
-                query.libusb_session_data));
+        struct QueryGroup final {
+            unsigned long session{};
+            std::vector<const WindowsUsbTopologyQuery*> queries;
+        };
+        std::vector<QueryGroup> groups;
+        for (const auto& query : queries) {
+            if (!query_is_valid(query)) {
+                return std::unexpected(make_error(
+                    query.port_numbers.size() >
+                            kMaximumWindowsUsbTopologyDepth
+                        ? WindowsUsbTopologyErrorKind::TopologyTooDeep
+                        : WindowsUsbTopologyErrorKind::InvalidArgument,
+                    WindowsUsbTopologyStage::Validation,
+                    "invalid libusb identity for Windows topology batch discovery",
+                    {},
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    query.libusb_session_data));
+            }
+            auto group = std::ranges::find(
+                groups, query.libusb_session_data, &QueryGroup::session);
+            if (group == groups.end()) {
+                groups.push_back(QueryGroup{
+                    .session = query.libusb_session_data,
+                    .queries = {&query},
+                });
+                continue;
+            }
+            const auto& first = *group->queries.front();
+            if (!ascii_iequals(first.device_instance_id_utf8,
+                               query.device_instance_id_utf8) ||
+                first.vendor_id != query.vendor_id ||
+                first.product_id != query.product_id ||
+                first.bus_number != query.bus_number ||
+                first.device_address != query.device_address ||
+                first.port_numbers != query.port_numbers ||
+                first.serial_utf8 != query.serial_utf8 ||
+                std::ranges::any_of(
+                    group->queries,
+                    [&query](const WindowsUsbTopologyQuery* existing) {
+                        return existing->interface_fingerprint ==
+                            query.interface_fingerprint;
+                    })) {
+                return std::unexpected(make_error(
+                    WindowsUsbTopologyErrorKind::InvalidArgument,
+                    WindowsUsbTopologyStage::Validation,
+                    "queries for one Windows DEVINST must describe one device and distinct interfaces",
+                    query.device_instance_id_utf8,
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    query.libusb_session_data));
+            }
+            group->queries.push_back(&query);
+        }
+        if (groups.empty()) {
+            return std::vector<WindowsUsbTopologyDeviceCandidatesResult>{};
         }
 
         SetupApiWindowsUsbNativeBackend production_native;
@@ -1852,47 +2008,97 @@ SetupApiWindowsUsbTopologyBackend::read_candidates(
             ? static_cast<const IWindowsUsbTopologyNativeBackend&>(
                   production_native)
             : *native_backend_;
-        auto snapshot = native.read_snapshot(
-            query.libusb_session_data, deadline, stop_token);
+        std::vector<unsigned long> sessions;
+        sessions.reserve(groups.size());
+        for (const auto& group : groups) {
+            sessions.push_back(group.session);
+        }
+        auto snapshots = native.read_snapshots(sessions, deadline, stop_token);
         if (const auto stop = interrupted(
                 WindowsUsbTopologyStage::StabilityCheck,
                 deadline,
                 stop_token,
                 system_now,
                 nullptr,
-                query.libusb_session_data);
+                sessions.front());
             stop.has_value()) {
             return std::unexpected(*stop);
         }
-        if (!snapshot.has_value()) {
-            return std::unexpected(snapshot.error());
+        if (!snapshots.has_value()) {
+            return std::unexpected(snapshots.error());
         }
-        auto node = map_native_snapshot(query, *snapshot, deadline, stop_token);
-        if (const auto stop = interrupted(
-                WindowsUsbTopologyStage::StabilityCheck,
-                deadline,
-                stop_token,
-                system_now,
-                nullptr,
-                query.libusb_session_data);
-            stop.has_value()) {
-            return std::unexpected(*stop);
+        if (snapshots->size() != groups.size()) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                WindowsUsbTopologyStage::Enumeration,
+                "Windows native batch returned the wrong device count",
+                {},
+                WindowsUsbNativeErrorDomain::None,
+                0U,
+                sessions.front()));
         }
-        if (!node.has_value()) {
-            return std::unexpected(node.error());
+
+        std::vector<WindowsUsbTopologyDeviceCandidatesResult> results;
+        results.reserve(groups.size());
+        for (std::size_t index = 0U; index < groups.size(); ++index) {
+            const auto& group = groups[index];
+            auto& snapshot = (*snapshots)[index];
+            if (!snapshot.has_value()) {
+                if (snapshot.error().libusb_session_data != group.session) {
+                    return std::unexpected(make_error(
+                        WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                        WindowsUsbTopologyStage::Enumeration,
+                        "Windows native batch error is out of order",
+                        snapshot.error().device_instance_id_utf8,
+                        WindowsUsbNativeErrorDomain::None,
+                        0U,
+                        group.session));
+                }
+                results.push_back(std::unexpected(snapshot.error()));
+                continue;
+            }
+            if (snapshot->requested_system_node != group.session) {
+                return std::unexpected(make_error(
+                    WindowsUsbTopologyErrorKind::IdentityMismatch,
+                    WindowsUsbTopologyStage::Enumeration,
+                    "Windows native batch snapshot is out of order",
+                    {},
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    group.session));
+            }
+            std::vector<WindowsUsbTopologyNode> candidates;
+            candidates.reserve(group.queries.size());
+            std::optional<WindowsUsbTopologyError> device_error;
+            for (const auto* query : group.queries) {
+                auto candidate = map_native_snapshot(
+                    *query, *snapshot, deadline, stop_token);
+                if (!candidate.has_value()) {
+                    device_error = candidate.error();
+                    break;
+                }
+                candidates.push_back(std::move(*candidate));
+            }
+            if (device_error.has_value()) {
+                results.push_back(std::unexpected(std::move(*device_error)));
+                continue;
+            }
+            results.push_back(WindowsUsbTopologyDeviceCandidates{
+                .libusb_session_data = group.session,
+                .native_snapshot = std::move(*snapshot),
+                .interface_candidates = std::move(candidates),
+            });
         }
-        std::vector<WindowsUsbTopologyNode> result;
-        result.push_back(std::move(*node));
-        return result;
+        return results;
     } catch (const std::bad_alloc&) {
         return std::unexpected(make_error(
             WindowsUsbTopologyErrorKind::ResourceExhausted,
             WindowsUsbTopologyStage::Enumeration,
-            "memory allocation failed during Windows USB correlation",
+            "memory allocation failed during Windows USB batch correlation",
             {},
             WindowsUsbNativeErrorDomain::None,
             0U,
-            query.libusb_session_data));
+            queries.empty() ? 0UL : queries.front().libusb_session_data));
     }
 }
 
@@ -2078,6 +2284,296 @@ WindowsUsbTopologyDiscovery::discover(
             WindowsUsbNativeErrorDomain::None,
             0U,
             query.libusb_session_data));
+    }
+}
+
+std::expected<std::vector<WindowsUsbTopologyResult>,
+              WindowsUsbTopologyError>
+WindowsUsbTopologyDiscovery::discover_batch(
+    const std::span<const WindowsUsbTopologyQuery> queries,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token stop_token) const {
+    try {
+        struct QueryGroup final {
+            unsigned long session{};
+            std::vector<std::size_t> query_indices;
+        };
+        std::vector<QueryGroup> groups;
+        for (std::size_t index = 0U; index < queries.size(); ++index) {
+            const auto& query = queries[index];
+            if (!query_is_valid(query)) {
+                return std::unexpected(make_error(
+                    query.port_numbers.size() >
+                            kMaximumWindowsUsbTopologyDepth
+                        ? WindowsUsbTopologyErrorKind::TopologyTooDeep
+                        : WindowsUsbTopologyErrorKind::InvalidArgument,
+                    WindowsUsbTopologyStage::Validation,
+                    "invalid libusb identity for Windows topology batch discovery",
+                    {},
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    query.libusb_session_data));
+            }
+            auto group = std::ranges::find(
+                groups, query.libusb_session_data, &QueryGroup::session);
+            if (group == groups.end()) {
+                groups.push_back(QueryGroup{
+                    .session = query.libusb_session_data,
+                    .query_indices = {index},
+                });
+            } else {
+                group->query_indices.push_back(index);
+            }
+        }
+        if (queries.empty()) {
+            return std::vector<WindowsUsbTopologyResult>{};
+        }
+        if (const auto stop = interrupted(
+                WindowsUsbTopologyStage::Validation,
+                deadline,
+                stop_token,
+                now_,
+                now_context_,
+                queries.front().libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+
+        auto first = backend_.read_candidate_batch(
+            queries, deadline, stop_token);
+        if (const auto stop = interrupted(
+                WindowsUsbTopologyStage::StabilityCheck,
+                deadline,
+                stop_token,
+                now_,
+                now_context_,
+                queries.front().libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+        if (!first.has_value()) {
+            return std::unexpected(first.error());
+        }
+        auto second = backend_.read_candidate_batch(
+            queries, deadline, stop_token);
+        if (const auto stop = interrupted(
+                WindowsUsbTopologyStage::StabilityCheck,
+                deadline,
+                stop_token,
+                now_,
+                now_context_,
+                queries.front().libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+        if (!second.has_value()) {
+            return std::unexpected(second.error());
+        }
+
+        const auto validate_shape = [&groups](
+            const std::vector<WindowsUsbTopologyDeviceCandidatesResult>& batch)
+            -> std::optional<WindowsUsbTopologyError> {
+            if (batch.size() != groups.size()) {
+                return make_error(
+                    WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                    WindowsUsbTopologyStage::StabilityCheck,
+                    "Windows topology batch returned the wrong device count");
+            }
+            for (std::size_t index = 0U; index < groups.size(); ++index) {
+                const auto& group = groups[index];
+                const auto& result = batch[index];
+                if (!result.has_value()) {
+                    if (result.error().libusb_session_data != group.session) {
+                        return make_error(
+                            WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                            WindowsUsbTopologyStage::StabilityCheck,
+                            "Windows topology batch error is out of order",
+                            result.error().device_instance_id_utf8,
+                            WindowsUsbNativeErrorDomain::None,
+                            0U,
+                            group.session);
+                    }
+                    continue;
+                }
+                if (result->libusb_session_data != group.session ||
+                    result->native_snapshot.requested_system_node !=
+                        group.session ||
+                    result->interface_candidates.size() !=
+                        group.query_indices.size()) {
+                    return make_error(
+                        WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                        WindowsUsbTopologyStage::StabilityCheck,
+                        "Windows topology batch device result is out of order or incomplete",
+                        {},
+                        WindowsUsbNativeErrorDomain::None,
+                        0U,
+                        group.session);
+                }
+            }
+            return std::nullopt;
+        };
+        if (const auto malformed = validate_shape(*first);
+            malformed.has_value()) {
+            return std::unexpected(*malformed);
+        }
+        if (const auto malformed = validate_shape(*second);
+            malformed.has_value()) {
+            return std::unexpected(*malformed);
+        }
+
+        std::vector<std::optional<WindowsUsbTopologyResult>> staged(
+            queries.size());
+        for (std::size_t group_index = 0U;
+             group_index < groups.size();
+             ++group_index) {
+            const auto& group = groups[group_index];
+            const auto& first_result = (*first)[group_index];
+            const auto& second_result = (*second)[group_index];
+            std::optional<WindowsUsbTopologyError> device_error;
+            if (!first_result.has_value() || !second_result.has_value()) {
+                const auto& error = !second_result.has_value()
+                    ? second_result.error()
+                    : first_result.error();
+                if (error.kind == WindowsUsbTopologyErrorKind::Cancelled ||
+                    error.kind == WindowsUsbTopologyErrorKind::TimedOut ||
+                    error.kind ==
+                        WindowsUsbTopologyErrorKind::ResourceExhausted) {
+                    return std::unexpected(error);
+                }
+                if (!first_result.has_value() &&
+                    !second_result.has_value() &&
+                    first_result.error() == second_result.error()) {
+                    device_error = error;
+                } else {
+                    device_error = make_error(
+                        WindowsUsbTopologyErrorKind::IdentityChanged,
+                        WindowsUsbTopologyStage::StabilityCheck,
+                        "Windows USB topology device result changed between global snapshots",
+                        error.device_instance_id_utf8,
+                        WindowsUsbNativeErrorDomain::None,
+                        0U,
+                        group.session);
+                }
+            } else if (*first_result != *second_result) {
+                device_error = make_error(
+                    WindowsUsbTopologyErrorKind::IdentityChanged,
+                    WindowsUsbTopologyStage::StabilityCheck,
+                    "Windows USB topology changed between global validation snapshots",
+                    {},
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    group.session);
+            }
+
+            std::vector<WindowsUsbTopology> resolved;
+            if (!device_error.has_value()) {
+                resolved.reserve(group.query_indices.size());
+                for (std::size_t offset = 0U;
+                     offset < group.query_indices.size();
+                     ++offset) {
+                    const auto query_index = group.query_indices[offset];
+                    const auto& query = queries[query_index];
+                    const auto& candidate =
+                        second_result->interface_candidates[offset];
+                    if (!node_shape_is_valid(candidate) ||
+                        candidate.libusb_session_data !=
+                            query.libusb_session_data ||
+                        !ascii_iequals(candidate.device_instance_id_utf8,
+                                       query.device_instance_id_utf8) ||
+                        candidate.vendor_id != query.vendor_id ||
+                        candidate.product_id != query.product_id ||
+                        candidate.bus_number != query.bus_number ||
+                        candidate.device_address != query.device_address ||
+                        candidate.port_numbers != query.port_numbers ||
+                        candidate.serial_utf8 != query.serial_utf8 ||
+                        candidate.interface_fingerprint !=
+                            query.interface_fingerprint) {
+                        device_error = make_error(
+                            node_shape_is_valid(candidate)
+                                ? WindowsUsbTopologyErrorKind::IdentityMismatch
+                                : WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                            WindowsUsbTopologyStage::Correlation,
+                            "Windows batch candidate does not match its libusb interface query",
+                            candidate.device_instance_id_utf8,
+                            WindowsUsbNativeErrorDomain::None,
+                            0U,
+                            group.session);
+                        break;
+                    }
+                    auto physical_path = canonical_windows_usb_port_path(
+                        candidate.bus_number, candidate.port_numbers);
+                    if (!physical_path.has_value()) {
+                        device_error = physical_path.error();
+                        break;
+                    }
+                    resolved.push_back(WindowsUsbTopology{
+                        .physical_port_path = std::move(*physical_path),
+                        .root_controller_id =
+                            "windows-pnp:" +
+                            candidate.root_controller_instance_id_utf8,
+                        .hub_port_chain = candidate.port_numbers,
+                        .vendor_id = candidate.vendor_id,
+                        .product_id = candidate.product_id,
+                        .bus_number = candidate.bus_number,
+                        .device_address = candidate.device_address,
+                        .serial_utf8 = candidate.serial_utf8,
+                        .interface_fingerprint =
+                            candidate.interface_fingerprint,
+                        .device_instance_id_utf8 =
+                            candidate.device_instance_id_utf8,
+                        .hub_instance_ids_utf8 =
+                            candidate.hub_instance_ids_utf8,
+                        .location_path_utf8 = candidate.location_path_utf8,
+                    });
+                }
+            }
+
+            if (device_error.has_value()) {
+                for (const auto query_index : group.query_indices) {
+                    staged[query_index].emplace(
+                        std::unexpected(*device_error));
+                }
+            } else {
+                for (std::size_t offset = 0U;
+                     offset < group.query_indices.size();
+                     ++offset) {
+                    staged[group.query_indices[offset]].emplace(
+                        std::move(resolved[offset]));
+                }
+            }
+            if (const auto stop = interrupted(
+                    WindowsUsbTopologyStage::Correlation,
+                    deadline,
+                    stop_token,
+                    now_,
+                    now_context_,
+                    group.session);
+                stop.has_value()) {
+                return std::unexpected(*stop);
+            }
+        }
+
+        std::vector<WindowsUsbTopologyResult> results;
+        results.reserve(staged.size());
+        for (auto& result : staged) {
+            if (!result.has_value()) {
+                return std::unexpected(make_error(
+                    WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                    WindowsUsbTopologyStage::Correlation,
+                    "Windows topology batch left an interface result unassigned"));
+            }
+            results.push_back(std::move(*result));
+        }
+        return results;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            WindowsUsbTopologyErrorKind::ResourceExhausted,
+            WindowsUsbTopologyStage::Correlation,
+            "memory allocation failed while correlating a Windows USB topology batch",
+            {},
+            WindowsUsbNativeErrorDomain::None,
+            0U,
+            queries.empty() ? 0UL : queries.front().libusb_session_data));
     }
 }
 
