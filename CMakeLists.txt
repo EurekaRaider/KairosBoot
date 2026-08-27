@@ -284,7 +284,7 @@ if(APPLE)
 endif()
 kairosboot_enable_strict_warnings(kairosboot_internal)
 
-add_library(kairosboot SHARED src/kairosboot.cpp)
+add_library(kairosboot SHARED src/kairosboot.cpp src/api/fleet_plan.cpp)
 if(WIN32)
   target_sources(kairosboot PRIVATE abi/kairosboot.def)
 elseif(APPLE)
@@ -698,6 +698,19 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_c_api_test PRIVATE KairosBoot::C)
   kairosboot_enable_strict_warnings(kairosboot_c_api_test)
   add_test(NAME c_api COMMAND kairosboot_c_api_test)
+
+  add_executable(kairosboot_c_fleet_plan_test tests/c_fleet_plan_test.c)
+  set_target_properties(
+    kairosboot_c_fleet_plan_test
+    PROPERTIES C_STANDARD 11
+               C_STANDARD_REQUIRED ON
+               C_EXTENSIONS OFF)
+  target_compile_definitions(
+    kairosboot_c_fleet_plan_test
+    PRIVATE KAIROSBOOT_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_c_fleet_plan_test PRIVATE KairosBoot::C)
+  kairosboot_enable_strict_warnings(kairosboot_c_fleet_plan_test)
+  add_test(NAME c_fleet_plan COMMAND kairosboot_c_fleet_plan_test)
 
   add_executable(kairosboot_c_primitive_tcp_tests
                  tests/api/c_primitive_tcp_tests.cpp)

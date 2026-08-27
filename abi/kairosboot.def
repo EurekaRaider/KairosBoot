@@ -52,6 +52,9 @@ EXPORTS
     kb_getvar_async
     kb_gsi
     kb_gsi_async
+    kb_job_plan_canonical_json
+    kb_job_plan_release
+    kb_job_plan_sha256_hex
     kb_oem
     kb_oem_async
     kb_operation_cancel
@@ -60,6 +63,7 @@ EXPORTS
     kb_operation_release
     kb_operation_state
     kb_operation_wait
+    kb_plan_job_file
     kb_raw_command
     kb_raw_command_async
     kb_reboot
@@ -78,4 +82,5 @@ EXPORTS
     kb_update_package_async
     kb_upload
     kb_upload_async
+    kb_validate_job_file
     kb_version_init

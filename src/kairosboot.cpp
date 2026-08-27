@@ -2,6 +2,7 @@
 
 #include "src/api/device_selection.hpp"
 #include "src/api/device_selector.hpp"
+#include "src/api/error_handle.hpp"
 #include "src/api/command_result_handle.hpp"
 #include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
@@ -59,20 +60,6 @@ struct kb_device_info {
 
 struct kb_device_list {
   std::vector<kb_device_info> devices;
-};
-
-struct kb_error {
-  kb_status_t status{KB_OK};
-  std::string message;
-  std::string device_identifier;
-  int32_t native_code{0};
-  kb_transfer_state_t transfer_state{KB_TRANSFER_NOT_SENT};
-  std::string device_message;
-  std::vector<kairosboot::api::CommandMessagePayload> command_messages;
-  std::optional<std::uint64_t> inbound_expected;
-  std::uint64_t inbound_transferred{0};
-  kb_transfer_state_t inbound_transfer_state{KB_TRANSFER_NOT_SENT};
-  bool session_poisoned{false};
 };
 
 struct kb_command_result {

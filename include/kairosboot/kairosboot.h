@@ -107,6 +107,7 @@ typedef struct kb_device_list kb_device_list_t;
 typedef struct kb_error kb_error_t;
 typedef struct kb_operation kb_operation_t;
 typedef struct kb_command_result kb_command_result_t;
+typedef struct kb_job_plan kb_job_plan_t;
 
 typedef struct kb_version {
   uint32_t struct_size;
@@ -416,6 +417,27 @@ KB_API kb_status_t KB_CALL kb_fetch(
     uint64_t size_or_unspecified,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
+
+/* Context-free Fleet manifest entry points. Neither function needs a
+ * kb_context_t: parsing and validation never initialize libusb, enumerate
+ * devices, or open artifact paths; only the manifest file itself is read.
+ * kb_validate_job_file stops after full semantic validation. Failures use
+ * the standard error handle: the manifest source path and, when known, its
+ * line and column appear inside the stable UTF-8 message and the platform
+ * native code is preserved in kb_error_native_code(). */
+KB_API kb_status_t KB_CALL kb_validate_job_file(const char *file_path,
+                                                kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_plan_job_file(
+    const char *file_path, kb_job_plan_t **plan, kb_error_t **error);
+
+/* Planning returns an immutable snapshot owned by the caller. The borrowed
+ * canonical JSON is NUL-terminated UTF-8 without a trailing LF; *size, when
+ * requested, excludes the terminator. Both borrows stay valid until the
+ * plan is released. */
+KB_API const char *KB_CALL kb_job_plan_canonical_json(
+    const kb_job_plan_t *plan, size_t *size);
+KB_API const char *KB_CALL kb_job_plan_sha256_hex(const kb_job_plan_t *plan);
+KB_API void KB_CALL kb_job_plan_release(kb_job_plan_t *plan);
 
 KB_API kb_status_t KB_CALL kb_operation_wait(kb_operation_t *operation,
                                               uint32_t timeout_ms);
