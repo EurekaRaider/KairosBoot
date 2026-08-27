@@ -105,7 +105,7 @@ void append_string(std::vector<std::byte>& output, const std::string_view value)
 struct ZipEntry final {
     std::string name;
     std::string payload;
-    std::optional<std::uint32_t> declared_crc;
+    std::optional<std::uint32_t> declared_crc{};
 };
 
 [[nodiscard]] std::vector<std::byte>
