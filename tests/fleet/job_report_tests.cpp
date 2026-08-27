@@ -220,13 +220,33 @@ void every_operation_and_success_state_are_canonical() {
     std::vector<ReportStepSpec> steps{
         flash_step(4U),
         ReportStepSpec{.operation = ReportOperation::Erase,
-                       .partition = "userdata"},
+                       .partition = "userdata",
+                       .artifact = std::nullopt,
+                       .slot = std::nullopt,
+                       .reboot_target = std::nullopt,
+                       .oem_command = std::nullopt,
+                       .bytes_total = std::nullopt},
         ReportStepSpec{.operation = ReportOperation::SetActive,
-                       .slot = ReportSlot::A},
+                       .partition = std::nullopt,
+                       .artifact = std::nullopt,
+                       .slot = ReportSlot::A,
+                       .reboot_target = std::nullopt,
+                       .oem_command = std::nullopt,
+                       .bytes_total = std::nullopt},
         ReportStepSpec{.operation = ReportOperation::Reboot,
-                       .reboot_target = ReportRebootTarget::Bootloader},
+                       .partition = std::nullopt,
+                       .artifact = std::nullopt,
+                       .slot = std::nullopt,
+                       .reboot_target = ReportRebootTarget::Bootloader,
+                       .oem_command = std::nullopt,
+                       .bytes_total = std::nullopt},
         ReportStepSpec{.operation = ReportOperation::Oem,
-                       .oem_command = "device-info"},
+                       .partition = std::nullopt,
+                       .artifact = std::nullopt,
+                       .slot = std::nullopt,
+                       .reboot_target = std::nullopt,
+                       .oem_command = "device-info",
+                       .bytes_total = std::nullopt},
     };
     auto builder = make_builder(
         {device("usb:2-1", "SERIAL-OPS", std::move(steps))});
@@ -293,8 +313,13 @@ void product_mismatch_is_all_skipped() {
     auto mismatch = device("usb:3-1", "SERIAL-MISMATCH",
                            {flash_step(),
                             ReportStepSpec{.operation = ReportOperation::Reboot,
+                                           .partition = std::nullopt,
+                                           .artifact = std::nullopt,
+                                           .slot = std::nullopt,
                                            .reboot_target =
-                                               ReportRebootTarget::System}});
+                                               ReportRebootTarget::System,
+                                           .oem_command = std::nullopt,
+                                           .bytes_total = std::nullopt}});
     mismatch.observed_product = "product_b";
     auto builder = make_builder({std::move(mismatch)});
     CHECK(!builder.running_snapshot());
@@ -304,6 +329,8 @@ void product_mismatch_is_all_skipped() {
         "2026-08-27T06:00:01Z",
         ReportError{.code = KB_E_DEVICE_FAIL,
                     .message = "generic preflight cannot classify mismatch",
+                    .device_identifier = std::nullopt,
+                    .native_code = std::nullopt,
                     .transfer_certainty = KB_TRANSFER_NOT_SENT});
     CHECK(!generic_mismatch);
     CHECK(generic_mismatch.error().kind ==
@@ -314,6 +341,8 @@ void product_mismatch_is_all_skipped() {
         "2026-08-27T06:00:01Z",
         ReportError{.code = KB_E_DEVICE_FAIL,
                     .message = "matching product is not a mismatch",
+                    .device_identifier = std::nullopt,
+                    .native_code = std::nullopt,
                     .transfer_certainty = KB_TRANSFER_NOT_SENT});
     CHECK(!matching_product);
     CHECK(matching_product.error().kind ==
@@ -324,6 +353,8 @@ void product_mismatch_is_all_skipped() {
         "2026-08-27T06:00:01Z",
         ReportError{.code = KB_E_DEVICE_FAIL,
                     .message = "device product does not match target",
+                    .device_identifier = std::nullopt,
+                    .native_code = std::nullopt,
                     .transfer_certainty = KB_TRANSFER_NOT_SENT}));
     CHECK(builder.finish("2026-08-27T06:00:02Z"));
     auto report = builder.terminal_snapshot();
@@ -574,6 +605,8 @@ void job_failure_cannot_wrap_executed_device_failure() {
         "2026-08-27T06:00:01Z",
         ReportError{.code = KB_E_NO_DEVICE,
                     .message = "device unavailable during preflight",
+                    .device_identifier = std::nullopt,
+                    .native_code = std::nullopt,
                     .transfer_certainty = KB_TRANSFER_NOT_SENT}));
     CHECK(allowed.finish_failed("2026-08-27T06:00:02Z",
                                 preflight_failure()));
@@ -609,6 +642,7 @@ void every_stable_kb_error_code_has_the_frozen_status_name() {
             "2026-08-27T06:00:01Z",
             ReportError{.code = code,
                         .message = "failure",
+                        .device_identifier = std::nullopt,
                         .native_code = std::numeric_limits<std::int32_t>::min(),
                         .transfer_certainty = std::nullopt}));
         auto report = builder.terminal_snapshot();
