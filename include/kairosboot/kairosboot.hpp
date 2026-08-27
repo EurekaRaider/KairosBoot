@@ -550,6 +550,73 @@ private:
   kb_command_result_t *handle_{};
 };
 
+/* Immutable fleet plan snapshot mirroring the context-free C ABI: validation
+ * and planning never touch a device; only the manifest file is read. */
+class JobPlan {
+public:
+  explicit JobPlan(kb_job_plan_t *handle) noexcept : handle_(handle) {}
+  ~JobPlan() { kb_job_plan_release(handle_); }
+
+  JobPlan(const JobPlan &) = delete;
+  JobPlan &operator=(const JobPlan &) = delete;
+
+  JobPlan(JobPlan &&other) noexcept
+      : handle_(std::exchange(other.handle_, nullptr)) {}
+  JobPlan &operator=(JobPlan &&other) noexcept {
+    if (this != &other) {
+      kb_job_plan_release(handle_);
+      handle_ = std::exchange(other.handle_, nullptr);
+    }
+    return *this;
+  }
+
+  // Borrowed views over plan-owned storage: no bytes are copied and the views
+  // stay valid until this JobPlan is destroyed or moved from. The canonical
+  // JSON is NUL-terminated UTF-8 without a trailing LF; the digest is 64
+  // lowercase hex characters.
+  [[nodiscard]] std::string_view canonical_json() const noexcept {
+    std::size_t size = 0;
+    const char *json = kb_job_plan_canonical_json(handle_, &size);
+    return json == nullptr ? std::string_view{} : std::string_view{json, size};
+  }
+  [[nodiscard]] std::string_view sha256_hex() const noexcept {
+    const char *hex = kb_job_plan_sha256_hex(handle_);
+    return hex == nullptr ? std::string_view{} : std::string_view{hex};
+  }
+
+private:
+  kb_job_plan_t *handle_{};
+};
+
+/* Context-free manifest entry points: failures surface the manifest source
+ * path and, when known, its line and column inside the error message. */
+[[nodiscard]] inline std::expected<void, Error>
+validate_job_file(const std::filesystem::path &file_path) {
+  const auto path_u8 = file_path.u8string();
+  const std::string path_string{path_u8.begin(), path_u8.end()};
+  kb_error_t *error = nullptr;
+  const kb_status_t status =
+      ::kb_validate_job_file(path_string.c_str(), &error);
+  if (status != KB_OK) {
+    return std::unexpected(detail_take_error(status, error));
+  }
+  return {};
+}
+
+[[nodiscard]] inline std::expected<JobPlan, Error>
+plan_job_file(const std::filesystem::path &file_path) {
+  const auto path_u8 = file_path.u8string();
+  const std::string path_string{path_u8.begin(), path_u8.end()};
+  kb_job_plan_t *plan = nullptr;
+  kb_error_t *error = nullptr;
+  const kb_status_t status =
+      ::kb_plan_job_file(path_string.c_str(), &plan, &error);
+  if (status != KB_OK) {
+    return std::unexpected(detail_take_error(status, error));
+  }
+  return JobPlan{plan};
+}
+
 class Operation {
 public:
   explicit Operation(kb_operation_t *handle) noexcept : resources_(handle) {}
