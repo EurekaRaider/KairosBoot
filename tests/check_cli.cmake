@@ -21,8 +21,8 @@ execute_process(
 if(NOT HELP_RESULT EQUAL 0 OR NOT HELP_ERROR STREQUAL "")
   message(FATAL_ERROR "--help failed: ${HELP_RESULT} ${HELP_ERROR}")
 endif()
-foreach(HELP_COMMAND IN ITEMS update flashing gsi snapshot-update
-                              create-logical-partition
+foreach(HELP_COMMAND IN ITEMS validate plan update flashing gsi
+                              snapshot-update create-logical-partition
                               delete-logical-partition
                               resize-logical-partition)
   string(FIND "${HELP_OUTPUT}" " ${HELP_COMMAND}" HELP_COMMAND_POSITION)

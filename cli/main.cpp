@@ -216,6 +216,8 @@ enum class CommandKind : std::uint8_t {
   Help,
   Doctor,
   Devices,
+  Validate,
+  Plan,
   Flash,
   Update,
   Getvar,
@@ -252,6 +254,7 @@ struct Invocation {
   kairosboot::FetchRange fetch_range;
   std::uint64_t logical_partition_size{};
   bool wipe{};
+  bool plan_digest{};
 };
 
 struct ParseError {
@@ -477,6 +480,50 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     result.kind = CommandKind::Devices;
     if (argc - command_index != 1) {
       return error("devices does not accept operands");
+    }
+    if (const auto rejected = reject_non_json_globals()) {
+      return *rejected;
+    }
+    return result;
+  }
+  if (command == "validate") {
+    result.kind = CommandKind::Validate;
+    if (argc - command_index != 2) {
+      return error("validate requires exactly <manifest>");
+    }
+    result.first = argv[index];
+    if (result.first.empty()) {
+      return error("validate manifest must not be empty");
+    }
+    if (const auto rejected = reject_non_json_globals()) {
+      return *rejected;
+    }
+    return result;
+  }
+  if (command == "plan") {
+    result.kind = CommandKind::Plan;
+    if (index >= argc) {
+      return error("plan requires exactly <manifest>");
+    }
+    result.first = argv[index++];
+    if (result.first == "--digest") {
+      return error("plan requires exactly <manifest>");
+    }
+    if (result.first.empty()) {
+      return error("plan manifest must not be empty");
+    }
+    while (index < argc) {
+      const std::string_view option{argv[index++]};
+      if (option != "--digest") {
+        return error("plan supports only --digest after <manifest>");
+      }
+      if (result.plan_digest) {
+        return error("plan option --digest may only be specified once");
+      }
+      result.plan_digest = true;
+    }
+    if (result.global.json) {
+      return error("option --json is not valid for plan");
     }
     if (const auto rejected = reject_non_json_globals()) {
       return *rejected;
@@ -761,6 +808,10 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "doctor";
   case CommandKind::Devices:
     return "devices";
+  case CommandKind::Validate:
+    return "validate";
+  case CommandKind::Plan:
+    return "plan";
   case CommandKind::Flash:
     return "flash";
   case CommandKind::Update:
@@ -1306,6 +1357,8 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Help:
   case CommandKind::Doctor:
   case CommandKind::Devices:
+  case CommandKind::Validate:
+  case CommandKind::Plan:
   case CommandKind::Flash:
   case CommandKind::Update:
   case CommandKind::Flashing:
@@ -1361,6 +1414,8 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Stage:
   case CommandKind::Upload:
   case CommandKind::Fetch:
+  case CommandKind::Validate:
+  case CommandKind::Plan:
     break;
   }
   std::terminate();
@@ -1530,6 +1585,88 @@ int update_package(const Invocation &invocation) {
   return 0;
 }
 
+struct FleetError {
+  kb_status_t status{KB_E_INTERNAL};
+  std::string message;
+  std::int32_t native_code{0};
+};
+
+class JobPlanOwner final {
+public:
+  explicit JobPlanOwner(kb_job_plan_t *plan) noexcept : plan_{plan} {}
+  ~JobPlanOwner() { kb_job_plan_release(plan_); }
+
+  JobPlanOwner(const JobPlanOwner &) = delete;
+  JobPlanOwner &operator=(const JobPlanOwner &) = delete;
+
+  [[nodiscard]] kb_job_plan_t *get() const noexcept { return plan_; }
+
+private:
+  kb_job_plan_t *plan_;
+};
+
+std::optional<FleetError> take_fleet_error(const kb_status_t fallback,
+                                           kb_error_t *handle) {
+  if (handle == nullptr) {
+    return FleetError{fallback, kb_status_string(fallback), 0};
+  }
+  FleetError result{kb_error_status(handle), kb_error_message(handle),
+                    kb_error_native_code(handle)};
+  kb_error_release(handle);
+  return result;
+}
+
+int print_fleet_error(const FleetError &error, const bool json) {
+  const std::string message = error.message + " (native error " +
+                              std::to_string(error.native_code) + ")";
+  if (json) {
+    std::cout << "{\"ok\":false,\"status\":\"" << status_name(error.status)
+              << "\",\"message\":\"" << json_escape(message)
+              << "\",\"nativeError\":" << error.native_code << "}\n";
+  } else {
+    std::cerr << "kairosboot: " << message << '\n';
+  }
+  return 4;
+}
+
+int validate_manifest(const Invocation &invocation) {
+  const std::string manifest{invocation.first};
+  kb_error_t *error = nullptr;
+  const kb_status_t status = kb_validate_job_file(manifest.c_str(), &error);
+  if (status != KB_OK) {
+    return print_fleet_error(*take_fleet_error(status, error),
+                             invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"validate\",\"manifest\":\""
+              << json_escape(invocation.first) << "\"}\n";
+  } else {
+    std::cout << "OK " << invocation.first << '\n';
+  }
+  return 0;
+}
+
+int plan_manifest(const Invocation &invocation) {
+  const std::string manifest{invocation.first};
+  kb_job_plan_t *raw_plan = nullptr;
+  kb_error_t *error = nullptr;
+  const kb_status_t status =
+      kb_plan_job_file(manifest.c_str(), &raw_plan, &error);
+  if (status != KB_OK) {
+    return print_fleet_error(*take_fleet_error(status, error), false);
+  }
+  const JobPlanOwner plan{raw_plan};
+  if (invocation.plan_digest) {
+    std::cout << kb_job_plan_sha256_hex(plan.get()) << '\n';
+    return 0;
+  }
+  std::size_t size = 0;
+  const char *canonical = kb_job_plan_canonical_json(plan.get(), &size);
+  std::cout.write(canonical, static_cast<std::streamsize>(size));
+  std::cout << '\n';
+  return 0;
+}
+
 int run_typed_command(const Invocation &invocation) {
   std::vector<std::byte> stage_data;
   if (invocation.kind == CommandKind::Stage) {
@@ -1588,6 +1725,8 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot --help [--json]\n"
                "  kairosboot doctor [--json]\n"
                "  kairosboot devices [--json]\n"
+               "  kairosboot [--json] validate <manifest>\n"
+               "  kairosboot plan <manifest> [--digest]\n"
                "  kairosboot [global options] flash <partition> <file>\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] getvar <variable>\n"
@@ -1694,6 +1833,10 @@ int run_cli(const int argc, char **argv) {
     return doctor(invocation->global.json);
   case CommandKind::Devices:
     return print_devices(invocation->global.json);
+  case CommandKind::Validate:
+    return validate_manifest(*invocation);
+  case CommandKind::Plan:
+    return plan_manifest(*invocation);
   case CommandKind::Flash:
     return flash_file(*invocation);
   case CommandKind::Update:
