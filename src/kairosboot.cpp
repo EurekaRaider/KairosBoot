@@ -512,6 +512,12 @@ const char *runtime_error_message(
     return "The Fastboot USB interface could not be claimed.";
   case LibusbRuntimeErrorKind::alternate_setting_failed:
     return "The Fastboot USB alternate setting could not be selected.";
+  case LibusbRuntimeErrorKind::operation_cancelled:
+    return "The USB open operation was cancelled at a safe stage boundary.";
+  case LibusbRuntimeErrorKind::operation_timed_out:
+    return "The USB open operation exceeded its deadline at a safe stage boundary.";
+  case LibusbRuntimeErrorKind::identity_changed:
+    return "The USB device identity changed while its interface was being opened.";
   }
   return "An unknown libusb runtime error occurred.";
 }
@@ -529,7 +535,12 @@ kb_status_t runtime_error_status(
   case LibusbRuntimeErrorKind::invalid_device:
     return KB_E_INTERNAL;
   case LibusbRuntimeErrorKind::device_not_found:
+  case LibusbRuntimeErrorKind::identity_changed:
     return KB_E_NO_DEVICE;
+  case LibusbRuntimeErrorKind::operation_cancelled:
+    return KB_E_CANCELLED;
+  case LibusbRuntimeErrorKind::operation_timed_out:
+    return KB_E_TIMEOUT;
   case LibusbRuntimeErrorKind::init_failed:
   case LibusbRuntimeErrorKind::event_thread_failed:
   case LibusbRuntimeErrorKind::event_loop_failed:

@@ -545,6 +545,379 @@ struct ProcessLifetimeQuarantineRoot final {
     return interface_snapshot_matches(functions, candidate, snapshot);
 }
 
+[[nodiscard]] LibusbRuntimeError verified_open_error(
+    const LibusbRuntimeErrorKind kind,
+    const LibusbVerifiedOpenStage stage,
+    const int native_code = 0) noexcept {
+    return LibusbRuntimeError{
+        .kind = kind,
+        .native_code = native_code,
+        .verified_open_stage = stage,
+        .cancellation_guarantee =
+            LibusbOpenCancellationGuarantee::cooperative_stage_boundary,
+    };
+}
+
+[[nodiscard]] LibusbRuntimeError verified_windows_anchor_error(
+    const WindowsUsbTopologyError& error) noexcept {
+    const auto native_code = error.native_code <=
+            static_cast<std::uint32_t>(std::numeric_limits<int>::max())
+        ? static_cast<int>(error.native_code)
+        : LIBUSB_ERROR_OTHER;
+    return verified_open_error(
+        LibusbRuntimeErrorKind::identity_changed,
+        LibusbVerifiedOpenStage::post_open_identity,
+        native_code);
+}
+
+struct ClaimedIdentitySample final {
+    UsbDeviceInfo identity;
+    WindowsLibusbTransportSnapshot transport_snapshot;
+};
+
+[[nodiscard]] bool same_claimed_generation(
+    const ClaimedIdentitySample& first,
+    const ClaimedIdentitySample& second) noexcept {
+    const auto& left = first.identity;
+    const auto& right = second.identity;
+    return first.transport_snapshot == second.transport_snapshot &&
+        left.vendor_id == right.vendor_id &&
+        left.product_id == right.product_id &&
+        left.bus_number == right.bus_number &&
+        left.device_address == right.device_address &&
+        left.backend_session_id == right.backend_session_id &&
+        left.configuration_value == right.configuration_value &&
+        left.port_path == right.port_path &&
+        left.serial_utf8 == right.serial_utf8 &&
+        left.interface_number == right.interface_number &&
+        left.alternate_setting == right.alternate_setting &&
+        left.interface_class == right.interface_class &&
+        left.interface_subclass == right.interface_subclass &&
+        left.interface_protocol == right.interface_protocol &&
+        left.bulk_out_endpoint == right.bulk_out_endpoint &&
+        left.bulk_out_max_packet_size == right.bulk_out_max_packet_size &&
+        left.bulk_in_endpoint == right.bulk_in_endpoint &&
+        left.bulk_in_max_packet_size == right.bulk_in_max_packet_size;
+}
+
+[[nodiscard]] std::expected<ClaimedIdentitySample, LibusbRuntimeError>
+sample_claimed_identity(const LibusbFunctions& functions,
+                        libusb_device* const selected_device,
+                        libusb_device_handle* const handle,
+                        const UsbDeviceInfo& expected) {
+    auto* const device = functions.get_device(handle);
+    if (device == nullptr || device != selected_device) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity));
+    }
+
+    libusb_device_descriptor descriptor{};
+    const auto descriptor_result =
+        functions.get_device_descriptor(device, &descriptor);
+    if (descriptor_result != LIBUSB_SUCCESS) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity,
+            descriptor_result));
+    }
+
+    int active_configuration = 0;
+    const auto configuration_result =
+        functions.get_configuration(handle, &active_configuration);
+    if (configuration_result != LIBUSB_SUCCESS) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity,
+            configuration_result));
+    }
+
+    libusb_config_descriptor* raw_config = nullptr;
+    auto config_result =
+        functions.get_active_config_descriptor(device, &raw_config);
+    if (config_result != LIBUSB_SUCCESS) {
+        config_result = functions.get_config_descriptor(device, 0U, &raw_config);
+    }
+    if (config_result != LIBUSB_SUCCESS || raw_config == nullptr) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity,
+            config_result != LIBUSB_SUCCESS ? config_result
+                                            : LIBUSB_ERROR_OTHER));
+    }
+    ConfigDescriptorGuard config_guard{&functions, raw_config};
+
+    const libusb_interface_descriptor* selected_alternate = nullptr;
+    const libusb_endpoint_descriptor* selected_bulk_out = nullptr;
+    const libusb_endpoint_descriptor* selected_bulk_in = nullptr;
+    if (raw_config->bNumInterfaces != 0U && raw_config->interface == nullptr) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity));
+    }
+    for (std::uint8_t interface_index = 0U;
+         interface_index < raw_config->bNumInterfaces;
+         ++interface_index) {
+        const auto& interface = raw_config->interface[interface_index];
+        if (interface.num_altsetting > 0 && interface.altsetting == nullptr) {
+            return std::unexpected(verified_open_error(
+                LibusbRuntimeErrorKind::identity_changed,
+                LibusbVerifiedOpenStage::post_open_identity));
+        }
+        for (int alternate_index = 0;
+             alternate_index < interface.num_altsetting;
+             ++alternate_index) {
+            const auto& alternate = interface.altsetting[alternate_index];
+            if (alternate.bInterfaceNumber != expected.interface_number ||
+                alternate.bAlternateSetting != expected.alternate_setting) {
+                continue;
+            }
+            if (selected_alternate != nullptr ||
+                (alternate.bNumEndpoints != 0U &&
+                 alternate.endpoint == nullptr)) {
+                return std::unexpected(verified_open_error(
+                    LibusbRuntimeErrorKind::identity_changed,
+                    LibusbVerifiedOpenStage::post_open_identity));
+            }
+
+            for (std::uint8_t endpoint_index = 0U;
+                 endpoint_index < alternate.bNumEndpoints;
+                 ++endpoint_index) {
+                const auto& endpoint = alternate.endpoint[endpoint_index];
+                if ((endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) !=
+                    LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK) {
+                    continue;
+                }
+                auto*& selected =
+                    (endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN) != 0U
+                    ? selected_bulk_in
+                    : selected_bulk_out;
+                if (selected != nullptr) {
+                    return std::unexpected(verified_open_error(
+                        LibusbRuntimeErrorKind::identity_changed,
+                        LibusbVerifiedOpenStage::post_open_identity));
+                }
+                selected = &endpoint;
+            }
+            selected_alternate = &alternate;
+        }
+    }
+    if (selected_alternate == nullptr || selected_bulk_out == nullptr ||
+        selected_bulk_in == nullptr) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity));
+    }
+
+    std::array<std::uint8_t, 16> port_numbers{};
+    const auto port_count = functions.get_port_numbers(
+        device, port_numbers.data(), static_cast<int>(port_numbers.size()));
+    if (port_count <= 0 ||
+        port_count > static_cast<int>(port_numbers.size())) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity,
+            port_count < 0 ? port_count : LIBUSB_ERROR_OTHER));
+    }
+
+    std::string serial;
+    if (descriptor.iSerialNumber != 0U) {
+        std::array<char, LIBUSB_DEVICE_STRING_BYTES_MAX> serial_buffer{};
+        const auto serial_result = functions.get_device_string(
+            device,
+            LIBUSB_DEVICE_STRING_SERIAL_NUMBER,
+            serial_buffer.data(),
+            static_cast<int>(serial_buffer.size()));
+        if (serial_result <= 0) {
+            return std::unexpected(verified_open_error(
+                LibusbRuntimeErrorKind::identity_changed,
+                LibusbVerifiedOpenStage::post_open_identity,
+                serial_result));
+        }
+        const auto serial_end =
+            std::find(serial_buffer.begin(), serial_buffer.end(), '\0');
+        serial.assign(serial_buffer.begin(), serial_end);
+    }
+
+    UsbDeviceInfo verified{
+        .vendor_id = descriptor.idVendor,
+        .product_id = descriptor.idProduct,
+        .bus_number = functions.get_bus_number(device),
+        .device_address = functions.get_device_address(device),
+        .backend_session_id = static_cast<std::uint64_t>(
+            functions.get_session_data(device)),
+        .configuration_value = raw_config->bConfigurationValue,
+        .port_path = std::vector<std::uint8_t>(
+            port_numbers.begin(), port_numbers.begin() + port_count),
+        .serial_utf8 = std::move(serial),
+        .interface_number = selected_alternate->bInterfaceNumber,
+        .alternate_setting = selected_alternate->bAlternateSetting,
+        .interface_class = selected_alternate->bInterfaceClass,
+        .interface_subclass = selected_alternate->bInterfaceSubClass,
+        .interface_protocol = selected_alternate->bInterfaceProtocol,
+        .bulk_out_endpoint = selected_bulk_out->bEndpointAddress,
+        .bulk_out_max_packet_size = static_cast<std::uint16_t>(
+            selected_bulk_out->wMaxPacketSize & 0x07FFU),
+        .bulk_in_endpoint = selected_bulk_in->bEndpointAddress,
+        .bulk_in_max_packet_size = static_cast<std::uint16_t>(
+            selected_bulk_in->wMaxPacketSize & 0x07FFU),
+        .linux_topology = std::nullopt,
+        .linux_topology_error = std::nullopt,
+        .windows_topology = std::nullopt,
+        .windows_topology_error = std::nullopt,
+        .macos_topology = std::nullopt,
+        .macos_topology_error = std::nullopt,
+    };
+
+    const bool stable_identity_matches =
+        active_configuration == expected.configuration_value &&
+        verified.vendor_id == expected.vendor_id &&
+        verified.product_id == expected.product_id &&
+        verified.bus_number == expected.bus_number &&
+        verified.configuration_value == expected.configuration_value &&
+        verified.port_path == expected.port_path &&
+        verified.serial_utf8 == expected.serial_utf8 &&
+        verified.interface_number == expected.interface_number &&
+        verified.alternate_setting == expected.alternate_setting &&
+        verified.interface_class == expected.interface_class &&
+        verified.interface_subclass == expected.interface_subclass &&
+        verified.interface_protocol == expected.interface_protocol &&
+        verified.bulk_out_endpoint == expected.bulk_out_endpoint &&
+        verified.bulk_out_max_packet_size ==
+            expected.bulk_out_max_packet_size &&
+        verified.bulk_in_endpoint == expected.bulk_in_endpoint &&
+        verified.bulk_in_max_packet_size == expected.bulk_in_max_packet_size;
+    if (!stable_identity_matches) {
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::identity_changed,
+            LibusbVerifiedOpenStage::post_open_identity));
+    }
+    return ClaimedIdentitySample{
+        .identity = std::move(verified),
+        .transport_snapshot = make_windows_transport_snapshot(
+            descriptor,
+            *raw_config,
+            *selected_alternate,
+            *selected_bulk_out,
+            *selected_bulk_in),
+    };
+}
+
+void enrich_verified_identity(const LibusbFunctions& functions,
+                              UsbDeviceInfo& verified,
+                              const SteadyClock::time_point deadline,
+                              const std::stop_token cancellation,
+                              const std::optional<std::string>&
+                                  windows_instance_identity) {
+    if (functions.resolve_linux_topology) {
+        auto topology = functions.resolve_linux_topology(
+            make_linux_usb_topology_query(verified));
+        if (topology.has_value()) {
+            verified.linux_topology = std::move(*topology);
+        } else {
+            verified.linux_topology_error = std::move(topology.error());
+        }
+    }
+
+    if (functions.resolve_windows_topology) {
+        const auto session = static_cast<unsigned long>(
+            verified.backend_session_id);
+        if (session == 0UL) {
+            verified.windows_topology_error = WindowsUsbTopologyError{
+                .kind = WindowsUsbTopologyErrorKind::InvalidArgument,
+                .stage = WindowsUsbTopologyStage::Validation,
+                .native_domain = WindowsUsbNativeErrorDomain::None,
+                .native_code = 0U,
+                .libusb_session_data = 0UL,
+                .device_instance_id_utf8 = {},
+                .message =
+                    "verified open received zero libusb session data",
+            };
+        } else if (!verified.windows_topology_error.has_value()) {
+            std::optional<std::string> fallback_instance;
+            const std::string* instance = nullptr;
+            if (windows_instance_identity.has_value()) {
+                instance = &*windows_instance_identity;
+            } else {
+                auto captured = functions.capture_windows_session_identity(
+                    session, deadline, cancellation);
+                if (!captured.has_value()) {
+                    verified.windows_topology_error =
+                        std::move(captured.error());
+                } else {
+                    fallback_instance = std::move(*captured);
+                    instance = &*fallback_instance;
+                }
+            }
+            if (instance != nullptr) {
+                const auto query = make_windows_usb_topology_query(
+                    verified, session, *instance);
+                auto resolved = functions.resolve_windows_topology(
+                    std::span<const WindowsUsbTopologyQuery>{&query, 1U},
+                    deadline,
+                    cancellation);
+                if (!resolved.has_value()) {
+                    verified.windows_topology_error =
+                        std::move(resolved.error());
+                } else if (resolved->size() != 1U) {
+                    verified.windows_topology_error = WindowsUsbTopologyError{
+                        .kind = WindowsUsbTopologyErrorKind::MalformedSnapshot,
+                        .stage = WindowsUsbTopologyStage::StabilityCheck,
+                        .native_domain = WindowsUsbNativeErrorDomain::None,
+                        .native_code = 0U,
+                        .libusb_session_data = session,
+                        .device_instance_id_utf8 = *instance,
+                        .message =
+                            "verified-open topology resolver returned the wrong result count",
+                    };
+                } else if (!resolved->front().has_value()) {
+                    verified.windows_topology_error =
+                        std::move(resolved->front().error());
+                } else {
+                    verified.windows_topology =
+                        std::move(*resolved->front());
+                }
+            }
+        }
+    }
+
+    if (functions.resolve_macos_topology) {
+        MacUsbTopologyDeviceQuery query;
+        query.interfaces.push_back(make_macos_usb_topology_query(verified));
+        auto resolved = functions.resolve_macos_topology(
+            std::span<const MacUsbTopologyDeviceQuery>{&query, 1U},
+            deadline,
+            cancellation);
+        if (!resolved.has_value()) {
+            verified.macos_topology_error = std::move(resolved.error());
+        } else if (resolved->size() != 1U) {
+            verified.macos_topology_error = MacUsbTopologyError{
+                .kind = MacUsbTopologyErrorKind::MalformedRegistry,
+                .stage = MacUsbTopologyStage::FinalValidation,
+                .native_code = 0,
+                .registry_path = {},
+                .message =
+                    "verified-open topology resolver returned the wrong device count",
+            };
+        } else if (!resolved->front().has_value()) {
+            verified.macos_topology_error =
+                std::move(resolved->front().error());
+        } else if (resolved->front()->size() != 1U) {
+            verified.macos_topology_error = MacUsbTopologyError{
+                .kind = MacUsbTopologyErrorKind::MalformedRegistry,
+                .stage = MacUsbTopologyStage::FinalValidation,
+                .native_code = 0,
+                .registry_path = {},
+                .message =
+                    "verified-open topology resolver returned the wrong interface count",
+            };
+        } else {
+            verified.macos_topology =
+                std::move(resolved->front()->front());
+        }
+    }
+}
+
 }  // namespace
 
 LibusbFunctions LibusbFunctions::system() {
@@ -602,6 +975,9 @@ LibusbFunctions LibusbFunctions::system() {
     };
     functions.open = [](libusb_device* device, libusb_device_handle** handle) {
         return libusb_open(device, handle);
+    };
+    functions.get_device = [](libusb_device_handle* handle) {
+        return libusb_get_device(handle);
     };
     functions.close = [](libusb_device_handle* handle) { libusb_close(handle); };
     functions.get_configuration = [](libusb_device_handle* handle, int* configuration) {
@@ -676,7 +1052,7 @@ bool LibusbFunctions::complete() const noexcept {
            get_device_list && free_device_list && get_device_descriptor &&
            get_active_config_descriptor && get_config_descriptor && free_config_descriptor &&
            get_bus_number && get_device_address && get_session_data && get_port_numbers &&
-           get_device_string && open && close && get_configuration && set_configuration &&
+           get_device_string && open && get_device && close && get_configuration && set_configuration &&
            claim_interface && release_interface &&
            set_interface_alt_setting && alloc_transfer && submit_transfer &&
            cancel_transfer && free_transfer && pin_current_module &&
@@ -2411,10 +2787,70 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
 
 std::expected<std::unique_ptr<LibusbBulkOutBackend>, LibusbRuntimeError>
 LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions options) {
+    auto verified = open_bulk_out_verified(
+        device,
+        SteadyClock::time_point::max(),
+        {},
+        options);
+    if (!verified.has_value()) {
+        return std::unexpected(verified.error());
+    }
+    return verified->take_backend();
+}
+
+std::expected<LibusbVerifiedOpenResult, LibusbRuntimeError>
+LibusbRuntime::open_bulk_out_verified(
+    const UsbDeviceInfo& device,
+    const SteadyClock::time_point deadline,
+    const std::stop_token cancellation,
+    const BulkOutOptions options) {
     std::unique_lock lifecycle(state_->stop_mutex);
-    if (!state_->accepting.load(std::memory_order_acquire)) {
-        return std::unexpected(
-            LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+    const auto runtime_cancellation = state_->topology_stop_source.get_token();
+    std::stop_source combined_stop_source;
+    std::stop_callback caller_stop_callback{
+        cancellation,
+        [&combined_stop_source] { combined_stop_source.request_stop(); }};
+    std::stop_callback runtime_stop_callback{
+        runtime_cancellation,
+        [&combined_stop_source] { combined_stop_source.request_stop(); }};
+
+    const auto termination_error = [&](const LibusbVerifiedOpenStage stage)
+        -> std::optional<LibusbRuntimeError> {
+        if (runtime_cancellation.stop_requested() ||
+            !state_->accepting.load(std::memory_order_acquire)) {
+            return verified_open_error(
+                LibusbRuntimeErrorKind::runtime_stopped, stage);
+        }
+        if (cancellation.stop_requested()) {
+            return verified_open_error(
+                LibusbRuntimeErrorKind::operation_cancelled, stage);
+        }
+        if (SteadyClock::now() >= deadline) {
+            return verified_open_error(
+                LibusbRuntimeErrorKind::operation_timed_out,
+                stage,
+                LIBUSB_ERROR_TIMEOUT);
+        }
+        return std::nullopt;
+    };
+    const auto stage_boundary = [&](const LibusbVerifiedOpenStage stage)
+        -> std::optional<LibusbRuntimeError> {
+        if (state_->functions.verified_open_stage_observer) {
+            try {
+                state_->functions.verified_open_stage_observer(stage);
+            } catch (...) {
+                return verified_open_error(
+                    LibusbRuntimeErrorKind::open_failed,
+                    stage,
+                    LIBUSB_ERROR_OTHER);
+            }
+        }
+        return termination_error(stage);
+    };
+
+    if (const auto stopped =
+            termination_error(LibusbVerifiedOpenStage::reservation)) {
+        return std::unexpected(*stopped);
     }
     if ((device.bulk_out_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_OUT ||
         (device.bulk_in_endpoint & LIBUSB_ENDPOINT_IN) != LIBUSB_ENDPOINT_IN ||
@@ -2438,110 +2874,265 @@ LibusbRuntime::open_bulk_out(const UsbDeviceInfo& device, const BulkOutOptions o
             reservation_owned_by_open = false;
         }
     };
+    if (const auto stopped =
+            stage_boundary(LibusbVerifiedOpenStage::reservation)) {
+        release_open_reservation();
+        return std::unexpected(*stopped);
+    }
 
     libusb_device** list = nullptr;
     const auto count = state_->functions.get_device_list(state_->context, &list);
-    if (count < 0 || (count != 0 && list == nullptr)) {
+    const auto selection_failure =
+        count < 0 || (count != 0 && list == nullptr);
+    DeviceListGuard list_guard{&state_->functions, list};
+    libusb_device* selected_device = nullptr;
+    if (!selection_failure) {
+        for (ssize_t index = 0; index < count; ++index) {
+            auto* candidate = list[index];
+            // USB addresses and backend session values can change after a
+            // legitimate re-enumeration. Selection uses the physical path and
+            // stable transport fingerprint; the current transient values are
+            // reconstructed from the opened handle below.
+            if (!open_snapshot_matches(state_->functions, candidate, device)) {
+                continue;
+            }
+            if (selected_device != nullptr) {
+                selected_device = nullptr;
+                break;
+            }
+            selected_device = candidate;
+        }
+    }
+    if (const auto stopped =
+            stage_boundary(LibusbVerifiedOpenStage::selection)) {
+        release_open_reservation();
+        return std::unexpected(*stopped);
+    }
+    if (selection_failure) {
         release_open_reservation();
         return std::unexpected(LibusbRuntimeError{
             LibusbRuntimeErrorKind::enumeration_failed,
             count < 0 ? static_cast<int>(count) : LIBUSB_ERROR_OTHER});
     }
-    DeviceListGuard list_guard{&state_->functions, list};
-
-    libusb_device_handle* handle = nullptr;
-    for (ssize_t index = 0; index < count; ++index) {
-        auto* candidate = list[index];
-        // USB addresses can be reused across re-enumeration. The stable key is
-        // bus + physical port path, with serial (when present) and the complete
-        // interface/endpoint snapshot revalidated immediately before open.
-        if (!open_snapshot_matches(state_->functions, candidate, device)) {
-            continue;
-        }
-        const auto open_result = state_->functions.open(candidate, &handle);
-        if (open_result != LIBUSB_SUCCESS) {
-            release_open_reservation();
-            return std::unexpected(
-                LibusbRuntimeError{LibusbRuntimeErrorKind::open_failed, open_result});
-        }
-        break;
-    }
-    if (handle == nullptr) {
+    if (selected_device == nullptr) {
         release_open_reservation();
         return std::unexpected(
             LibusbRuntimeError{LibusbRuntimeErrorKind::device_not_found});
     }
 
-    int active_configuration = 0;
-    const auto configuration_result =
-        state_->functions.get_configuration(handle, &active_configuration);
-    if (configuration_result != LIBUSB_SUCCESS) {
-        state_->functions.close(handle);
-        release_open_reservation();
-        return std::unexpected(LibusbRuntimeError{
-            LibusbRuntimeErrorKind::configuration_failed,
-            configuration_result,
-        });
-    }
-    if (active_configuration != device.configuration_value) {
-        const auto set_result = state_->functions.set_configuration(
-            handle, device.configuration_value);
-        if (set_result != LIBUSB_SUCCESS) {
+    libusb_device_handle* handle = nullptr;
+    bool claimed = false;
+    const auto cleanup_open = [&]() noexcept {
+        if (handle != nullptr) {
+            if (claimed) {
+                static_cast<void>(state_->functions.release_interface(
+                    handle, device.interface_number));
+                claimed = false;
+            }
             state_->functions.close(handle);
-            release_open_reservation();
-            return std::unexpected(LibusbRuntimeError{
-                LibusbRuntimeErrorKind::configuration_failed,
-                set_result,
-            });
+            handle = nullptr;
         }
-    }
-
-    const auto claim_result =
-        state_->functions.claim_interface(handle, device.interface_number);
-    if (claim_result != LIBUSB_SUCCESS) {
-        state_->functions.close(handle);
         release_open_reservation();
-        return std::unexpected(LibusbRuntimeError{
-            claim_result == LIBUSB_ERROR_BUSY
-                ? LibusbRuntimeErrorKind::interface_busy
-                : LibusbRuntimeErrorKind::claim_failed,
-            claim_result,
-        });
-    }
-    if (device.alternate_setting != 0) {
-        const auto alternate_result = state_->functions.set_interface_alt_setting(
-            handle, device.interface_number, device.alternate_setting);
-        if (alternate_result != LIBUSB_SUCCESS) {
-            static_cast<void>(
-                state_->functions.release_interface(handle, device.interface_number));
-            state_->functions.close(handle);
-            release_open_reservation();
-            return std::unexpected(LibusbRuntimeError{
-                LibusbRuntimeErrorKind::alternate_setting_failed, alternate_result});
-        }
-    }
+    };
 
     std::shared_ptr<LibusbBulkOutBackend::State> backend_state;
     try {
+        const auto open_result =
+            state_->functions.open(selected_device, &handle);
+        if (const auto stopped =
+                stage_boundary(LibusbVerifiedOpenStage::native_open)) {
+            cleanup_open();
+            return std::unexpected(*stopped);
+        }
+        if (open_result != LIBUSB_SUCCESS || handle == nullptr) {
+            cleanup_open();
+            return std::unexpected(LibusbRuntimeError{
+                LibusbRuntimeErrorKind::open_failed,
+                open_result != LIBUSB_SUCCESS ? open_result
+                                              : LIBUSB_ERROR_OTHER,
+            });
+        }
+
+        int active_configuration = 0;
+        auto configuration_failure =
+            state_->functions.get_configuration(handle, &active_configuration);
+        if (configuration_failure == LIBUSB_SUCCESS &&
+            active_configuration != device.configuration_value) {
+            configuration_failure = state_->functions.set_configuration(
+                handle, device.configuration_value);
+        }
+        if (const auto stopped =
+                stage_boundary(LibusbVerifiedOpenStage::configuration)) {
+            cleanup_open();
+            return std::unexpected(*stopped);
+        }
+        if (configuration_failure != LIBUSB_SUCCESS) {
+            cleanup_open();
+            return std::unexpected(LibusbRuntimeError{
+                LibusbRuntimeErrorKind::configuration_failed,
+                configuration_failure,
+            });
+        }
+
+        const auto claim_result =
+            state_->functions.claim_interface(handle, device.interface_number);
+        claimed = claim_result == LIBUSB_SUCCESS;
+        int alternate_result = LIBUSB_SUCCESS;
+        if (claimed) {
+            // Claiming an interface does not prove which alternate is active.
+            // Select even alternate zero explicitly so the claimed pipe set
+            // is the one reconstructed and published below.
+            alternate_result = state_->functions.set_interface_alt_setting(
+                handle, device.interface_number, device.alternate_setting);
+        }
+        if (const auto stopped =
+                stage_boundary(LibusbVerifiedOpenStage::claim)) {
+            cleanup_open();
+            return std::unexpected(*stopped);
+        }
+        if (claim_result != LIBUSB_SUCCESS) {
+            cleanup_open();
+            return std::unexpected(LibusbRuntimeError{
+                claim_result == LIBUSB_ERROR_BUSY
+                    ? LibusbRuntimeErrorKind::interface_busy
+                    : LibusbRuntimeErrorKind::claim_failed,
+                claim_result,
+            });
+        }
+        if (alternate_result != LIBUSB_SUCCESS) {
+            cleanup_open();
+            return std::unexpected(LibusbRuntimeError{
+                LibusbRuntimeErrorKind::alternate_setting_failed,
+                alternate_result,
+            });
+        }
+
+        auto verified_sample = sample_claimed_identity(
+            state_->functions, selected_device, handle, device);
+        std::optional<std::string> windows_instance_identity;
+        if (verified_sample.has_value() &&
+            state_->functions.resolve_windows_topology) {
+            const auto initial_session = static_cast<unsigned long>(
+                verified_sample->identity.backend_session_id);
+            if (initial_session == 0UL) {
+                verified_sample = std::unexpected(verified_open_error(
+                    LibusbRuntimeErrorKind::identity_changed,
+                    LibusbVerifiedOpenStage::post_open_identity));
+            } else {
+                auto initial_instance =
+                    state_->functions.capture_windows_session_identity(
+                        initial_session,
+                        deadline,
+                        combined_stop_source.get_token());
+                if (!initial_instance.has_value()) {
+                    verified_sample = std::unexpected(
+                        verified_windows_anchor_error(
+                            initial_instance.error()));
+                } else {
+                    auto current_sample = sample_claimed_identity(
+                        state_->functions, selected_device, handle, device);
+                    if (!current_sample.has_value()) {
+                        verified_sample = std::unexpected(
+                            current_sample.error());
+                    } else {
+                        const auto current_session =
+                            static_cast<unsigned long>(
+                                current_sample->identity.backend_session_id);
+                        auto current_instance = current_session == 0UL
+                            ? std::expected<std::string,
+                                            WindowsUsbTopologyError>{
+                                  std::unexpected(
+                                      windows_generation_changed(
+                                          initial_session,
+                                          *initial_instance,
+                                          "the claimed libusb DEVINST disappeared during verified-open generation revalidation"))}
+                            : state_->functions
+                                  .capture_windows_session_identity(
+                                      current_session,
+                                      deadline,
+                                      combined_stop_source.get_token());
+                        if (!current_instance.has_value()) {
+                            verified_sample = std::unexpected(
+                                verified_windows_anchor_error(
+                                    current_instance.error()));
+                        } else if (
+                            current_session != initial_session ||
+                            !pnp_identity_equal(*current_instance,
+                                                *initial_instance) ||
+                            !same_claimed_generation(*verified_sample,
+                                                     *current_sample)) {
+                            verified_sample = std::unexpected(
+                                verified_open_error(
+                                    LibusbRuntimeErrorKind::identity_changed,
+                                    LibusbVerifiedOpenStage::post_open_identity));
+                        } else {
+                            windows_instance_identity =
+                                std::move(*current_instance);
+                            verified_sample = std::move(current_sample);
+                        }
+                    }
+                }
+            }
+        }
+        if (verified_sample.has_value()) {
+            enrich_verified_identity(
+                state_->functions,
+                verified_sample->identity,
+                deadline,
+                combined_stop_source.get_token(),
+                windows_instance_identity);
+        }
+        if (const auto stopped =
+                stage_boundary(LibusbVerifiedOpenStage::post_open_identity)) {
+            cleanup_open();
+            return std::unexpected(*stopped);
+        }
+        if (!verified_sample.has_value()) {
+            cleanup_open();
+            return std::unexpected(verified_sample.error());
+        }
+        if (const auto stopped =
+                stage_boundary(LibusbVerifiedOpenStage::publish)) {
+            cleanup_open();
+            return std::unexpected(*stopped);
+        }
+
         backend_state =
             std::make_shared<LibusbBulkOutBackend::State>(
-                state_, handle, device, options, reserved_key);
+                state_,
+                handle,
+                verified_sample->identity,
+                options,
+                reserved_key);
         reservation_owned_by_open = false;
+        claimed = false;
+        handle = nullptr;
         state_->register_backend(backend_state);
-        return std::unique_ptr<LibusbBulkOutBackend>(
-            new LibusbBulkOutBackend(backend_state));
+        return LibusbVerifiedOpenResult{
+            std::unique_ptr<LibusbBulkOutBackend>(
+                new LibusbBulkOutBackend(backend_state)),
+            std::move(verified_sample->identity),
+        };
     } catch (const std::bad_alloc&) {
         if (backend_state != nullptr) {
             lifecycle.unlock();
             state_->stop_backend(backend_state);
         } else {
-            static_cast<void>(
-                state_->functions.release_interface(handle, device.interface_number));
-            state_->functions.close(handle);
-            release_open_reservation();
+            cleanup_open();
         }
         return std::unexpected(LibusbRuntimeError{LibusbRuntimeErrorKind::open_failed,
                                                   LIBUSB_ERROR_NO_MEM});
+    } catch (...) {
+        if (backend_state != nullptr) {
+            lifecycle.unlock();
+            state_->stop_backend(backend_state);
+        } else {
+            cleanup_open();
+        }
+        return std::unexpected(verified_open_error(
+            LibusbRuntimeErrorKind::open_failed,
+            LibusbVerifiedOpenStage::post_open_identity,
+            LIBUSB_ERROR_OTHER));
     }
 }
 
@@ -2568,6 +3159,33 @@ bool LibusbRuntime::shutdown_quarantined() const noexcept {
 bool LibusbRuntime::quarantine_module_pin_failed() const noexcept {
     return state_ != nullptr &&
            state_->module_pin_failed.load(std::memory_order_acquire);
+}
+
+LibusbVerifiedOpenResult::LibusbVerifiedOpenResult(
+    std::unique_ptr<LibusbBulkOutBackend> backend,
+    UsbDeviceInfo verified_identity) noexcept
+    : backend_(std::move(backend)),
+      verified_identity_(std::move(verified_identity)) {}
+
+LibusbVerifiedOpenResult::LibusbVerifiedOpenResult(
+    LibusbVerifiedOpenResult&&) noexcept = default;
+
+LibusbVerifiedOpenResult& LibusbVerifiedOpenResult::operator=(
+    LibusbVerifiedOpenResult&&) noexcept = default;
+
+LibusbVerifiedOpenResult::~LibusbVerifiedOpenResult() = default;
+
+const UsbDeviceInfo& LibusbVerifiedOpenResult::verified_identity() const noexcept {
+    return verified_identity_;
+}
+
+LibusbBulkOutBackend& LibusbVerifiedOpenResult::backend() const noexcept {
+    return *backend_;
+}
+
+std::unique_ptr<LibusbBulkOutBackend>
+LibusbVerifiedOpenResult::take_backend() noexcept {
+    return std::move(backend_);
 }
 
 LibusbBulkOutBackend::LibusbBulkOutBackend(std::shared_ptr<State> state)

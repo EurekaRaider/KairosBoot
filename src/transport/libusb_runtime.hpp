@@ -37,6 +37,25 @@ enum class LibusbSubmitFaultPoint : std::uint8_t {
     registry_allocation,
 };
 
+// A verified open is cancellable only at these owner-controlled boundaries.
+// The libusb open/configuration/claim calls between boundaries are synchronous
+// native calls and have no portable preemptive cancellation API.
+enum class LibusbVerifiedOpenStage : std::uint8_t {
+    none,
+    reservation,
+    selection,
+    native_open,
+    configuration,
+    claim,
+    post_open_identity,
+    publish,
+};
+
+enum class LibusbOpenCancellationGuarantee : std::uint8_t {
+    not_applicable,
+    cooperative_stage_boundary,
+};
+
 // Injectable libusb surface. Production uses system(); deterministic tests
 // replace every entry without requiring USB hardware.
 struct LibusbFunctions final {
@@ -61,6 +80,7 @@ struct LibusbFunctions final {
         get_device_string;
 
     std::function<int(libusb_device*, libusb_device_handle**)> open;
+    std::function<libusb_device*(libusb_device_handle*)> get_device;
     std::function<void(libusb_device_handle*)> close;
     std::function<int(libusb_device_handle*, int*)> get_configuration;
     std::function<int(libusb_device_handle*, int)> set_configuration;
@@ -82,6 +102,12 @@ struct LibusbFunctions final {
     // Optional deterministic allocation-fault seam for transport tests. The
     // production function table leaves it empty.
     std::function<void(LibusbSubmitFaultPoint)> submit_allocation_fault;
+
+    // Optional verified-open stage seam. Tests may block a boundary to prove
+    // that cancellation/deadline expiry observed after a synchronous native
+    // call fails closed. Production leaves it empty. Throwing is treated as an
+    // open failure; callbacks must not re-enter this runtime.
+    std::function<void(LibusbVerifiedOpenStage)> verified_open_stage_observer;
 
     // Optional platform topology enrichment. Production installs each resolver
     // only on its host platform; tests may inject either resolver anywhere.
@@ -137,6 +163,9 @@ enum class LibusbRuntimeErrorKind : std::uint8_t {
     interface_busy,
     claim_failed,
     alternate_setting_failed,
+    operation_cancelled,
+    operation_timed_out,
+    identity_changed,
 };
 
 struct LibusbRuntimeError final {
@@ -145,6 +174,9 @@ struct LibusbRuntimeError final {
     std::uint16_t actual_major{};
     std::uint16_t actual_minor{};
     std::uint16_t actual_micro{};
+    LibusbVerifiedOpenStage verified_open_stage{LibusbVerifiedOpenStage::none};
+    LibusbOpenCancellationGuarantee cancellation_guarantee{
+        LibusbOpenCancellationGuarantee::not_applicable};
 };
 
 struct UsbInterfaceFilter final {
@@ -200,6 +232,39 @@ struct BulkOutOptions final {
 
 class LibusbBulkOutBackend;
 
+// Move-only proof that the returned backend owns the exact interface described
+// by verified_identity(). The identity is reconstructed after open, claim, and
+// alternate selection from libusb_get_device(handle), not copied from the
+// caller's enumeration snapshot. Platform topology is resolved again from
+// that claimed generation, including its current backend session and device
+// address. Where the platform exposes a generation identity, the full claimed
+// descriptor/interface/endpoint snapshot is bracketed by that identity before
+// topology is published. verified_identity() retains either the new topology
+// value or its detailed platform diagnostic.
+class LibusbVerifiedOpenResult final {
+public:
+    static constexpr LibusbOpenCancellationGuarantee cancellation_guarantee =
+        LibusbOpenCancellationGuarantee::cooperative_stage_boundary;
+
+    LibusbVerifiedOpenResult(const LibusbVerifiedOpenResult&) = delete;
+    LibusbVerifiedOpenResult& operator=(const LibusbVerifiedOpenResult&) = delete;
+    LibusbVerifiedOpenResult(LibusbVerifiedOpenResult&&) noexcept;
+    LibusbVerifiedOpenResult& operator=(LibusbVerifiedOpenResult&&) noexcept;
+    ~LibusbVerifiedOpenResult();
+
+    [[nodiscard]] const UsbDeviceInfo& verified_identity() const noexcept;
+    [[nodiscard]] LibusbBulkOutBackend& backend() const noexcept;
+    [[nodiscard]] std::unique_ptr<LibusbBulkOutBackend> take_backend() noexcept;
+
+private:
+    friend class LibusbRuntime;
+    LibusbVerifiedOpenResult(std::unique_ptr<LibusbBulkOutBackend> backend,
+                             UsbDeviceInfo verified_identity) noexcept;
+
+    std::unique_ptr<LibusbBulkOutBackend> backend_;
+    UsbDeviceInfo verified_identity_;
+};
+
 class LibusbRuntime final {
 public:
     [[nodiscard]] static std::expected<std::shared_ptr<LibusbRuntime>, LibusbRuntimeError>
@@ -216,6 +281,20 @@ public:
         const UsbInterfaceFilter& filter) const;
     [[nodiscard]] std::expected<std::unique_ptr<LibusbBulkOutBackend>, LibusbRuntimeError>
     open_bulk_out(const UsbDeviceInfo& device, BulkOutOptions options = {});
+    // Cancellation/deadline checks happen before publication and at every
+    // LibusbVerifiedOpenStage boundary. A synchronous native call already in
+    // progress is allowed to return; therefore this is not an end-to-end
+    // wall-clock bound on libusb_open/configuration/claim. No detached worker
+    // is created. After a boundary observes cancellation or timeout, the call
+    // returns only after the handle is synchronously released/closed and the
+    // process-wide interface reservation has been released.
+    [[nodiscard]] std::expected<LibusbVerifiedOpenResult, LibusbRuntimeError>
+    open_bulk_out_verified(
+        const UsbDeviceInfo& device,
+        std::chrono::steady_clock::time_point deadline =
+            std::chrono::steady_clock::time_point::max(),
+        std::stop_token cancellation = {},
+        BulkOutOptions options = {});
 
     [[nodiscard]] std::optional<int> last_event_error() const noexcept;
     [[nodiscard]] std::thread::id event_thread_id() const noexcept;
