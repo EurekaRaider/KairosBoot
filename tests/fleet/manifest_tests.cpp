@@ -258,6 +258,24 @@ void document_and_yaml_graph_security_is_strict() {
     expect_error({}, ManifestErrorKind::Syntax);
     expect_error(minimal_manifest() + "---\n{}\n",
                  ManifestErrorKind::MultipleDocuments);
+    CHECK(parse_text(replace_once(minimal_manifest(),
+                                  "kind: FlashJob",
+                                  "kind: \"FlashJob\"")));
+    CHECK(parse_text(replace_once(minimal_manifest(),
+                                  "kind: FlashJob",
+                                  "kind: 'FlashJob'")));
+    expect_error(replace_once(minimal_manifest(),
+                              "kind: FlashJob",
+                              "kind: ! FlashJob"),
+                 ManifestErrorKind::UnsupportedTag);
+    expect_error(replace_once(minimal_manifest(),
+                              "kind: FlashJob",
+                              "kind: ! \"FlashJob\""),
+                 ManifestErrorKind::UnsupportedTag);
+    expect_error(replace_once(minimal_manifest(),
+                              "artifacts:\n",
+                              "artifacts: !\n"),
+                 ManifestErrorKind::UnsupportedTag);
     expect_error(replace_once(minimal_manifest(),
                               "kind: FlashJob",
                               "kind: !application FlashJob"),
@@ -287,6 +305,14 @@ void document_and_yaml_graph_security_is_strict() {
     auto embedded_nul = minimal_manifest();
     embedded_nul.insert(embedded_nul.find("FlashJob") + 4U, 1U, '\0');
     expect_error(embedded_nul, ManifestErrorKind::InvalidValue);
+    for (const auto escape : {"\\0", "\\x00", "\\u0000"}) {
+        expect_error(replace_once(
+                         minimal_manifest(),
+                         "expectedProduct: product_a",
+                         std::string("expectedProduct: \"product") + escape +
+                             "a\""),
+                     ManifestErrorKind::InvalidValue);
+    }
 
     auto invalid_utf8 = minimal_manifest();
     const auto product = invalid_utf8.find("product_a");
@@ -316,6 +342,37 @@ void document_and_yaml_graph_security_is_strict() {
                      "artifacts: {}\n"),
                  ManifestErrorKind::TypeMismatch);
     expect_error("apiVersion: [\n", ManifestErrorKind::Syntax);
+}
+
+void yaml_core_string_typing_matches_the_json_schema() {
+    const std::vector<std::string> core_non_strings{
+        "~",       "null",    "Null",      "NULL",      "true",
+        "True",    "TRUE",    "false",     "False",     "FALSE",
+        "0",       "-12",     "+12",       "0o17",      "0x2A",
+        "1.0",     ".5",      "1e3",       "-2.5E-2",   ".inf",
+        "-.Inf",   ".NaN",
+    };
+    for (const auto& value : core_non_strings) {
+        expect_error(replace_once(minimal_manifest(),
+                                  "expectedProduct: product_a",
+                                  "expectedProduct: " + value),
+                     ManifestErrorKind::TypeMismatch);
+        auto quoted = parse_text(replace_once(minimal_manifest(),
+                                              "expectedProduct: product_a",
+                                              "expectedProduct: \"" + value +
+                                                  "\""));
+        CHECK(quoted);
+        CHECK(quoted->targets[0].expected_product.value == value);
+    }
+
+    for (const auto value : {"yes", "no", "on", "off", "123abc"}) {
+        auto parsed = parse_text(replace_once(minimal_manifest(),
+                                              "expectedProduct: product_a",
+                                              std::string("expectedProduct: ") +
+                                                  value));
+        CHECK(parsed);
+        CHECK(parsed->targets[0].expected_product.value == value);
+    }
 }
 
 void path_hash_and_identity_rules_are_strict() {
@@ -769,6 +826,8 @@ int main() {
             defaults_are_owned_and_deterministic);
         run("document_and_yaml_graph_security_is_strict",
             document_and_yaml_graph_security_is_strict);
+        run("yaml_core_string_typing_matches_the_json_schema",
+            yaml_core_string_typing_matches_the_json_schema);
         run("path_hash_and_identity_rules_are_strict",
             path_hash_and_identity_rules_are_strict);
         run("schema_fields_selectors_and_references_are_closed",

@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kairosboot.io/schemas/fleet-job.v1.schema.json",
   "title": "KairosBoot FlashJob v1",
+  "$comment": "YAML inputs use the YAML 1.2 Core Schema. Quote plain null, boolean, or number spellings when a field defined as a JSON string is intended to contain that text.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "artifacts", "targets"],

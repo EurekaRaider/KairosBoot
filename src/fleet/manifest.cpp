@@ -146,6 +146,98 @@ void invoke_fault(const ManifestParseOptions& options,
     return tag.empty() || tag == "?" || tag == "!";
 }
 
+[[nodiscard]] bool yaml_core_plain_number(
+    const std::string_view value) noexcept {
+    if (value == ".nan" || value == ".NaN" || value == ".NAN") {
+        return true;
+    }
+
+    auto body = value;
+    bool signed_value = false;
+    if (!body.empty() && (body.front() == '+' || body.front() == '-')) {
+        signed_value = true;
+        body.remove_prefix(1U);
+    }
+    if (body == ".inf" || body == ".Inf" || body == ".INF") {
+        return true;
+    }
+    if (body.empty()) {
+        return false;
+    }
+    if (!signed_value && body.starts_with("0o")) {
+        const auto digits = body.substr(2U);
+        return !digits.empty() &&
+               std::ranges::all_of(digits, [](const char character) {
+                   return character >= '0' && character <= '7';
+               });
+    }
+    if (!signed_value && body.starts_with("0x")) {
+        const auto digits = body.substr(2U);
+        return !digits.empty() &&
+               std::ranges::all_of(digits, [](const char character) {
+                   return (character >= '0' && character <= '9') ||
+                          (character >= 'a' && character <= 'f') ||
+                          (character >= 'A' && character <= 'F');
+               });
+    }
+
+    std::size_t cursor = 0U;
+    if (body.front() == '.') {
+        ++cursor;
+        const auto fraction_begin = cursor;
+        while (cursor < body.size() && body[cursor] >= '0' &&
+               body[cursor] <= '9') {
+            ++cursor;
+        }
+        if (cursor == fraction_begin) {
+            return false;
+        }
+    } else {
+        while (cursor < body.size() && body[cursor] >= '0' &&
+               body[cursor] <= '9') {
+            ++cursor;
+        }
+        if (cursor == 0U) {
+            return false;
+        }
+        if (cursor < body.size() && body[cursor] == '.') {
+            ++cursor;
+            while (cursor < body.size() && body[cursor] >= '0' &&
+                   body[cursor] <= '9') {
+                ++cursor;
+            }
+        }
+    }
+    if (cursor < body.size() &&
+        (body[cursor] == 'e' || body[cursor] == 'E')) {
+        ++cursor;
+        if (cursor < body.size() &&
+            (body[cursor] == '+' || body[cursor] == '-')) {
+            ++cursor;
+        }
+        const auto exponent_begin = cursor;
+        while (cursor < body.size() && body[cursor] >= '0' &&
+               body[cursor] <= '9') {
+            ++cursor;
+        }
+        if (cursor == exponent_begin) {
+            return false;
+        }
+    }
+    return cursor == body.size();
+}
+
+[[nodiscard]] bool yaml_core_plain_non_string(
+    const std::string_view value) noexcept {
+    constexpr std::array null_and_boolean_values{
+        "~"sv,     "null"sv,  "Null"sv,  "NULL"sv,  "true"sv,
+        "True"sv,  "TRUE"sv,  "false"sv, "False"sv, "FALSE"sv,
+    };
+    return std::ranges::find(null_and_boolean_values, value) !=
+               null_and_boolean_values.end() ||
+           yaml_core_plain_number(value);
+}
+
 class ScanAbort final : public std::exception {
 public:
     explicit ScanAbort(ManifestError value) : error_(std::move(value)) {}
@@ -164,8 +256,9 @@ private:
 
 class StrictEventHandler final : public YAML::EventHandler {
 public:
-    explicit StrictEventHandler(const ManifestParseOptions& options)
-        : options_(options) {}
+    StrictEventHandler(const std::string_view input,
+                       const ManifestParseOptions& options)
+        : input_(input), options_(options) {}
 
     void OnDocumentStart(const YAML::Mark& mark) override {
         check_interruption(mark);
@@ -209,6 +302,11 @@ public:
         reject_tag(mark, tag);
         reject_anchor(mark, anchor);
         count_node(mark);
+        if (value.find('\0') != std::string::npos) {
+            reject(ManifestErrorKind::InvalidValue,
+                   mark,
+                   "YAML scalar contains an embedded NUL");
+        }
         if (value.size() > kMaximumManifestScalarBytes) {
             reject(ManifestErrorKind::LimitExceeded,
                    mark,
@@ -262,7 +360,16 @@ private:
     }
 
     void reject_tag(const YAML::Mark& mark, const std::string_view tag) const {
-        if (!implicit_tag(tag)) {
+        // yaml-cpp reports both a normally quoted scalar and an explicit bare
+        // non-specific `!` tag as tag "!". Its event mark points at the quote
+        // for the former and at the tag token for the latter, so consult the
+        // immutable input to keep quoted JSON strings valid while closing the
+        // explicit-tag grammar.
+        const bool explicit_bare_tag =
+            tag == "!" && mark.pos >= 0 &&
+            static_cast<std::size_t>(mark.pos) < input_.size() &&
+            input_[static_cast<std::size_t>(mark.pos)] == '!';
+        if (!implicit_tag(tag) || explicit_bare_tag) {
             reject(ManifestErrorKind::UnsupportedTag,
                    mark,
                    "explicit or custom YAML tags are not allowed");
@@ -314,6 +421,7 @@ private:
         --depth_;
     }
 
+    std::string_view input_;
     const ManifestParseOptions& options_;
     std::size_t documents_{};
     std::size_t nodes_{};
@@ -327,7 +435,7 @@ private:
         invoke_fault(options, ManifestFaultPoint::EventScan);
         std::istringstream stream(input);
         YAML::Parser parser(stream);
-        StrictEventHandler handler(options);
+        StrictEventHandler handler(input, options);
         while (parser.HandleNextDocument(handler)) {
             if (const auto interrupted = interruption_error(options, "$")) {
                 return std::unexpected(*interrupted);
@@ -526,6 +634,17 @@ public:
                                      location_from_mark(node.Mark())));
     }
     const auto& value = node.Scalar();
+    // The published JSON Schema describes these fields as strings. Under the
+    // YAML 1.2 Core Schema, plain null/boolean/number spellings are not strings;
+    // callers must quote those spellings when they are intended as text.
+    if (node.Tag() == "?" && yaml_core_plain_non_string(value)) {
+        return std::unexpected(error(
+            ManifestErrorKind::TypeMismatch,
+            "manifest value resolves to a YAML null, boolean, or number; "
+            "quote it to use it as a string",
+            path,
+            location_from_mark(node.Mark())));
+    }
     if ((!allow_empty && value.empty()) || value.size() > maximum_bytes ||
         !valid_utf8(value)) {
         return std::unexpected(error(
