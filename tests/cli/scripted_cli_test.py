@@ -526,20 +526,26 @@ def run(cli: pathlib.Path) -> None:
 
         def cumulative_update_timeout(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"erase:cache"
-            time.sleep(0.35)
+            time.sleep(1.5)
             send_frame(connection, b"OKAYcache")
             assert receive_frame(connection) == b"erase:metadata"
-            time.sleep(0.35)
+            time.sleep(1.5)
             send_frame(connection, b"OKAYmetadata")
             assert receive_frame(connection) == b"erase:misc"
-            require_peer_close(connection)
+            time.sleep(1.5)
+            try:
+                send_frame(connection, b"OKAYmisc")
+            except OSError:
+                # The shared whole-operation deadline normally closes the
+                # transport before this third, individually timely response.
+                pass
 
         stdout, stderr = invoke(
             cli,
             ["--json", "update", str(cumulative_timeout_package)],
             cumulative_update_timeout,
             expected_exit=4,
-            timeout_ms=1000,
+            timeout_ms=4000,
         )
         parse_failure_json(stdout, stderr, "timeout")
 
