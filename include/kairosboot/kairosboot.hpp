@@ -91,6 +91,13 @@ struct FlashOptions {
   std::function<ProgressAction(const FlashProgress &)> progress;
 };
 
+struct UpdateOptions {
+  // Whole-operation timeout. milliseconds::max() selects no deadline.
+  std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
+  bool wipe{};
+  std::function<ProgressAction(const Progress &)> progress;
+};
+
 struct CommandOptions {
   // Per-I/O timeout. milliseconds::max() selects the native infinite default.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
@@ -259,6 +266,11 @@ struct PreparedFlashOptions final {
   std::shared_ptr<ProgressCallbackState> callback_state;
 };
 
+struct PreparedUpdateOptions final {
+  kb_update_options_t native{};
+  std::shared_ptr<ProgressCallbackState> callback_state;
+};
+
 [[nodiscard]] inline std::expected<std::uint32_t, Error>
 prepare_timeout(const std::chrono::milliseconds timeout,
                 const std::string_view option_name) {
@@ -276,6 +288,28 @@ prepare_timeout(const std::chrono::milliseconds timeout,
             "or std::chrono::milliseconds::max()"));
   }
   return static_cast<std::uint32_t>(count);
+}
+
+[[nodiscard]] inline std::expected<PreparedUpdateOptions, Error>
+prepare_update_options(const UpdateOptions &options) {
+  auto timeout = prepare_timeout(options.timeout, "update timeout");
+  if (!timeout) {
+    return std::unexpected(std::move(timeout.error()));
+  }
+
+  PreparedUpdateOptions result;
+  kb_update_options_init(&result.native);
+  result.native.timeout_ms = *timeout;
+  result.native.wipe = options.wipe ? 1 : 0;
+  if (options.progress) {
+    result.callback_state =
+        std::make_shared<ProgressCallbackState>(ProgressCallbackState{
+            options.progress,
+        });
+    result.native.progress_callback = &progress_trampoline;
+    result.native.progress_user_data = result.callback_state.get();
+  }
+  return result;
 }
 
 [[nodiscard]] inline std::expected<PreparedFlashOptions, Error>
@@ -548,6 +582,29 @@ public:
       return std::unexpected(std::move(native_timeout.error()));
     }
     return wait(*native_timeout);
+  }
+  [[nodiscard]] std::expected<void, Error>
+  wait(const std::stop_token stop_token,
+       const std::chrono::milliseconds timeout =
+           std::chrono::milliseconds::max()) {
+    auto native_timeout = detail::prepare_timeout(timeout, "operation timeout");
+    if (!native_timeout) {
+      return std::unexpected(std::move(native_timeout.error()));
+    }
+    std::atomic<bool> stop_observed{false};
+    auto result = [&] {
+      std::stop_callback cancel_on_stop{
+          stop_token, [handle = resources_.handle(), &stop_observed] {
+            stop_observed.store(true, std::memory_order_release);
+            (void)kb_operation_cancel(handle);
+          }};
+      return wait(*native_timeout);
+    }();
+    if (!result && result.error().status() == KB_E_TIMEOUT &&
+        stop_observed.load(std::memory_order_acquire)) {
+      return wait(KB_WAIT_INFINITE);
+    }
+    return result;
   }
   [[nodiscard]] std::expected<void, Error> cancel() {
     const kb_status_t status = kb_operation_cancel(resources_.handle());
@@ -1288,6 +1345,63 @@ public:
       const std::string_view partition, const FetchRange range = {},
       const CommandOptions &options = {}) const {
     return fetch(std::nullopt, partition, range, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> update_package_async(
+      const DeviceSelector selector, const std::filesystem::path &package,
+      const UpdateOptions &options = {}) const {
+    auto prepared = detail::prepare_update_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto path_u8 = package.u8string();
+    const std::string path_storage{path_u8.begin(), path_u8.end()};
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_update_package_async(
+        handle_, selector_value, path_storage.c_str(), &prepared->native,
+        &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> update_package_async(
+      const std::filesystem::path &package,
+      const UpdateOptions &options = {}) const {
+    return update_package_async(std::nullopt, package, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> update_package_async(
+      const std::string_view selector, const std::filesystem::path &package,
+      const UpdateOptions &options = {}) const {
+    return update_package_async(DeviceSelector{selector}, package, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> update_package(
+      const DeviceSelector selector, const std::filesystem::path &package,
+      const UpdateOptions &options = {}) const {
+    auto operation = update_package_async(selector, package, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> update_package(
+      const std::filesystem::path &package,
+      const UpdateOptions &options = {}) const {
+    return update_package(std::nullopt, package, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> update_package(
+      const std::string_view selector, const std::filesystem::path &package,
+      const UpdateOptions &options = {}) const {
+    return update_package(DeviceSelector{selector}, package, options);
   }
 
   [[nodiscard]] std::expected<Operation, Error> flash_file_async(

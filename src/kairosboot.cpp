@@ -5,8 +5,12 @@
 #include "src/api/command_result_handle.hpp"
 #include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
+#include "src/fastboot/primitive_update_device.hpp"
 #include "src/fastboot/primitive_service.hpp"
+#include "src/fastboot/update_executor.hpp"
+#include "src/fastboot/update_package_preflight.hpp"
 #include "src/fastboot/variable_parser.hpp"
+#include "src/image/artifact_source.hpp"
 #include "src/image/file_source.hpp"
 #include "src/image/flash_artifact.hpp"
 #include "src/image/sparse_flash_plan.hpp"
@@ -23,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -36,10 +41,14 @@
 #include <utility>
 #include <vector>
 
-struct kb_context {
-  kb_context_options_t options{};
+struct kb_context_usb_state {
   mutable std::mutex usb_runtime_mutex;
   std::shared_ptr<kairosboot::transport::LibusbRuntime> usb_runtime;
+};
+
+struct kb_context {
+  kb_context_options_t options{};
+  std::shared_ptr<kb_context_usb_state> usb_state;
 };
 
 struct kb_device_info {
@@ -362,6 +371,113 @@ bool valid_flash_options(const kb_flash_options_t *options) noexcept {
           options->api_version == KB_API_VERSION);
 }
 
+bool valid_update_options(const kb_update_options_t *options) noexcept {
+  return options == nullptr ||
+         (options->struct_size >= KB_UPDATE_OPTIONS_V1_SIZE &&
+          options->api_version == KB_API_VERSION &&
+          (options->wipe == 0 || options->wipe == 1));
+}
+
+[[nodiscard]] kb_update_options_t update_options_or_default(
+    const kb_update_options_t *options) noexcept {
+  kb_update_options_t result{};
+  result.struct_size = sizeof(result);
+  result.api_version = KB_API_VERSION;
+  result.timeout_ms = kDefaultTimeoutMs;
+  if (options != nullptr) {
+    result.timeout_ms = options->timeout_ms;
+    result.wipe = options->wipe;
+    result.progress_callback = options->progress_callback;
+    result.progress_user_data = options->progress_user_data;
+  }
+  return result;
+}
+
+[[nodiscard]] bool report_update_progress(
+    const kb_update_options_t &options, const std::uint64_t completed,
+    const std::uint64_t total, const char *stage,
+    const std::string &device) noexcept {
+  if (options.progress_callback == nullptr) {
+    return true;
+  }
+  const kb_progress_t progress{
+      sizeof(kb_progress_t), KB_API_VERSION, completed, total, stage,
+      device.c_str()};
+  try {
+    return options.progress_callback(&progress, options.progress_user_data) !=
+           KB_PROGRESS_CANCEL;
+  } catch (...) {
+    return false;
+  }
+}
+
+using UpdateClock = std::chrono::steady_clock;
+
+[[nodiscard]] kairosboot::api::OperationErrorPayload update_error(
+    const kb_status_t status, std::string message,
+    const std::string_view identifier,
+    const kb_transfer_state_t transfer_state = KB_TRANSFER_NOT_SENT) {
+  return {
+      .status = status,
+      .message = std::move(message),
+      .native_code = 0,
+      .transfer_state = transfer_state,
+      .device_identifier = std::string(identifier),
+      .device_message = {},
+      .command_messages = {},
+      .inbound_expected = std::nullopt,
+      .inbound_transferred = 0,
+      .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+      .session_poisoned = false,
+  };
+}
+
+[[nodiscard]] std::expected<UpdateClock::time_point,
+                            kairosboot::api::OperationErrorPayload>
+update_deadline(const UpdateClock::time_point started,
+                const std::uint32_t timeout_ms,
+                const std::string_view identifier) {
+  if (timeout_ms == KB_WAIT_INFINITE) {
+    return UpdateClock::time_point::max();
+  }
+  const auto duration = std::chrono::duration_cast<UpdateClock::duration>(
+      std::chrono::milliseconds{timeout_ms});
+  if (duration > UpdateClock::time_point::max() - started) {
+    return std::unexpected(update_error(
+        KB_E_INVALID_ARGUMENT,
+        "update operation timeout overflows steady_clock", identifier));
+  }
+  return started + duration;
+}
+
+[[nodiscard]] std::expected<std::uint32_t,
+                            kairosboot::api::OperationErrorPayload>
+remaining_update_timeout(const UpdateClock::time_point deadline,
+                         const std::string_view identifier,
+                         const std::string_view phase) {
+  if (deadline == UpdateClock::time_point::max()) {
+    return KB_WAIT_INFINITE;
+  }
+  const auto now = UpdateClock::now();
+  if (now >= deadline) {
+    return std::unexpected(update_error(
+        KB_E_TIMEOUT,
+        "update operation deadline expired before " + std::string(phase),
+        identifier));
+  }
+  const auto remaining =
+      std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count();
+  if (remaining <= 0) {
+    return std::unexpected(update_error(
+        KB_E_TIMEOUT,
+        "update operation deadline expired before " + std::string(phase),
+        identifier));
+  }
+  return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+      static_cast<std::uint64_t>(remaining),
+      static_cast<std::uint64_t>(KB_WAIT_INFINITE) - 1U));
+}
+
 const char *runtime_error_message(
     const kairosboot::transport::LibusbRuntimeErrorKind kind) noexcept {
   using kairosboot::transport::LibusbRuntimeErrorKind;
@@ -451,15 +567,50 @@ acquire_usb_runtime() {
 std::expected<std::shared_ptr<kairosboot::transport::LibusbRuntime>,
               kairosboot::transport::LibusbRuntimeError>
 acquire_context_usb_runtime(kb_context_t &context) {
-  std::scoped_lock lock(context.usb_runtime_mutex);
-  if (context.usb_runtime != nullptr && context.usb_runtime->running()) {
-    return context.usb_runtime;
+  if (context.usb_state == nullptr) {
+    return std::unexpected(kairosboot::transport::LibusbRuntimeError{
+        .kind = kairosboot::transport::LibusbRuntimeErrorKind::init_failed,
+        .native_code = 0,
+        .actual_major = 0,
+        .actual_minor = 0,
+        .actual_micro = 0,
+    });
+  }
+  std::scoped_lock lock(context.usb_state->usb_runtime_mutex);
+  if (context.usb_state->usb_runtime != nullptr &&
+      context.usb_state->usb_runtime->running()) {
+    return context.usb_state->usb_runtime;
   }
   auto runtime = acquire_usb_runtime();
   if (!runtime) {
     return std::unexpected(runtime.error());
   }
-  context.usb_runtime = *runtime;
+  context.usb_state->usb_runtime = *runtime;
+  return *runtime;
+}
+
+std::expected<std::shared_ptr<kairosboot::transport::LibusbRuntime>,
+              kairosboot::transport::LibusbRuntimeError>
+acquire_context_usb_runtime(
+    const std::shared_ptr<kb_context_usb_state> &state) {
+  if (state == nullptr) {
+    return std::unexpected(kairosboot::transport::LibusbRuntimeError{
+        .kind = kairosboot::transport::LibusbRuntimeErrorKind::init_failed,
+        .native_code = 0,
+        .actual_major = 0,
+        .actual_minor = 0,
+        .actual_micro = 0,
+    });
+  }
+  std::scoped_lock lock(state->usb_runtime_mutex);
+  if (state->usb_runtime != nullptr && state->usb_runtime->running()) {
+    return state->usb_runtime;
+  }
+  auto runtime = acquire_usb_runtime();
+  if (!runtime) {
+    return std::unexpected(runtime.error());
+  }
+  state->usb_runtime = *runtime;
   return *runtime;
 }
 
@@ -667,9 +818,9 @@ using PrimitiveExecutor = std::function<std::expected<
   return result;
 }
 
-[[nodiscard]] std::expected<PreparedTarget,
+[[nodiscard]] std::expected<kairosboot::api::DeviceSelector,
                             kairosboot::api::OperationErrorPayload>
-prepare_target(kb_context_t &context, const char *selector_text) {
+parse_target_selector(const char *selector_text) {
   const auto text = selector_text == nullptr
                         ? std::optional<std::string_view>{}
                         : std::optional<std::string_view>{selector_text};
@@ -689,9 +840,16 @@ prepare_target(kb_context_t &context, const char *selector_text) {
         .session_poisoned = false,
     });
   }
+  return std::move(*parsed);
+}
 
+[[nodiscard]] std::expected<PreparedTarget,
+                            kairosboot::api::OperationErrorPayload>
+bind_target(
+    kairosboot::api::DeviceSelector selector,
+    std::shared_ptr<kairosboot::transport::LibusbRuntime> usb_runtime) {
   PreparedTarget target{
-      .selector = std::move(*parsed),
+      .selector = std::move(selector),
       .usb_runtime = {},
       .usb_device = std::nullopt,
   };
@@ -699,13 +857,23 @@ prepare_target(kb_context_t &context, const char *selector_text) {
       target.selector.kind == kairosboot::api::DeviceSelectorKind::Udp) {
     return target;
   }
-
-  auto runtime = acquire_context_usb_runtime(context);
-  if (!runtime) {
-    return std::unexpected(kairosboot::api::normalize_public_error(
-        runtime.error(), target.selector.identifier));
+  if (usb_runtime == nullptr) {
+    return std::unexpected(kairosboot::api::OperationErrorPayload{
+        .status = KB_E_INTERNAL,
+        .message = "prepared USB runtime is missing",
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
+        .device_identifier = target.selector.identifier,
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
+    });
   }
-  auto devices = (*runtime)->enumerate(fastboot_usb_filter());
+
+  auto devices = usb_runtime->enumerate(fastboot_usb_filter());
   if (!devices) {
     return std::unexpected(kairosboot::api::normalize_public_error(
         devices.error(), target.selector.identifier));
@@ -726,10 +894,31 @@ prepare_target(kb_context_t &context, const char *selector_text) {
         .session_poisoned = false,
     });
   }
-  target.usb_runtime = *runtime;
+  target.usb_runtime = std::move(usb_runtime);
   target.selector.identifier = device_identifier(*selected);
   target.usb_device = std::move(*selected);
   return target;
+}
+
+[[nodiscard]] std::expected<PreparedTarget,
+                            kairosboot::api::OperationErrorPayload>
+prepare_target(kb_context_t &context, const char *selector_text) {
+  auto parsed = parse_target_selector(selector_text);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+
+  if (parsed->kind == kairosboot::api::DeviceSelectorKind::Tcp ||
+      parsed->kind == kairosboot::api::DeviceSelectorKind::Udp) {
+    return bind_target(std::move(*parsed), {});
+  }
+
+  auto runtime = acquire_context_usb_runtime(context);
+  if (!runtime) {
+    return std::unexpected(kairosboot::api::normalize_public_error(
+        runtime.error(), parsed->identifier));
+  }
+  return bind_target(std::move(*parsed), std::move(*runtime));
 }
 
 [[nodiscard]] kairosboot::api::OperationErrorPayload network_error(
@@ -808,13 +997,115 @@ prepare_target(kb_context_t &context, const char *selector_text) {
   };
 }
 
+class UpdateDeadlineTransport final
+    : public kairosboot::protocol::ITransportSession,
+      public kairosboot::protocol::IStreamingTransportSession {
+public:
+  UpdateDeadlineTransport(
+      std::unique_ptr<kairosboot::protocol::ITransportSession> transport,
+      const UpdateClock::time_point deadline)
+      : transport_(std::move(transport)), deadline_(deadline) {}
+
+  [[nodiscard]] kairosboot::protocol::TransferResult write(
+      const std::span<const std::byte> bytes,
+      const std::chrono::milliseconds timeout) override {
+    auto bounded = bounded_timeout(timeout);
+    return bounded ? transport_->write(bytes, *bounded)
+                   : deadline_failure("write");
+  }
+
+  [[nodiscard]] kairosboot::protocol::TransferResult read(
+      const std::span<std::byte> destination,
+      const std::chrono::milliseconds timeout) override {
+    auto bounded = bounded_timeout(timeout);
+    return bounded ? transport_->read(destination, *bounded)
+                   : deadline_failure("read");
+  }
+
+  [[nodiscard]] kairosboot::protocol::TransferResult read_data(
+      const std::span<std::byte> destination,
+      const std::chrono::milliseconds timeout) override {
+    auto bounded = bounded_timeout(timeout);
+    return bounded ? transport_->read_data(destination, *bounded)
+                   : deadline_failure("data read");
+  }
+
+  [[nodiscard]] kairosboot::protocol::TransferResult write_source(
+      std::shared_ptr<kairosboot::protocol::ITransferSource> source,
+      const std::chrono::milliseconds timeout,
+      const kairosboot::protocol::TransferProgressObserver &observer) override {
+    auto bounded = bounded_timeout(timeout);
+    if (!bounded) {
+      return deadline_failure("streaming write");
+    }
+    auto *streaming = dynamic_cast<
+        kairosboot::protocol::IStreamingTransportSession *>(transport_.get());
+    if (streaming == nullptr) {
+      return {
+          .status = kairosboot::protocol::TransportStatus::IoError,
+          .transferred = 0,
+          .certainty =
+              kairosboot::protocol::TransferCertainty::NotTransferred,
+          .truncated = false,
+          .detail = "the deadline transport has no streaming backend",
+          .native_code = 0,
+      };
+    }
+    return streaming->write_source(std::move(source), *bounded, observer);
+  }
+
+  void request_cancel() noexcept override { transport_->request_cancel(); }
+  void close() noexcept override { transport_->close(); }
+
+private:
+  [[nodiscard]] std::optional<std::chrono::milliseconds> bounded_timeout(
+      const std::chrono::milliseconds requested) const noexcept {
+    const auto now = UpdateClock::now();
+    if (now >= deadline_) {
+      return std::nullopt;
+    }
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+        deadline_ - now);
+    return std::min(requested, remaining);
+  }
+
+  [[nodiscard]] static kairosboot::protocol::TransferResult deadline_failure(
+      const std::string_view operation) {
+    return {
+        .status = kairosboot::protocol::TransportStatus::Timeout,
+        .transferred = 0,
+        .certainty = kairosboot::protocol::TransferCertainty::NotTransferred,
+        .truncated = false,
+        .detail = "update operation deadline expired before transport " +
+                  std::string(operation),
+        .native_code = 0,
+    };
+  }
+
+  std::unique_ptr<kairosboot::protocol::ITransportSession> transport_;
+  UpdateClock::time_point deadline_;
+};
+
+[[nodiscard]] std::unique_ptr<kairosboot::protocol::ITransportSession>
+with_update_deadline(
+    std::unique_ptr<kairosboot::protocol::ITransportSession> transport,
+    const UpdateClock::time_point deadline) {
+  if (deadline == UpdateClock::time_point::max()) {
+    return transport;
+  }
+  return std::make_unique<UpdateDeadlineTransport>(std::move(transport),
+                                                   deadline);
+}
+
 [[nodiscard]] std::expected<
     std::unique_ptr<kairosboot::protocol::ITransportSession>,
     kairosboot::api::OperationErrorPayload>
 open_target(
     const PreparedTarget &target,
     const kb_command_options_t &options,
-    const std::stop_token cancellation) {
+    const std::stop_token cancellation,
+    const UpdateClock::time_point update_deadline =
+        UpdateClock::time_point::max()) {
   const auto timeout = std::chrono::milliseconds{options.timeout_ms};
   if (target.selector.kind == kairosboot::api::DeviceSelectorKind::Tcp) {
     kairosboot::transport::TcpTransportOptions transport_options;
@@ -830,7 +1121,7 @@ open_target(
     std::unique_ptr<kairosboot::protocol::ITransportSession> native =
         std::move(*connected);
     return kairosboot::transport::make_sequential_streaming_transport(
-        std::move(native));
+        with_update_deadline(std::move(native), update_deadline));
   }
   if (target.selector.kind == kairosboot::api::DeviceSelectorKind::Udp) {
     kairosboot::transport::UdpTransportOptions transport_options;
@@ -847,7 +1138,7 @@ open_target(
     std::unique_ptr<kairosboot::protocol::ITransportSession> native =
         std::move(*connected);
     return kairosboot::transport::make_sequential_streaming_transport(
-        std::move(native));
+        with_update_deadline(std::move(native), update_deadline));
   }
   if (target.usb_runtime == nullptr || !target.usb_device.has_value()) {
     return std::unexpected(kairosboot::api::OperationErrorPayload{
@@ -872,8 +1163,9 @@ open_target(
     return std::unexpected(kairosboot::api::normalize_public_error(
         opened.error(), target.selector.identifier));
   }
-  return std::unique_ptr<kairosboot::protocol::ITransportSession>(
-      std::move(*opened));
+  std::unique_ptr<kairosboot::protocol::ITransportSession> native =
+      std::move(*opened);
+  return with_update_deadline(std::move(native), update_deadline);
 }
 
 [[nodiscard]] std::vector<kairosboot::api::CommandMessagePayload>
@@ -1060,6 +1352,234 @@ kb_status_t run_blocking_command(
   return finish_blocking_command(operation, result, error);
 }
 
+class UpdateProgressCancelled final : public std::exception {
+public:
+  [[nodiscard]] const char *what() const noexcept override {
+    return "update operation cancelled by the progress callback";
+  }
+};
+
+[[nodiscard]] const char *update_event_stage(
+    const kairosboot::fastboot::UpdateExecutionEventKind kind) noexcept {
+  using kairosboot::fastboot::UpdateExecutionEventKind;
+  switch (kind) {
+  case UpdateExecutionEventKind::ValidationStarted:
+  case UpdateExecutionEventKind::PreparedPackageValidated:
+  case UpdateExecutionEventKind::RequirementSatisfied:
+  case UpdateExecutionEventKind::RequirementSkipped:
+  case UpdateExecutionEventKind::RequirementFailed:
+    return "validate";
+  case UpdateExecutionEventKind::GetVarQuery:
+  case UpdateExecutionEventKind::GetVarResult:
+  case UpdateExecutionEventKind::GetVarCacheHit:
+    return "getvar";
+  case UpdateExecutionEventKind::ValidationCompleted:
+    return "prepare";
+  case UpdateExecutionEventKind::TaskStarted:
+  case UpdateExecutionEventKind::TaskCompleted:
+  case UpdateExecutionEventKind::TaskFailed:
+  case UpdateExecutionEventKind::ExecutionCompleted:
+    return "execute";
+  }
+  return "execute";
+}
+
+[[nodiscard]] kb_transfer_state_t completed_update_transfer_state(
+    const std::size_t completed_tasks,
+    const std::size_t total_tasks) noexcept {
+  if (total_tasks != 0U && completed_tasks == total_tasks) {
+    return KB_TRANSFER_FULLY_TRANSFERRED;
+  }
+  return completed_tasks == 0U ? KB_TRANSFER_NOT_SENT
+                               : KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+}
+
+[[nodiscard]] kairosboot::api::OperationOutcome run_prepared_public_update(
+    const std::shared_ptr<kb_context_usb_state> &usb_state,
+    kairosboot::api::DeviceSelector selector,
+    const std::filesystem::path &package_path,
+    const kb_update_options_t &options,
+    kairosboot::api::OperationState::TaskContext &task_context) {
+  auto identifier = selector.identifier;
+  const auto started = UpdateClock::now();
+  auto deadline = update_deadline(started, options.timeout_ms, identifier);
+  if (!deadline) {
+    return operation_failure(std::move(deadline.error()));
+  }
+  if (task_context.cancel_requested() ||
+      !report_update_progress(options, 0U, 0U, "preflight", identifier)) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "update cancelled before package preflight");
+  }
+
+  kairosboot::image::ArtifactSourceResolver resolver;
+  auto prepared = kairosboot::fastboot::preflight_update_package(
+      resolver, package_path, options.wipe != 0,
+      kairosboot::fastboot::UpdatePackagePreflightLimits{}, *deadline,
+      task_context.cancellation_token());
+  if (!prepared) {
+    return operation_failure(kairosboot::api::normalize_public_error(
+        prepared.error(), identifier));
+  }
+  const auto total_tasks = prepared->plan.tasks.size();
+  if (task_context.cancel_requested() ||
+      !report_update_progress(options, 0U, 0U, "select", identifier)) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "update cancelled before device selection");
+  }
+  if (task_context.cancel_requested()) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "update cancelled before device selection");
+  }
+  if (auto remaining = remaining_update_timeout(
+          *deadline, identifier, "device selection");
+      !remaining) {
+    return operation_failure(std::move(remaining.error()));
+  }
+
+  std::expected<PreparedTarget, kairosboot::api::OperationErrorPayload> target =
+      std::unexpected(update_error(
+          KB_E_INTERNAL, "device target was not bound", identifier));
+  if (selector.kind == kairosboot::api::DeviceSelectorKind::Tcp ||
+      selector.kind == kairosboot::api::DeviceSelectorKind::Udp) {
+    target = bind_target(std::move(selector), {});
+  } else {
+    auto runtime = acquire_context_usb_runtime(usb_state);
+    if (!runtime) {
+      return operation_failure(kairosboot::api::normalize_public_error(
+          runtime.error(), identifier));
+    }
+    target = bind_target(std::move(selector), std::move(*runtime));
+  }
+  if (!target) {
+    return operation_failure(std::move(target.error()));
+  }
+  identifier = target->selector.identifier;
+
+  if (task_context.cancel_requested() ||
+      !report_update_progress(options, 0U, 0U, "open", identifier)) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "update cancelled before transport open");
+  }
+  if (task_context.cancel_requested()) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "update cancelled before transport open");
+  }
+  auto open_timeout = remaining_update_timeout(
+      *deadline, identifier, "transport open");
+  if (!open_timeout) {
+    return operation_failure(std::move(open_timeout.error()));
+  }
+  kb_command_options_t transport_options{};
+  kb_command_options_init(&transport_options);
+  transport_options.timeout_ms = *open_timeout;
+  auto transport = open_target(
+      *target, transport_options, task_context.cancellation_token(),
+      *deadline);
+  if (!transport) {
+    return operation_failure(std::move(transport.error()));
+  }
+
+  auto protocol_timeout = remaining_update_timeout(
+      *deadline, identifier, "device validation");
+  if (!protocol_timeout) {
+    return operation_failure(std::move(protocol_timeout.error()));
+  }
+  kairosboot::protocol::SessionOptions session_options{};
+  session_options.io_timeout = std::chrono::milliseconds{*protocol_timeout};
+  kairosboot::protocol::FastbootSession session(
+      std::move(*transport), session_options);
+  kairosboot::fastboot::PrimitiveService service(session);
+
+  bool callback_cancelled = false;
+  kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options{
+      .host_resparse_limit = kairosboot::image::kDefaultResparseLimitBytes,
+      .progress = [&options, &identifier](
+                      const kairosboot::fastboot::PrimitiveUpdateProgress
+                          &progress) {
+        return report_update_progress(
+                   options, progress.completed_bytes, progress.total_bytes,
+                   "download", identifier)
+                   ? kairosboot::fastboot::PrimitiveUpdateProgressAction::
+                         Continue
+                   : kairosboot::fastboot::PrimitiveUpdateProgressAction::
+                         Cancel;
+      },
+  };
+  kairosboot::fastboot::PrimitiveUpdateDevice device(
+      service, std::move(device_options));
+
+  kairosboot::fastboot::UpdateExecutorOptions executor_options{
+      .known_partitions =
+          kairosboot::fastboot::frozen_update_known_partitions(),
+      .deadline = *deadline == UpdateClock::time_point::max()
+                      ? std::optional<UpdateClock::time_point>{}
+                      : std::optional<UpdateClock::time_point>{*deadline},
+      .observer = [&options, &identifier, &callback_cancelled](
+                      const kairosboot::fastboot::UpdateExecutionEvent &event) {
+        if (!report_update_progress(
+                options, 0U, 0U, update_event_stage(event.kind), identifier)) {
+          callback_cancelled = true;
+          throw UpdateProgressCancelled{};
+        }
+      },
+  };
+  auto executed = kairosboot::fastboot::execute_prepared_update(
+      *prepared, device, executor_options, task_context.cancellation_token());
+  if (!executed) {
+    auto payload = kairosboot::api::normalize_public_error(
+        executed.error(), total_tasks, identifier);
+    if (callback_cancelled && !executed.error().device_error.has_value()) {
+      payload.status = KB_E_CANCELLED;
+      payload.message = "update operation cancelled by the progress callback";
+      payload.transfer_state = completed_update_transfer_state(
+          executed.error().completed_tasks, total_tasks);
+    }
+    return operation_failure(std::move(payload));
+  }
+
+  if (auto completion = remaining_update_timeout(
+          *deadline, identifier, "completion");
+      !completion) {
+    auto payload = std::move(completion.error());
+    payload.transfer_state = completed_update_transfer_state(
+        executed->completed_tasks, total_tasks);
+    return operation_failure(std::move(payload));
+  }
+  if (task_context.cancel_requested() ||
+      !report_update_progress(options, 0U, 0U, "complete", identifier) ||
+      task_context.cancel_requested()) {
+    return cancelled_operation(
+        identifier,
+        completed_update_transfer_state(executed->completed_tasks, total_tasks),
+        "update cancelled after completing all prepared tasks");
+  }
+  if (auto completion = remaining_update_timeout(
+          *deadline, identifier, "completion callback");
+      !completion) {
+    auto payload = std::move(completion.error());
+    payload.transfer_state = completed_update_transfer_state(
+        executed->completed_tasks, total_tasks);
+    return operation_failure(std::move(payload));
+  }
+  return kairosboot::api::OperationOutcome::succeeded();
+}
+
+kb_status_t finish_blocking_operation(kb_operation_t *operation,
+                                      kb_error_t **error) {
+  const auto waited = kb_operation_wait(operation, KB_WAIT_INFINITE);
+  if (waited != KB_OK) {
+    const auto payload = operation->state->error();
+    if (payload.has_value()) {
+      static_cast<void>(fail(error, *payload));
+    } else {
+      static_cast<void>(fail(error, waited, kb_status_string(waited)));
+    }
+  }
+  kb_operation_release(operation);
+  return waited;
+}
+
 } // namespace
 
 extern "C" {
@@ -1074,6 +1594,16 @@ void KB_CALL kb_context_options_init(kb_context_options_t *options) {
 }
 
 void KB_CALL kb_flash_options_init(kb_flash_options_t *options) {
+  if (options == nullptr) {
+    return;
+  }
+  *options = {};
+  options->struct_size = sizeof(*options);
+  options->api_version = KB_API_VERSION;
+  options->timeout_ms = kDefaultTimeoutMs;
+}
+
+void KB_CALL kb_update_options_init(kb_update_options_t *options) {
   if (options == nullptr) {
     return;
   }
@@ -1165,6 +1695,7 @@ kb_status_t KB_CALL kb_context_create(const kb_context_options_t *options,
   try {
     auto result = std::make_unique<kb_context>();
     kb_context_options_init(&result->options);
+    result->usb_state = std::make_shared<kb_context_usb_state>();
     if (options != nullptr) {
       result->options.log_callback = options->log_callback;
       result->options.log_user_data = options->log_user_data;
@@ -1532,6 +2063,94 @@ kb_status_t KB_CALL kb_flash_file(
   }
   kb_operation_release(operation);
   return result;
+}
+
+kb_status_t KB_CALL kb_update_package_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
+                device_selector_or_null);
+  }
+  if (package_path == nullptr || package_path[0] == '\0') {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "update package path must not be empty",
+                device_selector_or_null);
+  }
+  if (!valid_update_options(options_or_null)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "update options have an incompatible size, API version, or "
+                "wipe value",
+                device_selector_or_null);
+  }
+
+  try {
+    const std::string_view package_path_view{package_path};
+    if (!valid_utf8(package_path_view)) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "update package path must be valid UTF-8",
+                  device_selector_or_null);
+    }
+    auto selector = parse_target_selector(device_selector_or_null);
+    if (!selector) {
+      return fail(error, selector.error());
+    }
+
+    auto copied_options = update_options_or_default(options_or_null);
+    auto native_package_path =
+        std::filesystem::absolute(utf8_path(package_path_view));
+    auto usb_state = context->usb_state;
+    auto task = [usb_state = std::move(usb_state),
+                 selector = std::move(*selector),
+                 package = std::move(native_package_path), copied_options](
+                    kairosboot::api::OperationState::TaskContext &task_context)
+        mutable -> kairosboot::api::OperationOutcome {
+      return run_prepared_public_update(
+          usb_state, std::move(selector), package, copied_options,
+          task_context);
+    };
+    auto result = std::make_unique<kb_operation>(std::move(task));
+    if (!result->state->start()) {
+      return fail(error, KB_E_INTERNAL,
+                  "unable to start the update package operation",
+                  device_selector_or_null);
+    }
+    *operation = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the update package operation",
+                device_selector_or_null);
+  } catch (const std::filesystem::filesystem_error &exception) {
+    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+                exception.code().value());
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the update package operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_update_package(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_error_t **error) {
+  clear_error(error);
+  kb_operation_t *operation = nullptr;
+  const auto started = kb_update_package_async(
+      context, device_selector_or_null, package_path, options_or_null,
+      &operation, error);
+  if (started != KB_OK) {
+    return started;
+  }
+  return finish_blocking_operation(operation, error);
 }
 
 kb_status_t KB_CALL kb_getvar_async(

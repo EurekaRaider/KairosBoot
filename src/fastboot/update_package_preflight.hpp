@@ -96,6 +96,12 @@ struct PreparedUpdatePackage final {
     bool requires_device_validation{};
 };
 
+// Returns the de-duplicated partition column from the frozen Platform-Tools
+// 37.0.1 host image table used by partition-exists requirements. The public
+// update operation passes this exact table to the executor instead of
+// guessing partitions from the connected device or the package contents.
+[[nodiscard]] std::vector<std::string> frozen_update_known_partitions();
+
 // Resolves android-info.txt and, when present, fastboot-info.txt. A missing
 // fastboot-info.txt selects the frozen Platform-Tools 37.0.1 image inventory;
 // a present empty file intentionally remains an empty plan. The function

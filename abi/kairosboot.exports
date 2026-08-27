@@ -72,6 +72,9 @@ kb_snapshot_update_async
 kb_stage
 kb_stage_async
 kb_status_string
+kb_update_options_init
+kb_update_package
+kb_update_package_async
 kb_upload
 kb_upload_async
 kb_version_init

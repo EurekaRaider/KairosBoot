@@ -3,11 +3,14 @@
 
 #include "src/api/operation_state.hpp"
 
+#include <cstddef>
 #include <string_view>
 
 namespace kairosboot::fastboot {
 struct PrimitiveError;
 enum class PrimitiveOperation : std::uint8_t;
+struct UpdateExecutionError;
+struct UpdatePackagePreflightError;
 }
 
 namespace kairosboot::image {
@@ -51,6 +54,15 @@ struct DeviceSelectionError;
 
 [[nodiscard]] OperationErrorPayload normalize_public_error(
     const fastboot::PrimitiveError& error,
+    std::string_view device_identifier);
+
+[[nodiscard]] OperationErrorPayload normalize_public_error(
+    const fastboot::UpdatePackagePreflightError& error,
+    std::string_view device_identifier);
+
+[[nodiscard]] OperationErrorPayload normalize_public_error(
+    const fastboot::UpdateExecutionError& error,
+    std::size_t total_tasks,
     std::string_view device_identifier);
 
 // Converts the per-command certainty reported by PrimitiveService into the

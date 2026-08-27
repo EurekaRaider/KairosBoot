@@ -3,6 +3,8 @@
 
 #include "src/api/device_selection.hpp"
 #include "src/fastboot/primitive_service.hpp"
+#include "src/fastboot/update_executor.hpp"
+#include "src/fastboot/update_package_preflight.hpp"
 #include "src/image/file_source.hpp"
 #include "src/image/sparse_flash_plan.hpp"
 #include "src/transport/libusb_runtime.hpp"
@@ -135,6 +137,83 @@ namespace {
             return KB_TRANSFER_FULLY_TRANSFERRED;
     }
     return KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+}
+
+[[nodiscard]] kb_status_t artifact_source_status(
+    const image::ArtifactSourceErrorKind kind) noexcept {
+    using image::ArtifactSourceErrorKind;
+    switch (kind) {
+        case ArtifactSourceErrorKind::InvalidArgument:
+        case ArtifactSourceErrorKind::UnsafePath:
+        case ArtifactSourceErrorKind::InvalidArchive:
+        case ArtifactSourceErrorKind::LimitExceeded:
+        case ArtifactSourceErrorKind::Integrity:
+        case ArtifactSourceErrorKind::InvalidImage:
+            return KB_E_INVALID_ARGUMENT;
+        case ArtifactSourceErrorKind::UnsupportedFeature:
+            return KB_E_NOT_SUPPORTED;
+        case ArtifactSourceErrorKind::Cancelled:
+            return KB_E_CANCELLED;
+        case ArtifactSourceErrorKind::TimedOut:
+            return KB_E_TIMEOUT;
+        case ArtifactSourceErrorKind::NotFound:
+        case ArtifactSourceErrorKind::Io:
+            return KB_E_IO;
+    }
+    return KB_E_INTERNAL;
+}
+
+[[nodiscard]] kb_status_t update_device_status(
+    const fastboot::UpdateDeviceError& error) noexcept {
+    using fastboot::UpdateDeviceErrorKind;
+    switch (error.kind) {
+        case UpdateDeviceErrorKind::Cancelled:
+            return KB_E_CANCELLED;
+        case UpdateDeviceErrorKind::TimedOut:
+            return KB_E_TIMEOUT;
+        case UpdateDeviceErrorKind::Unsupported:
+            return KB_E_NOT_SUPPORTED;
+        case UpdateDeviceErrorKind::Failed:
+            break;
+    }
+
+    if (!error.device_message.empty()) {
+        return KB_E_DEVICE_FAIL;
+    }
+    switch (error.transport_status) {
+        case protocol::TransportStatus::Timeout:
+            return KB_E_TIMEOUT;
+        case protocol::TransportStatus::Cancelled:
+            return KB_E_CANCELLED;
+        case protocol::TransportStatus::Disconnected:
+            return KB_E_NO_DEVICE;
+        case protocol::TransportStatus::IoError:
+            return KB_E_IO;
+        case protocol::TransportStatus::Ok:
+            break;
+    }
+    if (error.session_closed || error.session_poisoned) {
+        return KB_E_IO;
+    }
+    if (error.phase != protocol::ProtocolPhase::Validation) {
+        return KB_E_PROTOCOL;
+    }
+    return KB_E_INTERNAL;
+}
+
+[[nodiscard]] kb_transfer_state_t update_transfer_state(
+    const fastboot::UpdateExecutionError& error,
+    const std::size_t total_tasks) noexcept {
+    if (total_tasks != 0 && error.completed_tasks == total_tasks) {
+        return KB_TRANSFER_FULLY_TRANSFERRED;
+    }
+    if (error.completed_tasks != 0) {
+        return KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+    }
+    if (error.device_error) {
+        return transfer_state(error.device_error->task_certainty);
+    }
+    return KB_TRANSFER_NOT_SENT;
 }
 
 [[nodiscard]] std::vector<CommandMessagePayload> command_messages(
@@ -277,6 +356,82 @@ OperationErrorPayload normalize_public_error(
     result.inbound_transferred = error.inbound_transferred;
     result.inbound_transfer_state = transfer_state(error.inbound_certainty);
     result.session_poisoned = error.session_poisoned;
+    return result;
+}
+
+OperationErrorPayload normalize_public_error(
+    const fastboot::UpdatePackagePreflightError& error,
+    const std::string_view device_identifier) {
+    kb_status_t status = KB_E_INVALID_ARGUMENT;
+    std::int32_t native_code = 0;
+    using fastboot::UpdatePackagePreflightErrorKind;
+    switch (error.kind) {
+        case UpdatePackagePreflightErrorKind::MissingAndroidInfo:
+        case UpdatePackagePreflightErrorKind::ManifestRead:
+            status = KB_E_IO;
+            break;
+        case UpdatePackagePreflightErrorKind::Artifact:
+            status = KB_E_IO;
+            break;
+        case UpdatePackagePreflightErrorKind::Manifest:
+        case UpdatePackagePreflightErrorKind::LimitExceeded:
+            status = KB_E_INVALID_ARGUMENT;
+            break;
+        case UpdatePackagePreflightErrorKind::Cancelled:
+            status = KB_E_CANCELLED;
+            break;
+    }
+    if (error.artifact_error) {
+        status = artifact_source_status(error.artifact_error->kind);
+        native_code = error.artifact_error->native_code;
+    }
+    return make_error(status, error.message, native_code,
+                      KB_TRANSFER_NOT_SENT, device_identifier);
+}
+
+OperationErrorPayload normalize_public_error(
+    const fastboot::UpdateExecutionError& error,
+    const std::size_t total_tasks,
+    const std::string_view device_identifier) {
+    kb_status_t status = KB_E_INTERNAL;
+    using fastboot::UpdateExecutionErrorKind;
+    switch (error.kind) {
+        case UpdateExecutionErrorKind::Cancelled:
+            status = KB_E_CANCELLED;
+            break;
+        case UpdateExecutionErrorKind::TimedOut:
+            status = KB_E_TIMEOUT;
+            break;
+        case UpdateExecutionErrorKind::RequirementNotMet:
+            status = KB_E_DEVICE_FAIL;
+            break;
+        case UpdateExecutionErrorKind::InvalidPreparedPackage:
+            status = KB_E_INVALID_ARGUMENT;
+            break;
+        case UpdateExecutionErrorKind::GetVarFailed:
+        case UpdateExecutionErrorKind::DeviceTaskFailed:
+        case UpdateExecutionErrorKind::ObserverFailed:
+        case UpdateExecutionErrorKind::ActorException:
+            status = error.device_error
+                ? update_device_status(*error.device_error)
+                : KB_E_INTERNAL;
+            break;
+    }
+
+    auto result = make_error(
+        status, error.message, 0,
+        update_transfer_state(error, total_tasks), device_identifier);
+    if (!error.device_error) {
+        return result;
+    }
+    const auto& device = *error.device_error;
+    result.native_code = device.native_code;
+    result.device_message = device.device_message;
+    result.command_messages = command_messages(device.informational);
+    result.inbound_expected = device.inbound_expected;
+    result.inbound_transferred = device.inbound_transferred;
+    result.inbound_transfer_state = transfer_state(device.inbound_certainty);
+    result.session_poisoned = device.session_poisoned || device.session_closed;
     return result;
 }
 

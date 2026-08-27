@@ -363,6 +363,17 @@ add_to_aggregate_bytes(
 
 }  // namespace
 
+std::vector<std::string> frozen_update_known_partitions() {
+    std::vector<std::string> partitions;
+    partitions.reserve(kHardcodedImages.size());
+    for (const auto& image : kHardcodedImages) {
+        if (std::ranges::find(partitions, image.partition) == partitions.end()) {
+            partitions.emplace_back(image.partition);
+        }
+    }
+    return partitions;
+}
+
 PreparedSuperArtifact::PreparedSuperArtifact(
     std::shared_ptr<const image::ResolvedArtifact> resolved,
     std::shared_ptr<const image::FlashArtifact> artifact,

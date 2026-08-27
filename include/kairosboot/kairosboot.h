@@ -153,6 +153,22 @@ typedef struct kb_flash_options {
   void *progress_user_data;
 } kb_flash_options_t;
 
+typedef struct kb_update_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  /* Whole-operation timeout in milliseconds, including package preflight,
+   * device selection, open, validation and every update task. The initialized
+   * default is infinite. */
+  uint32_t timeout_ms;
+  /* Zero preserves userdata; one applies wipe-conditioned package tasks. */
+  int32_t wipe;
+  /* Update stages are preflight, select, open, validate, getvar, prepare,
+   * execute, download and complete. Byte totals are non-zero only while an
+   * immutable image payload is being transferred. */
+  kb_progress_callback_t progress_callback;
+  void *progress_user_data;
+} kb_update_options_t;
+
 typedef struct kb_command_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -173,12 +189,16 @@ typedef struct kb_command_options {
 #define KB_FLASH_OPTIONS_V1_SIZE                                             \
   ((uint32_t)(offsetof(kb_flash_options_t, progress_user_data) +             \
               sizeof(((kb_flash_options_t *)0)->progress_user_data)))
+#define KB_UPDATE_OPTIONS_V1_SIZE                                            \
+  ((uint32_t)(offsetof(kb_update_options_t, progress_user_data) +            \
+              sizeof(((kb_update_options_t *)0)->progress_user_data)))
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))
 
 KB_API void KB_CALL kb_context_options_init(kb_context_options_t *options);
 KB_API void KB_CALL kb_flash_options_init(kb_flash_options_t *options);
+KB_API void KB_CALL kb_update_options_init(kb_update_options_t *options);
 KB_API void KB_CALL kb_command_options_init(kb_command_options_t *options);
 KB_API void KB_CALL kb_version_init(kb_version_t *version);
 
@@ -210,6 +230,23 @@ KB_API kb_status_t KB_CALL kb_flash_file_async(
 KB_API kb_status_t KB_CALL kb_flash_file(
     kb_context_t *context, const char *serial_or_null, const char *partition,
     const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_error_t **error);
+
+/* Performs complete package preflight before USB enumeration or any transport
+ * open. device_selector_or_null uses the typed selector grammar documented
+ * below. The selected target is bound exactly once for this operation.
+ * Packages that require bootloader-to-fastbootd re-enumeration fail with
+ * KB_E_NOT_SUPPORTED before any destructive task until the production USB
+ * opener can provide a verified physical-port reconnect binding. An already
+ * open fastbootd target remains supported. The blocking entry point starts the
+ * same async operation and waits for its terminal state. */
+KB_API kb_status_t KB_CALL kb_update_package_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_update_package(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *package_path, const kb_update_options_t *options_or_null,
     kb_error_t **error);
 
 /* Typed primitive selectors:
