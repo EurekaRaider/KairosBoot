@@ -2784,6 +2784,8 @@ void test_verified_open_rejects_windows_claimed_generation_reuse() {
                     .interface_fingerprint = query.interface_fingerprint,
                     .device_instance_id_utf8 =
                         query.device_instance_id_utf8,
+                    .hub_instance_ids_utf8 = {},
+                    .location_path_utf8 = {},
                 });
             }
             return std::expected<std::vector<WindowsUsbTopologyResult>,
@@ -2813,6 +2815,126 @@ void test_verified_open_rejects_windows_claimed_generation_reuse() {
     KB_CHECK(resolver_calls == 2U);
     (*reopened)->stop();
     runtime->stop();
+}
+
+void test_verified_open_requires_all_windows_generation_anchors() {
+    enum class FailureAnchor : std::uint8_t {
+        zero_sample_a_session,
+        capture_a,
+        capture_b,
+    };
+    constexpr std::array anchors{
+        FailureAnchor::zero_sample_a_session,
+        FailureAnchor::capture_a,
+        FailureAnchor::capture_b,
+    };
+
+    for (const auto anchor : anchors) {
+        auto fake = std::make_shared<FakeLibusb>();
+        auto functions = fake->functions();
+        auto base_session_data = functions.get_session_data;
+        bool force_zero_session = false;
+        functions.get_session_data =
+            [base_session_data, &force_zero_session](libusb_device* device) {
+                return force_zero_session
+                    ? 0UL
+                    : base_session_data(device);
+            };
+
+        const WindowsUsbTopologyError capture_error{
+            .kind = WindowsUsbTopologyErrorKind::IdentityChanged,
+            .stage = WindowsUsbTopologyStage::Enumeration,
+            .native_domain =
+                WindowsUsbNativeErrorDomain::ConfigurationManager,
+            .native_code = 0x0DU,
+            .libusb_session_data = fake->session_data,
+            .device_instance_id_utf8 =
+                "USB\\VID_18D1&PID_4EE0\\ANCHOR-REMOVED",
+            .message = "injected claimed-generation anchor failure",
+        };
+        std::size_t identity_captures = 0U;
+        std::size_t failed_capture = 0U;
+        functions.capture_windows_session_identity =
+            [&](const unsigned long session,
+                std::chrono::steady_clock::time_point,
+                std::stop_token) {
+                KB_CHECK(session == fake->session_data);
+                ++identity_captures;
+                if (identity_captures == failed_capture) {
+                    return std::expected<std::string,
+                                         WindowsUsbTopologyError>{
+                        std::unexpected(capture_error)};
+                }
+                return std::expected<std::string,
+                                     WindowsUsbTopologyError>{
+                    "USB\\VID_18D1&PID_4EE0\\STABLE-ANCHOR"};
+            };
+        std::size_t resolver_calls = 0U;
+        functions.resolve_windows_topology =
+            [&](const std::span<const WindowsUsbTopologyQuery> queries,
+                std::chrono::steady_clock::time_point,
+                std::stop_token) {
+                ++resolver_calls;
+                std::vector<WindowsUsbTopologyResult> results;
+                results.reserve(queries.size());
+                for (const auto& query : queries) {
+                    results.emplace_back(WindowsUsbTopology{
+                        .physical_port_path = "usb:2-3.4",
+                        .root_controller_id = "windows-pnp:controller",
+                        .hub_port_chain = query.port_numbers,
+                        .vendor_id = query.vendor_id,
+                        .product_id = query.product_id,
+                        .bus_number = query.bus_number,
+                        .device_address = query.device_address,
+                        .serial_utf8 = query.serial_utf8,
+                        .interface_fingerprint =
+                            query.interface_fingerprint,
+                        .device_instance_id_utf8 =
+                            query.device_instance_id_utf8,
+                        .hub_instance_ids_utf8 = {},
+                        .location_path_utf8 = {},
+                    });
+                }
+                return std::expected<std::vector<WindowsUsbTopologyResult>,
+                                     WindowsUsbTopologyError>{
+                    std::move(results)};
+            };
+
+        auto runtime = create_runtime(fake, std::move(functions));
+        const auto snapshot = matching_device(runtime);
+        KB_CHECK(identity_captures == 2U);
+        KB_CHECK(resolver_calls == 1U);
+        if (anchor == FailureAnchor::zero_sample_a_session) {
+            force_zero_session = true;
+        } else {
+            failed_capture = identity_captures +
+                (anchor == FailureAnchor::capture_a ? 1U : 2U);
+        }
+
+        const auto failed = runtime->open_bulk_out_verified(snapshot);
+        KB_CHECK(!failed.has_value());
+        KB_CHECK(failed.error().kind ==
+                 LibusbRuntimeErrorKind::identity_changed);
+        KB_CHECK(failed.error().verified_open_stage ==
+                 LibusbVerifiedOpenStage::post_open_identity);
+        KB_CHECK(failed.error().cancellation_guarantee ==
+                 LibusbOpenCancellationGuarantee::cooperative_stage_boundary);
+        KB_CHECK(failed.error().native_code ==
+                 (anchor == FailureAnchor::zero_sample_a_session
+                      ? 0
+                      : static_cast<int>(capture_error.native_code)));
+        KB_CHECK(fake->release_calls == 1);
+        KB_CHECK(fake->close_calls == 1);
+        KB_CHECK(resolver_calls == 1U);
+
+        force_zero_session = false;
+        failed_capture = 0U;
+        auto reopened = runtime->open_bulk_out(snapshot);
+        KB_CHECK(reopened.has_value());
+        KB_CHECK(resolver_calls == 2U);
+        (*reopened)->stop();
+        runtime->stop();
+    }
 }
 
 void test_verified_open_rejects_post_open_serial_and_fingerprint_changes() {
@@ -4245,6 +4367,8 @@ int main() {
          test_verified_open_reconstructs_transient_identity_and_topology},
         {"verified open rejects Windows claimed generation reuse",
          test_verified_open_rejects_windows_claimed_generation_reuse},
+        {"verified open requires all Windows generation anchors",
+         test_verified_open_requires_all_windows_generation_anchors},
         {"verified open rejects changed serial and fingerprint",
          test_verified_open_rejects_post_open_serial_and_fingerprint_changes},
         {"verified open concurrent reservation",

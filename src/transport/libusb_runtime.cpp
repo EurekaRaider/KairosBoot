@@ -558,6 +558,18 @@ struct ProcessLifetimeQuarantineRoot final {
     };
 }
 
+[[nodiscard]] LibusbRuntimeError verified_windows_anchor_error(
+    const WindowsUsbTopologyError& error) noexcept {
+    const auto native_code = error.native_code <=
+            static_cast<std::uint32_t>(std::numeric_limits<int>::max())
+        ? static_cast<int>(error.native_code)
+        : LIBUSB_ERROR_OTHER;
+    return verified_open_error(
+        LibusbRuntimeErrorKind::identity_changed,
+        LibusbVerifiedOpenStage::post_open_identity,
+        native_code);
+}
+
 struct ClaimedIdentitySample final {
     UsbDeviceInfo identity;
     WindowsLibusbTransportSnapshot transport_snapshot;
@@ -749,6 +761,12 @@ sample_claimed_identity(const LibusbFunctions& functions,
         .bulk_in_endpoint = selected_bulk_in->bEndpointAddress,
         .bulk_in_max_packet_size = static_cast<std::uint16_t>(
             selected_bulk_in->wMaxPacketSize & 0x07FFU),
+        .linux_topology = std::nullopt,
+        .linux_topology_error = std::nullopt,
+        .windows_topology = std::nullopt,
+        .windows_topology_error = std::nullopt,
+        .macos_topology = std::nullopt,
+        .macos_topology_error = std::nullopt,
     };
 
     const bool stable_identity_matches =
@@ -2997,17 +3015,9 @@ LibusbRuntime::open_bulk_out_verified(
             const auto initial_session = static_cast<unsigned long>(
                 verified_sample->identity.backend_session_id);
             if (initial_session == 0UL) {
-                verified_sample->identity.windows_topology_error =
-                    WindowsUsbTopologyError{
-                        .kind = WindowsUsbTopologyErrorKind::InvalidArgument,
-                        .stage = WindowsUsbTopologyStage::Validation,
-                        .native_domain = WindowsUsbNativeErrorDomain::None,
-                        .native_code = 0U,
-                        .libusb_session_data = 0UL,
-                        .device_instance_id_utf8 = {},
-                        .message =
-                            "verified open received zero libusb session data",
-                    };
+                verified_sample = std::unexpected(verified_open_error(
+                    LibusbRuntimeErrorKind::identity_changed,
+                    LibusbVerifiedOpenStage::post_open_identity));
             } else {
                 auto initial_instance =
                     state_->functions.capture_windows_session_identity(
@@ -3015,8 +3025,9 @@ LibusbRuntime::open_bulk_out_verified(
                         deadline,
                         combined_stop_source.get_token());
                 if (!initial_instance.has_value()) {
-                    verified_sample->identity.windows_topology_error =
-                        std::move(initial_instance.error());
+                    verified_sample = std::unexpected(
+                        verified_windows_anchor_error(
+                            initial_instance.error()));
                 } else {
                     auto current_sample = sample_claimed_identity(
                         state_->functions, selected_device, handle, device);
@@ -3041,9 +3052,9 @@ LibusbRuntime::open_bulk_out_verified(
                                       deadline,
                                       combined_stop_source.get_token());
                         if (!current_instance.has_value()) {
-                            current_sample->identity.windows_topology_error =
-                                std::move(current_instance.error());
-                            verified_sample = std::move(current_sample);
+                            verified_sample = std::unexpected(
+                                verified_windows_anchor_error(
+                                    current_instance.error()));
                         } else if (
                             current_session != initial_session ||
                             !pnp_identity_equal(*current_instance,
