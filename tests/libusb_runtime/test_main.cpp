@@ -760,6 +760,7 @@ void test_event_loop_and_filtered_utf8_enumeration() {
     KB_CHECK(device.product_id == 0x4EE0);
     KB_CHECK(device.bus_number == 2);
     KB_CHECK(device.device_address == 5);
+    KB_CHECK(device.backend_session_id == 0x1234U);
     KB_CHECK(device.configuration_value == 1);
     KB_CHECK(device.port_path == std::vector<std::uint8_t>({3, 4}));
     KB_CHECK(device.serial_utf8 == "serial-\xCE\xB1");

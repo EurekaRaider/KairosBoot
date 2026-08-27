@@ -146,6 +146,10 @@ struct UsbDeviceInfo final {
     std::uint16_t product_id{};
     std::uint8_t bus_number{};
     std::uint8_t device_address{};
+    // Opaque backend identity captured from libusb 1.0.30. On Darwin this is
+    // the IOKit sessionID used only to correlate an immutable registry
+    // snapshot; other platforms must not treat it as a physical-port key.
+    std::uint64_t backend_session_id{};
     std::uint8_t configuration_value{};
     std::vector<std::uint8_t> port_path;
     std::string serial_utf8;

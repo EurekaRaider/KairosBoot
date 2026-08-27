@@ -1745,6 +1745,8 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         const auto bus_number = state_->functions.get_bus_number(device);
         const auto device_address =
             state_->functions.get_device_address(device);
+        const auto backend_session_id = static_cast<std::uint64_t>(
+            state_->functions.get_session_data(device));
         std::optional<std::vector<std::uint8_t>> port_path;
         std::optional<std::string> serial;
         std::optional<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>>
@@ -1839,6 +1841,7 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     .product_id = descriptor.idProduct,
                     .bus_number = bus_number,
                     .device_address = device_address,
+                    .backend_session_id = backend_session_id,
                     .configuration_value = raw_config->bConfigurationValue,
                     .port_path = *port_path,
                     .serial_utf8 = *serial,
