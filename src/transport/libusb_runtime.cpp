@@ -499,6 +499,14 @@ LibusbFunctions LibusbFunctions::system() {
         return discovery.discover(query);
     };
 #endif
+#if defined(__APPLE__)
+    functions.resolve_macos_topology = [](const MacUsbTopologyQuery& query) {
+        static const IokitMacUsbRegistryBackend backend;
+        const MacUsbTopologyDiscovery discovery(backend);
+        return discovery.discover(
+            query, std::chrono::steady_clock::time_point::max());
+    };
+#endif
     return functions;
 }
 
@@ -1849,6 +1857,8 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     .linux_topology_error = std::nullopt,
                     .windows_topology = std::nullopt,
                     .windows_topology_error = std::nullopt,
+                    .macos_topology = std::nullopt,
+                    .macos_topology_error = std::nullopt,
                 };
                 if (state_->functions.resolve_linux_topology) {
                     // Physical topology belongs to the device, not to an
@@ -1866,6 +1876,16 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                     } else {
                         snapshot.linux_topology_error =
                             linux_topology_snapshot->error();
+                    }
+                }
+                if (state_->functions.resolve_macos_topology) {
+                    auto resolved = state_->functions.resolve_macos_topology(
+                        make_macos_usb_topology_query(snapshot));
+                    if (resolved.has_value()) {
+                        snapshot.macos_topology = std::move(*resolved);
+                    } else {
+                        snapshot.macos_topology_error =
+                            std::move(resolved.error());
                     }
                 }
                 devices.push_back(std::move(snapshot));

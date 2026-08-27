@@ -240,12 +240,13 @@ add_library(
   src/transport/image_transfer_source.cpp
   src/transport/libusb_runtime.cpp
   src/transport/linux_usb_topology.cpp
-  src/transport/windows_usb_topology.cpp
+  src/transport/macos_usb_topology.cpp
   src/transport/sequential_streaming_transport.cpp
   src/transport/tcp_fastboot.cpp
   src/transport/transfer_ring.cpp
   src/transport/udp_fastboot.cpp
-  src/transport/usb_fastboot.cpp)
+  src/transport/usb_fastboot.cpp
+  src/transport/windows_usb_topology.cpp)
 set_target_properties(
   kairosboot_internal
   PROPERTIES POSITION_INDEPENDENT_CODE ON
@@ -267,6 +268,14 @@ if(WIN32)
                              PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
   target_link_libraries(kairosboot_internal PRIVATE bcrypt ws2_32)
   target_link_libraries(kairosboot_internal PRIVATE setupapi cfgmgr32)
+endif()
+if(APPLE)
+  find_library(KAIROSBOOT_IOKIT_FRAMEWORK IOKit REQUIRED)
+  find_library(KAIROSBOOT_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+  target_link_libraries(
+    kairosboot_internal
+    PRIVATE "${KAIROSBOOT_IOKIT_FRAMEWORK}"
+            "${KAIROSBOOT_COREFOUNDATION_FRAMEWORK}")
 endif()
 kairosboot_enable_strict_warnings(kairosboot_internal)
 
@@ -813,6 +822,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_windows_usb_topology_tests)
   add_test(NAME windows_usb_topology COMMAND kairosboot_windows_usb_topology_tests)
   set_tests_properties(windows_usb_topology PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_macos_usb_topology_tests
+                 tests/libusb_runtime/macos_usb_topology_tests.cpp)
+  target_compile_features(kairosboot_macos_usb_topology_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_macos_usb_topology_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_macos_usb_topology_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_macos_usb_topology_tests)
+  add_test(NAME macos_usb_topology COMMAND kairosboot_macos_usb_topology_tests)
+  set_tests_properties(macos_usb_topology PROPERTIES TIMEOUT 30)
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(

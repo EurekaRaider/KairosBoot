@@ -5,6 +5,7 @@
 #endif
 
 #include "src/transport/linux_usb_topology.hpp"
+#include "src/transport/macos_usb_topology.hpp"
 #include "src/transport/transfer_ring.hpp"
 #include "src/transport/windows_usb_topology.hpp"
 
@@ -96,6 +97,12 @@ struct LibusbFunctions final {
         unsigned long)>
         capture_windows_session_identity;
 
+    // Optional macOS topology enrichment. Tests may inject this on any host;
+    // production installs the IOKit-backed resolver only on Apple platforms.
+    std::function<std::expected<MacUsbTopology, MacUsbTopologyError>(
+        const MacUsbTopologyQuery&)>
+        resolve_macos_topology;
+
     [[nodiscard]] static LibusbFunctions system();
     [[nodiscard]] bool complete() const noexcept;
 };
@@ -155,6 +162,8 @@ struct UsbDeviceInfo final {
     std::optional<LinuxUsbTopologyError> linux_topology_error;
     std::optional<WindowsUsbTopology> windows_topology;
     std::optional<WindowsUsbTopologyError> windows_topology_error;
+    std::optional<MacUsbTopology> macos_topology;
+    std::optional<MacUsbTopologyError> macos_topology_error;
 };
 
 enum class ZeroPacketPolicy : std::uint8_t {

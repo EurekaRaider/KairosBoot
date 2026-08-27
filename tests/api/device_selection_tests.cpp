@@ -16,6 +16,7 @@ namespace {
 using kairosboot::api::DeviceSelectionError;
 using kairosboot::api::select_usb_device;
 using kairosboot::transport::LinuxUsbTopology;
+using kairosboot::transport::MacUsbTopology;
 using kairosboot::transport::UsbDeviceInfo;
 
 #define CHECK(condition)                                                         \
@@ -70,7 +71,9 @@ using kairosboot::transport::UsbDeviceInfo;
            left.bulk_in_endpoint == right.bulk_in_endpoint &&
            left.bulk_in_max_packet_size == right.bulk_in_max_packet_size &&
            left.linux_topology == right.linux_topology &&
-           left.linux_topology_error == right.linux_topology_error;
+           left.linux_topology_error == right.linux_topology_error &&
+           left.macos_topology == right.macos_topology &&
+           left.macos_topology_error == right.macos_topology_error;
 }
 
 template <typename Result>
@@ -115,6 +118,32 @@ void absent_serial_returns_an_independent_full_snapshot() {
         .sysfs_device_path =
             "devices/pci0000:00/0000:00:14.0/usb4/4-4/4-4.5",
     };
+    expected.macos_topology = MacUsbTopology{
+        .physical_port_path = "usb:4-4.5",
+        .root_controller_id = "macos-iokit:0000000000000011",
+        .hub_port_chain = {4U, 5U},
+        .registry_entry_id = 0x21U,
+        .session_id = 0x31U,
+        .interface_registry_entry_id = 0x41U,
+        .location_id = 0x04450000U,
+        .vendor_id = expected.vendor_id,
+        .product_id = expected.product_id,
+        .bus_number = expected.bus_number,
+        .device_address = expected.device_address,
+        .interface_fingerprint = {
+            .configuration_value = expected.configuration_value,
+            .interface_number = expected.interface_number,
+            .alternate_setting = expected.alternate_setting,
+            .interface_class = expected.interface_class,
+            .interface_subclass = expected.interface_subclass,
+            .interface_protocol = expected.interface_protocol,
+        },
+        .serial_utf8 = expected.serial_utf8,
+        .product_utf8 = std::string{"Kairos device"},
+        .registry_path = "IOService:/USB/device",
+        .interface_registry_path = "IOService:/USB/device/interface",
+        .root_controller_registry_path = "IOService:/USB/controller",
+    };
     std::vector<UsbDeviceInfo> devices{expected};
 
     const auto selected = select_usb_device(devices, std::nullopt);
@@ -125,6 +154,7 @@ void absent_serial_returns_an_independent_full_snapshot() {
     devices.front().port_path.clear();
     devices.front().bulk_in_max_packet_size = 0;
     devices.front().linux_topology->root_controller_id = "mutated";
+    devices.front().macos_topology->root_controller_id = "mutated";
     CHECK(same_snapshot(*selected, expected));
 }
 

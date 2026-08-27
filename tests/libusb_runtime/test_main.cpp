@@ -44,6 +44,11 @@ using kairosboot::transport::LinuxUsbTopologyError;
 using kairosboot::transport::LinuxUsbTopologyErrorKind;
 using kairosboot::transport::LinuxUsbTopologyQuery;
 using kairosboot::transport::LinuxUsbTopologyStage;
+using kairosboot::transport::MacUsbTopology;
+using kairosboot::transport::MacUsbTopologyError;
+using kairosboot::transport::MacUsbTopologyErrorKind;
+using kairosboot::transport::MacUsbTopologyQuery;
+using kairosboot::transport::MacUsbTopologyStage;
 using kairosboot::transport::MemoryTransferSource;
 using kairosboot::transport::SubmitResult;
 using kairosboot::transport::TransferCompletion;
@@ -825,7 +830,78 @@ void test_enumeration_retains_linux_topology_or_diagnostic() {
     failing_runtime->stop();
 }
 
-void test_platform_topology_uses_consistent_identity_across_interfaces() {
+void test_enumeration_retains_macos_topology_or_diagnostic() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+    std::optional<MacUsbTopologyQuery> observed_query;
+    functions.resolve_macos_topology = [&](const MacUsbTopologyQuery& query) {
+        observed_query = query;
+        return std::expected<MacUsbTopology, MacUsbTopologyError>{
+            MacUsbTopology{
+                .physical_port_path = "usb:2-3.4",
+                .root_controller_id = "macos-iokit:0000000000000011",
+                .hub_port_chain = {3U, 4U},
+                .registry_entry_id = 0x21U,
+                .session_id = 0x31U,
+                .interface_registry_entry_id = 0x41U,
+                .location_id = 0x02340000U,
+                .vendor_id = query.vendor_id,
+                .product_id = query.product_id,
+                .bus_number = query.bus_number,
+                .device_address = query.device_address,
+                .interface_fingerprint = query.interface_fingerprint,
+                .serial_utf8 = query.serial_utf8,
+                .product_utf8 = std::nullopt,
+                .registry_path = "IOService:/USB/device",
+                .interface_registry_path = "IOService:/USB/device/interface",
+                .root_controller_registry_path = "IOService:/USB/controller",
+            }};
+    };
+    auto runtime = create_runtime(fake, std::move(functions));
+    const auto enriched = matching_device(runtime);
+    KB_CHECK(observed_query.has_value());
+    KB_CHECK(observed_query->vendor_id == enriched.vendor_id);
+    KB_CHECK(observed_query->product_id == enriched.product_id);
+    KB_CHECK(observed_query->bus_number == enriched.bus_number);
+    KB_CHECK(observed_query->device_address == enriched.device_address);
+    KB_CHECK(observed_query->port_numbers == enriched.port_path);
+    KB_CHECK(observed_query->interface_fingerprint.configuration_value ==
+             enriched.configuration_value);
+    KB_CHECK(observed_query->interface_fingerprint.interface_number ==
+             enriched.interface_number);
+    KB_CHECK(observed_query->interface_fingerprint.alternate_setting ==
+             enriched.alternate_setting);
+    KB_CHECK(observed_query->serial_utf8 ==
+             std::optional<std::string>{enriched.serial_utf8});
+    KB_CHECK(enriched.macos_topology.has_value());
+    KB_CHECK(enriched.macos_topology->physical_port_path == "usb:2-3.4");
+    KB_CHECK(!enriched.macos_topology_error.has_value());
+    runtime->stop();
+
+    auto failing_fake = std::make_shared<FakeLibusb>();
+    auto failing_functions = failing_fake->functions();
+    failing_functions.resolve_macos_topology = [](const MacUsbTopologyQuery&) {
+        return std::expected<MacUsbTopology, MacUsbTopologyError>{
+            std::unexpected(MacUsbTopologyError{
+                .kind = MacUsbTopologyErrorKind::PermissionDenied,
+                .stage = MacUsbTopologyStage::DeviceSnapshot,
+                .native_code = -1,
+                .registry_path = "IOService:/USB/device",
+                .message = "permission denied",
+            })};
+    };
+    auto failing_runtime = create_runtime(failing_fake,
+                                          std::move(failing_functions));
+    const auto diagnosed = matching_device(failing_runtime);
+    KB_CHECK(!diagnosed.macos_topology.has_value());
+    KB_CHECK(diagnosed.macos_topology_error.has_value());
+    KB_CHECK(diagnosed.macos_topology_error->kind ==
+             MacUsbTopologyErrorKind::PermissionDenied);
+    KB_CHECK(diagnosed.macos_topology_error->native_code == -1);
+    failing_runtime->stop();
+}
+
+void test_device_topology_is_resolved_once_for_distinct_interfaces() {
     auto fake = std::make_shared<FakeLibusb>();
     auto functions = fake->functions();
 
@@ -2585,8 +2661,10 @@ int main() {
         {"event loop and filtered UTF-8 enumeration", test_event_loop_and_filtered_utf8_enumeration},
         {"Linux topology enrichment and diagnostic",
          test_enumeration_retains_linux_topology_or_diagnostic},
+        {"macOS topology enrichment and diagnostic",
+         test_enumeration_retains_macos_topology_or_diagnostic},
         {"platform topology device/interface identity",
-         test_platform_topology_uses_consistent_identity_across_interfaces},
+         test_device_topology_is_resolved_once_for_distinct_interfaces},
         {"Windows topology exact session and zero rejection",
          test_zero_windows_session_is_diagnostic_and_never_resolved},
         {"Windows topology session identity capture diagnostic",

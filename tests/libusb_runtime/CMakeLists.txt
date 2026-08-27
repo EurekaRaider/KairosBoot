@@ -79,6 +79,7 @@ add_executable(kairosboot_libusb_runtime_tests
     ../../src/transport/buffer_budget.cpp
     ../../src/transport/libusb_runtime.cpp
     ../../src/transport/linux_usb_topology.cpp
+    ../../src/transport/macos_usb_topology.cpp
     ../../src/transport/transfer_ring.cpp
     ../../src/transport/usb_fastboot.cpp
     test_main.cpp
@@ -91,6 +92,14 @@ target_link_libraries(kairosboot_libusb_runtime_tests PRIVATE
     ${CMAKE_DL_LIBS}
     Threads::Threads
 )
+if(APPLE)
+    find_library(KAIROSBOOT_IOKIT_FRAMEWORK IOKit REQUIRED)
+    find_library(KAIROSBOOT_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+    target_link_libraries(kairosboot_libusb_runtime_tests PRIVATE
+        "${KAIROSBOOT_IOKIT_FRAMEWORK}"
+        "${KAIROSBOOT_COREFOUNDATION_FRAMEWORK}"
+    )
+endif()
 set_target_properties(kairosboot_libusb_runtime_tests PROPERTIES
     CXX_EXTENSIONS OFF
 )
@@ -137,3 +146,39 @@ endif()
 
 add_test(NAME kairosboot.linux-usb-topology
          COMMAND kairosboot_linux_usb_topology_tests)
+
+add_executable(kairosboot_macos_usb_topology_tests
+    ../../src/transport/macos_usb_topology.cpp
+    macos_usb_topology_tests.cpp
+)
+
+target_include_directories(kairosboot_macos_usb_topology_tests PRIVATE ../..)
+target_compile_features(kairosboot_macos_usb_topology_tests PRIVATE cxx_std_23)
+target_link_libraries(kairosboot_macos_usb_topology_tests PRIVATE
+    kairosboot_libusb_dependency
+)
+if(APPLE)
+    target_link_libraries(kairosboot_macos_usb_topology_tests PRIVATE
+        "${KAIROSBOOT_IOKIT_FRAMEWORK}"
+        "${KAIROSBOOT_COREFOUNDATION_FRAMEWORK}"
+    )
+endif()
+set_target_properties(kairosboot_macos_usb_topology_tests PROPERTIES
+    CXX_EXTENSIONS OFF
+)
+
+if(MSVC)
+    target_compile_options(kairosboot_macos_usb_topology_tests PRIVATE
+        /W4 /WX /permissive-
+    )
+else()
+    target_compile_options(kairosboot_macos_usb_topology_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif()
+
+add_test(NAME kairosboot.macos-usb-topology
+         COMMAND kairosboot_macos_usb_topology_tests)
