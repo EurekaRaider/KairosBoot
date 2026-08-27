@@ -46,6 +46,8 @@ using kairosboot::transport::parse_windows_usb_location_path;
     } while (false)
 
 constexpr unsigned long kSession = 0x101UL;
+constexpr std::string_view kDeviceInstanceId =
+    "USB\\VID_18D1&PID_4EE0&MI_00\\SERIAL-01";
 
 [[nodiscard]] WindowsUsbInterfaceFingerprint fingerprint() {
     return WindowsUsbInterfaceFingerprint{
@@ -63,6 +65,7 @@ constexpr unsigned long kSession = 0x101UL;
     std::vector<std::uint8_t> ports = {2U, 3U}) {
     return WindowsUsbTopologyQuery{
         .libusb_session_data = session,
+        .device_instance_id_utf8 = std::string{kDeviceInstanceId},
         .vendor_id = 0x18D1U,
         .product_id = 0x4EE0U,
         .bus_number = bus,
@@ -96,8 +99,7 @@ constexpr unsigned long kSession = 0x101UL;
             WindowsUsbNativeNodeSnapshot{
                 .system_node = wanted.libusb_session_data,
                 .parent_system_node = 0x201UL,
-                .device_instance_id_utf8 =
-                    "USB\\VID_18D1&PID_4EE0&MI_00\\SERIAL-01",
+                .device_instance_id_utf8 = wanted.device_instance_id_utf8,
                 .present = true,
                 .hardware_ids_utf8 = {
                     "USB\\VID_18D1&PID_4EE0&REV_0100&MI_00",
@@ -146,11 +148,10 @@ constexpr unsigned long kSession = 0x101UL;
 [[nodiscard]] WindowsUsbTopologyNode node(
     const WindowsUsbTopologyQuery& wanted,
     const unsigned long session = kSession,
-    std::string device_id =
-        "USB\\VID_18D1&PID_4EE0&MI_00\\SERIAL-01") {
+    std::string device_id = std::string{kDeviceInstanceId}) {
     return WindowsUsbTopologyNode{
         .libusb_session_data = session,
-        .device_instance_id_utf8 = std::move(device_id),
+        .device_instance_id_utf8 = device_id,
         .root_controller_instance_id_utf8 =
             "PCI\\VEN_8086&DEV_7AE0\\CONTROLLER-01",
         .hub_instance_ids_utf8 = {
@@ -173,7 +174,7 @@ constexpr unsigned long kSession = 0x101UL;
             0x401UL,
         },
         .validation_chain_instance_ids_utf8 = {
-            "USB\\VID_18D1&PID_4EE0&MI_00\\SERIAL-01",
+            std::move(device_id),
             "USB\\VID_2109&PID_2817\\EXTERNAL-HUB",
             "USB\\ROOT_HUB30\\ROOT-01",
             "PCI\\VEN_8086&DEV_7AE0\\CONTROLLER-01",
@@ -190,7 +191,8 @@ class FakeBackend final : public IWindowsUsbTopologyBackend {
 public:
     std::vector<BackendResult> results;
     mutable std::size_t calls{};
-    std::stop_source* request_stop_after_first{};
+    std::size_t request_stop_after_call{};
+    std::stop_source* stop_source{};
 
     [[nodiscard]] std::expected<std::vector<WindowsUsbTopologyNode>,
                                 WindowsUsbTopologyError>
@@ -202,8 +204,8 @@ public:
         }
         const auto index = calls < results.size() ? calls : results.size() - 1U;
         ++calls;
-        if (calls == 1U && request_stop_after_first != nullptr) {
-            (void)request_stop_after_first->request_stop();
+        if (calls == request_stop_after_call && stop_source != nullptr) {
+            (void)stop_source->request_stop();
         }
         return results[index];
     }
@@ -214,6 +216,8 @@ public:
     std::vector<NativeResult> results;
     mutable std::size_t calls{};
     mutable std::vector<unsigned long> requested_sessions;
+    std::size_t request_stop_after_call{};
+    std::stop_source* stop_source{};
 
     [[nodiscard]] std::expected<WindowsUsbNativeSnapshot,
                                 WindowsUsbTopologyError>
@@ -226,6 +230,9 @@ public:
         requested_sessions.push_back(session);
         const auto index = calls < results.size() ? calls : results.size() - 1U;
         ++calls;
+        if (calls == request_stop_after_call && stop_source != nullptr) {
+            (void)stop_source->request_stop();
+        }
         return results[index];
     }
 };
@@ -361,6 +368,47 @@ void stale_session_and_broken_parent_relation_fail_closed() {
     CHECK(!broken.has_value());
     CHECK(broken.error().kind == WindowsUsbTopologyErrorKind::IdentityChanged);
     CHECK(broken.error().stage == WindowsUsbTopologyStage::ParentTraversal);
+
+    auto missing_chain = native_snapshot(wanted);
+    missing_chain.chain_leaf_to_root.clear();
+    FakeNativeBackend missing_native;
+    missing_native.results = {missing_chain};
+    SetupApiWindowsUsbTopologyBackend missing_backend(missing_native);
+    const auto disappeared = missing_backend.read_candidates(
+        wanted, std::chrono::steady_clock::time_point::max(), {});
+    CHECK(!disappeared.has_value());
+    CHECK(disappeared.error().kind ==
+          WindowsUsbTopologyErrorKind::IdentityChanged);
+    CHECK(disappeared.error().device_instance_id_utf8 ==
+          wanted.device_instance_id_utf8);
+}
+
+void recycled_devinst_never_combines_device_generations() {
+    const auto wanted = query();
+    const std::string replacement_id =
+        "USB\\VID_18D1&PID_4EE0&MI_00\\REPLACEMENT";
+
+    auto replacement_snapshot = native_snapshot(wanted);
+    replacement_snapshot.chain_leaf_to_root.front()
+        .device_instance_id_utf8 = replacement_id;
+    FakeNativeBackend native;
+    native.results = {replacement_snapshot};
+    SetupApiWindowsUsbTopologyBackend adapter(native);
+    const auto adapted = adapter.read_candidates(
+        wanted, std::chrono::steady_clock::time_point::max(), {});
+    CHECK(!adapted.has_value());
+    CHECK(adapted.error().kind ==
+          WindowsUsbTopologyErrorKind::IdentityChanged);
+    CHECK(adapted.error().device_instance_id_utf8 == replacement_id);
+
+    auto replacement = node(wanted, kSession, replacement_id);
+    auto backend = stable_backend({replacement});
+    WindowsUsbTopologyDiscovery discovery(backend);
+    const auto direct = discovery.discover(wanted);
+    CHECK(!direct.has_value());
+    CHECK(direct.error().kind ==
+          WindowsUsbTopologyErrorKind::IdentityChanged);
+    CHECK(direct.error().device_instance_id_utf8 == replacement_id);
 }
 
 void hardware_location_and_interface_mismatch_fail_closed() {
@@ -402,6 +450,39 @@ void hardware_location_and_interface_mismatch_fail_closed() {
     CHECK(!interface_result.has_value());
     CHECK(interface_result.error().kind ==
           WindowsUsbTopologyErrorKind::IdentityMismatch);
+
+    const std::vector<std::string> malformed_hardware_ids{
+        "USB\\XVID_18D1&PID_4EE0&MI_00",
+        "USB\\VID_18D10&PID_4EE0&MI_00",
+        "USB\\VID_18D1&XPID_4EE0&MI_00",
+        "USB\\VID_18D1&PID_4EE0&MI_000",
+        "USB\\CLASS_FF\\VID_18D1&PID_4EE0&MI_00",
+        "PCI\\VID_18D1&PID_4EE0&MI_00",
+        "USB\\VID_18D1&VID_18D1&PID_4EE0&MI_00",
+    };
+    for (const auto& malformed_hardware_id : malformed_hardware_ids) {
+        auto malformed = native_snapshot(wanted);
+        malformed.chain_leaf_to_root.front().device_instance_id_utf8 =
+            "USB\\CLASS_FF\\SERIAL-01";
+        malformed.chain_leaf_to_root.front().hardware_ids_utf8 = {
+            malformed_hardware_id,
+        };
+        // The generation anchor follows the exact PnP instance while the
+        // hardware identity remains deliberately malformed.
+        auto malformed_query = wanted;
+        malformed_query.device_instance_id_utf8 =
+            malformed.chain_leaf_to_root.front().device_instance_id_utf8;
+        FakeNativeBackend malformed_native;
+        malformed_native.results = {malformed};
+        SetupApiWindowsUsbTopologyBackend malformed_backend(malformed_native);
+        const auto result = malformed_backend.read_candidates(
+            malformed_query,
+            std::chrono::steady_clock::time_point::max(),
+            {});
+        CHECK(!result.has_value());
+        CHECK(result.error().kind ==
+              WindowsUsbTopologyErrorKind::IdentityMismatch);
+    }
 }
 
 void conflicting_location_and_duplicate_native_identity_are_ambiguous() {
@@ -466,6 +547,50 @@ void hidden_parent_change_is_caught_by_double_snapshot() {
     CHECK(native.calls == 2U);
 }
 
+void unplug_between_native_snapshots_is_identity_change() {
+    const auto wanted = query();
+    auto missing = native_snapshot(wanted);
+    missing.chain_leaf_to_root.clear();
+    FakeNativeBackend native;
+    native.results = {native_snapshot(wanted), missing};
+    SetupApiWindowsUsbTopologyBackend backend(native);
+    WindowsUsbTopologyDiscovery discovery(backend);
+
+    const auto result = discovery.discover(wanted);
+    CHECK(!result.has_value());
+    CHECK(result.error().kind == WindowsUsbTopologyErrorKind::IdentityChanged);
+    CHECK(result.error().device_instance_id_utf8 ==
+          wanted.device_instance_id_utf8);
+    CHECK(native.calls == 2U);
+}
+
+void unplug_during_native_property_read_is_identity_change() {
+    const auto wanted = query();
+    const WindowsUsbTopologyError unplugged{
+        .kind = WindowsUsbTopologyErrorKind::IdentityChanged,
+        .stage = WindowsUsbTopologyStage::PropertyRead,
+        .native_domain =
+            WindowsUsbNativeErrorDomain::ConfigurationManager,
+        .native_code = 0x0DU,
+        .libusb_session_data = kSession,
+        .device_instance_id_utf8 = wanted.device_instance_id_utf8,
+        .message =
+            "device disappeared between native property size and read",
+    };
+    FakeNativeBackend native;
+    native.results = {
+        native_snapshot(wanted),
+        std::unexpected(unplugged),
+    };
+    SetupApiWindowsUsbTopologyBackend backend(native);
+    WindowsUsbTopologyDiscovery discovery(backend);
+
+    const auto result = discovery.discover(wanted);
+    CHECK(!result.has_value());
+    CHECK(result.error() == unplugged);
+    CHECK(native.calls == 2U);
+}
+
 void duplicate_serial_on_other_session_cannot_shadow_exact_devinst() {
     const auto wanted = query();
     auto wrong = node(
@@ -487,12 +612,7 @@ void duplicate_serial_on_other_session_cannot_shadow_exact_devinst() {
 void duplicate_candidates_for_exact_session_fail_closed() {
     const auto wanted = query();
     auto first = node(wanted);
-    auto second = node(
-        wanted,
-        kSession,
-        "USB\\VID_18D1&PID_4EE0&MI_00\\SECOND-NODE");
-    second.validation_chain_instance_ids_utf8.front() =
-        second.device_instance_id_utf8;
+    auto second = node(wanted);
     auto backend = stable_backend({first, second});
     WindowsUsbTopologyDiscovery discovery(backend);
 
@@ -519,7 +639,8 @@ void cancellation_before_and_between_snapshots_is_deterministic() {
 
     auto between_backend = stable_backend({node(wanted)});
     std::stop_source between_stop;
-    between_backend.request_stop_after_first = &between_stop;
+    between_backend.request_stop_after_call = 1U;
+    between_backend.stop_source = &between_stop;
     WindowsUsbTopologyDiscovery between_discovery(between_backend);
     const auto between = between_discovery.discover(
         wanted,
@@ -529,6 +650,74 @@ void cancellation_before_and_between_snapshots_is_deterministic() {
     CHECK(between.error().kind == WindowsUsbTopologyErrorKind::Cancelled);
     CHECK(between.error().stage == WindowsUsbTopologyStage::StabilityCheck);
     CHECK(between_backend.calls == 1U);
+}
+
+void interruption_wins_over_backend_failure() {
+    const auto wanted = query();
+    const WindowsUsbTopologyError backend_failure{
+        .kind = WindowsUsbTopologyErrorKind::NativeError,
+        .stage = WindowsUsbTopologyStage::Enumeration,
+        .native_domain = WindowsUsbNativeErrorDomain::Win32,
+        .native_code = 5U,
+        .libusb_session_data = kSession,
+        .device_instance_id_utf8 = wanted.device_instance_id_utf8,
+        .message = "injected backend failure",
+    };
+
+    FakeBackend cancelled_backend;
+    cancelled_backend.results = {std::unexpected(backend_failure)};
+    std::stop_source stop;
+    cancelled_backend.request_stop_after_call = 1U;
+    cancelled_backend.stop_source = &stop;
+    WindowsUsbTopologyDiscovery cancelled_discovery(cancelled_backend);
+    const auto cancelled = cancelled_discovery.discover(
+        wanted,
+        std::chrono::steady_clock::time_point::max(),
+        stop.get_token());
+    CHECK(!cancelled.has_value());
+    CHECK(cancelled.error().kind == WindowsUsbTopologyErrorKind::Cancelled);
+    CHECK(cancelled.error().stage == WindowsUsbTopologyStage::StabilityCheck);
+    CHECK(cancelled_backend.calls == 1U);
+
+    const auto epoch = std::chrono::steady_clock::time_point{};
+    const auto deadline = epoch + 10ms;
+    FakeBackend timed_out_backend;
+    timed_out_backend.results = {std::unexpected(backend_failure)};
+    FakeClock clock{.values = {epoch, deadline}};
+    WindowsUsbTopologyDiscovery timed_out_discovery(
+        timed_out_backend, FakeClock::now, &clock);
+    const auto timed_out = timed_out_discovery.discover(wanted, deadline);
+    CHECK(!timed_out.has_value());
+    CHECK(timed_out.error().kind == WindowsUsbTopologyErrorKind::TimedOut);
+    CHECK(timed_out.error().stage == WindowsUsbTopologyStage::StabilityCheck);
+    CHECK(timed_out_backend.calls == 1U);
+
+    FakeNativeBackend cancelled_native;
+    cancelled_native.results = {std::unexpected(backend_failure)};
+    std::stop_source native_stop;
+    cancelled_native.request_stop_after_call = 1U;
+    cancelled_native.stop_source = &native_stop;
+    SetupApiWindowsUsbTopologyBackend native_adapter(cancelled_native);
+    const auto native_cancelled = native_adapter.read_candidates(
+        wanted,
+        std::chrono::steady_clock::time_point::max(),
+        native_stop.get_token());
+    CHECK(!native_cancelled.has_value());
+    CHECK(native_cancelled.error().kind ==
+          WindowsUsbTopologyErrorKind::Cancelled);
+    CHECK(native_cancelled.error().stage ==
+          WindowsUsbTopologyStage::StabilityCheck);
+
+    FakeNativeBackend timed_out_native;
+    timed_out_native.results = {std::unexpected(backend_failure)};
+    SetupApiWindowsUsbTopologyBackend timed_out_adapter(timed_out_native);
+    const auto native_timed_out = timed_out_adapter.read_candidates(
+        wanted, std::chrono::steady_clock::now() - 1ms, {});
+    CHECK(!native_timed_out.has_value());
+    CHECK(native_timed_out.error().kind ==
+          WindowsUsbTopologyErrorKind::TimedOut);
+    CHECK(native_timed_out.error().stage ==
+          WindowsUsbTopologyStage::StabilityCheck);
 }
 
 void timeout_before_and_between_snapshots_is_deterministic() {
@@ -646,8 +835,11 @@ void libusb_snapshot_adapter_requires_explicit_session_data() {
     device.interface_subclass = 0x42U;
     device.interface_protocol = 0x03U;
 
-    const auto adapted = make_windows_usb_topology_query(device, 0xA55UL);
+    const auto adapted = make_windows_usb_topology_query(
+        device, 0xA55UL, "USB\\VID_18D1&PID_4EE0\\SERIAL-ADAPTER");
     CHECK(adapted.libusb_session_data == 0xA55UL);
+    CHECK(adapted.device_instance_id_utf8 ==
+          "USB\\VID_18D1&PID_4EE0\\SERIAL-ADAPTER");
     CHECK(adapted.vendor_id == device.vendor_id);
     CHECK(adapted.product_id == device.product_id);
     CHECK(adapted.bus_number == device.bus_number);
@@ -691,12 +883,17 @@ int main() {
         {"libusb-owned metadata", pnp_never_reinterprets_bus_address_or_interface_fingerprint},
         {"zero session", zero_session_is_rejected_before_native_access},
         {"stale session", stale_session_and_broken_parent_relation_fail_closed},
+        {"DEVINST generation reuse", recycled_devinst_never_combines_device_generations},
         {"identity mismatch", hardware_location_and_interface_mismatch_fail_closed},
         {"native ambiguity", conflicting_location_and_duplicate_native_identity_are_ambiguous},
         {"TOCTOU hidden parent", hidden_parent_change_is_caught_by_double_snapshot},
+        {"TOCTOU unplug", unplug_between_native_snapshots_is_identity_change},
+        {"property read unplug",
+         unplug_during_native_property_read_is_identity_change},
         {"duplicate serial isolation", duplicate_serial_on_other_session_cannot_shadow_exact_devinst},
         {"duplicate exact session", duplicate_candidates_for_exact_session_fail_closed},
         {"cancellation", cancellation_before_and_between_snapshots_is_deterministic},
+        {"post-call interruption precedence", interruption_wins_over_backend_failure},
         {"timeout", timeout_before_and_between_snapshots_is_deterministic},
         {"native error metadata", native_error_metadata_is_preserved_verbatim},
         {"malformed roles", malformed_hub_depth_and_roles_never_publish_topology},

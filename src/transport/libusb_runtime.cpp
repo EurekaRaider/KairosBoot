@@ -39,6 +39,35 @@ inline constexpr auto kEventThreadExitWait = std::chrono::milliseconds{250};
 
 using SteadyClock = std::chrono::steady_clock;
 
+[[nodiscard]] constexpr char ascii_upper(const char value) noexcept {
+    return value >= 'a' && value <= 'z'
+        ? static_cast<char>(value - ('a' - 'A'))
+        : value;
+}
+
+[[nodiscard]] bool pnp_identity_equal(const std::string_view left,
+                                      const std::string_view right) noexcept {
+    return left.size() == right.size() &&
+        std::ranges::equal(left, right, [](const char lhs, const char rhs) {
+            return ascii_upper(lhs) == ascii_upper(rhs);
+        });
+}
+
+[[nodiscard]] WindowsUsbTopologyError windows_generation_changed(
+    const unsigned long session,
+    std::string device_instance_id_utf8,
+    std::string message) {
+    return WindowsUsbTopologyError{
+        .kind = WindowsUsbTopologyErrorKind::IdentityChanged,
+        .stage = WindowsUsbTopologyStage::StabilityCheck,
+        .native_domain = WindowsUsbNativeErrorDomain::None,
+        .native_code = 0U,
+        .libusb_session_data = session,
+        .device_instance_id_utf8 = std::move(device_instance_id_utf8),
+        .message = std::move(message),
+    };
+}
+
 [[nodiscard]] SteadyClock::time_point deadline_after(
     const std::chrono::milliseconds timeout) noexcept {
     const auto now = SteadyClock::now();
@@ -461,6 +490,9 @@ LibusbFunctions LibusbFunctions::system() {
     };
 #endif
 #if defined(_WIN32)
+    functions.capture_windows_session_identity = [](const unsigned long session) {
+        return read_windows_usb_session_instance_id(session);
+    };
     functions.resolve_windows_topology = [](const WindowsUsbTopologyQuery& query) {
         static const SetupApiWindowsUsbTopologyBackend backend;
         const WindowsUsbTopologyDiscovery discovery(backend);
@@ -479,7 +511,8 @@ bool LibusbFunctions::complete() const noexcept {
            claim_interface && release_interface &&
            set_interface_alt_setting && alloc_transfer && submit_transfer &&
            cancel_transfer && free_transfer && pin_current_module &&
-           module_pin_failure;
+           module_pin_failure &&
+           (!resolve_windows_topology || capture_windows_session_identity);
 }
 
 struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::State> {
@@ -1656,6 +1689,30 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
 
     for (ssize_t index = 0; index < count; ++index) {
         auto* device = list[index];
+        std::optional<unsigned long> windows_session_data;
+        std::optional<std::expected<std::string, WindowsUsbTopologyError>>
+            windows_session_identity;
+        if (state_->functions.resolve_windows_topology) {
+            windows_session_data = state_->functions.get_session_data(device);
+            if (*windows_session_data == 0UL) {
+                windows_session_identity.emplace(std::unexpected(
+                    WindowsUsbTopologyError{
+                        .kind = WindowsUsbTopologyErrorKind::InvalidArgument,
+                        .stage = WindowsUsbTopologyStage::Validation,
+                        .native_domain = WindowsUsbNativeErrorDomain::None,
+                        .native_code = 0U,
+                        .libusb_session_data = 0UL,
+                        .device_instance_id_utf8 = {},
+                        .message =
+                            "libusb returned zero session data for Windows topology correlation",
+                    }));
+            } else {
+                windows_session_identity.emplace(
+                    state_->functions.capture_windows_session_identity(
+                        *windows_session_data));
+            }
+        }
+
         libusb_device_descriptor descriptor{};
         if (state_->functions.get_device_descriptor(device, &descriptor) != LIBUSB_SUCCESS ||
             !matches(filter.vendor_id, descriptor.idVendor) ||
@@ -1684,7 +1741,19 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
         std::optional<std::string> serial;
         std::optional<std::expected<LinuxUsbTopology, LinuxUsbTopologyError>>
             linux_topology_snapshot;
-        std::optional<unsigned long> windows_session_data;
+        const auto read_serial = [&]() {
+            std::array<char, LIBUSB_DEVICE_STRING_BYTES_MAX> serial_buffer{};
+            const auto serial_result = state_->functions.get_device_string(
+                device,
+                LIBUSB_DEVICE_STRING_SERIAL_NUMBER,
+                serial_buffer.data(),
+                static_cast<int>(serial_buffer.size()));
+            const auto serial_end =
+                std::find(serial_buffer.begin(), serial_buffer.end(), '\0');
+            return serial_result > 0
+                ? std::string(serial_buffer.begin(), serial_end)
+                : std::string{};
+        };
         const auto load_identity = [&]() -> bool {
             if (port_path.has_value()) {
                 return true;
@@ -1703,20 +1772,11 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
             // Descriptor string access can open/control-transfer the device on
             // some platforms. Do it only after a matching Fastboot interface
             // with one unambiguous bulk IN/OUT pair has been identified.
-            std::array<char, LIBUSB_DEVICE_STRING_BYTES_MAX> serial_buffer{};
-            const auto serial_result = state_->functions.get_device_string(
-                device,
-                LIBUSB_DEVICE_STRING_SERIAL_NUMBER,
-                serial_buffer.data(),
-                static_cast<int>(serial_buffer.size()));
-            const auto serial_end =
-                std::find(serial_buffer.begin(), serial_buffer.end(), '\0');
-            serial.emplace(serial_result > 0
-                               ? std::string(serial_buffer.begin(), serial_end)
-                               : std::string{});
+            serial.emplace(read_serial());
             return true;
         };
 
+        const auto windows_device_begin = devices.size();
         for (std::uint8_t interface_index = 0;
              interface_index < raw_config->bNumInterfaces;
              ++interface_index) {
@@ -1808,41 +1868,87 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                             linux_topology_snapshot->error();
                     }
                 }
-                if (state_->functions.resolve_windows_topology) {
-                    if (!windows_session_data.has_value()) {
-                        windows_session_data =
-                            state_->functions.get_session_data(device);
-                    }
-                    auto topology = [&]()
-                        -> std::expected<WindowsUsbTopology,
-                                         WindowsUsbTopologyError> {
-                        if (*windows_session_data == 0UL) {
-                            // Keep the device visible for diagnostics, but do
-                            // not publish a physical identity: bus/address are
-                            // transient values, not a substitute for DEVINST.
-                            return std::unexpected(WindowsUsbTopologyError{
-                                .kind = WindowsUsbTopologyErrorKind::InvalidArgument,
-                                .stage = WindowsUsbTopologyStage::Validation,
-                                .native_domain = WindowsUsbNativeErrorDomain::None,
-                                .native_code = 0U,
-                                .libusb_session_data = 0UL,
-                                .device_instance_id_utf8 = {},
-                                .message =
-                                    "libusb returned zero session data for Windows topology correlation",
-                            });
-                        }
-                        return state_->functions.resolve_windows_topology(
-                            make_windows_usb_topology_query(
-                                snapshot, *windows_session_data));
-                    }();
-                    if (topology.has_value()) {
-                        snapshot.windows_topology = std::move(*topology);
-                    } else {
-                        snapshot.windows_topology_error =
-                            std::move(topology.error());
-                    }
-                }
                 devices.push_back(std::move(snapshot));
+            }
+        }
+
+        if (state_->functions.resolve_windows_topology &&
+            devices.size() != windows_device_begin) {
+            // Bracket every copied libusb field for this device by the same
+            // DEVINST/PnP instance generation. Resolve only after the complete
+            // interface snapshot has been re-read so no earlier interface can
+            // publish stale address or serial data if replacement is detected.
+            std::optional<WindowsUsbTopologyError> generation_error;
+            if (!windows_session_identity->has_value()) {
+                generation_error = windows_session_identity->error();
+            } else {
+                std::array<std::uint8_t, 16> current_ports{};
+                const auto current_port_count =
+                    state_->functions.get_port_numbers(
+                        device,
+                        current_ports.data(),
+                        static_cast<int>(current_ports.size()));
+                const auto current_serial = read_serial();
+                const auto current_bus = state_->functions.get_bus_number(device);
+                const auto current_address =
+                    state_->functions.get_device_address(device);
+                const auto current_session =
+                    state_->functions.get_session_data(device);
+                auto current_instance = current_session == 0UL
+                    ? std::expected<std::string, WindowsUsbTopologyError>{
+                          std::unexpected(windows_generation_changed(
+                              *windows_session_data,
+                              windows_session_identity->value(),
+                              "the libusb DEVINST disappeared during generation revalidation"))}
+                    : state_->functions.capture_windows_session_identity(
+                          current_session);
+
+                const auto& first_snapshot = devices[windows_device_begin];
+                const bool ports_match =
+                    current_port_count ==
+                        static_cast<int>(first_snapshot.port_path.size()) &&
+                    current_port_count > 0 &&
+                    std::equal(
+                        first_snapshot.port_path.begin(),
+                        first_snapshot.port_path.end(),
+                        current_ports.begin());
+                if (!current_instance.has_value()) {
+                    generation_error = current_instance.error();
+                } else if (
+                    current_session != *windows_session_data ||
+                    !pnp_identity_equal(
+                        *current_instance,
+                        windows_session_identity->value()) ||
+                    current_bus != first_snapshot.bus_number ||
+                    current_address != first_snapshot.device_address ||
+                    !ports_match ||
+                    current_serial != first_snapshot.serial_utf8) {
+                    generation_error = windows_generation_changed(
+                        *windows_session_data,
+                        *current_instance,
+                        "the libusb USB identity changed while its PnP generation was captured");
+                }
+            }
+
+            for (auto snapshot_index = windows_device_begin;
+                 snapshot_index < devices.size();
+                 ++snapshot_index) {
+                auto& snapshot = devices[snapshot_index];
+                auto topology = generation_error.has_value()
+                    ? std::expected<WindowsUsbTopology,
+                                    WindowsUsbTopologyError>{
+                          std::unexpected(*generation_error)}
+                    : state_->functions.resolve_windows_topology(
+                          make_windows_usb_topology_query(
+                              snapshot,
+                              *windows_session_data,
+                              windows_session_identity->value()));
+                if (topology.has_value()) {
+                    snapshot.windows_topology = std::move(*topology);
+                } else {
+                    snapshot.windows_topology_error =
+                        std::move(topology.error());
+                }
             }
         }
     }

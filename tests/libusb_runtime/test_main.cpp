@@ -687,6 +687,22 @@ void test_init_failure_version_and_singleton() {
              LibusbRuntimeErrorKind::invalid_function_table);
     KB_CHECK(missing_session->init_calls == 0);
 
+    auto missing_windows_identity = std::make_shared<FakeLibusb>();
+    auto missing_windows_identity_functions =
+        missing_windows_identity->functions();
+    missing_windows_identity_functions.resolve_windows_topology =
+        [](const WindowsUsbTopologyQuery&) {
+            return std::expected<WindowsUsbTopology,
+                                 WindowsUsbTopologyError>{
+                std::unexpected(WindowsUsbTopologyError{})};
+        };
+    const auto missing_windows_identity_result = LibusbRuntime::create(
+        std::move(missing_windows_identity_functions));
+    KB_CHECK(!missing_windows_identity_result.has_value());
+    KB_CHECK(missing_windows_identity_result.error().kind ==
+             LibusbRuntimeErrorKind::invalid_function_table);
+    KB_CHECK(missing_windows_identity->init_calls == 0);
+
     auto wrong_version = std::make_shared<FakeLibusb>();
     wrong_version->version_.micro = 29;
     const auto version_result = LibusbRuntime::create(wrong_version->functions());
@@ -875,6 +891,17 @@ void test_platform_topology_uses_consistent_identity_across_interfaces() {
                 }};
         };
     std::vector<WindowsUsbTopologyQuery> windows_queries;
+    std::size_t windows_identity_captures = 0U;
+    const std::string windows_instance_id =
+        "USB\\VID_18D1&PID_4EE0\\SERIAL";
+    functions.capture_windows_session_identity =
+        [&windows_identity_captures,
+         &windows_instance_id](const unsigned long session) {
+            ++windows_identity_captures;
+            KB_CHECK(session == 0x101UL);
+            return std::expected<std::string, WindowsUsbTopologyError>{
+                windows_instance_id};
+        };
     functions.resolve_windows_topology =
         [&windows_queries](const WindowsUsbTopologyQuery& query) {
             windows_queries.push_back(query);
@@ -919,12 +946,14 @@ void test_platform_topology_uses_consistent_identity_across_interfaces() {
              (*enumerated)[1].linux_topology);
     KB_CHECK(!(*enumerated)[0].linux_topology_error.has_value());
     KB_CHECK(!(*enumerated)[1].linux_topology_error.has_value());
-    KB_CHECK(fake->session_data_calls == 1);
+    KB_CHECK(fake->session_data_calls == 2);
+    KB_CHECK(windows_identity_captures == 2U);
     KB_CHECK(windows_queries.size() == 2U);
     for (std::size_t index = 0U; index < windows_queries.size(); ++index) {
         const auto& query = windows_queries[index];
         const auto& snapshot = (*enumerated)[index];
         KB_CHECK(query.libusb_session_data == fake->session_data);
+        KB_CHECK(query.device_instance_id_utf8 == windows_instance_id);
         KB_CHECK(query.vendor_id == snapshot.vendor_id);
         KB_CHECK(query.product_id == snapshot.product_id);
         KB_CHECK(query.bus_number == snapshot.bus_number);
@@ -953,6 +982,13 @@ void test_zero_windows_session_is_diagnostic_and_never_resolved() {
     fake->session_data = 0UL;
     auto functions = fake->functions();
     std::size_t resolver_calls = 0U;
+    std::size_t identity_capture_calls = 0U;
+    functions.capture_windows_session_identity =
+        [&identity_capture_calls](const unsigned long) {
+            ++identity_capture_calls;
+            return std::expected<std::string, WindowsUsbTopologyError>{
+                "USB\\VID_18D1&PID_4EE0\\SHOULD-NOT-BE-CAPTURED"};
+        };
     functions.resolve_windows_topology =
         [&resolver_calls](const WindowsUsbTopologyQuery&) {
             ++resolver_calls;
@@ -964,6 +1000,7 @@ void test_zero_windows_session_is_diagnostic_and_never_resolved() {
     auto runtime = create_runtime(fake, std::move(functions));
     const auto snapshot = matching_device(runtime);
     KB_CHECK(fake->session_data_calls == 1);
+    KB_CHECK(identity_capture_calls == 0U);
     KB_CHECK(resolver_calls == 0U);
     KB_CHECK(!snapshot.windows_topology.has_value());
     KB_CHECK(snapshot.windows_topology_error.has_value());
@@ -976,6 +1013,160 @@ void test_zero_windows_session_is_diagnostic_and_never_resolved() {
     KB_CHECK(snapshot.windows_topology_error->native_code == 0U);
     KB_CHECK(snapshot.windows_topology_error->libusb_session_data == 0UL);
     runtime->stop();
+}
+
+void test_windows_session_identity_capture_failure_is_diagnostic() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+    const WindowsUsbTopologyError identity_error{
+        .kind = WindowsUsbTopologyErrorKind::IdentityChanged,
+        .stage = WindowsUsbTopologyStage::Enumeration,
+        .native_domain =
+            WindowsUsbNativeErrorDomain::ConfigurationManager,
+        .native_code = 0x0DU,
+        .libusb_session_data = fake->session_data,
+        .device_instance_id_utf8 =
+            "USB\\VID_18D1&PID_4EE0\\REMOVED",
+        .message = "the libusb DEVINST disappeared during identity capture",
+    };
+    std::size_t identity_capture_calls = 0U;
+    std::size_t resolver_calls = 0U;
+    functions.capture_windows_session_identity =
+        [&identity_capture_calls,
+         &identity_error](const unsigned long session) {
+            ++identity_capture_calls;
+            KB_CHECK(session == identity_error.libusb_session_data);
+            return std::expected<std::string, WindowsUsbTopologyError>{
+                std::unexpected(identity_error)};
+        };
+    functions.resolve_windows_topology =
+        [&resolver_calls](const WindowsUsbTopologyQuery&) {
+            ++resolver_calls;
+            return std::expected<WindowsUsbTopology,
+                                 WindowsUsbTopologyError>{
+                WindowsUsbTopology{}};
+        };
+
+    auto runtime = create_runtime(fake, std::move(functions));
+    const auto snapshot = matching_device(runtime);
+    KB_CHECK(fake->session_data_calls == 1);
+    KB_CHECK(identity_capture_calls == 1U);
+    KB_CHECK(resolver_calls == 0U);
+    KB_CHECK(!snapshot.windows_topology.has_value());
+    KB_CHECK(snapshot.windows_topology_error ==
+             std::optional<WindowsUsbTopologyError>{identity_error});
+    runtime->stop();
+}
+
+void test_windows_devinst_reuse_never_publishes_stale_libusb_identity() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+    const std::array<std::string_view, 2> generations{
+        "USB\\VID_18D1&PID_4EE0\\GENERATION-A",
+        "USB\\VID_18D1&PID_4EE0\\GENERATION-B",
+    };
+    std::size_t identity_captures = 0U;
+    std::size_t resolver_calls = 0U;
+    functions.capture_windows_session_identity =
+        [&identity_captures,
+         &generations](const unsigned long session) {
+            KB_CHECK(session == 0x101UL);
+            const auto index = std::min(identity_captures,
+                                        generations.size() - 1U);
+            ++identity_captures;
+            return std::expected<std::string, WindowsUsbTopologyError>{
+                std::string{generations[index]}};
+        };
+    functions.resolve_windows_topology =
+        [&resolver_calls](const WindowsUsbTopologyQuery&) {
+            ++resolver_calls;
+            return std::expected<WindowsUsbTopology,
+                                 WindowsUsbTopologyError>{
+                WindowsUsbTopology{}};
+        };
+
+    auto runtime = create_runtime(fake, std::move(functions));
+    const auto snapshot = matching_device(runtime);
+    KB_CHECK(fake->session_data_calls == 2);
+    KB_CHECK(identity_captures == 2U);
+    KB_CHECK(resolver_calls == 0U);
+    KB_CHECK(!snapshot.windows_topology.has_value());
+    KB_CHECK(snapshot.windows_topology_error.has_value());
+    KB_CHECK(snapshot.windows_topology_error->kind ==
+             WindowsUsbTopologyErrorKind::IdentityChanged);
+    KB_CHECK(snapshot.windows_topology_error->stage ==
+             WindowsUsbTopologyStage::StabilityCheck);
+    KB_CHECK(snapshot.windows_topology_error->device_instance_id_utf8 ==
+             generations[1]);
+    runtime->stop();
+}
+
+void test_windows_generation_revalidation_rejects_stale_address_and_serial() {
+    const auto run_case = [](const bool change_address,
+                             const bool change_serial) {
+        auto fake = std::make_shared<FakeLibusb>();
+        auto functions = fake->functions();
+        std::size_t address_reads = 0U;
+        std::size_t serial_reads = 0U;
+        std::size_t identity_captures = 0U;
+        std::size_t resolver_calls = 0U;
+        const std::string instance_id =
+            "USB\\VID_18D1&PID_4EE0\\STABLE-GENERATION";
+        functions.get_device_address =
+            [&address_reads, change_address](libusb_device*) {
+                ++address_reads;
+                return static_cast<std::uint8_t>(
+                    change_address && address_reads > 1U ? 6U : 5U);
+            };
+        functions.get_device_string =
+            [&serial_reads,
+             change_serial](libusb_device*,
+                            libusb_device_string_type,
+                            char* output,
+                            const int length) -> int {
+                ++serial_reads;
+                const std::string_view value =
+                    change_serial && serial_reads > 1U
+                    ? std::string_view{"SERIAL-REPLACED"}
+                    : std::string_view{"FASTBOOT-SERIAL"};
+                KB_CHECK(length > static_cast<int>(value.size()));
+                std::memcpy(output, value.data(), value.size());
+                output[value.size()] = '\0';
+                return static_cast<int>(value.size() + 1U);
+            };
+        functions.capture_windows_session_identity =
+            [&identity_captures,
+             &instance_id](const unsigned long session) {
+                ++identity_captures;
+                KB_CHECK(session == 0x101UL);
+                return std::expected<std::string,
+                                     WindowsUsbTopologyError>{instance_id};
+            };
+        functions.resolve_windows_topology =
+            [&resolver_calls](const WindowsUsbTopologyQuery&) {
+                ++resolver_calls;
+                return std::expected<WindowsUsbTopology,
+                                     WindowsUsbTopologyError>{
+                    WindowsUsbTopology{}};
+            };
+
+        auto runtime = create_runtime(fake, std::move(functions));
+        const auto snapshot = matching_device(runtime);
+        KB_CHECK(address_reads == 2U);
+        KB_CHECK(serial_reads == 2U);
+        KB_CHECK(identity_captures == 2U);
+        KB_CHECK(resolver_calls == 0U);
+        KB_CHECK(!snapshot.windows_topology.has_value());
+        KB_CHECK(snapshot.windows_topology_error.has_value());
+        KB_CHECK(snapshot.windows_topology_error->kind ==
+                 WindowsUsbTopologyErrorKind::IdentityChanged);
+        KB_CHECK(snapshot.windows_topology_error->stage ==
+                 WindowsUsbTopologyStage::StabilityCheck);
+        runtime->stop();
+    };
+
+    run_case(true, false);
+    run_case(false, true);
 }
 
 void test_open_revalidates_physical_identity_and_address_reuse() {
@@ -2398,6 +2589,12 @@ int main() {
          test_platform_topology_uses_consistent_identity_across_interfaces},
         {"Windows topology exact session and zero rejection",
          test_zero_windows_session_is_diagnostic_and_never_resolved},
+        {"Windows topology session identity capture diagnostic",
+         test_windows_session_identity_capture_failure_is_diagnostic},
+        {"Windows DEVINST generation reuse",
+         test_windows_devinst_reuse_never_publishes_stale_libusb_identity},
+        {"Windows stale address and serial generation gate",
+         test_windows_generation_revalidation_rejects_stale_address_and_serial},
         {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
         {"open rejects changed interface snapshot", test_open_rejects_changed_interface_snapshot},
         {"open configuration before claim", test_open_configuration_is_verified_before_claim},

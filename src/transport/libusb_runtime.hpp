@@ -88,6 +88,13 @@ struct LibusbFunctions final {
     std::function<std::expected<WindowsUsbTopology, WindowsUsbTopologyError>(
         const WindowsUsbTopologyQuery&)>
         resolve_windows_topology;
+    // Required whenever resolve_windows_topology is installed. This captures
+    // the exact PnP instance ID for libusb's DEVINST before the remaining
+    // libusb snapshot is read, so later topology validation can reject DEVINST
+    // reuse instead of combining two device generations.
+    std::function<std::expected<std::string, WindowsUsbTopologyError>(
+        unsigned long)>
+        capture_windows_session_identity;
 
     [[nodiscard]] static LibusbFunctions system();
     [[nodiscard]] bool complete() const noexcept;

@@ -184,37 +184,37 @@ template <typename Integer>
 }
 
 template <typename Integer>
-[[nodiscard]] std::optional<Integer> parse_hex_marker(
-    const std::string_view value,
+[[nodiscard]] std::optional<Integer> parse_exact_hex_token(
+    const std::string_view token,
     const std::string_view marker,
     const std::size_t digits) noexcept {
     static_assert(std::is_unsigned_v<Integer>);
-    if (value.size() < marker.size() + digits) {
+    if (token.size() != marker.size() + digits ||
+        !ascii_istarts_with(token, marker)) {
         return std::nullopt;
     }
-    for (std::size_t offset = 0U;
-         offset + marker.size() + digits <= value.size();
-         ++offset) {
-        if (!ascii_iequals(value.substr(offset, marker.size()), marker)) {
-            continue;
-        }
-        unsigned int parsed = 0U;
-        const auto token = value.substr(offset + marker.size(), digits);
-        const auto [end, error] =
-            std::from_chars(token.data(), token.data() + token.size(), parsed, 16);
-        if (error == std::errc{} && end == token.data() + token.size() &&
-            parsed <= static_cast<unsigned int>(
-                std::numeric_limits<Integer>::max())) {
-            return static_cast<Integer>(parsed);
-        }
+    unsigned int parsed = 0U;
+    const auto digits_token = token.substr(marker.size());
+    const auto [end, error] = std::from_chars(
+        digits_token.data(),
+        digits_token.data() + digits_token.size(),
+        parsed,
+        16);
+    if (error != std::errc{} ||
+        end != digits_token.data() + digits_token.size() ||
+        parsed > static_cast<unsigned int>(
+                     std::numeric_limits<Integer>::max())) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return static_cast<Integer>(parsed);
 }
 
 [[nodiscard]] bool query_is_valid(
     const WindowsUsbTopologyQuery& query) noexcept {
-    return query.libusb_session_data != 0UL && query.vendor_id != 0U &&
-        query.product_id != 0U && query.bus_number != 0U &&
+    return query.libusb_session_data != 0UL &&
+        valid_identity_text(query.device_instance_id_utf8) &&
+        query.vendor_id != 0U && query.product_id != 0U &&
+        query.bus_number != 0U &&
         query.device_address != 0U && !query.port_numbers.empty() &&
         query.port_numbers.size() <= kMaximumWindowsUsbTopologyDepth &&
         std::ranges::none_of(query.port_numbers, [](const std::uint8_t port) {
@@ -403,16 +403,78 @@ struct HardwareIdentity final {
 
 [[nodiscard]] std::optional<HardwareIdentity> parse_hardware_identity(
     const std::string_view value) noexcept {
-    const auto vendor = parse_hex_marker<std::uint16_t>(value, "VID_", 4U);
-    const auto product = parse_hex_marker<std::uint16_t>(value, "PID_", 4U);
+    // PnP hardware IDs have the shape ENUMERATOR\\device-id[\\instance-id].
+    // Only exact ampersand-delimited tokens in device-id are authoritative.
+    // Substring scanning would accept attacker-controlled or malformed values
+    // such as XVID_18D1, VID_18D10, or a VID_ token in the serial segment.
+    const auto first_separator = value.find('\\');
+    if (first_separator == std::string_view::npos ||
+        !ascii_iequals(value.substr(0U, first_separator), "USB")) {
+        return std::nullopt;
+    }
+    const auto device_id_begin = first_separator + 1U;
+    const auto second_separator = value.find('\\', device_id_begin);
+    const auto device_id = value.substr(
+        device_id_begin,
+        second_separator == std::string_view::npos
+            ? std::string_view::npos
+            : second_separator - device_id_begin);
+    if (device_id.empty()) {
+        return std::nullopt;
+    }
+
+    std::optional<std::uint16_t> vendor;
+    std::optional<std::uint16_t> product;
+    std::optional<std::uint8_t> interface_number;
+    std::size_t begin = 0U;
+    while (begin <= device_id.size()) {
+        const auto end = device_id.find('&', begin);
+        const auto token = device_id.substr(
+            begin,
+            end == std::string_view::npos ? std::string_view::npos
+                                          : end - begin);
+        if (token.empty()) {
+            return std::nullopt;
+        }
+        if (ascii_istarts_with(token, "VID_")) {
+            if (vendor.has_value()) {
+                return std::nullopt;
+            }
+            vendor = parse_exact_hex_token<std::uint16_t>(token, "VID_", 4U);
+            if (!vendor.has_value()) {
+                return std::nullopt;
+            }
+        } else if (ascii_istarts_with(token, "PID_")) {
+            if (product.has_value()) {
+                return std::nullopt;
+            }
+            product =
+                parse_exact_hex_token<std::uint16_t>(token, "PID_", 4U);
+            if (!product.has_value()) {
+                return std::nullopt;
+            }
+        } else if (ascii_istarts_with(token, "MI_")) {
+            if (interface_number.has_value()) {
+                return std::nullopt;
+            }
+            interface_number =
+                parse_exact_hex_token<std::uint8_t>(token, "MI_", 2U);
+            if (!interface_number.has_value()) {
+                return std::nullopt;
+            }
+        }
+        if (end == std::string_view::npos) {
+            break;
+        }
+        begin = end + 1U;
+    }
     if (!vendor.has_value() || !product.has_value()) {
         return std::nullopt;
     }
     return HardwareIdentity{
         .vendor_id = *vendor,
         .product_id = *product,
-        .interface_number =
-            parse_hex_marker<std::uint8_t>(value, "MI_", 2U),
+        .interface_number = interface_number,
     };
 }
 
@@ -444,10 +506,10 @@ map_native_snapshot(
     }
     if (snapshot.chain_leaf_to_root.empty()) {
         return std::unexpected(make_error(
-            WindowsUsbTopologyErrorKind::NotFound,
+            WindowsUsbTopologyErrorKind::IdentityChanged,
             WindowsUsbTopologyStage::Correlation,
-            "the libusb DEVINST is not present in the native snapshot",
-            {},
+            "the saved libusb DEVINST generation is no longer present",
+            query.device_instance_id_utf8,
             WindowsUsbNativeErrorDomain::None,
             0U,
             query.libusb_session_data));
@@ -510,6 +572,18 @@ map_native_snapshot(
                 WindowsUsbTopologyErrorKind::IdentityChanged,
                 WindowsUsbTopologyStage::Correlation,
                 "the native parent chain no longer starts at the libusb DEVINST",
+                raw.device_instance_id_utf8,
+                WindowsUsbNativeErrorDomain::None,
+                0U,
+                query.libusb_session_data));
+        }
+        if (index == 0U &&
+            !ascii_iequals(raw.device_instance_id_utf8,
+                           query.device_instance_id_utf8)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::Correlation,
+                "the libusb DEVINST was reused by another PnP device generation",
                 raw.device_instance_id_utf8,
                 WindowsUsbNativeErrorDomain::None,
                 0U,
@@ -755,6 +829,52 @@ map_native_snapshot(
     return result == CR_NO_SUCH_DEVNODE || result == CR_DEVICE_NOT_THERE;
 }
 
+[[nodiscard]] std::expected<void, WindowsUsbTopologyError>
+require_current_devnode(
+    const DEVINST device,
+    const WindowsUsbTopologyStage stage,
+    const unsigned long libusb_session_data,
+    const std::string& device_id,
+    const std::string_view operation) {
+    ULONG status = 0U;
+    ULONG problem = 0U;
+    const auto result =
+        CM_Get_DevNode_Status(&status, &problem, device, 0U);
+    if (config_node_missing(result)) {
+        return std::unexpected(make_error(
+            WindowsUsbTopologyErrorKind::IdentityChanged,
+            stage,
+            std::string{"device disappeared while "} +
+                std::string{operation},
+            device_id,
+            WindowsUsbNativeErrorDomain::ConfigurationManager,
+            static_cast<std::uint32_t>(result),
+            libusb_session_data));
+    }
+    if (result != CR_SUCCESS) {
+        return std::unexpected(config_error(
+            stage,
+            result,
+            std::string{"failed to verify the device while "} +
+                std::string{operation},
+            libusb_session_data,
+            device_id));
+    }
+    if ((status & DN_WILL_BE_REMOVED) != 0U ||
+        ((status & DN_HAS_PROBLEM) != 0U && problem == CM_PROB_PHANTOM)) {
+        return std::unexpected(make_error(
+            WindowsUsbTopologyErrorKind::IdentityChanged,
+            stage,
+            std::string{"device is no longer present while "} +
+                std::string{operation},
+            device_id,
+            WindowsUsbNativeErrorDomain::None,
+            0U,
+            libusb_session_data));
+    }
+    return {};
+}
+
 class DeviceInfoSet final {
 public:
     explicit DeviceInfoSet(const HDEVINFO handle) noexcept : handle_(handle) {}
@@ -791,6 +911,15 @@ read_property(const DEVINST device,
         auto result = CM_Get_DevNode_PropertyW(
             device, &key, &type, nullptr, &required, 0U);
         if (result == CR_NO_SUCH_VALUE) {
+            auto current = require_current_devnode(
+                device,
+                stage,
+                libusb_session_data,
+                device_id,
+                "checking an absent property");
+            if (!current.has_value()) {
+                return std::unexpected(current.error());
+            }
             return std::optional<DeviceProperty>{};
         }
         if (config_node_missing(result)) {
@@ -821,6 +950,17 @@ read_property(const DEVINST device,
                 0U,
                 libusb_session_data));
         }
+        if (required == 0U) {
+            auto current = require_current_devnode(
+                device,
+                stage,
+                libusb_session_data,
+                device_id,
+                "sizing an empty property");
+            if (!current.has_value()) {
+                return std::unexpected(current.error());
+            }
+        }
 
         DeviceProperty property{
             .type = type,
@@ -841,7 +981,14 @@ read_property(const DEVINST device,
             continue;
         }
         if (result == CR_NO_SUCH_VALUE) {
-            return std::optional<DeviceProperty>{};
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                stage,
+                "device property disappeared between its size and read",
+                device_id,
+                WindowsUsbNativeErrorDomain::ConfigurationManager,
+                static_cast<std::uint32_t>(result),
+                libusb_session_data));
         }
         if (config_node_missing(result)) {
             return std::unexpected(make_error(
@@ -965,6 +1112,17 @@ device_instance_id(const DEVINST device,
                 libusb_session_data));
         }
         if (characters == 0U || characters >= kMaximumIdentityBytes) {
+            if (characters == 0U) {
+                auto current = require_current_devnode(
+                    device,
+                    stage,
+                    libusb_session_data,
+                    {},
+                    "sizing an empty instance identifier");
+                if (!current.has_value()) {
+                    return std::unexpected(current.error());
+                }
+            }
             return std::unexpected(make_error(
                 WindowsUsbTopologyErrorKind::MalformedSnapshot,
                 stage,
@@ -979,6 +1137,16 @@ device_instance_id(const DEVINST device,
             device, buffer.data(), static_cast<ULONG>(buffer.size()), 0U);
         if (result == CR_BUFFER_SMALL) {
             continue;
+        }
+        if (config_node_missing(result)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                stage,
+                "the libusb DEVINST disappeared while its instance identifier was read",
+                {},
+                WindowsUsbNativeErrorDomain::ConfigurationManager,
+                static_cast<std::uint32_t>(result),
+                libusb_session_data));
         }
         if (result != CR_SUCCESS) {
             return std::unexpected(config_error(
@@ -1313,6 +1481,127 @@ canonical_windows_usb_port_path(
     }
 }
 
+std::expected<std::string, WindowsUsbTopologyError>
+read_windows_usb_session_instance_id(
+    const unsigned long libusb_session_data,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token stop_token) {
+#if !defined(_WIN32)
+    (void)deadline;
+    (void)stop_token;
+    return std::unexpected(make_error(
+        WindowsUsbTopologyErrorKind::UnsupportedPlatform,
+        WindowsUsbTopologyStage::Enumeration,
+        "Windows PnP session identity is only available on Windows",
+        {},
+        WindowsUsbNativeErrorDomain::None,
+        0U,
+        libusb_session_data));
+#else
+    try {
+        static_assert(sizeof(DEVINST) == sizeof(unsigned long));
+        if (libusb_session_data == 0UL) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::InvalidArgument,
+                WindowsUsbTopologyStage::Validation,
+                "libusb WinUSB session data must contain a non-zero DEVINST"));
+        }
+        if (const auto stop = native_interrupted(
+                WindowsUsbTopologyStage::Enumeration,
+                deadline,
+                stop_token,
+                libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+
+        const auto device = static_cast<DEVINST>(libusb_session_data);
+        ULONG status = 0U;
+        ULONG problem = 0U;
+        const auto status_result =
+            CM_Get_DevNode_Status(&status, &problem, device, 0U);
+        if (config_node_missing(status_result)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::Enumeration,
+                "the libusb DEVINST disappeared before its PnP generation was captured",
+                {},
+                WindowsUsbNativeErrorDomain::ConfigurationManager,
+                static_cast<std::uint32_t>(status_result),
+                libusb_session_data));
+        }
+        if (status_result != CR_SUCCESS) {
+            return std::unexpected(config_error(
+                WindowsUsbTopologyStage::Enumeration,
+                status_result,
+                "failed to query the libusb DEVINST generation status",
+                libusb_session_data));
+        }
+        if ((status & DN_WILL_BE_REMOVED) != 0U ||
+            ((status & DN_HAS_PROBLEM) != 0U &&
+             problem == CM_PROB_PHANTOM)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::Enumeration,
+                "the libusb DEVINST generation is no longer present",
+                {},
+                WindowsUsbNativeErrorDomain::None,
+                0U,
+                libusb_session_data));
+        }
+
+        auto first = device_instance_id(device,
+                                        WindowsUsbTopologyStage::Enumeration,
+                                        libusb_session_data);
+        if (const auto stop = native_interrupted(
+                WindowsUsbTopologyStage::Enumeration,
+                deadline,
+                stop_token,
+                libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+        if (!first.has_value()) {
+            return std::unexpected(first.error());
+        }
+        auto second = device_instance_id(device,
+                                         WindowsUsbTopologyStage::Enumeration,
+                                         libusb_session_data);
+        if (const auto stop = native_interrupted(
+                WindowsUsbTopologyStage::Enumeration,
+                deadline,
+                stop_token,
+                libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
+        if (!second.has_value()) {
+            return std::unexpected(second.error());
+        }
+        if (!ascii_iequals(*first, *second)) {
+            return std::unexpected(make_error(
+                WindowsUsbTopologyErrorKind::IdentityChanged,
+                WindowsUsbTopologyStage::Enumeration,
+                "the PnP instance identity changed while it was captured",
+                *second,
+                WindowsUsbNativeErrorDomain::None,
+                0U,
+                libusb_session_data));
+        }
+        return first;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            WindowsUsbTopologyErrorKind::ResourceExhausted,
+            WindowsUsbTopologyStage::Enumeration,
+            "memory allocation failed while capturing the PnP generation",
+            {},
+            WindowsUsbNativeErrorDomain::None,
+            0U,
+            libusb_session_data));
+    }
+#endif
+}
+
 std::expected<WindowsUsbNativeSnapshot, WindowsUsbTopologyError>
 SetupApiWindowsUsbNativeBackend::read_snapshot(
     const unsigned long libusb_session_data,
@@ -1565,10 +1854,30 @@ SetupApiWindowsUsbTopologyBackend::read_candidates(
             : *native_backend_;
         auto snapshot = native.read_snapshot(
             query.libusb_session_data, deadline, stop_token);
+        if (const auto stop = interrupted(
+                WindowsUsbTopologyStage::StabilityCheck,
+                deadline,
+                stop_token,
+                system_now,
+                nullptr,
+                query.libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
         if (!snapshot.has_value()) {
             return std::unexpected(snapshot.error());
         }
         auto node = map_native_snapshot(query, *snapshot, deadline, stop_token);
+        if (const auto stop = interrupted(
+                WindowsUsbTopologyStage::StabilityCheck,
+                deadline,
+                stop_token,
+                system_now,
+                nullptr,
+                query.libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
         if (!node.has_value()) {
             return std::unexpected(node.error());
         }
@@ -1624,9 +1933,20 @@ WindowsUsbTopologyDiscovery::discover(
         }
 
         auto first = backend_.read_candidates(query, deadline, stop_token);
+        if (const auto stop = interrupted(
+                WindowsUsbTopologyStage::StabilityCheck,
+                deadline,
+                stop_token,
+                now_,
+                now_context_,
+                query.libusb_session_data);
+            stop.has_value()) {
+            return std::unexpected(*stop);
+        }
         if (!first.has_value()) {
             return std::unexpected(first.error());
         }
+        auto second = backend_.read_candidates(query, deadline, stop_token);
         if (const auto stop = interrupted(
                 WindowsUsbTopologyStage::StabilityCheck,
                 deadline,
@@ -1637,19 +1957,8 @@ WindowsUsbTopologyDiscovery::discover(
             stop.has_value()) {
             return std::unexpected(*stop);
         }
-        auto second = backend_.read_candidates(query, deadline, stop_token);
         if (!second.has_value()) {
             return std::unexpected(second.error());
-        }
-        if (const auto stop = interrupted(
-                WindowsUsbTopologyStage::StabilityCheck,
-                deadline,
-                stop_token,
-                now_,
-                now_context_,
-                query.libusb_session_data);
-            stop.has_value()) {
-            return std::unexpected(*stop);
         }
 
         std::ranges::sort(*first, node_less);
@@ -1690,6 +1999,17 @@ WindowsUsbTopologyDiscovery::discover(
             }
             if (candidate.libusb_session_data != query.libusb_session_data) {
                 continue;
+            }
+            if (!ascii_iequals(candidate.device_instance_id_utf8,
+                               query.device_instance_id_utf8)) {
+                return std::unexpected(make_error(
+                    WindowsUsbTopologyErrorKind::IdentityChanged,
+                    WindowsUsbTopologyStage::Correlation,
+                    "the libusb DEVINST was reused by another PnP device generation",
+                    candidate.device_instance_id_utf8,
+                    WindowsUsbNativeErrorDomain::None,
+                    0U,
+                    query.libusb_session_data));
             }
             if (candidate.vendor_id != query.vendor_id ||
                 candidate.product_id != query.product_id ||
@@ -1763,9 +2083,11 @@ WindowsUsbTopologyDiscovery::discover(
 
 WindowsUsbTopologyQuery make_windows_usb_topology_query(
     const UsbDeviceInfo& device,
-    const unsigned long libusb_session_data) {
+    const unsigned long libusb_session_data,
+    const std::string_view device_instance_id_utf8) {
     return WindowsUsbTopologyQuery{
         .libusb_session_data = libusb_session_data,
+        .device_instance_id_utf8 = std::string{device_instance_id_utf8},
         .vendor_id = device.vendor_id,
         .product_id = device.product_id,
         .bus_number = device.bus_number,

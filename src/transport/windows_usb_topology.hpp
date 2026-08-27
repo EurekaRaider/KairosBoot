@@ -35,6 +35,10 @@ struct WindowsUsbTopologyQuery final {
     // value is never accepted because no other Windows property is a proven
     // substitute for this bridge.
     unsigned long libusb_session_data{};
+    // PnP generation anchor captured from that DEVINST before the remaining
+    // libusb snapshot fields. Both native validation snapshots must resolve the
+    // session back to this exact instance ID; a recycled DEVINST is rejected.
+    std::string device_instance_id_utf8;
     std::uint16_t vendor_id{};
     std::uint16_t product_id{};
     std::uint8_t bus_number{};
@@ -245,7 +249,15 @@ private:
 
 [[nodiscard]] WindowsUsbTopologyQuery make_windows_usb_topology_query(
     const UsbDeviceInfo& device,
-    unsigned long libusb_session_data);
+    unsigned long libusb_session_data,
+    std::string_view device_instance_id_utf8);
+
+[[nodiscard]] std::expected<std::string, WindowsUsbTopologyError>
+read_windows_usb_session_instance_id(
+    unsigned long libusb_session_data,
+    std::chrono::steady_clock::time_point deadline =
+        std::chrono::steady_clock::time_point::max(),
+    std::stop_token stop_token = {});
 
 [[nodiscard]] std::expected<WindowsUsbLocationPath, WindowsUsbTopologyError>
 parse_windows_usb_location_path(std::string_view location_path_utf8);
