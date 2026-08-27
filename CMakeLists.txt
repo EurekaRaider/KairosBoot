@@ -180,6 +180,7 @@ add_library(
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
   src/fastboot/file_receive_service.cpp
+  src/fastboot/primitive_update_device.cpp
   src/fastboot/primitive_service.cpp
   src/fastboot/reconnect_coordinator.cpp
   src/fastboot/update_executor.cpp
@@ -481,6 +482,21 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_update_executor_tests)
   add_test(NAME update_executor COMMAND kairosboot_update_executor_tests)
   set_tests_properties(update_executor PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_primitive_update_device_tests
+                 tests/fastboot/primitive_update_device_tests.cpp
+                 tests/protocol/scripted_transport.cpp)
+  target_compile_features(kairosboot_primitive_update_device_tests PRIVATE cxx_std_23)
+  target_include_directories(
+    kairosboot_primitive_update_device_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/protocol")
+  target_link_libraries(kairosboot_primitive_update_device_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_primitive_update_device_tests)
+  add_test(NAME primitive_update_device
+           COMMAND kairosboot_primitive_update_device_tests)
+  set_tests_properties(primitive_update_device PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_device_selection_tests
                  tests/api/device_selection_tests.cpp)
