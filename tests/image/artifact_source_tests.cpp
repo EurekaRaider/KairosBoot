@@ -369,6 +369,245 @@ void direct_and_directory_sources_are_immutable_snapshots() {
     CHECK(read_source(*(*resolved_directory)->source) == "original-directory");
 }
 
+void root_relative_direct_files_are_confined_to_the_selected_boundary() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directories(root / "images");
+    std::filesystem::create_directory(outside);
+    write_text(root / "images/system.img", "inside");
+    write_text(outside / "system.img", "outside");
+
+    ArtifactSourceLimits direct_limits;
+    direct_limits.max_spool_bytes = 6U;
+    ArtifactSourceResolver resolver(direct_limits);
+    auto direct = resolver.resolve_file_beneath(
+        root, std::filesystem::path("images") / "system.img");
+    CHECK(direct);
+    CHECK((*direct)->origin == ArtifactSourceOrigin::DirectFile);
+    CHECK(read_source(*(*direct)->source) == "inside");
+    auto repeated = resolver.resolve_file_beneath(
+        root, std::filesystem::path("images") / "system.img");
+    CHECK(repeated);
+    CHECK(*repeated == *direct);
+
+    const auto intermediate = root / "jump";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(
+        outside, intermediate, link_error);
+    if (link_error) {
+        return;
+    }
+    ArtifactSourceResolver escape_resolver;
+    auto escaped = escape_resolver.resolve_file_beneath(
+        root, std::filesystem::path("jump") / "system.img");
+    CHECK(!escaped);
+    CHECK(escaped.error().kind == ArtifactSourceErrorKind::UnsafePath);
+
+    const auto root_alias = temporary.path() / "root-alias";
+    std::filesystem::create_directory_symlink(root, root_alias, link_error);
+    CHECK(!link_error);
+    ArtifactSourceResolver alias_resolver;
+    auto through_root_alias = alias_resolver.resolve_file_beneath(
+        root_alias, std::filesystem::path("images") / "system.img");
+    CHECK(through_root_alias);
+    CHECK(read_source(*(*through_root_alias)->source) == "inside");
+}
+
+void root_and_ancestor_replacement_after_capture_cannot_redirect_resolution() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directories(root / "images");
+    std::filesystem::create_directories(outside / "images");
+    write_text(root / "images/system.img", "inside");
+    write_text(outside / "images/system.img", "outside");
+
+    const auto probe = temporary.path() / "link-probe";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, probe, link_error);
+    if (link_error) {
+        return;
+    }
+    std::filesystem::remove(probe);
+
+    ArtifactSourceLimits root_limits;
+    root_limits.package_entry_observer = [&](std::string_view) {
+        std::filesystem::rename(root, temporary.path() / "retained-root");
+        std::filesystem::create_directory_symlink(outside, root);
+    };
+    ArtifactSourceResolver root_resolver(root_limits);
+    auto after_root_replacement = root_resolver.resolve_file_beneath(
+        root, std::filesystem::path("images") / "system.img");
+    CHECK(after_root_replacement);
+    CHECK(read_source(*(*after_root_replacement)->source) == "inside");
+    auto cached_after_replacement = root_resolver.resolve_file_beneath(
+        root, std::filesystem::path("images") / "system.img");
+    CHECK(cached_after_replacement);
+    CHECK(*cached_after_replacement == *after_root_replacement);
+
+    // Windows rejects ancestor renames while a descendant handle is retained;
+    // the root replacement above is the equivalent supported native operation.
+#if !defined(_WIN32)
+    const auto trusted_anchor = temporary.path() / "trusted-anchor";
+    const auto outside_anchor = temporary.path() / "outside-anchor";
+    std::filesystem::create_directories(trusted_anchor / "root/images");
+    std::filesystem::create_directories(outside_anchor / "root/images");
+    write_text(trusted_anchor / "root/images/system.img", "inside");
+    write_text(outside_anchor / "root/images/system.img", "outside");
+    ArtifactSourceLimits ancestor_limits;
+    ancestor_limits.package_entry_observer = [&](std::string_view) {
+        std::filesystem::rename(
+            trusted_anchor, temporary.path() / "retained-anchor");
+        std::filesystem::create_directory_symlink(
+            outside_anchor, trusted_anchor);
+    };
+    ArtifactSourceResolver ancestor_resolver(ancestor_limits);
+    auto after_ancestor_replacement =
+        ancestor_resolver.resolve_file_beneath(
+            trusted_anchor / "root",
+            std::filesystem::path("images") / "system.img");
+    CHECK(after_ancestor_replacement);
+    CHECK(read_source(*(*after_ancestor_replacement)->source) == "inside");
+#endif
+}
+
+void concurrent_root_relative_resolves_share_the_captured_boundary() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directory(root);
+    std::filesystem::create_directory(outside);
+    write_text(root / "system.img", "inside");
+    write_text(outside / "system.img", "outside");
+    const auto probe = temporary.path() / "link-probe";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, probe, link_error);
+    if (link_error) {
+        return;
+    }
+    std::filesystem::remove(probe);
+
+    ArtifactSourceLimits limits;
+    limits.package_entry_observer = [&](std::string_view) {
+        std::filesystem::rename(root, temporary.path() / "retained-root");
+        std::filesystem::create_directory_symlink(outside, root);
+    };
+    ArtifactSourceResolver resolver(limits);
+    constexpr std::size_t thread_count = 8U;
+    std::array<std::shared_ptr<const kairosboot::image::ResolvedArtifact>,
+               thread_count> results{};
+    std::array<std::exception_ptr, thread_count> failures{};
+    std::atomic<std::size_t> ready{};
+    std::atomic<bool> start{};
+    std::vector<std::thread> threads;
+    threads.reserve(thread_count);
+    for (std::size_t index = 0U; index < thread_count; ++index) {
+        threads.emplace_back([&, index] {
+            try {
+                ready.fetch_add(1U, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                auto result = resolver.resolve_file_beneath(root, "system.img");
+                CHECK(result);
+                results[index] = std::move(*result);
+            } catch (...) {
+                failures[index] = std::current_exception();
+            }
+        });
+    }
+    while (ready.load(std::memory_order_acquire) != thread_count) {
+        std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    for (const auto& failure : failures) {
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    }
+    for (const auto& result : results) {
+        CHECK(result == results.front());
+        CHECK(read_source(*result->source) == "inside");
+    }
+}
+
+void root_relative_parent_replacement_race_never_publishes_outside_bytes() {
+    TemporaryDirectory temporary;
+    const auto root = temporary.path() / "root";
+    const auto outside = temporary.path() / "outside";
+    std::filesystem::create_directory(root);
+    std::filesystem::create_directory(outside);
+    write_text(outside / "system.img", "outside");
+
+    const auto probe = root / "link-probe";
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, probe, link_error);
+    if (link_error) {
+        return;
+    }
+    std::filesystem::remove(probe);
+
+    const auto parent = root / "images";
+    std::filesystem::create_directory(parent);
+    write_text(parent / "system.img", "inside");
+
+    std::atomic<bool> finished{};
+    std::exception_ptr attacker_error;
+    std::thread attacker([&] {
+        try {
+            for (std::size_t iteration = 0U; iteration < 1'000U; ++iteration) {
+                std::error_code ignored;
+                std::filesystem::remove_all(parent, ignored);
+                std::filesystem::create_directory_symlink(
+                    outside, parent, ignored);
+                std::this_thread::yield();
+                std::filesystem::remove(parent, ignored);
+
+                const auto candidate =
+                    root / ("candidate-" + std::to_string(iteration));
+                std::filesystem::create_directory(candidate, ignored);
+                if (!ignored) {
+                    write_text(candidate / "system.img", "inside");
+                    std::filesystem::rename(candidate, parent, ignored);
+                }
+                std::filesystem::remove_all(candidate, ignored);
+            }
+        } catch (...) {
+            attacker_error = std::current_exception();
+        }
+        finished.store(true, std::memory_order_release);
+    });
+
+    std::size_t successful_resolutions = 0U;
+    std::exception_ptr reader_error;
+    try {
+        while (!finished.load(std::memory_order_acquire)) {
+            ArtifactSourceResolver current;
+            auto resolved = current.resolve_file_beneath(
+                root, std::filesystem::path("images") / "system.img");
+            if (!resolved) {
+                continue;
+            }
+            ++successful_resolutions;
+            CHECK(read_source(*(*resolved)->source) == "inside");
+        }
+    } catch (...) {
+        reader_error = std::current_exception();
+    }
+    attacker.join();
+    if (attacker_error) {
+        std::rethrow_exception(attacker_error);
+    }
+    if (reader_error) {
+        std::rethrow_exception(reader_error);
+    }
+    CHECK(successful_resolutions != 0U);
+}
+
 void stored_non_first_entry_is_materialized_and_hashed() {
     TemporaryDirectory temporary;
     const std::array entries{
@@ -737,12 +976,26 @@ void cancellation_timeout_and_symlink_checks_precede_publication() {
     CHECK(!cancelled);
     CHECK(cancelled.error().kind == ArtifactSourceErrorKind::Cancelled);
 
+    const auto root = temporary.path() / "root";
+    std::filesystem::create_directory(root);
+    write_text(root / "system.img", "payload");
+    ArtifactSourceResolver cancelled_beneath_resolver;
+    auto cancelled_beneath = cancelled_beneath_resolver.resolve_file_beneath(
+        root, "system.img", cancellation.get_token());
+    CHECK(!cancelled_beneath);
+    CHECK(cancelled_beneath.error().kind == ArtifactSourceErrorKind::Cancelled);
+
     ArtifactSourceLimits timeout_limits;
     timeout_limits.max_elapsed = std::chrono::milliseconds(0);
     ArtifactSourceResolver timeout_resolver(timeout_limits);
     auto timed_out = timeout_resolver.resolve(image);
     CHECK(!timed_out);
     CHECK(timed_out.error().kind == ArtifactSourceErrorKind::TimedOut);
+    ArtifactSourceResolver timeout_beneath_resolver(timeout_limits);
+    auto timed_out_beneath =
+        timeout_beneath_resolver.resolve_file_beneath(root, "system.img");
+    CHECK(!timed_out_beneath);
+    CHECK(timed_out_beneath.error().kind == ArtifactSourceErrorKind::TimedOut);
 
     const auto link = temporary.path() / "linked.img";
     std::error_code link_error;
@@ -1169,6 +1422,14 @@ int main(const int argument_count, char** arguments) {
     const std::array tests{
         Test{"direct_and_directory_sources_are_immutable_snapshots",
              direct_and_directory_sources_are_immutable_snapshots},
+        Test{"root_relative_direct_files_are_confined_to_the_selected_boundary",
+             root_relative_direct_files_are_confined_to_the_selected_boundary},
+        Test{"root_and_ancestor_replacement_after_capture_cannot_redirect_resolution",
+             root_and_ancestor_replacement_after_capture_cannot_redirect_resolution},
+        Test{"concurrent_root_relative_resolves_share_the_captured_boundary",
+             concurrent_root_relative_resolves_share_the_captured_boundary},
+        Test{"root_relative_parent_replacement_race_never_publishes_outside_bytes",
+             root_relative_parent_replacement_race_never_publishes_outside_bytes},
         Test{"stored_non_first_entry_is_materialized_and_hashed",
              stored_non_first_entry_is_materialized_and_hashed},
         Test{"deflate_and_zip64_entries_are_supported",

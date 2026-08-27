@@ -1643,6 +1643,52 @@ resolve_directory(const std::filesystem::path& directory,
                               ArtifactSourceOrigin::DirectoryEntry, selected->path);
 }
 
+[[nodiscard]] std::filesystem::path portable_utf8_path(
+    const std::string_view value) {
+#if defined(_WIN32)
+    std::u8string utf8;
+    utf8.reserve(value.size());
+    for (const char character : value) {
+        utf8.push_back(static_cast<char8_t>(
+            static_cast<unsigned char>(character)));
+    }
+    return std::filesystem::path(utf8);
+#else
+    return std::filesystem::path(value);
+#endif
+}
+
+[[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                            ArtifactSourceError>
+resolve_direct_file_beneath(const FileDirectoryBoundary& boundary,
+                            const std::string_view relative_name,
+                            const ArtifactSourceLimits& limits,
+                            const Budget& budget,
+                            SpoolReservation& reservation) {
+    if (auto stopped = budget.check()) {
+        return std::unexpected(std::move(*stopped));
+    }
+    if (limits.package_entry_observer) {
+        limits.package_entry_observer(relative_name);
+    }
+    if (auto stopped = budget.check()) {
+        return std::unexpected(std::move(*stopped));
+    }
+    auto source = FileImageSource::open_beneath(
+        boundary, portable_utf8_path(relative_name));
+    if (!source) {
+        return std::unexpected(from_file_error(source.error()));
+    }
+    return materialize_source(
+        **source,
+        (*source)->size(),
+        limits,
+        budget,
+        reservation,
+        ArtifactSourceOrigin::DirectFile,
+        std::string(relative_name));
+}
+
 [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
                             ArtifactSourceError>
 resolve_uncached(const std::filesystem::path& container, const std::string_view entry,
@@ -2338,6 +2384,42 @@ std::expected<std::shared_ptr<const ResolvedArtifact>, ArtifactSourceError>
 ArtifactSourceResolver::resolve(const std::filesystem::path& archive_directory_or_file,
                                 const std::string_view entry_name,
                                 const std::stop_token cancellation) {
+    return resolve_impl(archive_directory_or_file,
+                        entry_name,
+                        cancellation,
+                        ResolveMode::General);
+}
+
+std::expected<std::shared_ptr<const ResolvedArtifact>, ArtifactSourceError>
+ArtifactSourceResolver::resolve_file_beneath(
+    const std::filesystem::path& root,
+    const std::filesystem::path& relative_path,
+    const std::stop_token cancellation) {
+    try {
+        const auto portable = relative_path.generic_u8string();
+        const std::string entry_name(portable.begin(), portable.end());
+        return resolve_impl(root,
+                            entry_name,
+                            cancellation,
+                            ResolveMode::DirectFileBeneath);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "memory allocation failed while preparing a root-relative artifact source"));
+    } catch (const std::filesystem::filesystem_error& error) {
+        return std::unexpected(make_error(
+            ArtifactSourceErrorKind::Io,
+            "filesystem failure while preparing a root-relative artifact source",
+            error.code().value()));
+    }
+}
+
+std::expected<std::shared_ptr<const ResolvedArtifact>, ArtifactSourceError>
+ArtifactSourceResolver::resolve_impl(
+    const std::filesystem::path& archive_directory_or_file,
+    const std::string_view entry_name,
+    const std::stop_token cancellation,
+    const ResolveMode mode) {
     try {
         if (archive_directory_or_file.empty()) {
             return std::unexpected(make_error(ArtifactSourceErrorKind::InvalidArgument,
@@ -2378,16 +2460,52 @@ ArtifactSourceResolver::resolve(const std::filesystem::path& archive_directory_o
         }
 
         std::error_code filesystem_error;
-        auto normalized =
-            std::filesystem::absolute(archive_directory_or_file, filesystem_error);
+        auto normalized = std::filesystem::absolute(
+            archive_directory_or_file, filesystem_error);
         if (filesystem_error) {
-            return std::unexpected(
-                make_error(ArtifactSourceErrorKind::InvalidArgument,
-                           "unable to normalize artifact container path",
-                           filesystem_error.value()));
+            return std::unexpected(make_error(
+                ArtifactSourceErrorKind::InvalidArgument,
+                mode == ResolveMode::DirectFileBeneath
+                    ? "unable to normalize artifact root display path"
+                    : "unable to normalize artifact container path",
+                filesystem_error.value()));
         }
         normalized = normalized.lexically_normal();
-        CacheKey key{normalized, std::string(entry_name)};
+        if (auto stopped = budget.check()) {
+            return std::unexpected(std::move(*stopped));
+        }
+        std::shared_ptr<const FileDirectoryBoundary> boundary;
+        if (mode == ResolveMode::DirectFileBeneath) {
+            {
+                std::lock_guard lock(cache_mutex_);
+                const auto position = boundaries_.find(normalized);
+                if (position != boundaries_.end()) {
+                    boundary = position->second;
+                }
+            }
+            if (!boundary) {
+                auto captured = FileDirectoryBoundary::capture(normalized);
+                if (!captured) {
+                    return std::unexpected(from_file_error(captured.error()));
+                }
+                auto candidate = std::make_shared<const FileDirectoryBoundary>(
+                    std::move(*captured));
+                if (auto stopped = budget.check()) {
+                    return std::unexpected(std::move(*stopped));
+                }
+                std::lock_guard lock(cache_mutex_);
+                const auto [position, inserted] =
+                    boundaries_.emplace(normalized, candidate);
+                boundary = inserted ? std::move(candidate) : position->second;
+            }
+        }
+        const auto boundary_device = boundary ? boundary->identity().device : 0U;
+        const auto boundary_object = boundary ? boundary->identity().object : 0U;
+        CacheKey key{mode,
+                     normalized,
+                     boundary_device,
+                     boundary_object,
+                     std::string(entry_name)};
         for (;;) {
             std::shared_ptr<CacheEntry> cache_entry;
             bool owner = false;
@@ -2397,6 +2515,7 @@ ArtifactSourceResolver::resolve(const std::filesystem::path& archive_directory_o
                 const auto position = cache_.find(key);
                 if (position == cache_.end()) {
                     auto candidate = std::make_shared<CacheEntry>();
+                    candidate->boundary = boundary;
                     const auto [inserted_position, inserted] =
                         cache_.emplace(key, candidate);
                     cache_entry = inserted_position->second;
@@ -2435,9 +2554,20 @@ ArtifactSourceResolver::resolve(const std::filesystem::path& archive_directory_o
             static_assert(std::is_nothrow_move_constructible_v<ResolveResult>);
             std::optional<ResolveResult> resolved;
             try {
-                resolved.emplace(resolve_uncached(normalized, entry_name, limits_,
-                                                  budget, reservation,
-                                                  archive_mutex_));
+                resolved.emplace(
+                    mode == ResolveMode::DirectFileBeneath
+                        ? resolve_direct_file_beneath(
+                              *cache_entry->boundary,
+                              entry_name,
+                              limits_,
+                              budget,
+                              reservation)
+                        : resolve_uncached(normalized,
+                                           entry_name,
+                                           limits_,
+                                           budget,
+                                           reservation,
+                                           archive_mutex_));
             } catch (...) {
                 // CacheEntry owns a fully constructed allocation-failure-safe
                 // fallback. Publication below never exposes a partial error.

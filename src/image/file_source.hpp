@@ -43,6 +43,45 @@ struct FileSnapshotIdentity final {
                            const FileSnapshotIdentity&) = default;
 };
 
+// Move-only capability for one already-open directory. Capturing follows a
+// caller-selected root symlink once; subsequent child opens start from the
+// retained native handle and are independent of root or ancestor renames.
+class FileDirectoryBoundary final {
+public:
+    [[nodiscard]] static std::expected<FileDirectoryBoundary, FileSourceError>
+    capture(const std::filesystem::path& path);
+
+    FileDirectoryBoundary(const FileDirectoryBoundary&) = delete;
+    FileDirectoryBoundary& operator=(const FileDirectoryBoundary&) = delete;
+    FileDirectoryBoundary(FileDirectoryBoundary&& other) noexcept;
+    FileDirectoryBoundary& operator=(FileDirectoryBoundary&& other) noexcept;
+    ~FileDirectoryBoundary();
+
+    [[nodiscard]] const FileSnapshotIdentity& identity() const noexcept;
+
+private:
+#if defined(_WIN32)
+    using NativeHandle = void*;
+#else
+    using NativeHandle = int;
+#endif
+
+    FileDirectoryBoundary(NativeHandle handle,
+                          FileSnapshotIdentity identity) noexcept;
+
+    [[nodiscard]] static std::expected<FileDirectoryBoundary, FileSourceError>
+    capture_impl(const std::filesystem::path& path, bool follow_root_symlink);
+
+#if defined(_WIN32)
+    NativeHandle handle_{};
+#else
+    NativeHandle handle_{-1};
+#endif
+    FileSnapshotIdentity identity_{};
+
+    friend class FileImageSource;
+};
+
 // A bounded-memory random-access view of one file. The size is snapshotted at
 // open time; reads never observe bytes appended later and a truncated file
 // produces a short read that TransferSource adapters reject.
@@ -63,6 +102,14 @@ public:
         const std::filesystem::path& directory,
         const std::filesystem::path& relative_path,
         const FileSnapshotIdentity* expected_directory_identity = nullptr,
+        const FileSnapshotIdentity* expected_file_identity = nullptr);
+
+    // Opens directly from an already-captured directory capability. No path
+    // lookup of the root or any of its ancestors occurs in this overload.
+    [[nodiscard]] static std::expected<std::shared_ptr<FileImageSource>, FileSourceError>
+    open_beneath(
+        const FileDirectoryBoundary& boundary,
+        const std::filesystem::path& relative_path,
         const FileSnapshotIdentity* expected_file_identity = nullptr);
 
     FileImageSource(const FileImageSource&) = delete;

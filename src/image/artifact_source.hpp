@@ -22,6 +22,8 @@
 
 namespace kairosboot::image {
 
+class FileDirectoryBoundary;
+
 enum class ArtifactSourceErrorKind : std::uint8_t {
     InvalidArgument,
     NotFound,
@@ -63,8 +65,9 @@ struct ArtifactSourceLimits final {
     // Internal observation seam used to prove the per-resolver archive-reader
     // concurrency ceiling without exposing miniz state.
     std::function<void()> archive_reader_observer{};
-    // Internal deterministic test seam. Package snapshots invoke it immediately
-    // before revalidating and resolving one exact entry name.
+    // Internal deterministic test seam. Package snapshots and root-relative
+    // direct-file resolution invoke it immediately before revalidating and
+    // opening one exact entry name.
     std::function<void(std::string_view)> package_entry_observer{};
 };
 
@@ -122,6 +125,17 @@ class ArtifactSourceResolver final {
     resolve(const std::filesystem::path& archive_directory_or_file,
             std::string_view entry_name = {}, std::stop_token cancellation = {});
 
+    // Resolves one direct file below a caller-selected root. The resolver opens
+    // the root once, so a root symlink selects its target at capability capture.
+    // Every child component is then opened from that retained directory handle;
+    // root, ancestor, child, symlink, and reparse replacement races cannot
+    // redirect the batch boundary.
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    resolve_file_beneath(const std::filesystem::path& root,
+                         const std::filesystem::path& relative_path,
+                         std::stop_token cancellation = {});
+
     // Opens one package snapshot with a single absolute deadline shared by
     // inventory and every subsequent entry materialization.
     [[nodiscard]] std::expected<ArtifactPackageSnapshot, ArtifactSourceError>
@@ -139,8 +153,16 @@ class ArtifactSourceResolver final {
         std::stop_token cancellation = {});
 
     private:
+    enum class ResolveMode : std::uint8_t {
+        General,
+        DirectFileBeneath,
+    };
+
     struct CacheKey final {
+        ResolveMode mode{ResolveMode::General};
         std::filesystem::path container;
+        std::uint64_t boundary_device{};
+        std::uint64_t boundary_object{};
         std::string entry;
 
         auto operator<=>(const CacheKey&) const = default;
@@ -155,12 +177,22 @@ class ArtifactSourceResolver final {
             .native_code = 0,
             .message = "artifact resolution failed before publication",
         };
+        std::shared_ptr<const FileDirectoryBoundary> boundary;
         std::condition_variable ready;
         std::uint64_t reserved_spool_bytes{};
     };
 
+    [[nodiscard]] std::expected<std::shared_ptr<const ResolvedArtifact>,
+                                ArtifactSourceError>
+    resolve_impl(const std::filesystem::path& container,
+                 std::string_view entry_name,
+                 std::stop_token cancellation,
+                 ResolveMode mode);
+
     ArtifactSourceLimits limits_;
     std::mutex cache_mutex_;
+    std::map<std::filesystem::path,
+             std::shared_ptr<const FileDirectoryBoundary>> boundaries_;
     std::map<CacheKey, std::shared_ptr<CacheEntry>> cache_;
     std::uint64_t reserved_spool_bytes_{};
     std::uint64_t completed_spool_bytes_{};
