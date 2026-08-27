@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -212,6 +213,15 @@ public:
     discover(const MacUsbTopologyQuery& query,
              MacUsbTopologyTimePoint deadline,
              std::stop_token cancellation = {}) const;
+
+    // Resolve every matching interface of one libusb device from the same two
+    // immutable IORegistry observations. The queries must carry identical
+    // device identity and distinct complete interface fingerprints.
+    [[nodiscard]] std::expected<std::vector<MacUsbTopology>,
+                                MacUsbTopologyError>
+    discover_device(std::span<const MacUsbTopologyQuery> queries,
+                    MacUsbTopologyTimePoint deadline,
+                    std::stop_token cancellation = {}) const;
 
 private:
     const IMacUsbRegistryBackend& backend_;

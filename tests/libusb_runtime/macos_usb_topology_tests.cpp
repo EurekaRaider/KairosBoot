@@ -3,6 +3,7 @@
 
 #include "src/transport/libusb_runtime.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -403,6 +404,57 @@ void deterministic_snapshot_order_does_not_create_a_false_race() {
     CHECK(result->registry_entry_id == matched.registry_entry_id);
 }
 
+void multi_interface_device_uses_one_generation_or_fails_closed() {
+    const auto first_query = query();
+    auto second_query = first_query;
+    second_query.interface_fingerprint = fingerprint(1U);
+    const std::array queries{first_query, second_query};
+
+    auto complete = node(first_query);
+    complete.interfaces.push_back(MacUsbRegistryInterface{
+        .registry_entry_id = 0x201U,
+        .fingerprint = second_query.interface_fingerprint,
+        .registry_path = "IOService:/device/interface-513",
+    });
+    ScriptedBackend stable;
+    stable.results = {snapshot_result({complete}), snapshot_result({complete})};
+    MacUsbTopologyDiscovery stable_discovery(stable);
+    const auto resolved = stable_discovery.discover_device(
+        queries, MacUsbTopologyClock::now() + 1h);
+    CHECK(resolved.has_value());
+    CHECK(resolved->size() == 2U);
+    CHECK(stable.calls == 2U);
+    CHECK((*resolved)[0].session_id == first_query.session_id);
+    CHECK((*resolved)[1].session_id == first_query.session_id);
+    CHECK((*resolved)[0].interface_registry_entry_id == 0x200U);
+    CHECK((*resolved)[1].interface_registry_entry_id == 0x201U);
+
+    auto next_generation = complete;
+    next_generation.interfaces.back().registry_entry_id = 0x301U;
+    next_generation.interfaces.back().registry_path =
+        "IOService:/device/interface-769";
+    ScriptedBackend raced;
+    raced.results = {snapshot_result({complete}),
+                     snapshot_result({next_generation})};
+    MacUsbTopologyDiscovery raced_discovery(raced);
+    const auto changed = raced_discovery.discover_device(
+        queries, MacUsbTopologyClock::now() + 1h);
+    CHECK(!changed.has_value());
+    CHECK(changed.error().kind == MacUsbTopologyErrorKind::IdentityChanged);
+    CHECK(changed.error().stage == MacUsbTopologyStage::FinalValidation);
+
+    auto incomplete = complete;
+    incomplete.interfaces.pop_back();
+    ScriptedBackend missing_interface;
+    missing_interface.results = {snapshot_result({incomplete}),
+                                 snapshot_result({incomplete})};
+    MacUsbTopologyDiscovery missing_discovery(missing_interface);
+    const auto missing = missing_discovery.discover_device(
+        queries, MacUsbTopologyClock::now() + 1h);
+    CHECK(!missing.has_value());
+    CHECK(missing.error().kind == MacUsbTopologyErrorKind::IdentityMismatch);
+}
+
 void duplicate_serials_are_never_used_as_the_physical_key() {
     const auto wanted = query();
     auto other_query = query(1U, 8U, {4U}, 0x301U);
@@ -484,6 +536,20 @@ void mismatched_and_missing_identities_fail_closed() {
         wanted, MacUsbTopologyClock::now() + 1h);
     CHECK(!not_found.has_value());
     CHECK(not_found.error().kind == MacUsbTopologyErrorKind::NotFound);
+}
+
+void unrelated_malformed_nodes_are_ignored_before_strict_snapshot_reads() {
+    const auto wanted = query();
+    auto unrelated = node(wanted);
+    unrelated.session_id += 1U;
+    unrelated.registry_entry_id = 0U;
+    unrelated.registry_path.clear();
+    unrelated.service_ancestry.clear();
+    unrelated.interfaces.clear();
+
+    const auto topology = discover_stable(wanted, {unrelated, node(wanted)});
+    CHECK(topology.session_id == wanted.session_id);
+    CHECK(topology.registry_entry_id == 0x100U);
 }
 
 void malformed_backend_nodes_and_invalid_queries_never_pass() {
@@ -613,9 +679,11 @@ int main() {
         {"error metadata", backend_timeout_and_native_metadata_are_preserved_verbatim},
         {"TOCTOU", two_snapshot_toctou_changes_fail_closed},
         {"snapshot order", deterministic_snapshot_order_does_not_create_a_false_race},
+        {"multi-interface generation", multi_interface_device_uses_one_generation_or_fails_closed},
         {"duplicate serial", duplicate_serials_are_never_used_as_the_physical_key},
         {"ambiguity", duplicate_device_and_interface_mappings_are_ambiguous},
         {"identity mismatch", mismatched_and_missing_identities_fail_closed},
+        {"unrelated malformed nodes", unrelated_malformed_nodes_are_ignored_before_strict_snapshot_reads},
         {"invalid contracts", malformed_backend_nodes_and_invalid_queries_never_pass},
         {"modern and Intel ancestry", modern_and_intel_controller_ancestry_allow_root_hubs},
         {"native source interruption", injectable_native_source_handles_empty_iterator_and_final_cancel},

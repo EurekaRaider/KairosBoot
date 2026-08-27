@@ -36,6 +36,7 @@ namespace {
 inline constexpr auto kPerBackendDrainWait = std::chrono::milliseconds{250};
 inline constexpr auto kRuntimeDrainWait = std::chrono::milliseconds{250};
 inline constexpr auto kEventThreadExitWait = std::chrono::milliseconds{250};
+inline constexpr auto kMacTopologyResolveBudget = std::chrono::seconds{5};
 
 using SteadyClock = std::chrono::steady_clock;
 
@@ -220,11 +221,14 @@ struct DeviceListGuard final {
     const LibusbFunctions* functions{};
     libusb_device** list{};
 
-    ~DeviceListGuard() {
+    void reset() noexcept {
         if (list != nullptr) {
             functions->free_device_list(list, 1);
+            list = nullptr;
         }
     }
+
+    ~DeviceListGuard() { reset(); }
 };
 
 struct ConfigDescriptorGuard final {
@@ -500,11 +504,13 @@ LibusbFunctions LibusbFunctions::system() {
     };
 #endif
 #if defined(__APPLE__)
-    functions.resolve_macos_topology = [](const MacUsbTopologyQuery& query) {
+    functions.resolve_macos_topology = [](
+        const std::span<const MacUsbTopologyQuery> queries,
+        const MacUsbTopologyTimePoint deadline,
+        const std::stop_token cancellation) {
         static const IokitMacUsbRegistryBackend backend;
         const MacUsbTopologyDiscovery discovery(backend);
-        return discovery.discover(
-            query, std::chrono::steady_clock::time_point::max());
+        return discovery.discover_device(queries, deadline, cancellation);
     };
 #endif
     return functions;
@@ -549,6 +555,7 @@ struct LibusbRuntime::State final : std::enable_shared_from_this<LibusbRuntime::
     std::atomic<std::uint64_t> next_event_epoch{1};
     std::atomic<std::uint64_t> active_event_epoch{0};
     std::atomic<std::uint64_t> completed_event_epoch{0};
+    std::stop_source topology_stop_source;
     std::thread event_thread;
     mutable std::mutex event_identity_mutex;
     std::thread::id event_identity;
@@ -849,6 +856,9 @@ void LibusbRuntime::State::stop_backend(
 }
 
 void LibusbRuntime::State::stop_all() noexcept {
+    // IOKit topology enrichment runs outside stop_mutex. Signal it before
+    // waiting for any in-progress libusb snapshot to leave the lifecycle lock.
+    topology_stop_source.request_stop();
     std::unique_lock lifecycle(stop_mutex);
     if (!running.load(std::memory_order_acquire)) {
         return;
@@ -1694,6 +1704,7 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
     }
     DeviceListGuard list_guard{&state_->functions, list};
     std::vector<UsbDeviceInfo> devices;
+    std::vector<std::pair<std::size_t, std::size_t>> macos_device_ranges;
 
     for (ssize_t index = 0; index < count; ++index) {
         auto* device = list[index];
@@ -1720,7 +1731,7 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                         *windows_session_data));
             }
         }
-
+        const auto device_range_begin = devices.size();
         libusb_device_descriptor descriptor{};
         if (state_->functions.get_device_descriptor(device, &descriptor) != LIBUSB_SUCCESS ||
             !matches(filter.vendor_id, descriptor.idVendor) ||
@@ -1881,16 +1892,6 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                             linux_topology_snapshot->error();
                     }
                 }
-                if (state_->functions.resolve_macos_topology) {
-                    auto resolved = state_->functions.resolve_macos_topology(
-                        make_macos_usb_topology_query(snapshot));
-                    if (resolved.has_value()) {
-                        snapshot.macos_topology = std::move(*resolved);
-                    } else {
-                        snapshot.macos_topology_error =
-                            std::move(resolved.error());
-                    }
-                }
                 devices.push_back(std::move(snapshot));
             }
         }
@@ -1974,6 +1975,67 @@ std::expected<std::vector<UsbDeviceInfo>, LibusbRuntimeError> LibusbRuntime::enu
                 }
             }
         }
+        if (devices.size() != device_range_begin) {
+            macos_device_ranges.emplace_back(device_range_begin, devices.size());
+        }
+    }
+
+    // Release every libusb-owned snapshot before leaving the lifecycle lock.
+    // IOKit can then be cancelled by stop_all() without allowing libusb_exit()
+    // to race any native libusb enumeration call.
+    list_guard.reset();
+    lifecycle.unlock();
+
+    if (state_->functions.resolve_macos_topology) {
+        const auto deadline = SteadyClock::now() + kMacTopologyResolveBudget;
+        const auto cancellation = state_->topology_stop_source.get_token();
+        for (const auto [begin, end] : macos_device_ranges) {
+            if (cancellation.stop_requested() ||
+                !state_->accepting.load(std::memory_order_acquire)) {
+                return std::unexpected(
+                    LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
+            }
+
+            std::vector<MacUsbTopologyQuery> queries;
+            queries.reserve(end - begin);
+            for (auto device_index = begin; device_index < end; ++device_index) {
+                queries.push_back(
+                    make_macos_usb_topology_query(devices[device_index]));
+            }
+            auto resolved = state_->functions.resolve_macos_topology(
+                queries, deadline, cancellation);
+            if (!resolved.has_value()) {
+                for (auto device_index = begin;
+                     device_index < end;
+                     ++device_index) {
+                    devices[device_index].macos_topology_error = resolved.error();
+                }
+                continue;
+            }
+            if (resolved->size() != end - begin) {
+                const MacUsbTopologyError malformed_result{
+                    .kind = MacUsbTopologyErrorKind::MalformedRegistry,
+                    .stage = MacUsbTopologyStage::FinalValidation,
+                    .message =
+                        "macOS topology resolver returned the wrong interface count",
+                };
+                for (auto device_index = begin;
+                     device_index < end;
+                     ++device_index) {
+                    devices[device_index].macos_topology_error = malformed_result;
+                }
+                continue;
+            }
+            for (std::size_t offset = 0U; offset < resolved->size(); ++offset) {
+                devices[begin + offset].macos_topology =
+                    std::move((*resolved)[offset]);
+            }
+        }
+    }
+    if (state_->topology_stop_source.stop_requested() ||
+        !state_->accepting.load(std::memory_order_acquire)) {
+        return std::unexpected(
+            LibusbRuntimeError{LibusbRuntimeErrorKind::runtime_stopped});
     }
     return devices;
 }

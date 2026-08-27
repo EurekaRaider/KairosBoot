@@ -835,10 +835,15 @@ void test_enumeration_retains_macos_topology_or_diagnostic() {
     auto fake = std::make_shared<FakeLibusb>();
     auto functions = fake->functions();
     std::optional<MacUsbTopologyQuery> observed_query;
-    functions.resolve_macos_topology = [&](const MacUsbTopologyQuery& query) {
-        observed_query = query;
-        return std::expected<MacUsbTopology, MacUsbTopologyError>{
-            MacUsbTopology{
+    functions.resolve_macos_topology = [
+        &observed_query](const std::span<const MacUsbTopologyQuery> queries,
+                         const auto,
+                         const std::stop_token) {
+        KB_CHECK(queries.size() == 1U);
+        observed_query = queries.front();
+        const auto& query = queries.front();
+        return std::expected<std::vector<MacUsbTopology>, MacUsbTopologyError>{
+            std::vector<MacUsbTopology>{MacUsbTopology{
                 .physical_port_path = "usb:2-3.4",
                 .root_controller_id = "macos-iokit:0000000000000011",
                 .hub_port_chain = {3U, 4U},
@@ -856,7 +861,7 @@ void test_enumeration_retains_macos_topology_or_diagnostic() {
                 .registry_path = "IOService:/USB/device",
                 .interface_registry_path = "IOService:/USB/device/interface",
                 .root_controller_registry_path = "IOService:/USB/controller",
-            }};
+            }}};
     };
     auto runtime = create_runtime(fake, std::move(functions));
     const auto enriched = matching_device(runtime);
@@ -881,8 +886,11 @@ void test_enumeration_retains_macos_topology_or_diagnostic() {
 
     auto failing_fake = std::make_shared<FakeLibusb>();
     auto failing_functions = failing_fake->functions();
-    failing_functions.resolve_macos_topology = [](const MacUsbTopologyQuery&) {
-        return std::expected<MacUsbTopology, MacUsbTopologyError>{
+    failing_functions.resolve_macos_topology = [](
+        const std::span<const MacUsbTopologyQuery>,
+        const auto,
+        const std::stop_token) {
+        return std::expected<std::vector<MacUsbTopology>, MacUsbTopologyError>{
             std::unexpected(MacUsbTopologyError{
                 .kind = MacUsbTopologyErrorKind::PermissionDenied,
                 .stage = MacUsbTopologyStage::DeviceSnapshot,
@@ -1006,6 +1014,49 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
                 }};
         };
 
+    std::size_t macos_resolver_calls = 0U;
+    std::vector<MacUsbTopologyQuery> macos_queries;
+    functions.resolve_macos_topology = [
+        &macos_resolver_calls,
+        &macos_queries](const std::span<const MacUsbTopologyQuery> queries,
+                        const auto deadline,
+                        const std::stop_token cancellation) {
+        ++macos_resolver_calls;
+        const auto now = std::chrono::steady_clock::now();
+        KB_CHECK(deadline > now);
+        KB_CHECK(deadline <= now + std::chrono::seconds{5});
+        KB_CHECK(!cancellation.stop_requested());
+        macos_queries.assign(queries.begin(), queries.end());
+        std::vector<MacUsbTopology> results;
+        results.reserve(queries.size());
+        for (std::size_t index = 0U; index < queries.size(); ++index) {
+            const auto& query = queries[index];
+            results.push_back(MacUsbTopology{
+                .physical_port_path = "usb:2-3.4",
+                .root_controller_id = "macos-iokit:0000000000000011",
+                .hub_port_chain = query.port_numbers,
+                .registry_entry_id = 0x21U,
+                .session_id = query.session_id,
+                .interface_registry_entry_id = 0x41U + index,
+                .location_id = 0x02340000U,
+                .vendor_id = query.vendor_id,
+                .product_id = query.product_id,
+                .bus_number = query.bus_number,
+                .device_address = query.device_address,
+                .interface_fingerprint = query.interface_fingerprint,
+                .serial_utf8 = query.serial_utf8,
+                .product_utf8 = std::nullopt,
+                .registry_path = "IOService:/USB/device",
+                .interface_registry_path =
+                    "IOService:/USB/device/interface-" +
+                    std::to_string(index),
+                .root_controller_registry_path = "IOService:/USB/controller",
+            });
+        }
+        return std::expected<std::vector<MacUsbTopology>, MacUsbTopologyError>{
+            std::move(results)};
+    };
+
     auto runtime = create_runtime(fake, std::move(functions));
     UsbInterfaceFilter filter;
     filter.interface_class = 0xFFU;
@@ -1015,6 +1066,12 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
     KB_CHECK(enumerated.has_value());
     KB_CHECK(enumerated->size() == 2U);
     KB_CHECK(resolver_calls == 1U);
+    KB_CHECK(macos_resolver_calls == 1U);
+    KB_CHECK(macos_queries.size() == 2U);
+    KB_CHECK(macos_queries[0].session_id != 0U);
+    KB_CHECK(macos_queries[0].session_id == macos_queries[1].session_id);
+    KB_CHECK(macos_queries[0].interface_fingerprint !=
+             macos_queries[1].interface_fingerprint);
     KB_CHECK((*enumerated)[0].interface_number !=
              (*enumerated)[1].interface_number);
     KB_CHECK((*enumerated)[0].linux_topology.has_value());
@@ -1051,6 +1108,12 @@ void test_device_topology_is_resolved_once_for_distinct_interfaces() {
                  query.interface_fingerprint);
         KB_CHECK(!snapshot.windows_topology_error.has_value());
     }
+    KB_CHECK((*enumerated)[0].macos_topology.has_value());
+    KB_CHECK((*enumerated)[1].macos_topology.has_value());
+    KB_CHECK((*enumerated)[0].macos_topology->session_id ==
+             (*enumerated)[1].macos_topology->session_id);
+    KB_CHECK((*enumerated)[0].macos_topology->interface_registry_entry_id !=
+             (*enumerated)[1].macos_topology->interface_registry_entry_id);
     runtime->stop();
 }
 
@@ -1244,6 +1307,58 @@ void test_windows_generation_revalidation_rejects_stale_address_and_serial() {
 
     run_case(true, false);
     run_case(false, true);
+}
+
+void test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto functions = fake->functions();
+    std::promise<void> resolver_entered;
+    auto entered = resolver_entered.get_future();
+    std::mutex wait_mutex;
+    std::condition_variable wait_cv;
+    functions.resolve_macos_topology = [
+        &resolver_entered,
+        &wait_mutex,
+        &wait_cv](const std::span<const MacUsbTopologyQuery> queries,
+                  const auto deadline,
+                  const std::stop_token cancellation) {
+        KB_CHECK(queries.size() == 1U);
+        KB_CHECK(queries.front().session_id == 0x1234U);
+        KB_CHECK(deadline != std::chrono::steady_clock::time_point::max());
+        resolver_entered.set_value();
+        std::stop_callback wake(cancellation, [&wait_cv] { wait_cv.notify_all(); });
+        std::unique_lock lock(wait_mutex);
+        wait_cv.wait_until(lock, deadline, [&cancellation] {
+            return cancellation.stop_requested();
+        });
+        KB_CHECK(cancellation.stop_requested());
+        return std::expected<std::vector<MacUsbTopology>, MacUsbTopologyError>{
+            std::unexpected(MacUsbTopologyError{
+                .kind = MacUsbTopologyErrorKind::Cancelled,
+                .stage = MacUsbTopologyStage::DeviceEnumeration,
+                .message = "cancelled by runtime stop",
+            })};
+    };
+
+    auto runtime = create_runtime(fake, std::move(functions));
+    auto enumeration = std::async(std::launch::async, [runtime] {
+        UsbInterfaceFilter filter;
+        filter.interface_class = 0xFFU;
+        filter.interface_subclass = 0x42U;
+        filter.interface_protocol = 0x03U;
+        return runtime->enumerate(filter);
+    });
+    KB_CHECK(entered.wait_for(std::chrono::seconds{1}) ==
+             std::future_status::ready);
+    const auto stop_started = std::chrono::steady_clock::now();
+    runtime->stop();
+    KB_CHECK(std::chrono::steady_clock::now() - stop_started <
+             std::chrono::seconds{1});
+    KB_CHECK(enumeration.wait_for(std::chrono::seconds{1}) ==
+             std::future_status::ready);
+    const auto result = enumeration.get();
+    KB_CHECK(!result.has_value());
+    KB_CHECK(result.error().kind == LibusbRuntimeErrorKind::runtime_stopped);
 }
 
 void test_open_revalidates_physical_identity_and_address_reuse() {
@@ -2674,6 +2789,8 @@ int main() {
          test_windows_devinst_reuse_never_publishes_stale_libusb_identity},
         {"Windows stale address and serial generation gate",
          test_windows_generation_revalidation_rejects_stale_address_and_serial},
+        {"macOS topology stop cancellation",
+         test_runtime_stop_cancels_macos_topology_outside_lifecycle_lock},
         {"open physical identity and address reuse", test_open_revalidates_physical_identity_and_address_reuse},
         {"open rejects changed interface snapshot", test_open_rejects_changed_interface_snapshot},
         {"open configuration before claim", test_open_configuration_is_verified_before_claim},
