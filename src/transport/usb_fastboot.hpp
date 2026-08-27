@@ -49,6 +49,15 @@ public:
          const UsbDeviceInfo& device,
          UsbFastbootTransportOptions options = {});
 
+    // Consumes an already-opened, post-claim verified interface without
+    // enumerating or opening USB again. The backend's BulkOutOptions were
+    // frozen by open_bulk_out_verified(); only the DATA ring, budget, and
+    // telemetry fields in options configure this adapter.
+    [[nodiscard]] static std::expected<std::unique_ptr<UsbFastbootTransport>,
+                                       LibusbRuntimeError>
+    adopt_verified(LibusbVerifiedOpenResult&& verified,
+                   UsbFastbootTransportOptions options = {});
+
     ~UsbFastbootTransport() override;
 
     UsbFastbootTransport(const UsbFastbootTransport&) = delete;
@@ -80,18 +89,21 @@ public:
     void cancel() noexcept;
     void close() noexcept override;
     [[nodiscard]] bool is_open() const noexcept;
+    [[nodiscard]] const UsbDeviceInfo& verified_identity() const noexcept;
     // Serializes with DATA writes and returns the most recently completed ring
     // snapshot. This is internal and does not invoke observers.
     [[nodiscard]] TransferTelemetrySnapshot data_telemetry_snapshot() const;
 
 private:
     UsbFastbootTransport(std::unique_ptr<LibusbBulkOutBackend> backend,
+                         UsbDeviceInfo verified_identity,
                          UsbFastbootTransportOptions options,
                          std::shared_ptr<BufferBudget> budget);
 
     void poison_and_stop() noexcept;
 
     std::unique_ptr<LibusbBulkOutBackend> backend_;
+    UsbDeviceInfo verified_identity_;
     UsbFastbootTransportOptions options_;
     std::shared_ptr<BufferBudget> budget_;
     TransferTelemetry data_telemetry_;
