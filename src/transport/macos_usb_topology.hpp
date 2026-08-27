@@ -18,10 +18,10 @@ struct UsbDeviceInfo;
 using MacUsbTopologyClock = std::chrono::steady_clock;
 using MacUsbTopologyTimePoint = MacUsbTopologyClock::time_point;
 
-// Darwin's 32-bit IOKit locationID stores at most six four-bit hub ports.
-// libusb 1.0.30 derives its macOS bus number from locationID >> 24, so bus
-// zero is valid on this platform even though every port remains non-zero.
-inline constexpr std::size_t kMaximumMacUsbTopologyDepth = 6U;
+// USB 2.0 permits at most seven tiers. libusb builds Darwin port paths from
+// each device's UInt8 PortNum and parent sessionID links; locationID supplies
+// only the zero-based bus number through its top byte.
+inline constexpr std::size_t kMaximumMacUsbTopologyDepth = 7U;
 
 struct MacUsbInterfaceFingerprint final {
     std::uint8_t configuration_value{};
@@ -35,13 +35,15 @@ struct MacUsbInterfaceFingerprint final {
         const MacUsbInterfaceFingerprint&) const = default;
 };
 
-// Immutable identity copied from one libusb enumeration result. The address
-// is intentionally transient, while bus + port_numbers is the physical key.
+// Immutable identity copied from one libusb enumeration result. Darwin
+// sessionID is the primary IORegistry correlation key; transient address and
+// bus + port_numbers remain mandatory full-snapshot verification fields.
 struct MacUsbTopologyQuery final {
     std::uint16_t vendor_id{};
     std::uint16_t product_id{};
     std::uint8_t bus_number{};
     std::uint8_t device_address{};
+    std::uint64_t session_id{};
     std::vector<std::uint8_t> port_numbers;
     MacUsbInterfaceFingerprint interface_fingerprint;
     std::optional<std::string> serial_utf8;
@@ -57,13 +59,31 @@ struct MacUsbRegistryInterface final {
     [[nodiscard]] bool operator==(const MacUsbRegistryInterface&) const = default;
 };
 
+enum class MacUsbRegistryEntryKind : std::uint8_t {
+    UsbDevice,
+    UsbRootHub,
+    HostController,
+    LegacyHostController,
+    Other,
+};
+
+// Nearest-to-farthest IOService-plane ancestry. Keeping the classification in
+// the immutable snapshot makes Intel IOUSBController and modern
+// IOUSBHostController layouts testable without depending on host hardware.
+struct MacUsbRegistryAncestor final {
+    std::uint64_t registry_entry_id{};
+    MacUsbRegistryEntryKind kind{MacUsbRegistryEntryKind::Other};
+    std::string registry_path;
+
+    [[nodiscard]] bool operator==(const MacUsbRegistryAncestor&) const = default;
+};
+
 // One immutable, device-scoped IORegistry observation. Production obtains two
 // independently enumerated observations; discovery publishes topology only
 // when the complete query-scoped snapshots are identical.
 struct MacUsbRegistryNode final {
     std::uint64_t registry_entry_id{};
     std::uint64_t session_id{};
-    std::uint64_t root_controller_registry_entry_id{};
     std::uint32_t location_id{};
     std::uint16_t vendor_id{};
     std::uint16_t product_id{};
@@ -74,7 +94,7 @@ struct MacUsbRegistryNode final {
     // USB descriptor text, not Fastboot getvar:product.
     std::optional<std::string> product_utf8;
     std::string registry_path;
-    std::string root_controller_registry_path;
+    std::vector<MacUsbRegistryAncestor> service_ancestry;
     std::vector<MacUsbRegistryInterface> interfaces;
 
     [[nodiscard]] bool operator==(const MacUsbRegistryNode&) const = default;
@@ -152,13 +172,35 @@ public:
              std::stop_token cancellation) const = 0;
 };
 
+// Lower-level injectable seam used by the production IOKit backend. A source
+// represents one native enumeration pass; a successful pass with no iterator
+// is represented by an empty vector.
+class IMacUsbRegistrySnapshotSource {
+public:
+    virtual ~IMacUsbRegistrySnapshotSource() = default;
+
+    [[nodiscard]] virtual std::expected<std::vector<MacUsbRegistryNode>,
+                                        MacUsbTopologyError>
+    snapshot(const MacUsbTopologyQuery& query,
+             MacUsbTopologyTimePoint deadline,
+             std::stop_token cancellation) const = 0;
+};
+
 class IokitMacUsbRegistryBackend final : public IMacUsbRegistryBackend {
 public:
+    IokitMacUsbRegistryBackend() = default;
+    explicit IokitMacUsbRegistryBackend(
+        const IMacUsbRegistrySnapshotSource& source) noexcept;
+    IokitMacUsbRegistryBackend(IMacUsbRegistrySnapshotSource&&) = delete;
+
     [[nodiscard]] std::expected<std::vector<MacUsbRegistryNode>,
                                 MacUsbTopologyError>
     snapshot(const MacUsbTopologyQuery& query,
              MacUsbTopologyTimePoint deadline,
              std::stop_token cancellation) const override;
+
+private:
+    const IMacUsbRegistrySnapshotSource* source_{};
 };
 
 class MacUsbTopologyDiscovery final {
@@ -184,15 +226,5 @@ private:
 canonical_macos_usb_port_path(
     std::uint8_t bus_number,
     const std::vector<std::uint8_t>& port_numbers);
-
-struct MacUsbDecodedLocation final {
-    std::uint8_t bus_number{};
-    std::vector<std::uint8_t> port_numbers;
-
-    [[nodiscard]] bool operator==(const MacUsbDecodedLocation&) const = default;
-};
-
-[[nodiscard]] std::expected<MacUsbDecodedLocation, MacUsbTopologyError>
-decode_macos_usb_location_id(std::uint32_t location_id);
 
 }  // namespace kairosboot::transport

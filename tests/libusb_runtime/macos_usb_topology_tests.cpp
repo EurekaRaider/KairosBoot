@@ -21,8 +21,11 @@ namespace {
 
 using namespace std::chrono_literals;
 using kairosboot::transport::IMacUsbRegistryBackend;
-using kairosboot::transport::MacUsbDecodedLocation;
+using kairosboot::transport::IMacUsbRegistrySnapshotSource;
+using kairosboot::transport::IokitMacUsbRegistryBackend;
 using kairosboot::transport::MacUsbInterfaceFingerprint;
+using kairosboot::transport::MacUsbRegistryAncestor;
+using kairosboot::transport::MacUsbRegistryEntryKind;
 using kairosboot::transport::MacUsbRegistryInterface;
 using kairosboot::transport::MacUsbRegistryNode;
 using kairosboot::transport::MacUsbTopology;
@@ -35,7 +38,6 @@ using kairosboot::transport::MacUsbTopologyStage;
 using kairosboot::transport::MacUsbTopologyTimePoint;
 using kairosboot::transport::UsbDeviceInfo;
 using kairosboot::transport::canonical_macos_usb_port_path;
-using kairosboot::transport::decode_macos_usb_location_id;
 using kairosboot::transport::make_macos_usb_topology_query;
 
 #define CHECK(condition)                                                         \
@@ -60,28 +62,23 @@ using kairosboot::transport::make_macos_usb_topology_query;
     };
 }
 
-[[nodiscard]] std::uint32_t location_id(
-    const std::uint8_t bus,
-    const std::vector<std::uint8_t>& ports) {
-    std::uint32_t value = static_cast<std::uint32_t>(bus) << 24U;
-    constexpr unsigned int shifts[]{20U, 16U, 12U, 8U, 4U, 0U};
-    CHECK(ports.size() <= std::size(shifts));
-    for (std::size_t index = 0U; index < ports.size(); ++index) {
-        CHECK(ports[index] > 0U && ports[index] <= 0x0FU);
-        value |= static_cast<std::uint32_t>(ports[index]) << shifts[index];
-    }
-    return value;
+[[nodiscard]] std::uint32_t location_id(const std::uint8_t bus) {
+    // The low 24 bits are deliberately unrelated to the port chain. Frozen
+    // libusb 1.0.30 consumes only the top byte for Darwin bus numbering.
+    return (static_cast<std::uint32_t>(bus) << 24U) | 0x00FEDCBAU;
 }
 
 [[nodiscard]] MacUsbTopologyQuery query(
     const std::uint8_t bus = 0U,
     const std::uint8_t address = 5U,
-    std::vector<std::uint8_t> ports = {2U, 3U}) {
+    std::vector<std::uint8_t> ports = {2U, 3U},
+    const std::uint64_t session_id = 0x300U) {
     return MacUsbTopologyQuery{
         .vendor_id = 0x18D1U,
         .product_id = 0x4EE0U,
         .bus_number = bus,
         .device_address = address,
+        .session_id = session_id,
         .port_numbers = std::move(ports),
         .interface_fingerprint = fingerprint(),
         .serial_utf8 = std::string{"SERIAL-01"},
@@ -93,13 +90,14 @@ using kairosboot::transport::make_macos_usb_topology_query;
     const MacUsbTopologyQuery& wanted,
     const std::uint64_t entry_id = 0x100U,
     const std::uint64_t interface_entry_id = 0x200U,
-    const std::uint64_t session_id = 0x300U,
-    const std::uint64_t controller_entry_id = 0xA0U) {
+    const std::uint64_t session_id = 0U,
+    const std::uint64_t controller_entry_id = 0xA0U,
+    const MacUsbRegistryEntryKind controller_kind =
+        MacUsbRegistryEntryKind::HostController) {
     return MacUsbRegistryNode{
         .registry_entry_id = entry_id,
-        .session_id = session_id,
-        .root_controller_registry_entry_id = controller_entry_id,
-        .location_id = location_id(wanted.bus_number, wanted.port_numbers),
+        .session_id = session_id == 0U ? wanted.session_id : session_id,
+        .location_id = location_id(wanted.bus_number),
         .vendor_id = wanted.vendor_id,
         .product_id = wanted.product_id,
         .bus_number = wanted.bus_number,
@@ -108,8 +106,20 @@ using kairosboot::transport::make_macos_usb_topology_query;
         .serial_utf8 = wanted.serial_utf8,
         .product_utf8 = wanted.product_utf8,
         .registry_path = "IOUSB:/controller/device-" + std::to_string(entry_id),
-        .root_controller_registry_path =
-            "IOUSB:/controller-" + std::to_string(controller_entry_id),
+        .service_ancestry = {
+            MacUsbRegistryAncestor{
+                .registry_entry_id = controller_entry_id + 1U,
+                .kind = MacUsbRegistryEntryKind::UsbRootHub,
+                .registry_path = "IOService:/root-hub-" +
+                    std::to_string(controller_entry_id + 1U),
+            },
+            MacUsbRegistryAncestor{
+                .registry_entry_id = controller_entry_id,
+                .kind = controller_kind,
+                .registry_path = "IOService:/controller-" +
+                    std::to_string(controller_entry_id),
+            },
+        },
         .interfaces = {MacUsbRegistryInterface{
             .registry_entry_id = interface_entry_id,
             .fingerprint = wanted.interface_fingerprint,
@@ -145,6 +155,27 @@ public:
     }
 };
 
+class ScriptedSource final : public IMacUsbRegistrySnapshotSource {
+public:
+    using Result = std::expected<std::vector<MacUsbRegistryNode>,
+                                 MacUsbTopologyError>;
+
+    Result result{std::vector<MacUsbRegistryNode>{}};
+    std::function<void()> before_return;
+    mutable std::size_t calls{};
+
+    [[nodiscard]] Result snapshot(
+        const MacUsbTopologyQuery&,
+        const MacUsbTopologyTimePoint,
+        const std::stop_token) const override {
+        ++calls;
+        if (before_return) {
+            before_return();
+        }
+        return result;
+    }
+};
+
 [[nodiscard]] ScriptedBackend::Result snapshot_result(
     std::vector<MacUsbRegistryNode> nodes) {
     return ScriptedBackend::Result{std::move(nodes)};
@@ -173,7 +204,7 @@ void bus_zero_and_complete_fingerprint_map_to_consumers() {
     CHECK(topology.hub_port_chain == wanted.port_numbers);
     CHECK(topology.registry_entry_id == 0x100U);
     CHECK(topology.interface_registry_entry_id == 0x200U);
-    CHECK(topology.location_id == 0x00230000U);
+    CHECK(topology.location_id == 0x00FEDCBAU);
     CHECK(topology.bus_number == 0U);
     CHECK(topology.device_address == wanted.device_address);
     CHECK(topology.interface_fingerprint == wanted.interface_fingerprint);
@@ -181,26 +212,19 @@ void bus_zero_and_complete_fingerprint_map_to_consumers() {
     CHECK(topology.product_utf8 == wanted.product_utf8);
 }
 
-void location_id_and_canonical_path_validation_are_strict() {
-    const auto decoded = decode_macos_usb_location_id(0xAB123000U);
-    CHECK(decoded.has_value());
-    CHECK((*decoded == MacUsbDecodedLocation{
-                          .bus_number = 0xABU,
-                          .port_numbers = {1U, 2U, 3U},
-                      }));
+void location_id_is_bus_only_and_uint8_ports_are_valid() {
+    auto wanted = query(0xABU, 5U, {16U, 255U});
+    auto observed = node(wanted);
+    observed.location_id = 0xAB102000U;
+    const auto topology = discover_stable(wanted, {observed});
+    CHECK(topology.bus_number == 0xABU);
+    CHECK(topology.hub_port_chain ==
+          std::vector<std::uint8_t>({16U, 255U}));
 
-    const auto hole = decode_macos_usb_location_id(0xAB102000U);
-    CHECK(!hole.has_value());
-    CHECK(hole.error().kind == MacUsbTopologyErrorKind::MalformedRegistry);
-
-    const auto no_port = decode_macos_usb_location_id(0xAB000000U);
-    CHECK(!no_port.has_value());
-    CHECK(no_port.error().kind == MacUsbTopologyErrorKind::MalformedRegistry);
-
-    const auto path = canonical_macos_usb_port_path(0U, {15U, 1U});
+    const auto path = canonical_macos_usb_port_path(0U, {255U, 16U});
     CHECK((path ==
-           std::expected<std::string, MacUsbTopologyError>{"usb:0-15.1"}));
-    const auto invalid_port = canonical_macos_usb_port_path(0U, {16U});
+           std::expected<std::string, MacUsbTopologyError>{"usb:0-255.16"}));
+    const auto invalid_port = canonical_macos_usb_port_path(0U, {0U});
     CHECK(!invalid_port.has_value());
     CHECK(invalid_port.error().kind ==
           MacUsbTopologyErrorKind::InvalidArgument);
@@ -212,6 +236,7 @@ void libusb_snapshot_adapter_preserves_the_interface_fingerprint() {
     device.product_id = 0x4EE0U;
     device.bus_number = 0U;
     device.device_address = 9U;
+    device.backend_session_id = 0x1122334455667788ULL;
     device.configuration_value = 2U;
     device.port_path = {15U, 4U};
     device.serial_utf8 = "SERIAL-ADAPTER";
@@ -227,6 +252,7 @@ void libusb_snapshot_adapter_preserves_the_interface_fingerprint() {
     CHECK(adapted.product_id == device.product_id);
     CHECK(adapted.bus_number == 0U);
     CHECK(adapted.device_address == device.device_address);
+    CHECK(adapted.session_id == device.backend_session_id);
     CHECK(adapted.port_numbers == device.port_path);
     CHECK(adapted.serial_utf8 ==
           std::optional<std::string>{device.serial_utf8});
@@ -362,7 +388,7 @@ void two_snapshot_toctou_changes_fail_closed() {
 
 void deterministic_snapshot_order_does_not_create_a_false_race() {
     const auto wanted = query();
-    auto other_query = query(1U, 8U, {4U});
+    auto other_query = query(1U, 8U, {4U}, 0x301U);
     other_query.serial_utf8 = wanted.serial_utf8;
     auto matched = node(wanted);
     auto other = node(other_query, 0x101U, 0x201U, 0x301U, 0xA1U);
@@ -379,7 +405,7 @@ void deterministic_snapshot_order_does_not_create_a_false_race() {
 
 void duplicate_serials_are_never_used_as_the_physical_key() {
     const auto wanted = query();
-    auto other_query = query(1U, 8U, {4U});
+    auto other_query = query(1U, 8U, {4U}, 0x301U);
     other_query.serial_utf8 = wanted.serial_utf8;
     const auto matched = node(wanted);
     const auto same_serial_elsewhere =
@@ -394,7 +420,8 @@ void duplicate_serials_are_never_used_as_the_physical_key() {
 void duplicate_device_and_interface_mappings_are_ambiguous() {
     const auto wanted = query();
     const auto first = node(wanted);
-    const auto second = node(wanted, 0x101U, 0x201U, 0x301U, 0xA0U);
+    const auto second = node(
+        wanted, 0x101U, 0x201U, wanted.session_id, 0xA0U);
 
     ScriptedBackend duplicate_devices;
     duplicate_devices.results = {snapshot_result({first, second}),
@@ -462,7 +489,7 @@ void mismatched_and_missing_identities_fail_closed() {
 void malformed_backend_nodes_and_invalid_queries_never_pass() {
     const auto wanted = query();
     auto malformed = node(wanted);
-    malformed.location_id = 0x00102000U;
+    malformed.location_id = 0x01102000U;
     ScriptedBackend malformed_backend;
     malformed_backend.results = {snapshot_result({malformed}),
                                  snapshot_result({malformed})};
@@ -484,8 +511,17 @@ void malformed_backend_nodes_and_invalid_queries_never_pass() {
           MacUsbTopologyErrorKind::InvalidArgument);
     CHECK(untouched.calls == 0U);
 
+    auto zero_session = wanted;
+    zero_session.session_id = 0U;
+    const auto invalid_session = invalid_discovery.discover(
+        zero_session, MacUsbTopologyClock::now() + 1h);
+    CHECK(!invalid_session.has_value());
+    CHECK(invalid_session.error().kind ==
+          MacUsbTopologyErrorKind::InvalidArgument);
+    CHECK(untouched.calls == 0U);
+
     auto too_deep = wanted;
-    too_deep.port_numbers.assign(7U, 1U);
+    too_deep.port_numbers.assign(8U, 1U);
     const auto deep = invalid_discovery.discover(
         too_deep, MacUsbTopologyClock::now() + 1h);
     CHECK(!deep.has_value());
@@ -494,12 +530,83 @@ void malformed_backend_nodes_and_invalid_queries_never_pass() {
     CHECK(untouched.calls == 0U);
 }
 
+void modern_and_intel_controller_ancestry_allow_root_hubs() {
+    const auto modern_query = query();
+    auto modern = node(modern_query);
+    modern.service_ancestry.insert(
+        modern.service_ancestry.begin() + 1,
+        MacUsbRegistryAncestor{
+            .registry_entry_id = 0xB0U,
+            .kind = MacUsbRegistryEntryKind::Other,
+            .registry_path = "IOService:/AppleUSBHostPort",
+        });
+    const auto modern_topology = discover_stable(modern_query, {modern});
+    CHECK(modern_topology.root_controller_id ==
+          "macos-iokit:00000000000000a0");
+
+    const auto intel_query = query(7U, 9U, {31U}, 0x400U);
+    auto intel = node(
+        intel_query,
+        0x500U,
+        0x600U,
+        intel_query.session_id,
+        0x700U,
+        MacUsbRegistryEntryKind::LegacyHostController);
+    intel.service_ancestry.insert(
+        intel.service_ancestry.begin(),
+        MacUsbRegistryAncestor{
+            .registry_entry_id = 0x702U,
+            .kind = MacUsbRegistryEntryKind::UsbDevice,
+            .registry_path = "IOService:/Intel-root-hub-device",
+        });
+    const auto intel_topology = discover_stable(intel_query, {intel});
+    CHECK(intel_topology.root_controller_id ==
+          "macos-iokit:0000000000000700");
+    CHECK(intel_topology.hub_port_chain ==
+          std::vector<std::uint8_t>({31U}));
+}
+
+void injectable_native_source_handles_empty_iterator_and_final_cancel() {
+    const auto wanted = query();
+    ScriptedSource empty_source;
+    IokitMacUsbRegistryBackend empty_backend(empty_source);
+    const auto empty = empty_backend.snapshot(
+        wanted, MacUsbTopologyClock::now() + 1h, {});
+    CHECK(empty.has_value());
+    CHECK(empty->empty());
+    CHECK(empty_source.calls == 1U);
+
+    std::stop_source cancellation;
+    ScriptedSource interrupted_source;
+    interrupted_source.result = std::vector<MacUsbRegistryNode>{node(wanted)};
+    interrupted_source.before_return = [&cancellation] {
+        cancellation.request_stop();
+    };
+    IokitMacUsbRegistryBackend interrupted_backend(interrupted_source);
+    const auto interrupted = interrupted_backend.snapshot(
+        wanted,
+        MacUsbTopologyClock::now() + 1h,
+        cancellation.get_token());
+    CHECK(!interrupted.has_value());
+    CHECK(interrupted.error().kind == MacUsbTopologyErrorKind::Cancelled);
+    CHECK(interrupted.error().stage == MacUsbTopologyStage::FinalValidation);
+    CHECK(interrupted_source.calls == 1U);
+
+    ScriptedSource untouched;
+    IokitMacUsbRegistryBackend timed_backend(untouched);
+    const auto timed_out = timed_backend.snapshot(
+        wanted, MacUsbTopologyClock::now() - 1ms, {});
+    CHECK(!timed_out.has_value());
+    CHECK(timed_out.error().kind == MacUsbTopologyErrorKind::Timeout);
+    CHECK(untouched.calls == 0U);
+}
+
 }  // namespace
 
 int main() {
     const std::vector<std::pair<std::string_view, void (*)()>> tests{
         {"bus zero and fingerprint", bus_zero_and_complete_fingerprint_map_to_consumers},
-        {"location and canonical path", location_id_and_canonical_path_validation_are_strict},
+        {"location bus and UInt8 ports", location_id_is_bus_only_and_uint8_ports_are_valid},
         {"libusb adapter", libusb_snapshot_adapter_preserves_the_interface_fingerprint},
         {"cancellation", cancellation_before_and_between_snapshots_never_publishes_topology},
         {"deadline", expired_deadline_never_reaches_the_registry_backend},
@@ -510,6 +617,8 @@ int main() {
         {"ambiguity", duplicate_device_and_interface_mappings_are_ambiguous},
         {"identity mismatch", mismatched_and_missing_identities_fail_closed},
         {"invalid contracts", malformed_backend_nodes_and_invalid_queries_never_pass},
+        {"modern and Intel ancestry", modern_and_intel_controller_ancestry_allow_root_hubs},
+        {"native source interruption", injectable_native_source_handles_empty_iterator_and_final_cancel},
     };
 
     int failures = 0;
