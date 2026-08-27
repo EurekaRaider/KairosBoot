@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--libusb-source", type=Path, required=True)
     parser.add_argument("--boost-source", type=Path, required=True)
     parser.add_argument("--miniz-source", type=Path, required=True)
+    parser.add_argument("--yaml-cpp-source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -87,6 +88,18 @@ def main() -> None:
                 "comment": "miniz is built as a private static archive dependency with CRC validation enabled."
             },
             {
+                "name": "yaml-cpp",
+                "SPDXID": "SPDXRef-Package-yaml-cpp",
+                "versionInfo": "0.9.0",
+                "downloadLocation": "https://github.com/jbeder/yaml-cpp/releases/download/yaml-cpp-0.9.0/yaml-cpp-yaml-cpp-0.9.0.tar.gz",
+                "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": sha256(args.yaml_cpp_source)}],
+                "licenseConcluded": "MIT",
+                "licenseDeclared": "MIT",
+                "copyrightText": "NOASSERTION",
+                "comment": "yaml-cpp is built as a private static Fleet manifest parser dependency."
+            },
+            {
                 "name": "Microsoft Visual C++ Runtime",
                 "SPDXID": "SPDXRef-Package-MSVC-Runtime",
                 "downloadLocation": "NOASSERTION",
@@ -103,6 +116,7 @@ def main() -> None:
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-libusb"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-Boost"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-miniz"},
+            {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-yaml-cpp"},
             {"spdxElementId": "SPDXRef-Package-KairosBoot", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": "SPDXRef-Package-MSVC-Runtime", "comment": "Windows distributions only."}
         ]
     }

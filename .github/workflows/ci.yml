@@ -77,8 +77,8 @@ jobs:
           library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.${project_version}"
           readelf -d "$library" | grep -F 'libusb-1.0.so.0'
           readelf -d "$library" | grep -F "\$ORIGIN"
-          if readelf -d "$library" | grep -Eqi 'Shared library: \[(libminiz|libz\.so)'; then
-            echo "miniz must not add a compression shared-library dependency"
+          if readelf -d "$library" | grep -Eqi 'Shared library: \[(libminiz|libz\.so|libyaml-cpp)'; then
+            echo "private static dependencies must not add shared-library dependencies"
             exit 1
           fi
 
@@ -206,8 +206,8 @@ jobs:
           } else {
             @('/nologo', '/dependents', $library)
           }
-          if (& $dependencyTool @dependencyArguments | Select-String -Pattern '(?i)(miniz|zlib|libz\.dll)') {
-            throw "miniz must not add a compression DLL dependency"
+          if (& $dependencyTool @dependencyArguments | Select-String -Pattern '(?i)(miniz|zlib|libz\.dll|yaml-cpp)') {
+            throw "private static dependencies must not add DLL dependencies"
           }
 
       - name: Build macOS
@@ -234,8 +234,8 @@ jobs:
           project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
           library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.${project_version}.dylib"
           otool -L "$library" | grep -F '@rpath/libusb-1.0.0.dylib'
-          if otool -L "$library" | grep -Eqi '/(libminiz|libz(\.[0-9]+)*)\.dylib'; then
-            echo "miniz must not add a compression dylib dependency"
+          if otool -L "$library" | grep -Eqi '/(libminiz|libz(\.[0-9]+)*|libyaml-cpp[^/]*)\.dylib'; then
+            echo "private static dependencies must not add dylib dependencies"
             exit 1
           fi
           otool -l "$library" | grep -A2 LC_RPATH | grep -F '@loader_path'
@@ -355,6 +355,9 @@ jobs:
             miniz_destination="$runtime_root/$rid/native/licenses/miniz"
             mkdir -p "$miniz_destination"
             cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/miniz/LICENSE" "$miniz_destination/"
+            yaml_cpp_destination="$runtime_root/$rid/native/licenses/yaml-cpp"
+            mkdir -p "$yaml_cpp_destination"
+            cp "${RUNNER_TEMP}/native/${artifact}/share/kairosboot/yaml-cpp/LICENSE" "$yaml_cpp_destination/"
           done
 
       - name: Pack the real native NuGet package
