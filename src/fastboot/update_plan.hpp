@@ -90,7 +90,7 @@ enum class PlannedRebootTarget : std::uint8_t {
 struct PlannedUpdateTask final {
     UpdateTaskKind kind{UpdateTaskKind::Flash};
     bool conditional_on_wipe{false};
-    UpdateSourceLocation location;
+    UpdateSourceLocation location{};
 
     // Flash fields.
     std::string partition{};

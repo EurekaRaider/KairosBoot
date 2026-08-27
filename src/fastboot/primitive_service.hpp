@@ -94,8 +94,8 @@ struct PrimitiveError final {
     PrimitiveOperation operation{PrimitiveOperation::GetVar};
     protocol::ProtocolPhase phase{protocol::ProtocolPhase::Validation};
     std::string message;
-    std::string device_message;
-    std::vector<protocol::Response> informational;
+    std::string device_message{};
+    std::vector<protocol::Response> informational{};
     protocol::TransportStatus transport_status{protocol::TransportStatus::Ok};
     protocol::TransferCertainty transport_certainty{
         protocol::TransferCertainty::NotTransferred};

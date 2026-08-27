@@ -35,7 +35,7 @@ enum class ResponseKind : std::uint8_t {
 struct Response {
     ResponseKind kind;
     std::string payload;
-    std::optional<std::uint32_t> data_size;
+    std::optional<std::uint32_t> data_size{};
 };
 
 enum class ResponseParseErrorCode : std::uint8_t {
