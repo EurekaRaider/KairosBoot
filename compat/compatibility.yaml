@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 69
+    implemented: 79
     intentional-deviation: 15
-    missing: 1
-    partial: 34
+    missing: 0
+    partial: 25
 officialDifferentialCoverage:
   status: "partial"
   requiredEntries: 87
@@ -64,22 +64,32 @@ entries:
   - id: "capability.dynamic-partitions"
     kind: "image-plan"
     required: true
-    status: "partial"
-    note: "The update pipeline implements these paths, but not every Platform-Tools 37.0.1 option and differential scenario is covered."
+    status: "implemented"
+    note: "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution."
     evidence:
       - "tests/fastboot/update_package_preflight_tests.cpp"
       - "tests/fastboot/update_plan_tests.cpp"
       - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/fastboot/update_operation_tests.cpp"
+      - "tests/fastboot/super_optimizer_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/compat/aosp-update-plan-37.0.1.json"
     officialDifferentialEvidence: []
   - id: "capability.fastboot-info"
     kind: "image-plan"
     required: true
-    status: "partial"
-    note: "The update pipeline implements these paths, but not every Platform-Tools 37.0.1 option and differential scenario is covered."
+    status: "implemented"
+    note: "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution."
     evidence:
       - "tests/fastboot/update_package_preflight_tests.cpp"
       - "tests/fastboot/update_plan_tests.cpp"
       - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/fastboot/update_operation_tests.cpp"
+      - "tests/fastboot/super_optimizer_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/compat/aosp-update-plan-37.0.1.json"
     officialDifferentialEvidence: []
   - id: "capability.fastbootd-reenumeration"
     kind: "image-plan"
@@ -118,12 +128,17 @@ entries:
   - id: "capability.update-zip"
     kind: "image-plan"
     required: true
-    status: "partial"
-    note: "The update pipeline implements these paths, but not every Platform-Tools 37.0.1 option and differential scenario is covered."
+    status: "implemented"
+    note: "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution."
     evidence:
       - "tests/fastboot/update_package_preflight_tests.cpp"
       - "tests/fastboot/update_plan_tests.cpp"
       - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/fastboot/update_operation_tests.cpp"
+      - "tests/fastboot/super_optimizer_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/compat/aosp-update-plan-37.0.1.json"
     officialDifferentialEvidence: []
   - id: "capability.vbmeta-avb-mutation"
     kind: "image-plan"
@@ -149,12 +164,17 @@ entries:
   - id: "command.boot"
     kind: "command"
     required: true
-    status: "partial"
-    note: "Prebuilt images remain unchanged and raw kernel/ramdisk/second operands use the configured legacy v0 builder; modern boot headers, vendor_boot construction, and AVB mutation remain missing."
+    status: "implemented"
+    note: "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 from raw operands with the complete locked builder option surface across C11, C++23, .NET and CLI."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
     officialDifferentialEvidence: []
   - id: "command.continue"
     kind: "command"
@@ -228,21 +248,29 @@ entries:
   - id: "command.flash-raw"
     kind: "command"
     required: true
-    status: "partial"
-    note: "Legacy Android boot v0 construction supports the locked base, command-line, page-size and address-offset surface; modern headers, vendor_boot construction, and AVB mutation remain missing."
+    status: "implemented"
+    note: "Flash-raw constructs validated Android boot images v0-v4 from kernel, ramdisk and second-stage operands and flashes them with the complete locked builder, slot, sparse-limit and force option surface."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
     officialDifferentialEvidence: []
   - id: "command.flashall"
     kind: "command"
     required: true
-    status: "partial"
-    note: "flashall executes the production update pipeline from ANDROID_PRODUCT_OUT, but the full locked AOSP global option surface remains incomplete."
+    status: "implemented"
+    note: "Flashall resolves ANDROID_PRODUCT_OUT and executes the same fail-closed production image plan as update with the complete locked wipe, reboot, slot, sparse, dynamic-partition, fastboot-info, super-optimization, vbmeta, force and filesystem option surface."
     evidence:
       - "tests/cli/scripted_cli_test.py"
+      - "tests/check_cli.cmake"
+      - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/fastboot/update_plan_tests.cpp"
       - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/fastboot/super_optimizer_tests.cpp"
     officialDifferentialEvidence: []
   - id: "command.flashing-get-unlock-ability"
     kind: "command"
@@ -462,11 +490,16 @@ entries:
   - id: "command.update"
     kind: "command"
     required: true
-    status: "partial"
-    note: "ZIP/directory preflight and task execution exist, but full 37.0.1 option and device-behavior differential coverage is not complete."
+    status: "implemented"
+    note: "Update performs fail-closed ZIP/directory preflight, frozen fastboot-info and fallback planning, device validation, dynamic-partition transitions, sparse and vbmeta transforms, slot policy, deterministic super optimization, execution, cancellation, progress and reboot policy across the complete locked option surface."
     evidence:
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/fastboot/update_plan_tests.cpp"
       - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/fastboot/update_operation_tests.cpp"
+      - "tests/fastboot/super_optimizer_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
       - "tests/compat/aosp-update-plan-37.0.1.json"
     officialDifferentialEvidence: []
   - id: "command.wipe-super"
@@ -547,17 +580,20 @@ entries:
   - id: "image.boot"
     kind: "image"
     required: true
-    status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    status: "implemented"
+    note: "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.boot-other"
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -566,7 +602,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -575,7 +611,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -584,7 +620,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -593,7 +629,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -602,7 +638,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -611,7 +647,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -620,7 +656,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -629,7 +665,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -638,7 +674,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -647,7 +683,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -656,7 +692,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -665,7 +701,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -673,11 +709,14 @@ entries:
   - id: "image.system"
     kind: "image"
     required: true
-    status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    status: "implemented"
+    note: "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence:
       - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
       - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
@@ -685,7 +724,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -694,7 +733,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -703,7 +742,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -712,7 +751,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -721,7 +760,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -730,7 +769,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -739,7 +778,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -748,7 +787,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -757,7 +796,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -766,7 +805,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -775,7 +814,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -784,7 +823,7 @@ entries:
     kind: "image"
     required: false
     status: "partial"
-    note: "The locked fallback image table is recognized and planned; full official-binary differential execution evidence is still absent."
+    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
@@ -840,9 +879,17 @@ entries:
   - id: "option.disable-super-optimization"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The disable-super-optimization policy is exposed by C11, C++23, .NET and CLI and selects the frozen unoptimized update/flashall plan before any destructive operation."
+    evidence:
+      - "src/fastboot/super_optimizer.cpp"
+      - "tests/fastboot/super_optimizer_tests.cpp"
+      - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/check_cli.cmake"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
     officialDifferentialEvidence: []
   - id: "option.disable-verification"
     kind: "option"
@@ -1220,14 +1267,4 @@ entries:
       - "tests/api/c_primitive_tcp_tests.cpp"
     officialDifferentialEvidence: []
 requiredGaps:
-  - "capability.dynamic-partitions"
-  - "capability.fastboot-info"
-  - "capability.update-zip"
-  - "command.boot"
-  - "command.flash-raw"
-  - "command.flashall"
-  - "command.update"
-  - "image.boot"
-  - "image.system"
-  - "option.disable-super-optimization"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"
