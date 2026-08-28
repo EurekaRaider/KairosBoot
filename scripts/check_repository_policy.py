@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -187,40 +188,46 @@ def check_compatibility_baseline() -> None:
     ) != archives["darwin"].get("fastbootSha256"):
         fail("update-plan golden and AOSP lock use different fastboot binaries")
 
-    update_plan_slices = inventory.get("implementedPlanSlices", [])
-    expected_update_plan_slice = {
-        "id": "update-manifest-parser",
-        "status": "implemented-core",
-        "scope": "offline-manifest-parse-only",
-        "evidence": [
-            "tests/fastboot/update_plan_tests.cpp",
-            "tests/compat/aosp-update-plan-37.0.1.json",
-        ],
-        "excluded": update_plan_golden.get("scope", {}).get("excluded", []),
+    if inventory.get("schemaVersion") != 2:
+        fail("compatibility inventory has an unsupported generated schema")
+    if inventory.get("claimCompatibility") is not False:
+        fail("compatibility claim must remain false before official differentials")
+    allowed_statuses = {
+        "implemented",
+        "partial",
+        "missing",
+        "intentional-deviation",
     }
-    if update_plan_slices != [expected_update_plan_slice]:
-        fail("compatibility inventory must lock the offline update-plan slice")
-
-    deviation_descriptions = [
-        deviation.get("description")
-        for deviation in inventory.get("intentionalDeviations", [])
-        if isinstance(deviation, dict)
-        and deviation.get("scope") == "update-manifest-parser"
-    ]
-    if deviation_descriptions != update_plan_golden.get("intentionalDeviations"):
-        fail("update-plan intentional deviations differ from the locked golden")
-
-    compatibility = (ROOT / "compat" / "compatibility.yaml").read_text(
-        encoding="utf-8"
+    if set(inventory.get("statusVocabulary", [])) != allowed_statuses:
+        fail("compatibility inventory status vocabulary is not frozen")
+    entries = inventory.get("entries", [])
+    if not isinstance(entries, list) or not entries:
+        fail("compatibility inventory must contain generated entries")
+    if any(entry.get("status") not in allowed_statuses for entry in entries):
+        fail("compatibility inventory contains an unknown status")
+    deviation_descriptions = sorted(
+        entry.get("note")
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("kind") == "deviation"
+        and entry.get("scope") == "command.update"
     )
-    for marker in (
-        "id: plan.update-manifest-parser",
-        "scope: offline-manifest-parse-only",
-        "tests/fastboot/update_plan_tests.cpp",
-        "tests/compat/aosp-update-plan-37.0.1.json",
-    ):
-        if marker not in compatibility:
-            fail(f"compatibility matrix is missing update-plan evidence: {marker}")
+    if deviation_descriptions != sorted(update_plan_golden.get("intentionalDeviations")):
+        fail("update-plan intentional deviations differ from the locked golden")
+    generator = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "generate_compatibility_inventory.py"),
+            "--repository-root",
+            str(ROOT),
+            "--check",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if generator.returncode != 0:
+        fail(generator.stderr.strip() or generator.stdout.strip())
     libusb = lock.get("libusb", {})
     if libusb.get("requiredVersion") != "1.0.30":
         fail("libusb baseline must remain fixed at 1.0.30")
