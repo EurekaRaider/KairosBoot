@@ -1024,6 +1024,12 @@ def run(cli: pathlib.Path) -> None:
         raw_ramdisk.write_bytes(raw_ramdisk_payload)
 
         def flashed_raw_over_tcp(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:boot"
+            send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:max-download-size"
             send_frame(connection, b"OKAY0x00100000")
             assert receive_frame(connection) == b"download:00001800"
