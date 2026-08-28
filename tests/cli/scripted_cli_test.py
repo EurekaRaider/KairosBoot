@@ -152,6 +152,7 @@ def invoke(
     device: Callable[[socket.socket], None],
     expected_exit: int = 0,
     timeout_ms: int = 5000,
+    environment: Optional[dict[str, str]] = None,
 ) -> tuple[bytes, bytes]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -168,7 +169,10 @@ def invoke(
             *arguments,
         ]
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
         )
         device_error: Optional[BaseException] = None
         try:
@@ -204,6 +208,7 @@ def invoke_without_connection(
     arguments: Sequence[str],
     expected_exit: int,
     expected_status: str,
+    environment: Optional[dict[str, str]] = None,
 ) -> dict[str, object]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -220,6 +225,7 @@ def invoke_without_connection(
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=environment,
             timeout=10,
             check=False,
         )
@@ -798,6 +804,53 @@ def run(cli: pathlib.Path) -> None:
         ):
             raise AssertionError(f"text update did not report progress: {stderr!r}")
 
+        flashall_environment = os.environ.copy()
+        flashall_environment.pop("ANDROID_PRODUCT_OUT", None)
+        missing_product_out = invoke_without_connection(
+            cli,
+            ["flashall"],
+            4,
+            "invalid_argument",
+            flashall_environment,
+        )
+        assert missing_product_out["message"] == (
+            "flashall requires non-empty ANDROID_PRODUCT_OUT"
+        )
+
+        flashall_environment["ANDROID_PRODUCT_OUT"] = str(update_package)
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flashall"],
+            update_success,
+            environment=flashall_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flashall",
+            "package": str(update_package),
+            "wipe": False,
+        }
+
+        stdout, stderr = invoke(
+            cli,
+            ["flashall"],
+            update_success,
+            environment=flashall_environment,
+        )
+        if (
+            b"Flashed all from " not in stdout
+            or str(update_package).encode() not in stdout
+        ):
+            raise AssertionError(f"unexpected text flashall output: {stdout!r}")
+        if (
+            b"flashall: preflight" not in stderr
+            or b"flashall: complete" not in stderr
+        ):
+            raise AssertionError(
+                f"text flashall did not report progress: {stderr!r}"
+            )
+
         wipe_package = make_update_package(
             directory, "wipe-package", "version 1\nif-wipe erase userdata\n"
         )
@@ -815,6 +868,21 @@ def run(cli: pathlib.Path) -> None:
         assert document["command"] == "update"
         assert document["package"] == str(wipe_package)
         assert document["wipe"] is True
+
+        flashall_environment["ANDROID_PRODUCT_OUT"] = str(wipe_package)
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flashall", "--wipe"],
+            wipe_success,
+            environment=flashall_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flashall",
+            "package": str(wipe_package),
+            "wipe": True,
+        }
 
         failed_update_package = make_update_package(
             directory, "failed-update", "version 1\nerase metadata\n"

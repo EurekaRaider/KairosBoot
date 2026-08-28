@@ -21,7 +21,7 @@ execute_process(
 if(NOT HELP_RESULT EQUAL 0 OR NOT HELP_ERROR STREQUAL "")
   message(FATAL_ERROR "--help failed: ${HELP_RESULT} ${HELP_ERROR}")
 endif()
-foreach(HELP_COMMAND IN ITEMS validate plan update flashing gsi
+foreach(HELP_COMMAND IN ITEMS validate plan update flashall flashing gsi
                               snapshot-update create-logical-partition
                               delete-logical-partition
                               resize-logical-partition)
@@ -291,8 +291,19 @@ expect_json_parse_error(
   update_duplicate_wipe "update option --wipe may only be specified once"
   update package.zip --wipe --wipe)
 expect_json_parse_error(
+  flashall_operand "flashall supports only --wipe" flashall images)
+expect_json_parse_error(
+  flashall_unknown_option "flashall supports only --wipe" flashall --unknown)
+expect_json_parse_error(
+  flashall_duplicate_wipe "flashall option --wipe may only be specified once"
+  flashall --wipe --wipe)
+expect_json_parse_error(
   receive_limit_update "option --max-receive-bytes is not valid for update"
   --max-receive-bytes 1 update package.zip)
+expect_json_parse_error(
+  receive_limit_flashall
+  "option --max-receive-bytes is not valid for flashall"
+  --max-receive-bytes 1 flashall)
 expect_json_parse_error(
   typed_trailing_global "global options must precede the command" getvar
   product --timeout-ms 1)

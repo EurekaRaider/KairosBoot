@@ -19,6 +19,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <expected>
 #include <filesystem>
@@ -220,6 +221,7 @@ enum class CommandKind : std::uint8_t {
   Run,
   Flash,
   Update,
+  Flashall,
   Getvar,
   Erase,
   SetActive,
@@ -567,30 +569,34 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
-  if (command == "update") {
-    result.kind = CommandKind::Update;
-    if (index >= argc) {
-      return error("update requires <package>");
-    }
-    result.first = argv[index++];
-    if (result.first == "--wipe") {
-      return error("update requires <package>");
-    }
-    if (result.first.empty()) {
-      return error("update package must not be empty");
+  if (command == "update" || command == "flashall") {
+    const bool is_flashall = command == "flashall";
+    result.kind = is_flashall ? CommandKind::Flashall : CommandKind::Update;
+    if (!is_flashall) {
+      if (index >= argc || std::string_view{argv[index]} == "--wipe") {
+        return error("update requires <package>");
+      }
+      result.first = argv[index++];
+      if (result.first.empty()) {
+        return error("update package must not be empty");
+      }
     }
     while (index < argc) {
       const std::string_view option{argv[index++]};
       if (option != "--wipe") {
-        return error("update supports only --wipe after <package>");
+        return error(std::string{command} +
+                     (is_flashall ? " supports only --wipe"
+                                  : " supports only --wipe after <package>"));
       }
       if (result.wipe) {
-        return error("update option --wipe may only be specified once");
+        return error(std::string{command} +
+                     " option --wipe may only be specified once");
       }
       result.wipe = true;
     }
     if (result.global.maximum_receive_bytes_set) {
-      return error("option --max-receive-bytes is not valid for update");
+      return error("option --max-receive-bytes is not valid for " +
+                   std::string{command});
     }
     return result;
   }
@@ -840,6 +846,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "flash";
   case CommandKind::Update:
     return "update";
+  case CommandKind::Flashall:
+    return "flashall";
   case CommandKind::Getvar:
     return "getvar";
   case CommandKind::Erase:
@@ -1273,6 +1281,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Run:
   case CommandKind::Flash:
   case CommandKind::Update:
+  case CommandKind::Flashall:
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
@@ -1315,6 +1324,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Devices:
   case CommandKind::Flash:
   case CommandKind::Update:
+  case CommandKind::Flashall:
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
@@ -1425,7 +1435,9 @@ int flash_file(const Invocation &invocation) {
 
 class UpdateProgressReporter final {
 public:
-  explicit UpdateProgressReporter(const bool json) noexcept : json_(json) {}
+  UpdateProgressReporter(const bool json,
+                         const std::string_view command) noexcept
+      : json_(json), command_(command) {}
 
   kairosboot::ProgressAction operator()(const kairosboot::Progress &progress) {
     std::scoped_lock lock(mutex_);
@@ -1435,7 +1447,7 @@ public:
         (stage != stage_ || device != device_ ||
          progress.bytes_completed != completed_ ||
          progress.bytes_total != total_)) {
-      std::cerr << "update: " << stage;
+      std::cerr << command_ << ": " << stage;
       if (progress.bytes_total != 0U) {
         std::cerr << ' ' << progress.bytes_completed << '/'
                   << progress.bytes_total << " bytes";
@@ -1454,6 +1466,7 @@ public:
 
 private:
   bool json_{};
+  std::string_view command_;
   std::mutex mutex_;
   std::string stage_;
   std::string device_;
@@ -1462,21 +1475,65 @@ private:
 };
 
 int update_package(const Invocation &invocation) {
+  std::string package;
+  if (invocation.kind == CommandKind::Update) {
+    package = invocation.first;
+  } else {
+#if defined(_WIN32)
+    constexpr wchar_t product_out_name[] = L"ANDROID_PRODUCT_OUT";
+    const DWORD required =
+        GetEnvironmentVariableW(product_out_name, nullptr, 0U);
+    if (required == 0U) {
+      return print_local_runtime_error(
+          LocalRuntimeError{
+              KB_E_INVALID_ARGUMENT,
+              "flashall requires non-empty ANDROID_PRODUCT_OUT"},
+          invocation.global.json);
+    }
+    std::wstring wide_package(static_cast<std::size_t>(required), L'\0');
+    const DWORD copied = GetEnvironmentVariableW(
+        product_out_name, wide_package.data(), required);
+    if (copied == 0U || copied >= required) {
+      return print_local_runtime_error(
+          LocalRuntimeError{KB_E_INVALID_ARGUMENT,
+                            "cannot read ANDROID_PRODUCT_OUT"},
+          invocation.global.json);
+    }
+    wide_package.resize(static_cast<std::size_t>(copied));
+    auto converted = utf8_from_wide(wide_package);
+    if (!converted) {
+      return print_local_runtime_error(converted.error(),
+                                       invocation.global.json);
+    }
+    package = std::move(*converted);
+#else
+    const char *product_out = std::getenv("ANDROID_PRODUCT_OUT");
+    if (product_out == nullptr || product_out[0] == '\0') {
+      return print_local_runtime_error(
+          LocalRuntimeError{
+              KB_E_INVALID_ARGUMENT,
+              "flashall requires non-empty ANDROID_PRODUCT_OUT"},
+          invocation.global.json);
+    }
+    package = product_out;
+#endif
+  }
+
   auto context = kairosboot::Context::create();
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
 
   InterruptCancellation cancellation;
-  UpdateProgressReporter progress{invocation.global.json};
+  const std::string_view command = command_name(invocation.kind);
+  UpdateProgressReporter progress{invocation.global.json, command};
   auto options = update_options(invocation.global);
   options.wipe = invocation.wipe;
   options.progress = [&progress](const kairosboot::Progress &value) {
     return progress(value);
   };
   auto operation = context->update_package_async(
-      selector_view(invocation.global), path_from_utf8(invocation.first),
-      options);
+      selector_view(invocation.global), path_from_utf8(package), options);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -1486,11 +1543,15 @@ int update_package(const Invocation &invocation) {
   }
 
   if (invocation.global.json) {
-    std::cout << "{\"ok\":true,\"command\":\"update\",\"package\":\""
-              << json_escape(invocation.first) << "\",\"wipe\":"
+    std::cout << "{\"ok\":true,\"command\":\"" << command
+              << "\",\"package\":\"" << json_escape(package)
+              << "\",\"wipe\":"
               << (invocation.wipe ? "true" : "false") << "}\n";
   } else {
-    std::cout << "Updated from " << invocation.first;
+    std::cout << (invocation.kind == CommandKind::Flashall
+                      ? "Flashed all from "
+                      : "Updated from ")
+              << package;
     if (invocation.wipe) {
       std::cout << " (wipe requested)";
     }
@@ -1684,6 +1745,7 @@ constexpr std::string_view usage_text() noexcept {
                "<manifest>\n"
                "  kairosboot [global options] flash <partition> <file>\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
+               "  kairosboot [global options] flashall [--wipe]\n"
                "  kairosboot [global options] getvar <variable>\n"
                "  kairosboot [global options] erase <partition>\n"
                "  kairosboot [global options] set-active <slot>\n"
@@ -1799,6 +1861,7 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::Flash:
     return flash_file(*invocation);
   case CommandKind::Update:
+  case CommandKind::Flashall:
     return update_package(*invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
