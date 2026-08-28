@@ -106,6 +106,31 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_vendor_boot_ramdisk_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FlashVendorBootRamdiskAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string partition,
+        string? ramdiskName,
+        string ramdiskPath,
+        string? dtbPath,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_vendor_boot_ramdisk", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FlashVendorBootRamdisk(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string partition,
+        string? ramdiskName,
+        string ramdiskPath,
+        string? dtbPath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashRawAsync(

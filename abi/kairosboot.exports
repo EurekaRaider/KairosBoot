@@ -56,6 +56,8 @@ kb_flash_raw
 kb_flash_raw_async
 kb_flash_raw_with_boot_options
 kb_flash_raw_with_boot_options_async
+kb_flash_vendor_boot_ramdisk
+kb_flash_vendor_boot_ramdisk_async
 kb_flashing
 kb_flashing_async
 kb_format_partition

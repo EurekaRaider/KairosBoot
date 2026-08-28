@@ -85,6 +85,29 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_flash_vendor_boot_ramdisk_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashVendorBootRamdiskAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskName,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? dtbPath,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_flash_vendor_boot_ramdisk", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashVendorBootRamdisk(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskName,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? dtbPath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_flash_raw_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FlashRawAsync(
         ContextSafeHandle context,

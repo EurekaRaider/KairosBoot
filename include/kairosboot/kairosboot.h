@@ -331,6 +331,25 @@ KB_API kb_status_t KB_CALL kb_flash_file(
     const char *file_path, const kb_flash_options_t *options_or_null,
     kb_error_t **error);
 
+/* Implements AOSP `flash vendor_boot:RAMDISK FILE` without materializing the
+ * fetched partition in memory. PARTITION must be vendor_boot, vendor_boot_a,
+ * or vendor_boot_b. A NULL ramdisk_name_or_null selects `default`, replacing
+ * the complete v3/v4 vendor ramdisk; any other name replaces one unique v4
+ * table fragment. dtb_path_or_null optionally replaces the DTB in the same
+ * repack. Fetch, repack, download and flash use one selected Fastboot session.
+ */
+KB_API kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *ramdisk_name_or_null,
+    const char *ramdisk_path, const char *dtb_path_or_null,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *ramdisk_name_or_null,
+    const char *ramdisk_path, const char *dtb_path_or_null,
+    const kb_flash_options_t *options_or_null, kb_error_t **error);
+
 /* Builds the default Android boot image used by AOSP fastboot flash:raw from
  * KERNEL and optional RAMDISK/SECOND files, then flashes it to PARTITION. If
  * KERNEL is already an Android boot image, it is flashed unchanged and both

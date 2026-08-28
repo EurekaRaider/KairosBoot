@@ -149,7 +149,7 @@
       "evidence": [],
       "id": "capability.super-image-optimization",
       "kind": "image-plan",
-      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
+      "note": "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "missing"
@@ -180,21 +180,32 @@
       "evidence": [],
       "id": "capability.vbmeta-avb-mutation",
       "kind": "image-plan",
-      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
+      "note": "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "capability.vendor-boot-construction",
       "kind": "image-plan",
-      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
+      "note": "The locked vendor_boot v3/v4 workflow fetches the existing partition, strictly repacks the default ramdisk or one named v4 fragment with an optional DTB, and flashes in the same session with bounded memory.",
       "officialDifferentialEvidence": [],
       "required": true,
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -1678,16 +1689,25 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "flash"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.dtb",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "--dtb replaces the DTB while repacking an existing vendor_boot v3/v4 image. The locked legacy boot-v2 construction use remains unavailable.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--dtb",
-      "status": "missing"
+      "status": "partial"
     },
     {
       "cSymbols": [],
@@ -2278,7 +2298,6 @@
     "capability.super-image-optimization",
     "capability.update-zip",
     "capability.vbmeta-avb-mutation",
-    "capability.vendor-boot-construction",
     "command.boot",
     "command.flash-raw",
     "command.flashall",
@@ -2327,16 +2346,16 @@
         "partial": 27
       },
       "image-plan": {
-        "implemented": 3,
+        "implemented": 4,
         "intentional-deviation": 0,
-        "missing": 3,
+        "missing": 2,
         "partial": 5
       },
       "option": {
         "implemented": 19,
         "intentional-deviation": 4,
-        "missing": 10,
-        "partial": 0
+        "missing": 9,
+        "partial": 1
       },
       "protocol": {
         "implemented": 4,
@@ -2352,10 +2371,10 @@
       }
     },
     "byStatus": {
-      "implemented": 52,
+      "implemented": 53,
       "intentional-deviation": 15,
-      "missing": 16,
-      "partial": 36
+      "missing": 14,
+      "partial": 37
     },
     "totalEntries": 119
   }

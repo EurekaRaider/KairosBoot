@@ -219,6 +219,7 @@ struct GlobalOptions {
   bool disable_verification{};
   std::uint64_t sparse_limit_bytes{};
   bool sparse_limit_set{false};
+  std::optional<std::string> dtb_path;
   bool legacy_boot_options_set{false};
   std::optional<std::string> slot;
   bool set_active{};
@@ -236,6 +237,7 @@ enum class CommandKind : std::uint8_t {
   Plan,
   Run,
   Flash,
+  FlashVendorBootRamdisk,
   FlashRaw,
   Signature,
   Update,
@@ -348,6 +350,7 @@ bool is_global_option(const std::string_view value) noexcept {
          value == "--disable-verity" ||
          value == "--disable-verification" ||
          value == "-S" ||
+         value == "--dtb" ||
          value == "--base" || value == "--cmdline" ||
          value == "--page-size" || value == "--kernel-offset" ||
          value == "--ramdisk-offset" || value == "--second-offset" ||
@@ -464,6 +467,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool timeout_seen = false;
   bool vendor_id_seen = false;
   bool verbose_seen = false;
+  bool dtb_seen = false;
   bool cmdline_seen = false;
   bool base_seen = false;
   bool page_size_seen = false;
@@ -628,6 +632,19 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       ++index;
       continue;
     }
+    if (argument == "--dtb") {
+      if (dtb_seen) {
+        return error("option --dtb may only be specified once");
+      }
+      if (index + 1 >= argc || argv[index + 1][0] == '\0' ||
+          std::string_view{argv[index + 1]}.starts_with("--")) {
+        return error("option --dtb requires a non-empty file path");
+      }
+      result.global.dtb_path = std::string{argv[index + 1]};
+      dtb_seen = true;
+      index += 2;
+      continue;
+    }
     bool *legacy_seen = nullptr;
     std::uint32_t *legacy_number = nullptr;
     if (argument == "--cmdline") {
@@ -731,6 +748,9 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       command != "flash:raw" && command != "update" &&
       command != "flashall") {
     return error("option -S is not valid for " + std::string{command});
+  }
+  if (result.global.dtb_path.has_value() && command != "flash") {
+    return error("option --dtb is valid only for flash vendor_boot:RAMDISK");
   }
 
   if (command == "--version") {
@@ -836,20 +856,51 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     return result;
   }
   if (command == "flash") {
-    result.kind = CommandKind::Flash;
-    if (argc - command_index != 3) {
-      return error("flash requires exactly <partition> and <file>");
+    const int operand_count = argc - command_index - 1;
+    if (operand_count < 1 || operand_count > 2) {
+      return error("flash requires <partition> [file]");
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for flash");
     }
     result.first = argv[index];
-    result.second = argv[index + 1];
     if (result.first.empty()) {
       return error("flash partition must not be empty");
     }
-    if (result.second.empty()) {
-      return error("flash file must not be empty");
+    const auto separator = result.first.find(':');
+    const auto partition = result.first.substr(0U, separator);
+    const bool vendor_boot_repack =
+        separator != std::string_view::npos &&
+        (partition == "vendor_boot" || partition == "vendor_boot_a" ||
+         partition == "vendor_boot_b");
+    if (vendor_boot_repack) {
+      result.kind = CommandKind::FlashVendorBootRamdisk;
+      result.second = result.first.substr(separator + 1U);
+      result.first = partition;
+      if (result.second.empty()) {
+        return error("vendor_boot flash requires a ramdisk name after ':'");
+      }
+      if (operand_count == 2) {
+        result.third = argv[index + 1];
+        if (result.third.empty()) {
+          return error("vendor_boot ramdisk file must not be empty");
+        }
+      }
+    } else {
+      result.kind = CommandKind::Flash;
+      if (separator != std::string_view::npos) {
+        return error("partition suffix repack is supported only for vendor_boot");
+      }
+      if (operand_count != 2) {
+        return error("flash requires exactly <partition> and <file>");
+      }
+      result.second = argv[index + 1];
+      if (result.second.empty()) {
+        return error("flash file must not be empty");
+      }
+      if (result.global.dtb_path.has_value()) {
+        return error("option --dtb is valid only for flash vendor_boot:RAMDISK");
+      }
     }
     return result;
   }
@@ -1342,6 +1393,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
   case CommandKind::Run:
     return "run";
   case CommandKind::Flash:
+    return "flash";
+  case CommandKind::FlashVendorBootRamdisk:
     return "flash";
   case CommandKind::FlashRaw:
     return "flash:raw";
@@ -1947,6 +2000,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Plan:
   case CommandKind::Run:
   case CommandKind::Flash:
+  case CommandKind::FlashVendorBootRamdisk:
   case CommandKind::FlashRaw:
   case CommandKind::Signature:
   case CommandKind::Update:
@@ -1995,6 +2049,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Doctor:
   case CommandKind::Devices:
   case CommandKind::Flash:
+  case CommandKind::FlashVendorBootRamdisk:
   case CommandKind::FlashRaw:
   case CommandKind::Signature:
   case CommandKind::Update:
@@ -2113,6 +2168,54 @@ int flash_file(const Invocation &invocation) {
   } else {
     std::cout << "Flashed " << invocation.first << " from " << invocation.second
               << '\n';
+  }
+  return 0;
+}
+
+int flash_vendor_boot_ramdisk(const Invocation &invocation) {
+  if (invocation.third.empty()) {
+    return print_local_runtime_error(
+        LocalRuntimeError{
+            KB_E_INVALID_ARGUMENT,
+            "cannot determine image filename for vendor_boot:" +
+                std::string{invocation.second}},
+        invocation.global.json);
+  }
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  const std::optional<std::filesystem::path> dtb =
+      invocation.global.dtb_path.has_value()
+          ? std::optional<std::filesystem::path>{
+                path_from_utf8(*invocation.global.dtb_path)}
+          : std::nullopt;
+  InterruptCancellation cancellation;
+  auto operation = context->flash_vendor_boot_ramdisk_async(
+      selector_view(invocation.global), invocation.first,
+      path_from_utf8(invocation.third), invocation.second, dtb,
+      flash_options(invocation.global));
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"flash\",\"partition\":\""
+              << json_escape(invocation.first)
+              << "\",\"vendorRamdisk\":\""
+              << json_escape(invocation.second) << "\",\"file\":\""
+              << json_escape(invocation.third) << '"';
+    if (invocation.global.dtb_path.has_value()) {
+      std::cout << ",\"dtb\":\""
+                << json_escape(*invocation.global.dtb_path) << '"';
+    }
+    std::cout << "}\n";
+  } else {
+    std::cout << "Repacked and flashed " << invocation.first << ':'
+              << invocation.second << " from " << invocation.third << '\n';
   }
   return 0;
 }
@@ -2691,6 +2794,8 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [--json] [--timeout-ms <milliseconds>] run "
                "<manifest>\n"
                "  kairosboot [global options] flash <partition> <file>\n"
+               "  kairosboot [global options] [--dtb <file>] flash "
+               "vendor_boot:RAMDISK [file]\n"
                "  kairosboot [global options] flash:raw <partition> <kernel> "
                "[ramdisk [second]]\n"
                "  kairosboot [global options] signature <file>\n"
@@ -2739,6 +2844,7 @@ constexpr std::string_view usage_text() noexcept {
                "--max-receive-bytes <bytes>\n"
                "  --disable-verity --disable-verification\n"
                "  -S SIZE[K|M|G] (flash, flash:raw, update and flashall)\n"
+               "  --dtb <file> (vendor_boot ramdisk repack only)\n"
                "  Legacy boot options (boot and flash:raw only):\n"
                "  --cmdline <text> --base <value> --page-size <value>\n"
                "  --kernel-offset <value> --ramdisk-offset <value>\n"
@@ -2844,6 +2950,8 @@ int run_cli(const int argc, char **argv) {
     return run_manifest(*invocation);
   case CommandKind::Flash:
     return flash_file(*invocation);
+  case CommandKind::FlashVendorBootRamdisk:
+    return flash_vendor_boot_ramdisk(*invocation);
   case CommandKind::FlashRaw:
     return flash_raw(*invocation);
   case CommandKind::Signature:

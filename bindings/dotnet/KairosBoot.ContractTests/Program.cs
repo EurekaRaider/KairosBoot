@@ -117,18 +117,24 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 115)
+        if (uniqueEntryPoints.Count != 117)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 115 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 117 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 115, "unique entry points");
+        Check(uniqueEntryPoints.Count == 117, "unique entry points");
         Check(entryPoints.Contains("kb_legacy_boot_options_init"), "legacy boot options import");
         Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
         Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
+        Check(
+            entryPoints.Contains("kb_flash_vendor_boot_ramdisk_async"),
+            "async vendor_boot ramdisk import");
+        Check(
+            entryPoints.Contains("kb_flash_vendor_boot_ramdisk"),
+            "blocking vendor_boot ramdisk import");
         Check(
             entryPoints.Contains("kb_flash_raw_with_boot_options_async"),
             "configured async flash:raw import");
@@ -216,7 +222,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 115, "net48 DllImport count");
+        Check(methods.Count == 117, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -225,7 +231,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 116, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 126, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -243,7 +249,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 115, "net10 LibraryImport count");
+        Check(groups.Count == 117, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -254,7 +260,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 58, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 60, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -600,6 +606,28 @@ internal static class Program
             flashRawMethods.All(method => method.GetParameters().Any(parameter =>
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed flash:raw cancellation");
+
+        var vendorBootMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "FlashVendorBootRamdiskAsync")
+            .ToList();
+        Check(vendorBootMethods.Count == 1, "managed vendor_boot ramdisk method");
+        Check(
+            vendorBootMethods[0].ReturnType == typeof(Task),
+            "managed vendor_boot ramdisk returns Task");
+        Check(
+            vendorBootMethods[0].GetParameters().Any(parameter =>
+                parameter.Name == "dtbPath" &&
+                parameter.ParameterType == typeof(string)),
+            "managed vendor_boot optional DTB");
+        Check(
+            vendorBootMethods[0].GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>)),
+            "managed vendor_boot progress type");
+        Check(
+            vendorBootMethods[0].GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken)),
+            "managed vendor_boot cancellation");
 
         var bootRawMethods = typeof(Context)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)

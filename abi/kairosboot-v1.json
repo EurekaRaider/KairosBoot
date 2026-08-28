@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "5a710a9ca56b319ddeed3907e41cb33301893656eeb668a04d49c72ed081ba05",
+  "headerContractSha256": "b1f640faffb15fe8a4a1e9b9c951abf102fa6f2a0bcbf685fdb1b4cd9adef634",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -507,6 +507,8 @@
     "kb_flash_raw_async",
     "kb_flash_raw_with_boot_options",
     "kb_flash_raw_with_boot_options_async",
+    "kb_flash_vendor_boot_ramdisk",
+    "kb_flash_vendor_boot_ramdisk_async",
     "kb_flashing",
     "kb_flashing_async",
     "kb_format_partition",

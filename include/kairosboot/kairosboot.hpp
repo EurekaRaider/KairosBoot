@@ -2147,6 +2147,75 @@ public:
     return flash_file(std::optional<std::string_view>{serial}, partition, file);
   }
 
+  [[nodiscard]] std::expected<Operation, Error>
+  flash_vendor_boot_ramdisk_async(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    const std::string name_storage{ramdisk_name};
+    const std::string ramdisk_storage = to_utf8(ramdisk);
+    const std::optional<std::string> dtb_storage =
+        dtb.has_value() ? std::optional<std::string>{to_utf8(*dtb)}
+                        : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_flash_vendor_boot_ramdisk_async(
+        handle_, selector_value, partition_storage.c_str(),
+        name_storage.c_str(), ramdisk_storage.c_str(),
+        dtb_storage.has_value() ? dtb_storage->c_str() : nullptr,
+        &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  flash_vendor_boot_ramdisk_async(
+      std::string_view partition, const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    return flash_vendor_boot_ramdisk_async(
+        std::nullopt, partition, ramdisk, ramdisk_name, dtb, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_vendor_boot_ramdisk(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto operation = flash_vendor_boot_ramdisk_async(
+        selector, partition, ramdisk, ramdisk_name, dtb, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_vendor_boot_ramdisk(
+      std::string_view partition, const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    return flash_vendor_boot_ramdisk(
+        std::nullopt, partition, ramdisk, ramdisk_name, dtb, options);
+  }
+
   [[nodiscard]] std::expected<Operation, Error> flash_raw_async(
       DeviceSelector selector, std::string_view partition,
       const std::filesystem::path &kernel,

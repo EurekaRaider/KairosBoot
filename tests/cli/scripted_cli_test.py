@@ -41,6 +41,47 @@ def send_frame(connection: socket.socket, payload: bytes) -> None:
     connection.sendall(struct.pack(">Q", len(payload)) + payload)
 
 
+def make_vendor_boot_v4() -> bytes:
+    page = 4096
+    entry_size = 112
+    table_size = 2 * entry_size
+    image = bytearray([0x6C] * (7 * page))
+    image[0:8] = b"VNDRBOOT"
+    for offset, value in (
+        (8, 4),
+        (12, page),
+        (24, 7),
+        (2096, 2128),
+        (2100, 3),
+        (2112, table_size),
+        (2116, 2),
+        (2120, entry_size),
+        (2124, 4),
+    ):
+        struct.pack_into("<I", image, offset, value)
+    image[page : page + 7] = b"oneTWO2"
+    image[page + 7 : 2 * page] = bytes(page - 7)
+    image[2 * page : 2 * page + 3] = b"dtb"
+    image[2 * page + 3 : 3 * page] = bytes(page - 3)
+
+    table = 3 * page
+    struct.pack_into("<III", image, table, 3, 0, 1)
+    image[table + 12 : table + 44] = bytes(32)
+    image[table + 12 : table + 17] = b"alpha"
+    image[table + 108] = 0xD1
+    second = table + entry_size
+    struct.pack_into("<III", image, second, 4, 3, 3)
+    image[second + 12 : second + 44] = bytes(32)
+    image[second + 12 : second + 16] = b"beta"
+    image[second + 44] = 0xB7
+    image[second + 108] = 0xE1
+    image[table + table_size : 4 * page] = bytes(page - table_size)
+    image[4 * page : 4 * page + 4] = b"boot"
+    image[4 * page + 4 : 5 * page] = bytes(page - 4)
+    image[6 * page + 11 : 6 * page + 15] = b"TAIL"
+    return bytes(image)
+
+
 def handshake(connection: socket.socket) -> None:
     hello = receive_exact(connection, 4)
     if hello != b"FB01":
@@ -1143,6 +1184,88 @@ def run(cli: pathlib.Path) -> None:
         document = parse_success_json(stdout, stderr)
         assert document["command"] == "flash"
         assert document["partition"] == "system"
+
+        vendor_boot_image = make_vendor_boot_v4()
+        replacement_ramdisk = directory / "vendor-ramdisk.bin"
+        replacement_dtb = directory / "vendor-dtb.bin"
+        replacement_ramdisk.write_bytes(b"FIRST")
+        replacement_dtb.write_bytes(b"new-dtb")
+
+        def repacked_vendor_boot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-fetch-size"
+            send_frame(connection, b"OKAY0x00002000")
+            assert receive_frame(connection) == b"getvar:partition-size:vendor_boot"
+            send_frame(connection, b"OKAY0x00007000")
+            for offset, size in ((0, 0x2000), (0x2000, 0x2000),
+                                 (0x4000, 0x2000), (0x6000, 0x1000)):
+                expected = (
+                    f"fetch:vendor_boot:0x{offset:08x}:0x{size:08x}"
+                ).encode("ascii")
+                assert receive_frame(connection) == expected
+                send_frame(connection, f"DATA{size:08x}".encode("ascii"))
+                send_frame(connection, vendor_boot_image[offset : offset + size])
+                send_frame(connection, b"OKAYfetched")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00007000"
+            send_frame(connection, b"DATA00007000")
+            image = receive_frame(connection)
+            assert len(image) == len(vendor_boot_image)
+            assert image[:8] == b"VNDRBOOT"
+            assert int.from_bytes(image[24:28], "little") == 9
+            assert int.from_bytes(image[2100:2104], "little") == 7
+            assert image[4096:4105] == b"FIRSTTWO2"
+            assert image[8192:8199] == b"new-dtb"
+            table = 3 * 4096
+            assert int.from_bytes(image[table : table + 4], "little") == 5
+            assert int.from_bytes(image[table + 4 : table + 8], "little") == 0
+            assert int.from_bytes(image[table + 112 : table + 116], "little") == 4
+            assert int.from_bytes(image[table + 116 : table + 120], "little") == 5
+            assert image[table + 108] == 0xD1
+            assert image[table + 112 + 44] == 0xB7
+            assert image[table + 112 + 108] == 0xE1
+            assert image[6 * 4096 + 11 : 6 * 4096 + 15] == b"TAIL"
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vendor_boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--json",
+                "--dtb",
+                str(replacement_dtb),
+                "flash",
+                "vendor_boot:alpha",
+                str(replacement_ramdisk),
+            ],
+            repacked_vendor_boot,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash",
+            "partition": "vendor_boot",
+            "vendorRamdisk": "alpha",
+            "file": str(replacement_ramdisk),
+            "dtb": str(replacement_dtb),
+        }
+
+        missing_vendor_boot_file = invoke_without_connection(
+            cli,
+            ["flash", "vendor_boot:alpha"],
+            4,
+            "invalid_argument",
+        )
+        assert "cannot determine image filename" in str(
+            missing_vendor_boot_file["message"]
+        )
 
         vbmeta_file = directory / "vbmeta.img"
         vbmeta_payload = bytearray([0x5A] * 256)

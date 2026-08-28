@@ -257,6 +257,31 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>
+    /// Fetches an existing vendor_boot image, replaces one vendor ramdisk and
+    /// optionally its DTB, then flashes the repacked image in the same session.
+    /// </summary>
+    public Task FlashVendorBootRamdiskAsync(
+        string partition,
+        string ramdiskPath,
+        string ramdiskName = "default",
+        string? dtbPath = null,
+        FlashOptions options = default,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashVendorBootRamdiskCoreAsync(
+            partition,
+            ramdiskPath,
+            ramdiskName,
+            dtbPath,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
     /// <summary>Builds and flashes a default Android boot image.</summary>
     public Task FlashRawAsync(
         string partition,
@@ -1119,6 +1144,76 @@ public sealed partial class Context : IDisposable
                 out var rawOperation,
                 out var rawError);
 
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task FlashVendorBootRamdiskCoreAsync(
+        string partition,
+        string ramdiskPath,
+        string ramdiskName,
+        string? dtbPath,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(ramdiskPath, nameof(ramdiskPath));
+        ValidateRequiredText(ramdiskName, nameof(ramdiskName));
+        ValidateOptionalText(dtbPath, nameof(dtbPath));
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
+
+            var status = NativeMethods.FlashVendorBootRamdiskAsync(
+                handle,
+                deviceSelector,
+                partition,
+                ramdiskName,
+                ramdiskPath,
+                dtbPath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
             using (var operation = TakeStartedOperation(status, rawOperation, rawError))
             {
                 await OperationPollingEngine.WaitAsync(

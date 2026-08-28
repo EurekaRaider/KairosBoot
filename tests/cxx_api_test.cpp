@@ -102,6 +102,18 @@ static_assert(requires(kairosboot::Context &context,
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.flash_raw(selector, "boot", kernel) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk_async(selector, "vendor_boot", package,
+                                             "default", std::nullopt,
+                                             flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk(selector, "vendor_boot", package,
+                                      "default", std::nullopt,
+                                      flash_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk_async("vendor_boot", package) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk("vendor_boot", package) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
   { context.flash_raw_async(selector, "boot", kernel, std::nullopt,
                             std::nullopt, legacy_boot_options, flash_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;

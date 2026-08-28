@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 52
+    implemented: 53
     intentional-deviation: 15
-    missing: 16
-    partial: 36
+    missing: 14
+    partial: 37
 officialDifferentialCoverage:
   status: "not-run"
   requiredEntries: 87
@@ -87,7 +87,7 @@ entries:
     kind: "image-plan"
     required: true
     status: "missing"
-    note: "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
+    note: "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     evidence: []
   - id: "capability.update-zip"
     kind: "image-plan"
@@ -102,14 +102,19 @@ entries:
     kind: "image-plan"
     required: true
     status: "missing"
-    note: "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
+    note: "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     evidence: []
   - id: "capability.vendor-boot-construction"
     kind: "image-plan"
     required: true
-    status: "missing"
-    note: "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
-    evidence: []
+    status: "implemented"
+    note: "The locked vendor_boot v3/v4 workflow fetches the existing partition, strictly repacks the default ramdisk or one named v4 fragment with an optional DTB, and flashes in the same session with bounded memory."
+    evidence:
+      - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "command.boot"
     kind: "command"
     required: true
@@ -716,9 +721,12 @@ entries:
   - id: "option.dtb"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "partial"
+    note: "--dtb replaces the DTB while repacking an existing vendor_boot v3/v4 image. The locked legacy boot-v2 construction use remains unavailable."
+    evidence:
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.dtb-offset"
     kind: "option"
     required: true
@@ -980,7 +988,6 @@ requiredGaps:
   - "capability.super-image-optimization"
   - "capability.update-zip"
   - "capability.vbmeta-avb-mutation"
-  - "capability.vendor-boot-construction"
   - "command.boot"
   - "command.flash-raw"
   - "command.flashall"

@@ -426,6 +426,28 @@ int main(void) {
 
   operation = NULL;
   error = NULL;
+  CHECK(kb_flash_vendor_boot_ramdisk_async(
+            context, NULL, "boot", "default", "vendor_ramdisk.img", NULL,
+            NULL, &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_vendor_boot_ramdisk_async(
+            context, "tcp:127.0.0.1", "vendor_boot", "default",
+            "kairosboot-test-does-not-exist-vendor-ramdisk", NULL, NULL,
+            &operation, &error) == KB_E_IO);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "tcp:127.0.0.1") == 0);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
   CHECK(kb_boot_raw_async(context, NULL, "kernel", NULL, "second",
                           &legacy_boot_options, NULL, &operation, &error) ==
         KB_E_INVALID_ARGUMENT);
@@ -455,6 +477,15 @@ int main(void) {
   CHECK(kb_flash_file(context, NULL, "system",
                       "kairosboot-test-does-not-exist.img", NULL, &error) ==
         KB_E_IO);
+  CHECK(error != NULL);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  error = NULL;
+  CHECK(kb_flash_vendor_boot_ramdisk(
+            context, NULL, "vendor_boot", NULL,
+            "kairosboot-test-does-not-exist-vendor-ramdisk", NULL, NULL,
+            &error) == KB_E_IO);
   CHECK(error != NULL);
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   kb_error_release(error);

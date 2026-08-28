@@ -276,7 +276,7 @@
       "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
     },
     {
-      "ids": ["option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset"],
+      "ids": ["option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb-offset"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."
@@ -288,6 +288,14 @@
       "cliCommands": ["flash", "flash:raw", "update", "flashall"],
       "evidence": ["tests/fastboot/primitive_service_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
       "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks."
+    },
+    {
+      "ids": ["option.dtb"],
+      "status": "partial",
+      "cSymbols": ["kb_flash_vendor_boot_ramdisk", "kb_flash_vendor_boot_ramdisk_async"],
+      "cliCommands": ["flash"],
+      "evidence": ["tests/cli/scripted_cli_test.py", "tests/image/vendor_boot_repacker_tests.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "--dtb replaces the DTB while repacking an existing vendor_boot v3/v4 image. The locked legacy boot-v2 construction use remains unavailable."
     },
 
     {
@@ -330,10 +338,18 @@
       "note": "A bounded legacy Android boot v0 builder implements the locked base, command-line, page-size and address-offset surface; modern boot/vendor_boot headers and AVB mutation remain missing."
     },
     {
-      "ids": ["capability.vendor-boot-construction", "capability.vbmeta-avb-mutation", "capability.super-image-optimization"],
+      "ids": ["capability.vendor-boot-construction"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_vendor_boot_ramdisk", "kb_flash_vendor_boot_ramdisk_async"],
+      "cliCommands": ["flash"],
+      "evidence": ["tests/image/vendor_boot_repacker_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The locked vendor_boot v3/v4 workflow fetches the existing partition, strictly repacks the default ramdisk or one named v4 fragment with an optional DTB, and flashes in the same session with bounded memory."
+    },
+    {
+      "ids": ["capability.vbmeta-avb-mutation", "capability.super-image-optimization"],
       "status": "missing",
       "evidence": [],
-      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
+      "note": "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     },
 
     {
