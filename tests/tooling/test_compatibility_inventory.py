@@ -297,13 +297,13 @@ class CompatibilityInventoryTests(unittest.TestCase):
             ):
                 current, _ = GENERATOR.generate(root)
             self.assertEqual(
-                current["officialDifferentialCoverage"]["matchedScenarios"], 16
+                current["officialDifferentialCoverage"]["matchedScenarios"], 19
             )
             self.assertEqual(
                 current["officialDifferentialCoverage"][
                     "requiredEntriesWithEvidence"
                 ],
-                19,
+                22,
             )
             self.assertFalse(current["claimCompatibility"])
 

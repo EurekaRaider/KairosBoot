@@ -1677,14 +1677,10 @@ def run(cli: pathlib.Path) -> None:
         raw_dtb.write_bytes(raw_dtb_payload)
 
         def flashed_raw_over_tcp(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"getvar:is-userspace"
-            send_frame(connection, b"OKAYno")
+            # AOSP-aligned raw flash preflight: the frozen 37.0.1 trace only
+            # queries has-slot for the target partition before download.
             assert receive_frame(connection) == b"getvar:has-slot:boot"
             send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:is-logical:boot"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:max-download-size"
-            send_frame(connection, b"OKAY0x00100000")
             assert receive_frame(connection) == b"download:00005000"
             send_frame(connection, b"DATA00005000")
             image = receive_frame(connection)
