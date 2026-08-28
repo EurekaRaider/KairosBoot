@@ -286,7 +286,15 @@
       "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans."
     },
     {
-      "ids": ["option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb-offset"],
+      "ids": ["option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset"],
+      "status": "implemented",
+      "cSymbols": ["kb_boot_raw", "kb_boot_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async", "kb_flash_vendor_boot_ramdisk", "kb_flash_vendor_boot_ramdisk_async"],
+      "cliCommands": ["boot", "flash:raw", "make-boot-image", "flash"],
+      "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_image_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/image/vendor_boot_repacker_tests.cpp", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
+    },
+    {
+      "ids": ["option.disable-super-optimization", "option.force", "option.fs-options"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."
@@ -299,15 +307,6 @@
       "evidence": ["tests/fastboot/primitive_service_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
       "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks."
     },
-    {
-      "ids": ["option.dtb"],
-      "status": "partial",
-      "cSymbols": ["kb_flash_vendor_boot_ramdisk", "kb_flash_vendor_boot_ramdisk_async"],
-      "cliCommands": ["flash"],
-      "evidence": ["tests/cli/scripted_cli_test.py", "tests/image/vendor_boot_repacker_tests.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
-      "note": "--dtb replaces the DTB while repacking an existing vendor_boot v3/v4 image. The locked legacy boot-v2 construction use remains unavailable."
-    },
-
     {
       "ids": ["capability.raw-image"],
       "status": "implemented",
@@ -350,10 +349,11 @@
     },
     {
       "ids": ["capability.boot-image-construction"],
-      "status": "partial",
-      "cliCommands": ["make-boot-image", "flash:raw"],
-      "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/cli/boot_image_cli_test.py"],
-      "note": "A bounded legacy Android boot v0 builder implements the locked base, command-line, page-size and address-offset surface; modern boot/vendor_boot headers and AVB mutation remain missing."
+      "status": "implemented",
+      "cSymbols": ["kb_boot_raw", "kb_boot_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async"],
+      "cliCommands": ["boot", "flash:raw", "make-boot-image"],
+      "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_image_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The bounded shared builder emits Android boot headers v0-v4 and exposes every locked construction option through C11, C++23, .NET and CLI while rejecting header-incompatible layouts."
     },
     {
       "ids": ["capability.vendor-boot-construction"],

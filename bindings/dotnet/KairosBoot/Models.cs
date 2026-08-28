@@ -197,7 +197,7 @@ public readonly struct FlashOptions
     }
 }
 
-/// <summary>Controls the layout of a legacy Android boot header v0 image.</summary>
+/// <summary>Controls Android boot image construction for header versions 0 through 4.</summary>
 public readonly struct LegacyBootOptions
 {
     private const uint DefaultBaseAddress = 0x10000000U;
@@ -206,6 +206,7 @@ public readonly struct LegacyBootOptions
     private const uint DefaultRamdiskOffset = 0x01000000U;
     private const uint DefaultSecondOffset = 0x00f00000U;
     private const uint DefaultTagsOffset = 0x00000100U;
+    private const ulong DefaultDtbOffset = 0x01100000UL;
 
     private readonly bool hasExplicitValues;
     private readonly string? commandLine;
@@ -215,8 +216,13 @@ public readonly struct LegacyBootOptions
     private readonly uint ramdiskOffset;
     private readonly uint secondOffset;
     private readonly uint tagsOffset;
+    private readonly uint headerVersion;
+    private readonly string? osVersion;
+    private readonly string? osPatchLevel;
+    private readonly string? dtbPath;
+    private readonly ulong dtbOffset;
 
-    /// <summary>Creates a legacy Android boot header v0 layout.</summary>
+    /// <summary>Creates an Android boot image layout.</summary>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="commandLine"/> is <see langword="null"/>.
     /// </exception>
@@ -230,7 +236,12 @@ public readonly struct LegacyBootOptions
         uint kernelOffset = DefaultKernelOffset,
         uint ramdiskOffset = DefaultRamdiskOffset,
         uint secondOffset = DefaultSecondOffset,
-        uint tagsOffset = DefaultTagsOffset)
+        uint tagsOffset = DefaultTagsOffset,
+        uint headerVersion = 0,
+        string osVersion = "",
+        string osPatchLevel = "",
+        string? dtbPath = null,
+        ulong dtbOffset = DefaultDtbOffset)
     {
         if (commandLine == null)
         {
@@ -242,6 +253,20 @@ public readonly struct LegacyBootOptions
                 "Legacy boot command line must not contain a NUL character.",
                 nameof(commandLine));
         }
+        if (osVersion == null)
+        {
+            throw new ArgumentNullException(nameof(osVersion));
+        }
+        if (osPatchLevel == null)
+        {
+            throw new ArgumentNullException(nameof(osPatchLevel));
+        }
+        if (osVersion.IndexOf('\0') >= 0 || osPatchLevel.IndexOf('\0') >= 0 ||
+            (dtbPath != null && dtbPath.IndexOf('\0') >= 0))
+        {
+            throw new ArgumentException(
+                "Boot construction strings must not contain a NUL character.");
+        }
 
         this.commandLine = commandLine;
         this.baseAddress = baseAddress;
@@ -250,6 +275,11 @@ public readonly struct LegacyBootOptions
         this.ramdiskOffset = ramdiskOffset;
         this.secondOffset = secondOffset;
         this.tagsOffset = tagsOffset;
+        this.headerVersion = headerVersion;
+        this.osVersion = osVersion;
+        this.osPatchLevel = osPatchLevel;
+        this.dtbPath = dtbPath;
+        this.dtbOffset = dtbOffset;
         hasExplicitValues = true;
     }
 
@@ -276,6 +306,21 @@ public readonly struct LegacyBootOptions
 
     /// <summary>Gets the tags offset from the base address.</summary>
     public uint TagsOffset => hasExplicitValues ? tagsOffset : DefaultTagsOffset;
+
+    /// <summary>Gets the Android boot header version (0 through 4).</summary>
+    public uint HeaderVersion => hasExplicitValues ? headerVersion : 0U;
+
+    /// <summary>Gets MAJOR[.MINOR[.PATCH]], or an empty string for 0.0.0.</summary>
+    public string OsVersion => hasExplicitValues ? osVersion! : string.Empty;
+
+    /// <summary>Gets YYYY-MM-DD, or an empty string when unset.</summary>
+    public string OsPatchLevel => hasExplicitValues ? osPatchLevel! : string.Empty;
+
+    /// <summary>Gets the optional DTB file path for header version 2.</summary>
+    public string? DtbPath => hasExplicitValues ? dtbPath : null;
+
+    /// <summary>Gets the DTB offset relative to the base address.</summary>
+    public ulong DtbOffset => hasExplicitValues ? dtbOffset : DefaultDtbOffset;
 }
 
 /// <summary>Controls a complete update-package operation.</summary>

@@ -82,6 +82,11 @@ typedef struct kb_legacy_boot_options {
   uint32_t ramdisk_offset;
   uint32_t second_offset;
   uint32_t tags_offset;
+  uint32_t header_version;
+  const char *os_version;
+  const char *os_patch_level;
+  const char *dtb_path;
+  uint64_t dtb_offset;
 } kb_legacy_boot_options_t;
 
 typedef struct kb_operation {
@@ -202,7 +207,10 @@ static int valid_default_legacy_boot_options(
          options->kernel_offset == 0x00008000U &&
          options->ramdisk_offset == 0x01000000U &&
          options->second_offset == 0x00f00000U &&
-         options->tags_offset == 0x00000100U;
+         options->tags_offset == 0x00000100U &&
+         options->header_version == 0U && options->os_version == NULL &&
+         options->os_patch_level == NULL && options->dtb_path == NULL &&
+         options->dtb_offset == 0x01100000ULL;
 }
 
 static int valid_custom_legacy_boot_layout(
@@ -218,7 +226,12 @@ static int valid_custom_legacy_boot_layout(
 static int valid_custom_legacy_boot_options(
     const kb_legacy_boot_options_t *options) {
   return valid_custom_legacy_boot_layout(options) &&
-         same_string(options->command_line, expected_unicode_command_line);
+         same_string(options->command_line, expected_unicode_command_line) &&
+         options->header_version == 2U &&
+         same_string(options->os_version, "15.0.1") &&
+         same_string(options->os_patch_level, "2025-02-05") &&
+         same_string(options->dtb_path, "board.dtb") &&
+         options->dtb_offset == 0x01200000ULL;
 }
 
 static int valid_job_options(const kb_job_options_t *options) {
@@ -356,6 +369,17 @@ KB_TEST_API const char *KB_TEST_CALL kb_status_string(int32_t status) {
   return "scripted update native validation failed";
 }
 
+KB_TEST_API void KB_TEST_CALL kb_context_options_init(
+    kb_context_options_t *options) {
+  if (options == NULL) {
+    record_failure(9);
+    return;
+  }
+  memset(options, 0, sizeof(*options));
+  options->struct_size = (uint32_t)sizeof(*options);
+  options->api_version = 1;
+}
+
 KB_TEST_API int32_t KB_TEST_CALL kb_context_create(
     const void *options, void **context, void **error) {
   if (context == NULL || error == NULL) {
@@ -424,6 +448,7 @@ KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init(
   options->ramdisk_offset = 0x01000000U;
   options->second_offset = 0x00f00000U;
   options->tags_offset = 0x00000100U;
+  options->dtb_offset = 0x01100000ULL;
   ++legacy_boot_options_init_count;
 }
 

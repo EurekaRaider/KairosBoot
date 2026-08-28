@@ -24,6 +24,7 @@ using kairosboot::image::BootImageBuildErrorKind;
 using kairosboot::image::IImageSource;
 using kairosboot::image::ImageSourceError;
 using kairosboot::image::LegacyBootImageOptions;
+using kairosboot::image::build_boot_image;
 using kairosboot::image::build_legacy_boot_image;
 using kairosboot::image::compute_sha256;
 using kairosboot::image::sha256_hex;
@@ -90,6 +91,18 @@ private:
     std::uint32_t value = 0U;
     for (std::size_t index = 0U; index < 4U; ++index) {
         value |= static_cast<std::uint32_t>(
+                     std::to_integer<std::uint8_t>(bytes[offset + index]))
+                 << (index * 8U);
+    }
+    return value;
+}
+
+[[nodiscard]] std::uint64_t read_u64(
+    const std::span<const std::byte> bytes,
+    const std::size_t offset) {
+    std::uint64_t value = 0U;
+    for (std::size_t index = 0U; index < 8U; ++index) {
+        value |= static_cast<std::uint64_t>(
                      std::to_integer<std::uint8_t>(bytes[offset + index]))
                  << (index * 8U);
     }
@@ -203,6 +216,61 @@ void reads_cross_piece_boundaries_without_copying_payloads() {
     CHECK(boundary[9] == std::byte{0});
 }
 
+void v2_dtb_and_release_fields_change_header_and_layout() {
+    LegacyBootImageOptions options;
+    options.header_version = 2U;
+    options.os_version = "15.2.1";
+    options.os_patch_level = "2025-02-05";
+    options.dtb_path = "board.dtb";
+    options.dtb_offset = 0x01200000ULL;
+    const auto built = build_boot_image(
+        std::make_shared<MemorySource>("K"),
+        std::make_shared<MemorySource>("R"),
+        std::make_shared<MemorySource>("S"),
+        std::make_shared<MemorySource>("D"), options);
+    CHECK(built.has_value());
+    CHECK((*built)->size() == 10240U);
+    const auto bytes = materialize(**built);
+    CHECK(read_u32(bytes, 40U) == 2U);
+    CHECK(read_u32(bytes, 44U) ==
+          ((15U << 25U) | (2U << 18U) | (1U << 11U) | (25U << 4U) | 2U));
+    CHECK(read_u32(bytes, 1644U) == 1660U);
+    CHECK(read_u32(bytes, 1648U) == 1U);
+    CHECK(read_u64(bytes, 1652U) == 0x11200000ULL);
+    CHECK(bytes[2048] == std::byte{'K'});
+    CHECK(bytes[4096] == std::byte{'R'});
+    CHECK(bytes[6144] == std::byte{'S'});
+    CHECK(bytes[8192] == std::byte{'D'});
+}
+
+void v3_v4_use_fixed_modern_layout() {
+    for (const std::uint32_t version : {3U, 4U}) {
+        LegacyBootImageOptions options;
+        options.header_version = version;
+        options.command_line = "console=modern";
+        options.os_version = "14";
+        options.os_patch_level = "2024-12-01";
+        const auto built = build_boot_image(
+            std::make_shared<MemorySource>("kernel"),
+            std::make_shared<MemorySource>("ramdisk"), {}, {}, options);
+        CHECK(built.has_value());
+        CHECK((*built)->size() == 12288U);
+        const auto bytes = materialize(**built);
+        CHECK(read_u32(bytes, 8U) == 6U);
+        CHECK(read_u32(bytes, 12U) == 7U);
+        CHECK(read_u32(bytes, 16U) ==
+              ((14U << 25U) | (24U << 4U) | 12U));
+        CHECK(read_u32(bytes, 20U) == 1580U);
+        CHECK(read_u32(bytes, 40U) == version);
+        CHECK(matches(bytes, 44U, "console=modern"));
+        CHECK(matches(bytes, 4096U, "kernel"));
+        CHECK(matches(bytes, 8192U, "ramdisk"));
+        if (version == 4U) {
+            CHECK(read_u32(bytes, 1580U) == 0U);
+        }
+    }
+}
+
 void rejects_unsupported_or_unrepresentable_inputs_before_publication() {
     const auto kernel = std::make_shared<MemorySource>("k");
     {
@@ -211,6 +279,38 @@ void rejects_unsupported_or_unrepresentable_inputs_before_publication() {
         const auto result = build_legacy_boot_image(kernel, {}, {}, options);
         CHECK(!result.has_value());
         CHECK(result.error().kind == BootImageBuildErrorKind::InvalidArgument);
+    }
+    {
+        auto options = LegacyBootImageOptions{};
+        options.header_version = 5U;
+        CHECK(!build_boot_image(kernel, {}, {}, {}, options).has_value());
+    }
+    {
+        auto options = LegacyBootImageOptions{};
+        options.header_version = 1U;
+        options.dtb_path = "board.dtb";
+        const auto result = build_boot_image(
+            kernel, {}, {}, std::make_shared<MemorySource>("d"), options);
+        CHECK(!result.has_value());
+        CHECK(result.error().kind == BootImageBuildErrorKind::InvalidArgument);
+    }
+    {
+        auto options = LegacyBootImageOptions{};
+        options.header_version = 3U;
+        const auto result = build_boot_image(
+            kernel, {}, std::make_shared<MemorySource>("s"), {}, options);
+        CHECK(!result.has_value());
+        CHECK(result.error().kind == BootImageBuildErrorKind::InvalidArgument);
+        options.page_size = 4096U;
+        CHECK(!build_boot_image(kernel, {}, {}, {}, options).has_value());
+    }
+    {
+        auto options = LegacyBootImageOptions{};
+        options.os_version = "128.0.0";
+        CHECK(!build_boot_image(kernel, {}, {}, {}, options).has_value());
+        options.os_version.clear();
+        options.os_patch_level = "2025-02-30";
+        CHECK(!build_boot_image(kernel, {}, {}, {}, options).has_value());
     }
     {
         auto options = LegacyBootImageOptions{};
@@ -269,10 +369,12 @@ void source_contract_and_cancellation_are_reported() {
 
 int main() {
     using TestCase = std::pair<std::string_view, void (*)()>;
-    const std::array<TestCase, 5> tests{{
+    const std::array<TestCase, 7> tests{{
         {"canonical v0", canonical_v0_layout_addresses_hash_and_padding},
         {"cmdline and custom layout", command_line_split_and_custom_layout_are_exact},
         {"cross-piece reads", reads_cross_piece_boundaries_without_copying_payloads},
+        {"v2 DTB and release fields", v2_dtb_and_release_fields_change_header_and_layout},
+        {"v3/v4 modern layout", v3_v4_use_fixed_modern_layout},
         {"invalid boundaries", rejects_unsupported_or_unrepresentable_inputs_before_publication},
         {"source and cancellation", source_contract_and_cancellation_are_reported},
     }};

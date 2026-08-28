@@ -84,6 +84,11 @@ int main(void) {
   CHECK(legacy_boot_options.ramdisk_offset == UINT32_C(0x01000000));
   CHECK(legacy_boot_options.second_offset == UINT32_C(0x00f00000));
   CHECK(legacy_boot_options.tags_offset == UINT32_C(0x00000100));
+  CHECK(legacy_boot_options.header_version == 0U);
+  CHECK(legacy_boot_options.os_version == NULL);
+  CHECK(legacy_boot_options.os_patch_level == NULL);
+  CHECK(legacy_boot_options.dtb_path == NULL);
+  CHECK(legacy_boot_options.dtb_offset == UINT64_C(0x01100000));
 
   kb_update_options_t update_options;
   kb_update_options_init(&update_options);

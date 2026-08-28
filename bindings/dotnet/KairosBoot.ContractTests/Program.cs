@@ -320,7 +320,24 @@ internal static class Program
             Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.TagsOffset)).ToInt32() == legacyAddressOffset + 20,
             "legacy boot options tags offset");
         Check(
-            Marshal.SizeOf<NativeLegacyBootOptions>() == (IntPtr.Size == 8 ? 40 : 36),
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.HeaderVersion)).ToInt32() == legacyAddressOffset + 24,
+            "boot options header version offset");
+        var bootStringOffset = IntPtr.Size == 8 ? 48 : 40;
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.OsVersion)).ToInt32() == bootStringOffset,
+            "boot options OS version offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.OsPatchLevel)).ToInt32() == bootStringOffset + IntPtr.Size,
+            "boot options OS patch offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.DtbPath)).ToInt32() == bootStringOffset + 2 * IntPtr.Size,
+            "boot options DTB path offset");
+        var dtbOffsetOffset = IntPtr.Size == 8 ? 72 : 56;
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.DtbOffset)).ToInt32() == dtbOffsetOffset,
+            "boot options DTB offset field");
+        Check(
+            Marshal.SizeOf<NativeLegacyBootOptions>() == (IntPtr.Size == 8 ? 80 : 64),
             "legacy boot options native size");
         Check(
             NativeMethods.LegacyBootOptionsStructSize == Marshal.SizeOf<NativeLegacyBootOptions>(),
@@ -901,6 +918,11 @@ internal static class Program
         Check(defaults.RamdiskOffset == 0x01000000U, "default legacy ramdisk offset");
         Check(defaults.SecondOffset == 0x00f00000U, "default legacy second offset");
         Check(defaults.TagsOffset == 0x00000100U, "default legacy tags offset");
+        Check(defaults.HeaderVersion == 0U, "default boot header version");
+        Check(defaults.OsVersion == string.Empty, "default boot OS version");
+        Check(defaults.OsPatchLevel == string.Empty, "default boot OS patch level");
+        Check(defaults.DtbPath == null, "default boot DTB path");
+        Check(defaults.DtbOffset == 0x01100000UL, "default boot DTB offset");
 
         var custom = new LegacyBootOptions(
             "console=ttyS0",
@@ -909,7 +931,12 @@ internal static class Program
             0x00010000U,
             0x02000000U,
             0x01f00000U,
-            0x00000200U);
+            0x00000200U,
+            2U,
+            "15.0.1",
+            "2025-02-05",
+            "board.dtb",
+            0x01200000UL);
         Check(custom.CommandLine == "console=ttyS0", "custom legacy command line");
         Check(custom.BaseAddress == 0x12000000U, "custom legacy base");
         Check(custom.PageSize == 4096U, "custom legacy page size");
@@ -917,6 +944,11 @@ internal static class Program
         Check(custom.RamdiskOffset == 0x02000000U, "custom legacy ramdisk offset");
         Check(custom.SecondOffset == 0x01f00000U, "custom legacy second offset");
         Check(custom.TagsOffset == 0x00000200U, "custom legacy tags offset");
+        Check(custom.HeaderVersion == 2U, "custom boot header version");
+        Check(custom.OsVersion == "15.0.1", "custom boot OS version");
+        Check(custom.OsPatchLevel == "2025-02-05", "custom boot OS patch level");
+        Check(custom.DtbPath == "board.dtb", "custom boot DTB path");
+        Check(custom.DtbOffset == 0x01200000UL, "custom boot DTB offset");
         Expect<ArgumentNullException>(() => _ = new LegacyBootOptions(null!));
         Expect<ArgumentException>(() => _ = new LegacyBootOptions("console=x\0ignored"));
     }
@@ -1084,7 +1116,7 @@ internal static class Program
             "blocking flash:raw import call");
         Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "native operation cancellation");
         Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 5, "operation release");
-        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "update context release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 3, "update context release");
     }
 
     private static async Task CheckScriptedBootShim()
@@ -1232,7 +1264,12 @@ internal static class Program
             0x00010000U,
             0x02000000U,
             0x01f00000U,
-            0x00000200U);
+            0x00000200U,
+            2U,
+            "15.0.1",
+            "2025-02-05",
+            "board.dtb",
+            0x01200000UL);
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
 
         using (var context = Context.Create())

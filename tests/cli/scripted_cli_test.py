@@ -1483,12 +1483,15 @@ def run(cli: pathlib.Path) -> None:
         raw_kernel = directory / "raw-kernel.bin"
         raw_ramdisk = directory / "raw-ramdisk.bin"
         raw_second = directory / "raw-second.bin"
+        raw_dtb = directory / "raw-board.dtb"
         raw_kernel_payload = bytes(index & 0xFF for index in range(2048))
         raw_ramdisk_payload = b"r\x00d"
         raw_second_payload = b"second"
+        raw_dtb_payload = b"dtb"
         raw_kernel.write_bytes(raw_kernel_payload)
         raw_ramdisk.write_bytes(raw_ramdisk_payload)
         raw_second.write_bytes(raw_second_payload)
+        raw_dtb.write_bytes(raw_dtb_payload)
 
         def flashed_raw_over_tcp(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"getvar:is-userspace"
@@ -1499,10 +1502,10 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:max-download-size"
             send_frame(connection, b"OKAY0x00100000")
-            assert receive_frame(connection) == b"download:00004000"
-            send_frame(connection, b"DATA00004000")
+            assert receive_frame(connection) == b"download:00005000"
+            send_frame(connection, b"DATA00005000")
             image = receive_frame(connection)
-            assert len(image) == 16384
+            assert len(image) == 20480
             assert image[:8] == b"ANDROID!"
             assert int.from_bytes(image[8:12], "little") == 2048
             assert int.from_bytes(image[12:16], "little") == 0x20001000
@@ -1512,10 +1515,18 @@ def run(cli: pathlib.Path) -> None:
             assert int.from_bytes(image[28:32], "little") == 0x20003000
             assert int.from_bytes(image[32:36], "little") == 0x20004000
             assert int.from_bytes(image[36:40], "little") == 4096
+            assert int.from_bytes(image[40:44], "little") == 2
+            assert int.from_bytes(image[44:48], "little") == (
+                (15 << 25) | (1 << 18) | (25 << 4) | 2
+            )
+            assert int.from_bytes(image[1644:1648], "little") == 1660
+            assert int.from_bytes(image[1648:1652], "little") == len(raw_dtb_payload)
+            assert int.from_bytes(image[1652:1660], "little") == 0x21200000
             assert image[64 : 64 + len(b"console=ttyS0")] == b"console=ttyS0"
             assert image[4096:6144] == raw_kernel_payload
             assert image[8192:8195] == raw_ramdisk_payload
             assert image[12288 : 12288 + len(raw_second_payload)] == raw_second_payload
+            assert image[16384 : 16384 + len(raw_dtb_payload)] == raw_dtb_payload
             send_frame(connection, b"OKAYdownloaded")
             assert receive_frame(connection) == b"flash:boot"
             send_frame(connection, b"OKAYflashed")
@@ -1538,6 +1549,16 @@ def run(cli: pathlib.Path) -> None:
                 "0x3000",
                 "--tags-offset",
                 "0x4000",
+                "--header-version",
+                "2",
+                "--os-version",
+                "15.1",
+                "--os-patch-level",
+                "2025-02-05",
+                "--dtb",
+                str(raw_dtb),
+                "--dtb-offset",
+                "0x1200000",
                 "flash:raw",
                 "boot",
                 str(raw_kernel),

@@ -145,6 +145,48 @@ def main() -> int:
         }:
             raise AssertionError(f"unexpected success document: {document!r}")
 
+        modern_output = directory / "boot-v3.img"
+        modern_document = run(
+            arguments.cli,
+            [
+                "make-boot-image",
+                str(modern_output),
+                str(kernel_path),
+                str(ramdisk_path),
+                "--header-version",
+                "3",
+                "--os-version",
+                "14.1.2",
+                "--os-patch-level",
+                "2024-12-05",
+                "--cmdline",
+                "console=modern",
+            ],
+            0,
+        )
+        modern = modern_output.read_bytes()
+        if len(modern) != 12288:
+            raise AssertionError(f"unexpected v3 image size: {len(modern)}")
+        if struct.unpack_from("<I", modern, 8)[0] != len(kernel):
+            raise AssertionError("v3 kernel size was not encoded")
+        if struct.unpack_from("<I", modern, 12)[0] != len(ramdisk):
+            raise AssertionError("v3 ramdisk size was not encoded")
+        expected_os = (14 << 25) | (1 << 18) | (2 << 11) | (24 << 4) | 12
+        if struct.unpack_from("<I", modern, 16)[0] != expected_os:
+            raise AssertionError("v3 OS version/patch field was not encoded")
+        if struct.unpack_from("<II", modern, 20) != (1580, 0):
+            raise AssertionError("v3 header size/reserved fields are invalid")
+        if struct.unpack_from("<I", modern, 40)[0] != 3:
+            raise AssertionError("v3 header version was not encoded")
+        if modern[44 : 44 + len(b"console=modern")] != b"console=modern":
+            raise AssertionError("v3 command line was not encoded")
+        if modern[4096 : 4096 + len(kernel)] != kernel:
+            raise AssertionError("v3 kernel layout is invalid")
+        if modern[8192 : 8192 + len(ramdisk)] != ramdisk:
+            raise AssertionError("v3 ramdisk layout is invalid")
+        if modern_document["headerVersion"] != 3:
+            raise AssertionError(f"unexpected v3 document: {modern_document!r}")
+
         rejected = directory / "rejected.img"
         failure = run(
             arguments.cli,

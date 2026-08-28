@@ -25,10 +25,10 @@ struct BootImageBuildError final {
     std::string message;
 };
 
-// Address and layout defaults match the legacy image produced by AOSP
-// fastboot's `boot <kernel> [ramdisk [second]]` path. This clean-room builder
-// intentionally emits only Android boot header v0; modern boot/vendor_boot
-// construction requires separate vendor payloads and is not implied here.
+// Address and layout defaults match the image produced by AOSP fastboot's
+// `boot <kernel> [ramdisk [second]]` path. The historical type name is kept for
+// source compatibility, but header_version selects Android boot header v0-v4.
+// DTB is supported only by v2; v3/v4 use their fixed 4096-byte layout.
 struct LegacyBootImageOptions final {
     std::string command_line;
     std::uint32_t base{0x10000000U};
@@ -37,12 +37,17 @@ struct LegacyBootImageOptions final {
     std::uint32_t ramdisk_offset{0x01000000U};
     std::uint32_t second_offset{0x00f00000U};
     std::uint32_t tags_offset{0x00000100U};
+    std::uint32_t header_version{};
+    std::string os_version;
+    std::string os_patch_level;
+    std::string dtb_path;
+    std::uint64_t dtb_offset{0x01100000ULL};
     std::uint64_t maximum_output_bytes{16ULL * 1024ULL * 1024ULL * 1024ULL};
 };
 
-// Immutable, bounded-memory composite image. Kernel, ramdisk, and second-stage
-// bytes remain in their original random-access sources; only the 1632-byte v0
-// header and a small piece table are owned by the result.
+// Immutable, bounded-memory composite image. Component bytes remain in their
+// original random-access sources; only one header page and a small piece table
+// are owned by the result.
 class LegacyBootImageSource final : public IImageSource {
 public:
     ~LegacyBootImageSource() override;
@@ -66,6 +71,16 @@ private:
         std::shared_ptr<const IImageSource>,
         LegacyBootImageOptions,
         std::stop_token);
+
+    friend std::expected<std::shared_ptr<const LegacyBootImageSource>,
+                         BootImageBuildError>
+    build_boot_image(
+        std::shared_ptr<const IImageSource>,
+        std::shared_ptr<const IImageSource>,
+        std::shared_ptr<const IImageSource>,
+        std::shared_ptr<const IImageSource>,
+        LegacyBootImageOptions,
+        std::stop_token);
 };
 
 [[nodiscard]] std::expected<std::shared_ptr<const LegacyBootImageSource>,
@@ -74,6 +89,18 @@ build_legacy_boot_image(
     std::shared_ptr<const IImageSource> kernel,
     std::shared_ptr<const IImageSource> ramdisk = {},
     std::shared_ptr<const IImageSource> second = {},
+    LegacyBootImageOptions options = {},
+    std::stop_token cancellation = {});
+
+// General v0-v4 builder. Payloads remain random-access sources in the returned
+// piece table, so even very large components are not copied into one buffer.
+[[nodiscard]] std::expected<std::shared_ptr<const LegacyBootImageSource>,
+                            BootImageBuildError>
+build_boot_image(
+    std::shared_ptr<const IImageSource> kernel,
+    std::shared_ptr<const IImageSource> ramdisk,
+    std::shared_ptr<const IImageSource> second,
+    std::shared_ptr<const IImageSource> dtb,
     LegacyBootImageOptions options = {},
     std::stop_token cancellation = {});
 

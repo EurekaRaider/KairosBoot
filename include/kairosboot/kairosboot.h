@@ -176,9 +176,11 @@ typedef struct kb_flash_options {
   uint64_t sparse_limit_bytes;
 } kb_flash_options_t;
 
-/* Legacy Android boot header v0 layout used only when constructing an image
- * from KERNEL and optional RAMDISK/SECOND component files. command_line is
- * copied before the call returns and may be NULL for an empty command line. */
+/* Android boot image construction options used with KERNEL and optional
+ * RAMDISK/SECOND components. The historic name is retained for ABI stability.
+ * header_version accepts 0..4. DTB is supported only by v2; v3/v4 use a fixed
+ * 4096-byte layout and reject legacy address/page options that differ from the
+ * initialized defaults. All strings are copied before an async call returns. */
 typedef struct kb_legacy_boot_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -189,6 +191,15 @@ typedef struct kb_legacy_boot_options {
   uint32_t ramdisk_offset;
   uint32_t second_offset;
   uint32_t tags_offset;
+  uint32_t header_version;
+  /* NULL means 0.0.0; otherwise MAJOR[.MINOR[.PATCH]], each in [0, 127]. */
+  const char *os_version;
+  /* NULL means unset; otherwise an encodable YYYY-MM-DD calendar date. */
+  const char *os_patch_level;
+  /* Optional UTF-8 DTB file path. Requires header_version == 2. */
+  const char *dtb_path;
+  /* Relative to base for v2. The initialized default is 0x01100000. */
+  uint64_t dtb_offset;
 } kb_legacy_boot_options_t;
 
 typedef struct kb_update_options {
@@ -275,6 +286,9 @@ typedef struct kb_job_options {
 #define KB_LEGACY_BOOT_OPTIONS_V1_SIZE                                       \
   ((uint32_t)(offsetof(kb_legacy_boot_options_t, tags_offset) +              \
               sizeof(((kb_legacy_boot_options_t *)0)->tags_offset)))
+#define KB_LEGACY_BOOT_OPTIONS_MODERN_SIZE                                   \
+  ((uint32_t)(offsetof(kb_legacy_boot_options_t, dtb_offset) +               \
+              sizeof(((kb_legacy_boot_options_t *)0)->dtb_offset)))
 #define KB_UPDATE_OPTIONS_V1_SIZE                                            \
   ((uint32_t)(offsetof(kb_update_options_t, progress_user_data) +            \
               sizeof(((kb_update_options_t *)0)->progress_user_data)))
@@ -366,9 +380,9 @@ KB_API kb_status_t KB_CALL kb_flash_raw(
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
 
-/* Configured counterpart of kb_flash_raw. A prebuilt Android boot image is
- * still flashed unchanged; legacy_options_or_null is used only when KERNEL is
- * a raw kernel component. */
+/* Configured counterpart of kb_flash_raw. Construction options are used only
+ * when KERNEL is a raw kernel component; prebuilt Android boot images are sent
+ * unchanged and reject component files. */
 KB_API kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
     kb_context_t *context, const char *device_selector_or_null,
     const char *partition, const char *kernel_path,

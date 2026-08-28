@@ -260,10 +260,24 @@ int main() {
     kairosboot::LegacyBootOptions options;
     options.command_line = "console=ttyS0";
     options.page_size = 4096U;
+    options.header_version = 2U;
+    options.os_version = "15.0.1";
+    options.os_patch_level = "2025-02-05";
+    options.dtb = std::filesystem::path{"board.dtb"};
+    options.dtb_offset = 0x01200000ULL;
     auto prepared = kairosboot::detail::prepare_legacy_boot_options(options);
     CHECK(prepared.has_value());
     CHECK(prepared->command_line == "console=ttyS0");
     CHECK(prepared->native.page_size == 4096U);
+    CHECK(prepared->native.header_version == 2U);
+    CHECK(prepared->os_version == "15.0.1");
+    CHECK(prepared->os_patch_level == "2025-02-05");
+    CHECK(prepared->dtb_path == "board.dtb");
+    CHECK(prepared->native.dtb_offset == 0x01200000ULL);
+    kairosboot::detail::bind_legacy_boot_option_strings(*prepared);
+    CHECK(std::string_view{prepared->native.os_version} == "15.0.1");
+    CHECK(std::string_view{prepared->native.os_patch_level} == "2025-02-05");
+    CHECK(std::string_view{prepared->native.dtb_path} == "board.dtb");
 
     options.command_line = std::string{"bad\0cmdline", 11U};
     prepared = kairosboot::detail::prepare_legacy_boot_options(options);

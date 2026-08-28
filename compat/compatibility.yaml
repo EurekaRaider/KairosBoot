@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 60
+    implemented: 66
     intentional-deviation: 15
-    missing: 8
-    partial: 36
+    missing: 4
+    partial: 34
 officialDifferentialCoverage:
   status: "not-run"
   requiredEntries: 87
@@ -46,11 +46,16 @@ entries:
   - id: "capability.boot-image-construction"
     kind: "image-plan"
     required: true
-    status: "partial"
-    note: "A bounded legacy Android boot v0 builder implements the locked base, command-line, page-size and address-offset surface; modern boot/vendor_boot headers and AVB mutation remain missing."
+    status: "implemented"
+    note: "The bounded shared builder emits Android boot headers v0-v4 and exposes every locked construction option through C11, C++23, .NET and CLI while rejecting header-incompatible layouts."
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "capability.dynamic-partitions"
     kind: "image-plan"
     required: true
@@ -750,18 +755,31 @@ entries:
   - id: "option.dtb"
     kind: "option"
     required: true
-    status: "partial"
-    note: "--dtb replaces the DTB while repacking an existing vendor_boot v3/v4 image. The locked legacy boot-v2 construction use remains unavailable."
+    status: "implemented"
+    note: "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
     evidence:
+      - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.dtb-offset"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
+    evidence:
+      - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.exclude-dynamic-partitions"
     kind: "option"
     required: true
@@ -787,9 +805,17 @@ entries:
   - id: "option.header-version"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
+    evidence:
+      - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.help"
     kind: "option"
     required: true
@@ -816,15 +842,31 @@ entries:
   - id: "option.os-patch-level"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
+    evidence:
+      - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.os-version"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
+    evidence:
+      - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/vendor_boot_repacker_tests.cpp"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.page-size"
     kind: "option"
     required: true
@@ -1010,7 +1052,6 @@ entries:
       - "tests/libusb_runtime/test_main.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
 requiredGaps:
-  - "capability.boot-image-construction"
   - "capability.dynamic-partitions"
   - "capability.fastboot-info"
   - "capability.super-image-optimization"
@@ -1022,11 +1063,6 @@ requiredGaps:
   - "image.boot"
   - "image.system"
   - "option.disable-super-optimization"
-  - "option.dtb"
-  - "option.dtb-offset"
   - "option.force"
   - "option.fs-options"
-  - "option.header-version"
-  - "option.os-patch-level"
-  - "option.os-version"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"

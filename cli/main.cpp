@@ -354,7 +354,10 @@ bool is_global_option(const std::string_view value) noexcept {
          value == "--base" || value == "--cmdline" ||
          value == "--page-size" || value == "--kernel-offset" ||
          value == "--ramdisk-offset" || value == "--second-offset" ||
-         value == "--tags-offset" || value == "--slot" ||
+         value == "--tags-offset" || value == "--header-version" ||
+         value == "--os-version" || value == "--os-patch-level" ||
+         value == "--dtb-offset" ||
+         value == "--slot" ||
          value == "-a" || value == "--set-active" ||
          value.starts_with("--set-active=");
 }
@@ -475,6 +478,10 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool ramdisk_offset_seen = false;
   bool second_offset_seen = false;
   bool tags_offset_seen = false;
+  bool header_version_seen = false;
+  bool os_version_seen = false;
+  bool os_patch_level_seen = false;
+  bool dtb_offset_seen = false;
   bool slot_seen = false;
   bool set_active_seen = false;
   const auto error = [&result](std::string message) {
@@ -647,8 +654,11 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     bool *legacy_seen = nullptr;
     std::uint32_t *legacy_number = nullptr;
+    std::uint64_t *boot_u64 = nullptr;
+    std::string *boot_string = nullptr;
     if (argument == "--cmdline") {
       legacy_seen = &cmdline_seen;
+      boot_string = &result.boot_image_options.command_line;
     } else if (argument == "--base") {
       legacy_seen = &base_seen;
       legacy_number = &result.boot_image_options.base;
@@ -667,6 +677,18 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     } else if (argument == "--tags-offset") {
       legacy_seen = &tags_offset_seen;
       legacy_number = &result.boot_image_options.tags_offset;
+    } else if (argument == "--header-version") {
+      legacy_seen = &header_version_seen;
+      legacy_number = &result.boot_image_options.header_version;
+    } else if (argument == "--os-version") {
+      legacy_seen = &os_version_seen;
+      boot_string = &result.boot_image_options.os_version;
+    } else if (argument == "--os-patch-level") {
+      legacy_seen = &os_patch_level_seen;
+      boot_string = &result.boot_image_options.os_patch_level;
+    } else if (argument == "--dtb-offset") {
+      legacy_seen = &dtb_offset_seen;
+      boot_u64 = &result.boot_image_options.dtb_offset;
     }
     if (legacy_seen != nullptr) {
       if (*legacy_seen) {
@@ -678,11 +700,25 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
                      " requires a value");
       }
       const std::string_view value{argv[index + 1]};
-      if (legacy_number == nullptr) {
-        result.boot_image_options.command_line = value;
-      } else if (!parse_u32_auto(value, *legacy_number)) {
+      if (boot_string != nullptr) {
+        if (argument != "--cmdline" && value.empty()) {
+          return error("option " + std::string{argument} +
+                       " requires a non-empty value");
+        }
+        *boot_string = value;
+      } else if (legacy_number != nullptr) {
+        if (!parse_u32_auto(value, *legacy_number)) {
+          return error("option " + std::string{argument} +
+                       " requires an unsigned decimal or 0x hexadecimal value");
+        }
+      } else if (boot_u64 == nullptr ||
+                 !parse_unsigned_number(value, *boot_u64)) {
         return error("option " + std::string{argument} +
-                     " requires a uint32 decimal or 0x hexadecimal value");
+                     " requires an unsigned decimal or 0x hexadecimal value");
+      }
+      if (argument == "--header-version" &&
+          result.boot_image_options.header_version > 4U) {
+        return error("option --header-version requires an integer in [0, 4]");
       }
       *legacy_seen = true;
       result.global.legacy_boot_options_set = true;
@@ -701,6 +737,11 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     return error("unknown option " + std::string{command});
   }
   const int command_index = index++;
+  if (result.global.dtb_path.has_value() &&
+      (command == "boot" || command == "flash:raw")) {
+    result.boot_image_options.dtb_path = *result.global.dtb_path;
+    result.global.legacy_boot_options_set = true;
+  }
   for (int operand = index; operand < argc; ++operand) {
     if (command != "make-boot-image" && is_global_option(argv[operand])) {
       return error("global options must precede the command");
@@ -749,8 +790,10 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       command != "flashall") {
     return error("option -S is not valid for " + std::string{command});
   }
-  if (result.global.dtb_path.has_value() && command != "flash") {
-    return error("option --dtb is valid only for flash vendor_boot:RAMDISK");
+  if (result.global.dtb_path.has_value() && command != "flash" &&
+      command != "boot" && command != "flash:raw") {
+    return error(
+        "option --dtb is valid only for boot, flash:raw, or flash vendor_boot:RAMDISK");
   }
 
   if (command == "--version") {
@@ -1037,12 +1080,20 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     bool ramdisk_offset_seen = false;
     bool second_offset_seen = false;
     bool tags_offset_seen = false;
+    bool header_version_seen = false;
+    bool os_version_seen = false;
+    bool os_patch_level_seen = false;
+    bool dtb_seen = false;
+    bool dtb_offset_seen = false;
     while (index < argc) {
       const std::string_view option{argv[index++]};
       bool *seen = nullptr;
       std::uint32_t *number = nullptr;
+      std::uint64_t *number64 = nullptr;
+      std::string *text = nullptr;
       if (option == "--cmdline") {
         seen = &cmdline_seen;
+        text = &result.boot_image_options.command_line;
       } else if (option == "--base") {
         seen = &base_seen;
         number = &result.boot_image_options.base;
@@ -1061,6 +1112,21 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       } else if (option == "--tags-offset") {
         seen = &tags_offset_seen;
         number = &result.boot_image_options.tags_offset;
+      } else if (option == "--header-version") {
+        seen = &header_version_seen;
+        number = &result.boot_image_options.header_version;
+      } else if (option == "--os-version") {
+        seen = &os_version_seen;
+        text = &result.boot_image_options.os_version;
+      } else if (option == "--os-patch-level") {
+        seen = &os_patch_level_seen;
+        text = &result.boot_image_options.os_patch_level;
+      } else if (option == "--dtb") {
+        seen = &dtb_seen;
+        text = &result.boot_image_options.dtb_path;
+      } else if (option == "--dtb-offset") {
+        seen = &dtb_offset_seen;
+        number64 = &result.boot_image_options.dtb_offset;
       } else {
         return error("unknown make-boot-image option " + std::string{option});
       }
@@ -1074,14 +1140,26 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
                      " requires a value");
       }
       const std::string_view value{argv[index++]};
-      if (number == nullptr) {
+      if (text != nullptr) {
         if (value.empty()) {
-          return error("make-boot-image cmdline must not be empty");
+          return error("make-boot-image option " + std::string{option} +
+                       " requires a non-empty value");
         }
-        result.boot_image_options.command_line = value;
-      } else if (!parse_u32_auto(value, *number)) {
+        *text = value;
+      } else if (number != nullptr) {
+        if (!parse_u32_auto(value, *number)) {
+          return error("make-boot-image option " + std::string{option} +
+                       " requires an unsigned decimal or 0x hexadecimal value");
+        }
+      } else if (number64 == nullptr ||
+                 !parse_unsigned_number(value, *number64)) {
         return error("make-boot-image option " + std::string{option} +
-                     " requires a uint32 decimal or 0x hexadecimal value");
+                     " requires an unsigned decimal or 0x hexadecimal value");
+      }
+      if (option == "--header-version" &&
+          result.boot_image_options.header_version > 4U) {
+        return error(
+            "make-boot-image option --header-version requires an integer in [0, 4]");
       }
     }
     if (const auto rejected = reject_non_json_globals()) {
@@ -2268,6 +2346,14 @@ int boot_file(const Invocation &invocation) {
       .ramdisk_offset = invocation.boot_image_options.ramdisk_offset,
       .second_offset = invocation.boot_image_options.second_offset,
       .tags_offset = invocation.boot_image_options.tags_offset,
+      .header_version = invocation.boot_image_options.header_version,
+      .os_version = invocation.boot_image_options.os_version,
+      .os_patch_level = invocation.boot_image_options.os_patch_level,
+      .dtb = invocation.boot_image_options.dtb_path.empty()
+                 ? std::nullopt
+                 : std::optional<std::filesystem::path>{path_from_utf8(
+                       invocation.boot_image_options.dtb_path)},
+      .dtb_offset = invocation.boot_image_options.dtb_offset,
   };
   const std::optional<std::filesystem::path> ramdisk =
       invocation.second.empty()
@@ -2331,10 +2417,19 @@ int make_boot_image(const Invocation &invocation) {
     }
     second = std::move(*opened);
   }
+  std::shared_ptr<const kairosboot::image::IImageSource> dtb;
+  if (!invocation.boot_image_options.dtb_path.empty()) {
+    auto opened =
+        open_boot_component(invocation.boot_image_options.dtb_path, "DTB");
+    if (!opened) {
+      return print_local_runtime_error(opened.error(), invocation.global.json);
+    }
+    dtb = std::move(*opened);
+  }
 
-  auto built = kairosboot::image::build_legacy_boot_image(
+  auto built = kairosboot::image::build_boot_image(
       std::move(*kernel), std::move(ramdisk), std::move(second),
-      invocation.boot_image_options);
+      std::move(dtb), invocation.boot_image_options);
   if (!built) {
     const bool invalid =
         built.error().kind ==
@@ -2356,9 +2451,11 @@ int make_boot_image(const Invocation &invocation) {
                  "\"output\":\""
               << json_escape(invocation.first) << "\",\"bytes\":"
               << (*built)->size()
-              << ",\"headerVersion\":0,\"vendorBoot\":false}\n";
+              << ",\"headerVersion\":"
+              << invocation.boot_image_options.header_version
+              << ",\"vendorBoot\":false}\n";
   } else {
-    std::cout << "Created legacy boot image " << invocation.first << " ("
+    std::cout << "Created boot image " << invocation.first << " ("
               << (*built)->size() << " bytes)\n";
   }
   return 0;
@@ -2390,6 +2487,14 @@ int flash_raw(const Invocation &invocation) {
           .ramdisk_offset = invocation.boot_image_options.ramdisk_offset,
           .second_offset = invocation.boot_image_options.second_offset,
           .tags_offset = invocation.boot_image_options.tags_offset,
+          .header_version = invocation.boot_image_options.header_version,
+          .os_version = invocation.boot_image_options.os_version,
+          .os_patch_level = invocation.boot_image_options.os_patch_level,
+          .dtb = invocation.boot_image_options.dtb_path.empty()
+                     ? std::nullopt
+                     : std::optional<std::filesystem::path>{path_from_utf8(
+                           invocation.boot_image_options.dtb_path)},
+          .dtb_offset = invocation.boot_image_options.dtb_offset,
       },
       flash_options(invocation.global));
   if (!result) {
@@ -2844,11 +2949,15 @@ constexpr std::string_view usage_text() noexcept {
                "--max-receive-bytes <bytes>\n"
                "  --disable-verity --disable-verification\n"
                "  -S SIZE[K|M|G] (flash, flash:raw, update and flashall)\n"
-               "  --dtb <file> (vendor_boot ramdisk repack only)\n"
-               "  Legacy boot options (boot and flash:raw only):\n"
+               "  Boot image construction options (boot and flash:raw only):\n"
                "  --cmdline <text> --base <value> --page-size <value>\n"
                "  --kernel-offset <value> --ramdisk-offset <value>\n"
                "  --second-offset <value> --tags-offset <value>\n"
+               "  --header-version <0..4> --os-version <A[.B[.C]]>\n"
+               "  --os-patch-level <YYYY-MM-DD> --dtb <file>\n"
+               "  --dtb-offset <value> (DTB requires header version 2)\n"
+               "  --dtb <file> also replaces vendor_boot DTB for "
+               "flash vendor_boot:RAMDISK\n"
                "Exit codes: 0 success, 2 usage error, 4 runtime/cancelled\n";
 }
 

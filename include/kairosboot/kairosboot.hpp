@@ -111,6 +111,11 @@ struct LegacyBootOptions {
   std::uint32_t ramdisk_offset{0x01000000U};
   std::uint32_t second_offset{0x00f00000U};
   std::uint32_t tags_offset{0x00000100U};
+  std::uint32_t header_version{};
+  std::string os_version;
+  std::string os_patch_level;
+  std::optional<std::filesystem::path> dtb;
+  std::uint64_t dtb_offset{0x01100000ULL};
 };
 
 struct UpdateOptions {
@@ -310,6 +315,9 @@ struct PreparedFlashOptions final {
 struct PreparedLegacyBootOptions final {
   kb_legacy_boot_options_t native{};
   std::string command_line;
+  std::string os_version;
+  std::string os_patch_level;
+  std::string dtb_path;
 };
 
 struct PreparedUpdateOptions final {
@@ -443,20 +451,49 @@ prepare_flash_options(const FlashOptions &options) {
 
 [[nodiscard]] inline std::expected<PreparedLegacyBootOptions, Error>
 prepare_legacy_boot_options(const LegacyBootOptions &options) {
-  if (options.command_line.find('\0') != std::string::npos) {
+  if (options.command_line.find('\0') != std::string::npos ||
+      options.os_version.find('\0') != std::string::npos ||
+      options.os_patch_level.find('\0') != std::string::npos) {
     return std::unexpected(detail_make_error(
-        KB_E_INVALID_ARGUMENT, "legacy boot command line must be NUL-free"));
+        KB_E_INVALID_ARGUMENT, "boot construction strings must be NUL-free"));
   }
   PreparedLegacyBootOptions result;
   kb_legacy_boot_options_init(&result.native);
   result.command_line = options.command_line;
+  result.os_version = options.os_version;
+  result.os_patch_level = options.os_patch_level;
+  if (options.dtb) {
+    const auto encoded = options.dtb->u8string();
+    result.dtb_path.assign(encoded.begin(), encoded.end());
+    if (result.dtb_path.find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "boot DTB path must be NUL-free"));
+    }
+  }
   result.native.base = options.base;
   result.native.page_size = options.page_size;
   result.native.kernel_offset = options.kernel_offset;
   result.native.ramdisk_offset = options.ramdisk_offset;
   result.native.second_offset = options.second_offset;
   result.native.tags_offset = options.tags_offset;
+  result.native.header_version = options.header_version;
+  result.native.dtb_offset = options.dtb_offset;
   return result;
+}
+
+inline void bind_legacy_boot_option_strings(
+    PreparedLegacyBootOptions &options) noexcept {
+  options.native.command_line = options.command_line.empty()
+                                    ? nullptr
+                                    : options.command_line.c_str();
+  options.native.os_version = options.os_version.empty()
+                                  ? nullptr
+                                  : options.os_version.c_str();
+  options.native.os_patch_level = options.os_patch_level.empty()
+                                      ? nullptr
+                                      : options.os_patch_level.c_str();
+  options.native.dtb_path =
+      options.dtb_path.empty() ? nullptr : options.dtb_path.c_str();
 }
 
 struct PreparedCommandOptions final {
@@ -2285,7 +2322,7 @@ public:
     if (!legacy) {
       return std::unexpected(std::move(legacy.error()));
     }
-    legacy->native.command_line = legacy->command_line.c_str();
+    detail::bind_legacy_boot_option_strings(*legacy);
     const auto to_utf8 = [](const std::filesystem::path &path) {
       const auto value = path.u8string();
       return std::string{value.begin(), value.end()};
@@ -2345,7 +2382,7 @@ public:
     if (!legacy) {
       return std::unexpected(std::move(legacy.error()));
     }
-    legacy->native.command_line = legacy->command_line.c_str();
+    detail::bind_legacy_boot_option_strings(*legacy);
     const auto to_utf8 = [](const std::filesystem::path &path) {
       const auto value = path.u8string();
       return std::string{value.begin(), value.end()};

@@ -78,6 +78,11 @@ internal struct NativeLegacyBootOptions
     internal uint RamdiskOffset;
     internal uint SecondOffset;
     internal uint TagsOffset;
+    internal uint HeaderVersion;
+    internal IntPtr OsVersion;
+    internal IntPtr OsPatchLevel;
+    internal IntPtr DtbPath;
+    internal ulong DtbOffset;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -407,6 +407,17 @@ make_flash_raw_source(const std::string_view kernel_path,
               "second-stage files",
           device_identifier));
     }
+    const kairosboot::image::LegacyBootImageOptions defaults;
+    if (options.header_version != defaults.header_version ||
+        !options.os_version.empty() || !options.os_patch_level.empty() ||
+        !options.dtb_path.empty() ||
+        options.dtb_offset != defaults.dtb_offset) {
+      return std::unexpected(local_flash_error(
+          KB_E_INVALID_ARGUMENT,
+          std::string{operation_name} +
+              " cannot apply boot construction options to a prebuilt image",
+          device_identifier));
+    }
     return std::move(*kernel);
   }
 
@@ -430,10 +441,20 @@ make_flash_raw_source(const std::string_view kernel_path,
     }
     second_stage = std::move(*loaded);
   }
+  std::shared_ptr<const kairosboot::image::IImageSource> dtb;
+  if (!options.dtb_path.empty()) {
+    auto loaded = open_raw_boot_part(
+        options.dtb_path, std::string{operation_name} + " DTB", true,
+        device_identifier);
+    if (!loaded) {
+      return std::unexpected(std::move(loaded.error()));
+    }
+    dtb = std::move(*loaded);
+  }
   options.maximum_output_bytes = std::numeric_limits<std::uint32_t>::max();
-  auto built = kairosboot::image::build_legacy_boot_image(
+  auto built = kairosboot::image::build_boot_image(
       std::move(*kernel), std::move(ramdisk), std::move(second_stage),
-      std::move(options));
+      std::move(dtb), std::move(options));
   if (!built) {
     return std::unexpected(
         boot_builder_error(built.error(), device_identifier));
@@ -607,6 +628,30 @@ bool valid_legacy_boot_options(
           options->api_version == KB_API_VERSION);
 }
 
+bool valid_legacy_boot_option_strings(
+    const kb_legacy_boot_options_t *options) noexcept {
+  if (options == nullptr) {
+    return true;
+  }
+  if (options->command_line != nullptr &&
+      !valid_utf8(options->command_line)) {
+    return false;
+  }
+  return (options->struct_size <
+              offsetof(kb_legacy_boot_options_t, os_version) +
+                  sizeof(options->os_version) ||
+          options->os_version == nullptr || valid_utf8(options->os_version)) &&
+         (options->struct_size <
+              offsetof(kb_legacy_boot_options_t, os_patch_level) +
+                  sizeof(options->os_patch_level) ||
+          options->os_patch_level == nullptr ||
+          valid_utf8(options->os_patch_level)) &&
+         (options->struct_size <
+              offsetof(kb_legacy_boot_options_t, dtb_path) +
+                  sizeof(options->dtb_path) ||
+          options->dtb_path == nullptr || valid_utf8(options->dtb_path));
+}
+
 [[nodiscard]] kairosboot::image::LegacyBootImageOptions
 legacy_boot_options_or_default(const kb_legacy_boot_options_t *options) {
   kairosboot::image::LegacyBootImageOptions result;
@@ -621,6 +666,33 @@ legacy_boot_options_or_default(const kb_legacy_boot_options_t *options) {
   result.ramdisk_offset = options->ramdisk_offset;
   result.second_offset = options->second_offset;
   result.tags_offset = options->tags_offset;
+  if (options->struct_size >=
+      offsetof(kb_legacy_boot_options_t, header_version) +
+          sizeof(options->header_version)) {
+    result.header_version = options->header_version;
+  }
+  if (options->struct_size >=
+      offsetof(kb_legacy_boot_options_t, os_version) +
+          sizeof(options->os_version)) {
+    result.os_version =
+        options->os_version == nullptr ? "" : options->os_version;
+  }
+  if (options->struct_size >=
+      offsetof(kb_legacy_boot_options_t, os_patch_level) +
+          sizeof(options->os_patch_level)) {
+    result.os_patch_level = options->os_patch_level == nullptr
+                                ? ""
+                                : options->os_patch_level;
+  }
+  if (options->struct_size >=
+      offsetof(kb_legacy_boot_options_t, dtb_path) +
+          sizeof(options->dtb_path)) {
+    result.dtb_path =
+        options->dtb_path == nullptr ? "" : options->dtb_path;
+  }
+  if (options->struct_size >= KB_LEGACY_BOOT_OPTIONS_MODERN_SIZE) {
+    result.dtb_offset = options->dtb_offset;
+  }
   return result;
 }
 
@@ -3379,6 +3451,7 @@ void KB_CALL kb_legacy_boot_options_init(
   options->ramdisk_offset = 0x01000000U;
   options->second_offset = 0x00f00000U;
   options->tags_offset = 0x00000100U;
+  options->dtb_offset = 0x01100000ULL;
 }
 
 void KB_CALL kb_update_options_init(kb_update_options_t *options) {
@@ -3859,11 +3932,9 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
                 "legacy boot options have an incompatible size or API version",
                 device_selector_or_null);
   }
-  if (legacy_options_or_null != nullptr &&
-      legacy_options_or_null->command_line != nullptr &&
-      !valid_utf8(legacy_options_or_null->command_line)) {
+  if (!valid_legacy_boot_option_strings(legacy_options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
-                "legacy boot command line must be valid UTF-8",
+                "boot construction option strings must be valid UTF-8",
                 device_selector_or_null);
   }
 
@@ -4039,11 +4110,9 @@ kb_status_t KB_CALL kb_boot_raw_async(
                 "boot options have an incompatible size or API version",
                 device_selector_or_null);
   }
-  if (legacy_options_or_null != nullptr &&
-      legacy_options_or_null->command_line != nullptr &&
-      !valid_utf8(legacy_options_or_null->command_line)) {
+  if (!valid_legacy_boot_option_strings(legacy_options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
-                "legacy boot command line must be valid UTF-8",
+                "boot construction option strings must be valid UTF-8",
                 device_selector_or_null);
   }
 

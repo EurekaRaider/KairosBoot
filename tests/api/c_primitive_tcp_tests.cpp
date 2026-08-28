@@ -480,10 +480,10 @@ private:
       write_frame(socket, "OKAYno");
       CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
       write_frame(socket, "OKAY0x00100000");
-      CHECK(as_string(read_frame(socket)) == "download:00001800");
-      write_frame(socket, "DATA00001800");
+      CHECK(as_string(read_frame(socket)) == "download:00002000");
+      write_frame(socket, "DATA00002000");
       const auto image = read_frame(socket);
-      CHECK(image.size() == 6144U);
+      CHECK(image.size() == 8192U);
       CHECK(std::memcmp(image.data(), "ANDROID!", 8U) == 0);
       const auto le32 = [&image](const std::size_t offset) {
         std::uint32_t result = 0;
@@ -500,6 +500,13 @@ private:
       CHECK(le32(24U) == 0U);
       CHECK(le32(32U) == 0x10000100U);
       CHECK(le32(36U) == 2048U);
+      CHECK(le32(40U) == 2U);
+      CHECK(le32(44U) ==
+            ((15U << 25U) | (1U << 18U) | (25U << 4U) | 2U));
+      CHECK(le32(1644U) == 1660U);
+      CHECK(le32(1648U) == 3U);
+      CHECK(le32(1652U) == 0x11200000U);
+      CHECK(le32(1656U) == 0U);
       for (std::size_t index = 0; index < 2048U; ++index) {
         CHECK(image[2048U + index] ==
               std::byte{static_cast<unsigned char>(index & 0xffU)});
@@ -507,6 +514,9 @@ private:
       CHECK(image[4096U] == std::byte{'r'});
       CHECK(image[4097U] == std::byte{0});
       CHECK(image[4098U] == std::byte{'d'});
+      CHECK(image[6144U] == std::byte{'d'});
+      CHECK(image[6145U] == std::byte{'t'});
+      CHECK(image[6146U] == std::byte{'b'});
       write_frame(socket, "OKAYdownloaded");
       CHECK(as_string(read_frame(socket)) == "flash:boot");
       write_frame(socket, "OKAYflashed");
@@ -1376,16 +1386,29 @@ void run_flash_raw_contract() {
   }
   const std::array<std::byte, 3> ramdisk{std::byte{'r'}, std::byte{0},
                                         std::byte{'d'}};
+  const std::array<std::byte, 3> dtb{std::byte{'d'}, std::byte{'t'},
+                                    std::byte{'b'}};
   TemporaryUpdatePackage kernel_files("version 1\n", kernel);
   TemporaryUpdatePackage ramdisk_files("version 1\n", ramdisk);
+  TemporaryUpdatePackage dtb_files("version 1\n", dtb);
   const auto kernel_path = (kernel_files.path() / "system.img").string();
   const auto ramdisk_path = (ramdisk_files.path() / "system.img").string();
+  const auto dtb_path = (dtb_files.path() / "system.img").string();
 
   kb_context_t* context = nullptr;
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
-  CHECK(kb_flash_raw(context, selector.c_str(), "boot", kernel_path.c_str(),
-                     ramdisk_path.c_str(), nullptr, nullptr, &error) == KB_OK);
+  kb_legacy_boot_options_t boot_options;
+  kb_legacy_boot_options_init(&boot_options);
+  boot_options.header_version = 2U;
+  boot_options.os_version = "15.1";
+  boot_options.os_patch_level = "2025-02-05";
+  boot_options.dtb_path = dtb_path.c_str();
+  boot_options.dtb_offset = 0x01200000ULL;
+  CHECK(kb_flash_raw_with_boot_options(
+            context, selector.c_str(), "boot", kernel_path.c_str(),
+            ramdisk_path.c_str(), nullptr, &boot_options, nullptr, &error) ==
+        KB_OK);
   CHECK(error == nullptr);
   kb_context_release(context);
   server.finish();

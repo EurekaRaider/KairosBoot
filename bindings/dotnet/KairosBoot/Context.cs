@@ -1288,7 +1288,10 @@ public sealed partial class Context : IDisposable
             {
                 var nativeLegacyOptions = CreateNativeLegacyBootOptions(
                     legacyBootOptions.Value,
-                    out var commandLine);
+                    out var commandLine,
+                    out var osVersion,
+                    out var osPatchLevel,
+                    out var dtbPath);
                 try
                 {
                     status = NativeMethods.FlashRawWithBootOptionsAsync(
@@ -1306,6 +1309,9 @@ public sealed partial class Context : IDisposable
                 finally
                 {
                     Utf8String.Free(commandLine);
+                    Utf8String.Free(osVersion);
+                    Utf8String.Free(osPatchLevel);
+                    Utf8String.Free(dtbPath);
                 }
             }
             else
@@ -1386,7 +1392,10 @@ public sealed partial class Context : IDisposable
 
             var nativeLegacyOptions = CreateNativeLegacyBootOptions(
                 legacyBootOptions,
-                out var commandLine);
+                out var commandLine,
+                out var osVersion,
+                out var osPatchLevel,
+                out var dtbPath);
             int status;
             IntPtr rawOperation;
             IntPtr rawError;
@@ -1406,6 +1415,9 @@ public sealed partial class Context : IDisposable
             finally
             {
                 Utf8String.Free(commandLine);
+                Utf8String.Free(osVersion);
+                Utf8String.Free(osPatchLevel);
+                Utf8String.Free(dtbPath);
             }
 
             using (var operation = TakeStartedOperation(status, rawOperation, rawError))
@@ -1427,11 +1439,34 @@ public sealed partial class Context : IDisposable
 
     private static NativeLegacyBootOptions CreateNativeLegacyBootOptions(
         LegacyBootOptions options,
-        out IntPtr commandLine)
+        out IntPtr commandLine,
+        out IntPtr osVersion,
+        out IntPtr osPatchLevel,
+        out IntPtr dtbPath)
     {
         var native = new NativeLegacyBootOptions();
         NativeMethods.LegacyBootOptionsInit(ref native);
-        commandLine = Utf8String.Allocate(options.CommandLine);
+        commandLine = IntPtr.Zero;
+        osVersion = IntPtr.Zero;
+        osPatchLevel = IntPtr.Zero;
+        dtbPath = IntPtr.Zero;
+        try
+        {
+            commandLine = Utf8String.Allocate(options.CommandLine);
+            osVersion = Utf8String.Allocate(options.OsVersion);
+            osPatchLevel = Utf8String.Allocate(options.OsPatchLevel);
+            dtbPath = options.DtbPath == null
+                ? IntPtr.Zero
+                : Utf8String.Allocate(options.DtbPath);
+        }
+        catch
+        {
+            Utf8String.Free(commandLine);
+            Utf8String.Free(osVersion);
+            Utf8String.Free(osPatchLevel);
+            Utf8String.Free(dtbPath);
+            throw;
+        }
         native.CommandLine = commandLine;
         native.BaseAddress = options.BaseAddress;
         native.PageSize = options.PageSize;
@@ -1439,6 +1474,11 @@ public sealed partial class Context : IDisposable
         native.RamdiskOffset = options.RamdiskOffset;
         native.SecondOffset = options.SecondOffset;
         native.TagsOffset = options.TagsOffset;
+        native.HeaderVersion = options.HeaderVersion;
+        native.OsVersion = osVersion;
+        native.OsPatchLevel = osPatchLevel;
+        native.DtbPath = dtbPath;
+        native.DtbOffset = options.DtbOffset;
         return native;
     }
 
