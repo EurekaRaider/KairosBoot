@@ -125,6 +125,87 @@ public readonly struct FlashOptions
     }
 }
 
+/// <summary>Controls the layout of a legacy Android boot header v0 image.</summary>
+public readonly struct LegacyBootOptions
+{
+    private const uint DefaultBaseAddress = 0x10000000U;
+    private const uint DefaultPageSize = 2048U;
+    private const uint DefaultKernelOffset = 0x00008000U;
+    private const uint DefaultRamdiskOffset = 0x01000000U;
+    private const uint DefaultSecondOffset = 0x00f00000U;
+    private const uint DefaultTagsOffset = 0x00000100U;
+
+    private readonly bool hasExplicitValues;
+    private readonly string? commandLine;
+    private readonly uint baseAddress;
+    private readonly uint pageSize;
+    private readonly uint kernelOffset;
+    private readonly uint ramdiskOffset;
+    private readonly uint secondOffset;
+    private readonly uint tagsOffset;
+
+    /// <summary>Creates a legacy Android boot header v0 layout.</summary>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="commandLine"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="commandLine"/> contains a NUL character.
+    /// </exception>
+    public LegacyBootOptions(
+        string commandLine = "",
+        uint baseAddress = DefaultBaseAddress,
+        uint pageSize = DefaultPageSize,
+        uint kernelOffset = DefaultKernelOffset,
+        uint ramdiskOffset = DefaultRamdiskOffset,
+        uint secondOffset = DefaultSecondOffset,
+        uint tagsOffset = DefaultTagsOffset)
+    {
+        if (commandLine == null)
+        {
+            throw new ArgumentNullException(nameof(commandLine));
+        }
+        if (commandLine.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException(
+                "Legacy boot command line must not contain a NUL character.",
+                nameof(commandLine));
+        }
+
+        this.commandLine = commandLine;
+        this.baseAddress = baseAddress;
+        this.pageSize = pageSize;
+        this.kernelOffset = kernelOffset;
+        this.ramdiskOffset = ramdiskOffset;
+        this.secondOffset = secondOffset;
+        this.tagsOffset = tagsOffset;
+        hasExplicitValues = true;
+    }
+
+    /// <summary>Gets the AOSP-compatible legacy boot defaults.</summary>
+    public static LegacyBootOptions Default => default;
+
+    /// <summary>Gets the kernel command line.</summary>
+    public string CommandLine => hasExplicitValues ? commandLine! : string.Empty;
+
+    /// <summary>Gets the physical base address.</summary>
+    public uint BaseAddress => hasExplicitValues ? baseAddress : DefaultBaseAddress;
+
+    /// <summary>Gets the boot image page size.</summary>
+    public uint PageSize => hasExplicitValues ? pageSize : DefaultPageSize;
+
+    /// <summary>Gets the kernel offset from the base address.</summary>
+    public uint KernelOffset => hasExplicitValues ? kernelOffset : DefaultKernelOffset;
+
+    /// <summary>Gets the ramdisk offset from the base address.</summary>
+    public uint RamdiskOffset => hasExplicitValues ? ramdiskOffset : DefaultRamdiskOffset;
+
+    /// <summary>Gets the second-stage offset from the base address.</summary>
+    public uint SecondOffset => hasExplicitValues ? secondOffset : DefaultSecondOffset;
+
+    /// <summary>Gets the tags offset from the base address.</summary>
+    public uint TagsOffset => hasExplicitValues ? tagsOffset : DefaultTagsOffset;
+}
+
 /// <summary>Controls a complete update-package operation.</summary>
 public readonly struct UpdateOptions
 {

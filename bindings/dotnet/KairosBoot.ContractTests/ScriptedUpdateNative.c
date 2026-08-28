@@ -48,6 +48,18 @@ typedef struct kb_flash_options {
   void *progress_user_data;
 } kb_flash_options_t;
 
+typedef struct kb_legacy_boot_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  const char *command_line;
+  uint32_t base;
+  uint32_t page_size;
+  uint32_t kernel_offset;
+  uint32_t ramdisk_offset;
+  uint32_t second_offset;
+  uint32_t tags_offset;
+} kb_legacy_boot_options_t;
+
 typedef struct kb_operation {
   int32_t kind;
   int32_t polls;
@@ -88,6 +100,7 @@ static int32_t options_init_count;
 static int32_t async_start_count;
 static int32_t blocking_count;
 static int32_t flash_options_init_count;
+static int32_t legacy_boot_options_init_count;
 static int32_t flash_raw_async_start_count;
 static int32_t flash_raw_blocking_count;
 static int32_t boot_async_start_count;
@@ -116,6 +129,10 @@ static const char expected_unicode_boot_image[] = {
     'i', 'm', 'a', 'g', 'e', 's', '/', (char)0xe5, (char)0x90,
     (char)0xaf, (char)0xe5, (char)0x8a, (char)0xa8, '.', 'i', 'm', 'g', 0};
 
+static const char expected_unicode_command_line[] = {
+    'c', 'o', 'n', 's', 'o', 'l', 'e', '=', (char)0xe5, (char)0x90,
+    (char)0xaf, (char)0xe5, (char)0x8a, (char)0xa8, 0};
+
 static int same_string(const char *actual, const char *expected) {
   return actual != NULL && strcmp(actual, expected) == 0;
 }
@@ -138,6 +155,39 @@ static int valid_flash_options(const kb_flash_options_t *options) {
            options->progress_user_data == NULL) ||
           (options->progress_callback != NULL &&
            options->progress_user_data != NULL));
+}
+
+static int valid_legacy_boot_options(
+    const kb_legacy_boot_options_t *options) {
+  return options != NULL &&
+         options->struct_size == (uint32_t)sizeof(*options) &&
+         options->api_version == 1;
+}
+
+static int valid_default_legacy_boot_options(
+    const kb_legacy_boot_options_t *options) {
+  return valid_legacy_boot_options(options) && options->command_line == NULL &&
+         options->base == 0x10000000U && options->page_size == 2048U &&
+         options->kernel_offset == 0x00008000U &&
+         options->ramdisk_offset == 0x01000000U &&
+         options->second_offset == 0x00f00000U &&
+         options->tags_offset == 0x00000100U;
+}
+
+static int valid_custom_legacy_boot_layout(
+    const kb_legacy_boot_options_t *options) {
+  return valid_legacy_boot_options(options) &&
+         options->base == 0x12000000U && options->page_size == 4096U &&
+         options->kernel_offset == 0x00010000U &&
+         options->ramdisk_offset == 0x02000000U &&
+         options->second_offset == 0x01f00000U &&
+         options->tags_offset == 0x00000200U;
+}
+
+static int valid_custom_legacy_boot_options(
+    const kb_legacy_boot_options_t *options) {
+  return valid_custom_legacy_boot_layout(options) &&
+         same_string(options->command_line, expected_unicode_command_line);
 }
 
 static int valid_job_options(const kb_job_options_t *options) {
@@ -178,6 +228,7 @@ KB_TEST_API void KB_TEST_CALL kb_test_reset(void) {
   async_start_count = 0;
   blocking_count = 0;
   flash_options_init_count = 0;
+  legacy_boot_options_init_count = 0;
   flash_raw_async_start_count = 0;
   flash_raw_blocking_count = 0;
   boot_async_start_count = 0;
@@ -211,6 +262,10 @@ KB_TEST_API int32_t KB_TEST_CALL kb_test_blocking_count(void) {
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_options_init_count(void) {
   return flash_options_init_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_legacy_boot_options_init_count(void) {
+  return legacy_boot_options_init_count;
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_raw_async_start_count(void) {
@@ -312,6 +367,24 @@ KB_TEST_API void KB_TEST_CALL kb_flash_options_init(
   options->api_version = 1;
   options->timeout_ms = UINT32_MAX;
   ++flash_options_init_count;
+}
+
+KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init(
+    kb_legacy_boot_options_t *options) {
+  if (options == NULL) {
+    record_failure(22);
+    return;
+  }
+  memset(options, 0, sizeof(*options));
+  options->struct_size = (uint32_t)sizeof(*options);
+  options->api_version = 1;
+  options->base = 0x10000000U;
+  options->page_size = 2048U;
+  options->kernel_offset = 0x00008000U;
+  options->ramdisk_offset = 0x01000000U;
+  options->second_offset = 0x00f00000U;
+  options->tags_offset = 0x00000100U;
+  ++legacy_boot_options_init_count;
 }
 
 KB_TEST_API void KB_TEST_CALL kb_job_options_init(kb_job_options_t *options) {
@@ -704,6 +777,167 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw(
   }
   *error = NULL;
   ++flash_raw_blocking_count;
+  return KB_OK;
+}
+
+static int32_t start_legacy_operation(
+    const char *device_selector, const int32_t kind,
+    const kb_flash_options_t *options, kb_operation_t **operation,
+    void **error, const int32_t allocation_failure) {
+  kb_operation_t *created = (kb_operation_t *)calloc(1, sizeof(*created));
+  if (created == NULL) {
+    record_failure(allocation_failure);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  created->kind = kind;
+  created->progress_callback = options->progress_callback;
+  created->progress_user_data = options->progress_user_data;
+  const char *identifier = device_selector == NULL ? "" : device_selector;
+  const size_t identifier_size = strlen(identifier) + 1;
+  created->device_identifier = (char *)malloc(identifier_size);
+  if (created->device_identifier == NULL) {
+    free(created);
+    record_failure(allocation_failure);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  memcpy(created->device_identifier, identifier, identifier_size);
+  *operation = created;
+  *error = NULL;
+  return KB_OK;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options_async(
+    void *context, const char *device_selector, const char *partition,
+    const char *kernel_path, const char *ramdisk_path,
+    const char *second_stage_path,
+    const kb_legacy_boot_options_t *legacy_options,
+    const kb_flash_options_t *options, kb_operation_t **operation,
+    void **error) {
+  if (context != &context_sentinel || operation == NULL || error == NULL ||
+      !valid_flash_options(options) || !same_string(partition, "boot")) {
+    record_failure(110);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  int32_t kind = 0;
+  if (same_string(kernel_path, "configured-kernel.bin")) {
+    kind = 4;
+    if (!same_string(device_selector, "usb:serial:configured-raw") ||
+        !same_string(ramdisk_path, "configured-ramdisk.img") ||
+        !same_string(second_stage_path, "configured-second.bin") ||
+        !valid_custom_legacy_boot_options(legacy_options) ||
+        options->timeout_ms != 2 || options->progress_callback == NULL) {
+      record_failure(111);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else if (same_string(kernel_path, "cancel-configured-kernel.bin")) {
+    kind = 5;
+    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+        ramdisk_path != NULL || second_stage_path != NULL ||
+        !valid_default_legacy_boot_options(legacy_options) ||
+        options->timeout_ms != UINT32_MAX || options->progress_callback == NULL) {
+      record_failure(112);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else {
+    record_failure(113);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  const int32_t status = start_legacy_operation(
+      device_selector, kind, options, operation, error, 114);
+  if (status == KB_OK) {
+    ++flash_raw_async_start_count;
+  }
+  return status;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options(
+    void *context, const char *device_selector, const char *partition,
+    const char *kernel_path, const char *ramdisk_path,
+    const char *second_stage_path,
+    const kb_legacy_boot_options_t *legacy_options,
+    const kb_flash_options_t *options, void **error) {
+  if (context != (void *)(uintptr_t)1 || error == NULL ||
+      !valid_flash_options(options) || options->timeout_ms != 17 ||
+      options->progress_callback != NULL ||
+      !same_string(device_selector, "usb:serial:blocking-configured-raw") ||
+      !same_string(partition, "boot") ||
+      !same_string(kernel_path, "blocking-configured-kernel.bin") ||
+      ramdisk_path != NULL || second_stage_path != NULL ||
+      !valid_custom_legacy_boot_layout(legacy_options) ||
+      !same_string(legacy_options->command_line, "console=blocking")) {
+    record_failure(115);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  *error = NULL;
+  ++flash_raw_blocking_count;
+  return KB_OK;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw_async(
+    void *context, const char *device_selector, const char *kernel_path,
+    const char *ramdisk_path, const char *second_stage_path,
+    const kb_legacy_boot_options_t *legacy_options,
+    const kb_flash_options_t *options, kb_operation_t **operation,
+    void **error) {
+  if (context != &context_sentinel || operation == NULL || error == NULL ||
+      !valid_flash_options(options)) {
+    record_failure(120);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  int32_t kind = 0;
+  if (same_string(kernel_path, "boot-raw-kernel.bin")) {
+    kind = 1;
+    if (!same_string(device_selector, "usb:serial:boot-raw") ||
+        !same_string(ramdisk_path, "boot-raw-ramdisk.img") ||
+        !same_string(second_stage_path, "boot-raw-second.bin") ||
+        !valid_custom_legacy_boot_options(legacy_options) ||
+        options->timeout_ms != 2 || options->progress_callback == NULL) {
+      record_failure(121);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else if (same_string(kernel_path, "cancel-boot-raw-kernel.bin")) {
+    kind = 2;
+    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+        ramdisk_path != NULL || second_stage_path != NULL ||
+        !valid_default_legacy_boot_options(legacy_options) ||
+        options->timeout_ms != UINT32_MAX || options->progress_callback == NULL) {
+      record_failure(122);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else {
+    record_failure(123);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  const int32_t status = start_legacy_operation(
+      device_selector, kind, options, operation, error, 124);
+  if (status == KB_OK) {
+    ++boot_async_start_count;
+  }
+  return status;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw(
+    void *context, const char *device_selector, const char *kernel_path,
+    const char *ramdisk_path, const char *second_stage_path,
+    const kb_legacy_boot_options_t *legacy_options,
+    const kb_flash_options_t *options, void **error) {
+  if (context != (void *)(uintptr_t)1 || error == NULL ||
+      !valid_flash_options(options) || options->timeout_ms != 17 ||
+      options->progress_callback != NULL ||
+      !same_string(device_selector, "usb:serial:blocking-boot-raw") ||
+      !same_string(kernel_path, "blocking-boot-raw-kernel.bin") ||
+      ramdisk_path != NULL || second_stage_path != NULL ||
+      !valid_custom_legacy_boot_layout(legacy_options) ||
+      !same_string(legacy_options->command_line, "console=blocking")) {
+    record_failure(125);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  *error = NULL;
+  ++boot_blocking_count;
   return KB_OK;
 }
 

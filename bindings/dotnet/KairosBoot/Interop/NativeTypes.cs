@@ -15,6 +15,8 @@ internal static partial class NativeMethods
     internal const ulong DefaultMaximumReceiveBytes = 64UL * 1024UL * 1024UL;
     internal static readonly uint ProgressStructSize =
         checked((uint)Marshal.SizeOf<NativeProgress>());
+    internal static readonly uint LegacyBootOptionsStructSize =
+        checked((uint)Marshal.SizeOf<NativeLegacyBootOptions>());
     internal static readonly uint UpdateOptionsStructSize =
         checked((uint)Marshal.SizeOf<NativeUpdateOptions>());
     internal static readonly uint CommandOptionsStructSize =
@@ -51,6 +53,20 @@ internal struct NativeFlashOptions
     internal uint TimeoutMilliseconds;
     internal IntPtr ProgressCallback;
     internal IntPtr ProgressUserData;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeLegacyBootOptions
+{
+    internal uint StructSize;
+    internal uint ApiVersion;
+    internal IntPtr CommandLine;
+    internal uint BaseAddress;
+    internal uint PageSize;
+    internal uint KernelOffset;
+    internal uint RamdiskOffset;
+    internal uint SecondOffset;
+    internal uint TagsOffset;
 }
 
 [StructLayout(LayoutKind.Sequential)]

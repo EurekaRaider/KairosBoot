@@ -193,6 +193,7 @@ public sealed partial class Context : IDisposable
             kernelPath,
             ramdiskPath,
             secondStagePath,
+            null,
             FlashOptions.Default,
             deviceSelector,
             progress,
@@ -215,6 +216,138 @@ public sealed partial class Context : IDisposable
             kernelPath,
             ramdiskPath,
             secondStagePath,
+            null,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a legacy Android boot image with a custom layout.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a legacy Android boot image with a custom layout and timeout.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            LegacyBootOptions.Default,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image with a typed timeout.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            LegacyBootOptions.Default,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image with a custom layout.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image with a custom layout and timeout.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
             options,
             deviceSelector,
             progress,
@@ -923,6 +1056,7 @@ public sealed partial class Context : IDisposable
         string kernelPath,
         string? ramdiskPath,
         string? secondStagePath,
+        LegacyBootOptions? legacyBootOptions,
         FlashOptions options,
         string? deviceSelector,
         IProgress<FlashProgress>? progress,
@@ -961,16 +1095,46 @@ public sealed partial class Context : IDisposable
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
-            var status = NativeMethods.FlashRawAsync(
-                handle,
-                deviceSelector,
-                partition,
-                kernelPath,
-                ramdiskPath,
-                secondStagePath,
-                ref nativeOptions,
-                out var rawOperation,
-                out var rawError);
+            int status;
+            IntPtr rawOperation;
+            IntPtr rawError;
+            if (legacyBootOptions.HasValue)
+            {
+                var nativeLegacyOptions = CreateNativeLegacyBootOptions(
+                    legacyBootOptions.Value,
+                    out var commandLine);
+                try
+                {
+                    status = NativeMethods.FlashRawWithBootOptionsAsync(
+                        handle,
+                        deviceSelector,
+                        partition,
+                        kernelPath,
+                        ramdiskPath,
+                        secondStagePath,
+                        ref nativeLegacyOptions,
+                        ref nativeOptions,
+                        out rawOperation,
+                        out rawError);
+                }
+                finally
+                {
+                    Utf8String.Free(commandLine);
+                }
+            }
+            else
+            {
+                status = NativeMethods.FlashRawAsync(
+                    handle,
+                    deviceSelector,
+                    partition,
+                    kernelPath,
+                    ramdiskPath,
+                    secondStagePath,
+                    ref nativeOptions,
+                    out rawOperation,
+                    out rawError);
+            }
 
             using (var operation = TakeStartedOperation(status, rawOperation, rawError))
             {
@@ -987,6 +1151,106 @@ public sealed partial class Context : IDisposable
                 handle.DangerousRelease();
             }
         }
+    }
+
+    private async Task BootRawCoreAsync(
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        LegacyBootOptions legacyBootOptions,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(kernelPath, nameof(kernelPath));
+        ValidateOptionalText(ramdiskPath, nameof(ramdiskPath));
+        ValidateOptionalText(secondStagePath, nameof(secondStagePath));
+        if (secondStagePath != null && ramdiskPath == null)
+        {
+            throw new ArgumentException(
+                "A second-stage path requires a ramdisk path.",
+                nameof(secondStagePath));
+        }
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var nativeLegacyOptions = CreateNativeLegacyBootOptions(
+                legacyBootOptions,
+                out var commandLine);
+            int status;
+            IntPtr rawOperation;
+            IntPtr rawError;
+            try
+            {
+                status = NativeMethods.BootRawAsync(
+                    handle,
+                    deviceSelector,
+                    kernelPath,
+                    ramdiskPath,
+                    secondStagePath,
+                    ref nativeLegacyOptions,
+                    ref nativeOptions,
+                    out rawOperation,
+                    out rawError);
+            }
+            finally
+            {
+                Utf8String.Free(commandLine);
+            }
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private static NativeLegacyBootOptions CreateNativeLegacyBootOptions(
+        LegacyBootOptions options,
+        out IntPtr commandLine)
+    {
+        var native = new NativeLegacyBootOptions();
+        NativeMethods.LegacyBootOptionsInit(ref native);
+        commandLine = Utf8String.Allocate(options.CommandLine);
+        native.CommandLine = commandLine;
+        native.BaseAddress = options.BaseAddress;
+        native.PageSize = options.PageSize;
+        native.KernelOffset = options.KernelOffset;
+        native.RamdiskOffset = options.RamdiskOffset;
+        native.SecondOffset = options.SecondOffset;
+        native.TagsOffset = options.TagsOffset;
+        return native;
     }
 
     private async Task BootFileCoreAsync(

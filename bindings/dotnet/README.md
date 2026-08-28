@@ -37,6 +37,32 @@ deadline. Cancellation calls `kb_operation_cancel`; disposal unregisters that
 callback, releases and drains the native operation, and only then frees the
 managed progress delegate state.
 
+Legacy Android boot header v0 construction is exposed by `BootRawAsync` and
+the `LegacyBootOptions` overloads of `FlashRawAsync`. Omitting the layout uses
+the AOSP-compatible base, page-size, and component-offset defaults:
+
+```csharp
+var legacy = new LegacyBootOptions(
+    commandLine: "console=ttyS0",
+    baseAddress: 0x10000000,
+    pageSize: 4096,
+    kernelOffset: 0x00008000,
+    ramdiskOffset: 0x01000000,
+    secondOffset: 0x00f00000,
+    tagsOffset: 0x00000100);
+
+await context.BootRawAsync(
+    "images/kernel",
+    legacy,
+    new FlashOptions(TimeSpan.FromSeconds(30)),
+    ramdiskPath: "images/ramdisk",
+    progress: progress,
+    cancellationToken: cancellationToken);
+```
+
+These APIs intentionally construct only the locked legacy boot v0 surface;
+modern boot headers, `vendor_boot`, and AVB image construction are not implied.
+
 Complete update packages use the same operation lifetime contract. The C#
 first-class entry point is asynchronous on both target frameworks; the native
 blocking export remains imported and ABI-tested for parity with the C SDK:

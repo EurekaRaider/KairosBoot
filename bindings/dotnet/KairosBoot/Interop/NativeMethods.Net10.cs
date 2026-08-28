@@ -15,6 +15,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void FlashOptionsInit(ref NativeFlashOptions options);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_legacy_boot_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void LegacyBootOptionsInit(ref NativeLegacyBootOptions options);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_update_options_init")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void UpdateOptionsInit(ref NativeUpdateOptions options);
@@ -117,6 +121,58 @@ internal static partial class NativeMethods
         string kernelPath,
         string? ramdiskPath,
         string? secondStagePath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw_with_boot_options_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FlashRawWithBootOptionsAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string partition,
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw_with_boot_options", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FlashRawWithBootOptions(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string partition,
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_boot_raw_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int BootRawAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_boot_raw", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int BootRaw(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
         ref NativeFlashOptions options,
         out IntPtr error);
 

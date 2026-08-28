@@ -47,6 +47,7 @@ internal static class Program
             CheckCommandOptions();
             CheckUpdateOptions();
             CheckJobOptions();
+            CheckLegacyBootOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
             CheckFleetPublicSurface();
@@ -58,6 +59,7 @@ internal static class Program
             {
                 await CheckScriptedUpdateShim().ConfigureAwait(false);
                 await CheckScriptedBootShim().ConfigureAwait(false);
+                await CheckScriptedLegacyBootShim().ConfigureAwait(false);
                 await CheckScriptedFleetShim().ConfigureAwait(false);
                 Console.WriteLine($"KairosBoot scripted native checks passed: {checks}");
                 return 0;
@@ -115,17 +117,26 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 110)
+        if (uniqueEntryPoints.Count != 115)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 110 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 115 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 110, "unique entry points");
+        Check(uniqueEntryPoints.Count == 115, "unique entry points");
+        Check(entryPoints.Contains("kb_legacy_boot_options_init"), "legacy boot options import");
         Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
         Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
+        Check(
+            entryPoints.Contains("kb_flash_raw_with_boot_options_async"),
+            "configured async flash:raw import");
+        Check(
+            entryPoints.Contains("kb_flash_raw_with_boot_options"),
+            "configured blocking flash:raw import");
+        Check(entryPoints.Contains("kb_boot_raw_async"), "async boot:raw import");
+        Check(entryPoints.Contains("kb_boot_raw"), "blocking boot:raw import");
         Check(entryPoints.Contains("kb_boot_file_async"), "async boot-file import");
         Check(entryPoints.Contains("kb_boot_file"), "blocking boot-file import");
         Check(entryPoints.Contains("kb_signature_file_async"), "async signature import");
@@ -205,7 +216,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 110, "net48 DllImport count");
+        Check(methods.Count == 115, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -214,7 +225,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 98, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 116, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -232,7 +243,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 110, "net10 LibraryImport count");
+        Check(groups.Count == 115, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -243,7 +254,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 54, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 58, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -253,6 +264,41 @@ internal static class Program
 
     private static void CheckNativeLayouts()
     {
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.StructSize)).ToInt32() == 0,
+            "legacy boot options struct_size offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.ApiVersion)).ToInt32() == 4,
+            "legacy boot options api_version offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.CommandLine)).ToInt32() == 8,
+            "legacy boot options command line offset");
+        var legacyAddressOffset = IntPtr.Size == 8 ? 16 : 12;
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.BaseAddress)).ToInt32() == legacyAddressOffset,
+            "legacy boot options base offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.PageSize)).ToInt32() == legacyAddressOffset + 4,
+            "legacy boot options page size offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.KernelOffset)).ToInt32() == legacyAddressOffset + 8,
+            "legacy boot options kernel offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.RamdiskOffset)).ToInt32() == legacyAddressOffset + 12,
+            "legacy boot options ramdisk offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.SecondOffset)).ToInt32() == legacyAddressOffset + 16,
+            "legacy boot options second offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.TagsOffset)).ToInt32() == legacyAddressOffset + 20,
+            "legacy boot options tags offset");
+        Check(
+            Marshal.SizeOf<NativeLegacyBootOptions>() == (IntPtr.Size == 8 ? 40 : 36),
+            "legacy boot options native size");
+        Check(
+            NativeMethods.LegacyBootOptionsStructSize == Marshal.SizeOf<NativeLegacyBootOptions>(),
+            "legacy boot options declared size");
+
         Check(
             Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.StructSize)).ToInt32() == 0,
             "update options struct_size offset");
@@ -454,14 +500,18 @@ internal static class Program
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "FlashRawAsync")
             .ToList();
-        Check(flashRawMethods.Count == 2, "managed flash:raw overloads");
+        Check(flashRawMethods.Count == 4, "managed flash:raw overloads");
         Check(
             flashRawMethods.All(method => method.ReturnType == typeof(Task)),
             "managed flash:raw returns Task");
         Check(
             flashRawMethods.Count(method => method.GetParameters().Any(parameter =>
-                parameter.ParameterType == typeof(FlashOptions))) == 1,
+                parameter.ParameterType == typeof(FlashOptions))) == 2,
             "managed flash:raw typed options overload");
+        Check(
+            flashRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(LegacyBootOptions))) == 2,
+            "managed flash:raw legacy layout overloads");
         Check(
             flashRawMethods.All(method => method.GetParameters().Any(parameter =>
                 parameter.ParameterType == typeof(IProgress<FlashProgress>))),
@@ -470,6 +520,31 @@ internal static class Program
             flashRawMethods.All(method => method.GetParameters().Any(parameter =>
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed flash:raw cancellation");
+
+        var bootRawMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "BootRawAsync")
+            .ToList();
+        Check(bootRawMethods.Count == 4, "managed boot:raw overloads");
+        Check(
+            bootRawMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed boot:raw returns Task");
+        Check(
+            bootRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(FlashOptions))) == 2,
+            "managed boot:raw typed options overloads");
+        Check(
+            bootRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(LegacyBootOptions))) == 2,
+            "managed boot:raw legacy layout overloads");
+        Check(
+            bootRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>))),
+            "managed boot:raw progress type");
+        Check(
+            bootRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed boot:raw cancellation");
 
         var updateMethods = typeof(Context)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
@@ -695,6 +770,36 @@ internal static class Program
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
         Check(new FlashOptions(maximum).Timeout == maximum, "maximum finite flash timeout");
+    }
+
+    private static void CheckLegacyBootOptions()
+    {
+        var defaults = LegacyBootOptions.Default;
+        Check(defaults.CommandLine == string.Empty, "default legacy command line");
+        Check(defaults.BaseAddress == 0x10000000U, "default legacy base");
+        Check(defaults.PageSize == 2048U, "default legacy page size");
+        Check(defaults.KernelOffset == 0x00008000U, "default legacy kernel offset");
+        Check(defaults.RamdiskOffset == 0x01000000U, "default legacy ramdisk offset");
+        Check(defaults.SecondOffset == 0x00f00000U, "default legacy second offset");
+        Check(defaults.TagsOffset == 0x00000100U, "default legacy tags offset");
+
+        var custom = new LegacyBootOptions(
+            "console=ttyS0",
+            0x12000000U,
+            4096U,
+            0x00010000U,
+            0x02000000U,
+            0x01f00000U,
+            0x00000200U);
+        Check(custom.CommandLine == "console=ttyS0", "custom legacy command line");
+        Check(custom.BaseAddress == 0x12000000U, "custom legacy base");
+        Check(custom.PageSize == 4096U, "custom legacy page size");
+        Check(custom.KernelOffset == 0x00010000U, "custom legacy kernel offset");
+        Check(custom.RamdiskOffset == 0x02000000U, "custom legacy ramdisk offset");
+        Check(custom.SecondOffset == 0x01f00000U, "custom legacy second offset");
+        Check(custom.TagsOffset == 0x00000200U, "custom legacy tags offset");
+        Expect<ArgumentNullException>(() => _ = new LegacyBootOptions(null!));
+        Expect<ArgumentException>(() => _ = new LegacyBootOptions("console=x\0ignored"));
     }
 
     private static async Task CheckScriptedUpdateShim()
@@ -934,6 +1039,173 @@ internal static class Program
             ScriptedUpdateNativeMethods.OperationReleaseCount() == 3,
             "boot-file operation release");
         Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "boot-file context release");
+    }
+
+    private static async Task CheckScriptedLegacyBootShim()
+    {
+        ScriptedUpdateNativeMethods.Reset();
+
+        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        {
+            var nativeLegacyOptions = new NativeLegacyBootOptions();
+            NativeMethods.LegacyBootOptionsInit(ref nativeLegacyOptions);
+            var commandLine = Utf8String.Allocate("console=blocking");
+            try
+            {
+                nativeLegacyOptions.CommandLine = commandLine;
+                nativeLegacyOptions.BaseAddress = 0x12000000U;
+                nativeLegacyOptions.PageSize = 4096U;
+                nativeLegacyOptions.KernelOffset = 0x00010000U;
+                nativeLegacyOptions.RamdiskOffset = 0x02000000U;
+                nativeLegacyOptions.SecondOffset = 0x01f00000U;
+                nativeLegacyOptions.TagsOffset = 0x00000200U;
+
+                var nativeFlashOptions = new NativeFlashOptions();
+                NativeMethods.FlashOptionsInit(ref nativeFlashOptions);
+                nativeFlashOptions.TimeoutMilliseconds = 17;
+                var status = NativeMethods.FlashRawWithBootOptions(
+                    context,
+                    "usb:serial:blocking-configured-raw",
+                    "boot",
+                    "blocking-configured-kernel.bin",
+                    null,
+                    null,
+                    ref nativeLegacyOptions,
+                    ref nativeFlashOptions,
+                    out var rawError);
+                Check(status == (int)KairosBootStatus.Ok, "blocking configured flash:raw status");
+                Check(rawError == IntPtr.Zero, "blocking configured flash:raw error ownership");
+
+                status = NativeMethods.BootRaw(
+                    context,
+                    "usb:serial:blocking-boot-raw",
+                    "blocking-boot-raw-kernel.bin",
+                    null,
+                    null,
+                    ref nativeLegacyOptions,
+                    ref nativeFlashOptions,
+                    out rawError);
+                Check(status == (int)KairosBootStatus.Ok, "blocking boot:raw status");
+                Check(rawError == IntPtr.Zero, "blocking boot:raw error ownership");
+            }
+            finally
+            {
+                Utf8String.Free(commandLine);
+            }
+        }
+
+        var custom = new LegacyBootOptions(
+            "console=启动",
+            0x12000000U,
+            4096U,
+            0x00010000U,
+            0x02000000U,
+            0x01f00000U,
+            0x00000200U);
+        var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+
+        using (var context = Context.Create())
+        {
+            var flashReports = new List<FlashProgress>();
+            await context.FlashRawAsync(
+                "boot",
+                "configured-kernel.bin",
+                custom,
+                new FlashOptions(fractional),
+                ramdiskPath: "configured-ramdisk.img",
+                secondStagePath: "configured-second.bin",
+                deviceSelector: "usb:serial:configured-raw",
+                progress: new InlineProgress<FlashProgress>(flashReports.Add),
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            Check(flashReports.Count == 3, "configured flash:raw progress count");
+            Check(flashReports[0].Stage == "download", "configured flash:raw initial stage");
+            Check(flashReports[2].Stage == "complete", "configured flash:raw completion stage");
+            Check(
+                flashReports.All(report => report.DeviceIdentifier == "usb:serial:configured-raw"),
+                "configured flash:raw progress device");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var progress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "cancel-configured-kernel.bin",
+                        LegacyBootOptions.Default,
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: progress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            var bootReports = new List<FlashProgress>();
+            await context.BootRawAsync(
+                "boot-raw-kernel.bin",
+                custom,
+                new FlashOptions(fractional),
+                ramdiskPath: "boot-raw-ramdisk.img",
+                secondStagePath: "boot-raw-second.bin",
+                deviceSelector: "usb:serial:boot-raw",
+                progress: new InlineProgress<FlashProgress>(bootReports.Add),
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            Check(bootReports.Count == 3, "boot:raw progress count");
+            Check(bootReports[0].Stage == "preflight", "boot:raw initial stage");
+            Check(bootReports[2].Stage == "complete", "boot:raw completion stage");
+            Check(
+                bootReports.All(report => report.DeviceIdentifier == "usb:serial:boot-raw"),
+                "boot:raw progress device");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var progress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.BootRawAsync(
+                        "cancel-boot-raw-kernel.bin",
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: progress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            using (var source = new CancellationTokenSource())
+            {
+                source.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.BootRawAsync(
+                        "not-started-boot-raw-kernel.bin",
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "not-started-configured-kernel.bin",
+                        LegacyBootOptions.Default,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            await ExpectAsync<ArgumentException>(
+                () => context.BootRawAsync(string.Empty)).ConfigureAwait(false);
+            await ExpectAsync<ArgumentException>(
+                () => context.BootRawAsync(
+                    "kernel.bin",
+                    secondStagePath: "second.bin")).ConfigureAwait(false);
+        }
+
+        Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "legacy boot native assertions");
+        Check(
+            ScriptedUpdateNativeMethods.LegacyBootOptionsInitCount() == 5,
+            "legacy boot options init calls");
+        Check(
+            ScriptedUpdateNativeMethods.FlashOptionsInitCount() == 5,
+            "legacy boot flash options init calls");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawAsyncStartCount() == 2,
+            "configured async flash:raw starts");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawBlockingCount() == 1,
+            "configured blocking flash:raw call");
+        Check(ScriptedUpdateNativeMethods.BootAsyncStartCount() == 2, "async boot:raw starts");
+        Check(ScriptedUpdateNativeMethods.BootBlockingCount() == 1, "blocking boot:raw call");
+        Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "legacy boot cancellation");
+        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 4, "legacy boot operation release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "legacy boot context release");
     }
 
     private static void CheckFleetPublicSurface()
@@ -2033,6 +2305,9 @@ internal static class Program
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_options_init_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int FlashOptionsInitCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_legacy_boot_options_init_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int LegacyBootOptionsInitCount();
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_boot_async_start_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int BootAsyncStartCount();

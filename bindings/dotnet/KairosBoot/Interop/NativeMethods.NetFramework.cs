@@ -12,6 +12,9 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, EntryPoint = "kb_flash_options_init", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FlashOptionsInit(ref NativeFlashOptions options);
 
+    [DllImport(LibraryName, EntryPoint = "kb_legacy_boot_options_init", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void LegacyBootOptionsInit(ref NativeLegacyBootOptions options);
+
     [DllImport(LibraryName, EntryPoint = "kb_update_options_init", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void UpdateOptionsInit(ref NativeUpdateOptions options);
 
@@ -96,6 +99,54 @@ internal static partial class NativeMethods
         [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_flash_raw_with_boot_options_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashRawWithBootOptionsAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_flash_raw_with_boot_options", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashRawWithBootOptions(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_boot_raw_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int BootRawAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_boot_raw", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int BootRaw(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeLegacyBootOptions legacyOptions,
         ref NativeFlashOptions options,
         out IntPtr error);
 
