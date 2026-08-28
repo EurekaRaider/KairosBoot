@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 76
+    implemented: 79
     intentional-deviation: 15
     missing: 0
-    partial: 28
+    partial: 25
 officialDifferentialCoverage:
   status: "not-run"
   requiredEntries: 87
@@ -50,8 +50,8 @@ entries:
   - id: "capability.boot-image-construction"
     kind: "image-plan"
     required: true
-    status: "partial"
-    note: "The bounded shared builder emits Android boot headers v0-v4 and exposes the locked construction options through C11, C++23, .NET and CLI, but its legacy image bytes do not yet match the frozen Platform-Tools 37.0.1 DATA hash."
+    status: "implemented"
+    note: "The bounded shared builder emits Android boot headers v0-v4 through C11, C++23, .NET and CLI, and its frozen v0 construction matches Platform-Tools 37.0.1 exact bytes including the zero identity field and raw v0/v1 DTB address template field."
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
@@ -60,6 +60,7 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      - "scripts/run_official_fastboot_differential.py"
     officialDifferentialEvidence: []
   - id: "capability.dynamic-partitions"
     kind: "image-plan"
@@ -162,8 +163,8 @@ entries:
   - id: "command.boot"
     kind: "command"
     required: true
-    status: "partial"
-    note: "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI, but the frozen Platform-Tools 37.0.1 differential capture produces a different legacy boot-image DATA hash."
+    status: "implemented"
+    note: "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI; the frozen Platform-Tools 37.0.1 raw boot scenario matches exact DATA bytes, wire events and device state."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/boot_file_cli_test.py"
@@ -173,6 +174,7 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      - "scripts/run_official_fastboot_differential.py"
     officialDifferentialEvidence: []
   - id: "command.continue"
     kind: "command"
@@ -242,8 +244,8 @@ entries:
   - id: "command.flash-raw"
     kind: "command"
     required: true
-    status: "partial"
-    note: "Flash-raw constructs validated Android boot images v0-v4 from kernel, ramdisk and second-stage operands, but the frozen Platform-Tools 37.0.1 differential capture produces a different legacy boot-image DATA hash."
+    status: "implemented"
+    note: "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/boot_image_cli_test.py"
@@ -252,6 +254,7 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      - "scripts/run_official_fastboot_differential.py"
     officialDifferentialEvidence: []
   - id: "command.flashall"
     kind: "command"
@@ -1241,8 +1244,5 @@ entries:
       - "tests/libusb_runtime/test_main.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
     officialDifferentialEvidence: []
-requiredGaps:
-  - "capability.boot-image-construction"
-  - "command.boot"
-  - "command.flash-raw"
+requiredGaps: []
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence from a Release artifact built at the current source commit (or an evidence-only descendant), and no partial, missing, unknown, or unassessed entry remains"

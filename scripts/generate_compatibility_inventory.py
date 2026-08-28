@@ -81,6 +81,20 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "commands": ["download:00000020", "flash:system"],
         "data": [["host-to-device", 32]],
     },
+    "official-tcp-flash-default-file": {
+        "transport": "tcp",
+        "coverageIds": [
+            "command.flash", "protocol.command", "protocol.download",
+            "capability.raw-image", "image.system",
+        ],
+        "argv": ["flash", "system"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system"],
+        "data": [["host-to-device", 32]],
+    },
     "official-tcp-signature": {
         "transport": "tcp",
         "coverageIds": ["command.signature"],
@@ -169,6 +183,11 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
 
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
     "official-scripted-erase": ["command.erase"],
+    # Retain the old mapping so a stale pre-fix capture remains structurally
+    # auditable; current evidence is accepted only from the matched scenarios.
+    "official-scripted-boot-flash-raw": [
+        "command.boot", "command.flash-raw", "capability.boot-image-construction",
+    ],
     "official-scripted-slot-policy": [
         "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
     ],

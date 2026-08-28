@@ -73,14 +73,15 @@
         "tests/cli/scripted_cli_test.py",
         "tests/c_api_test.c",
         "tests/cxx_api_test.cpp",
-        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs",
+        "scripts/run_official_fastboot_differential.py"
       ],
       "id": "capability.boot-image-construction",
       "kind": "image-plan",
-      "note": "The bounded shared builder emits Android boot headers v0-v4 and exposes the locked construction options through C11, C++23, .NET and CLI, but its legacy image bytes do not yet match the frozen Platform-Tools 37.0.1 DATA hash.",
+      "note": "The bounded shared builder emits Android boot headers v0-v4 through C11, C++23, .NET and CLI, and its frozen v0 construction matches Platform-Tools 37.0.1 exact bytes including the zero identity field and raw v0/v1 DTB address template field.",
       "officialDifferentialEvidence": [],
       "required": true,
-      "status": "partial"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -287,15 +288,16 @@
         "tests/image/boot_image_builder_tests.cpp",
         "tests/c_api_test.c",
         "tests/cxx_api_test.cpp",
-        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs",
+        "scripts/run_official_fastboot_differential.py"
       ],
       "id": "command.boot",
       "kind": "command",
-      "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI, but the frozen Platform-Tools 37.0.1 differential capture produces a different legacy boot-image DATA hash.",
+      "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI; the frozen Platform-Tools 37.0.1 raw boot scenario matches exact DATA bytes, wire events and device state.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "boot",
-      "status": "partial"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -463,15 +465,16 @@
         "tests/image/boot_image_builder_tests.cpp",
         "tests/c_api_test.c",
         "tests/cxx_api_test.cpp",
-        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs",
+        "scripts/run_official_fastboot_differential.py"
       ],
       "id": "command.flash-raw",
       "kind": "command",
-      "note": "Flash-raw constructs validated Android boot images v0-v4 from kernel, ramdisk and second-stage operands, but the frozen Platform-Tools 37.0.1 differential capture produces a different legacy boot-image DATA hash.",
+      "note": "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flash:raw",
-      "status": "partial"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -2616,11 +2619,7 @@
     "status": "not-run",
     "uncoveredCandidateScenarios": 0
   },
-  "requiredGaps": [
-    "capability.boot-image-construction",
-    "command.boot",
-    "command.flash-raw"
-  ],
+  "requiredGaps": [],
   "schemaVersion": 2,
   "statusVocabulary": [
     "implemented",
@@ -2631,10 +2630,10 @@
   "summary": {
     "byKind": {
       "command": {
-        "implemented": 28,
+        "implemented": 30,
         "intentional-deviation": 4,
         "missing": 0,
-        "partial": 2
+        "partial": 0
       },
       "deviation": {
         "implemented": 0,
@@ -2649,10 +2648,10 @@
         "partial": 25
       },
       "image-plan": {
-        "implemented": 10,
+        "implemented": 11,
         "intentional-deviation": 0,
         "missing": 0,
-        "partial": 1
+        "partial": 0
       },
       "option": {
         "implemented": 29,
@@ -2674,10 +2673,10 @@
       }
     },
     "byStatus": {
-      "implemented": 76,
+      "implemented": 79,
       "intentional-deviation": 15,
       "missing": 0,
-      "partial": 28
+      "partial": 25
     },
     "totalEntries": 119
   }
