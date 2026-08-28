@@ -3,8 +3,11 @@
 #include "src/api/fleet_run.hpp"
 
 #include "src/api/error_handle.hpp"
+#include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
+#include "src/fleet/artifact_preflight.hpp"
 #include "src/fleet/manifest.hpp"
+#include "src/kairosboot_internal.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -79,6 +82,8 @@ namespace {
 
 std::mutex g_prepare_factory_mutex;
 kairosboot::api::FleetRunPrepareFactory g_prepare_factory;
+kairosboot::api::FleetRunDeviceDependenciesFactory
+    g_device_dependencies_factory;
 
 void clear_error(kb_error_t** error) noexcept {
     if (error != nullptr) {
@@ -351,6 +356,124 @@ job_deadline(const kb_job_options_t& options) noexcept {
     return KB_E_INTERNAL;
 }
 
+[[nodiscard]] kb_status_t artifact_preflight_status(
+    const kairosboot::fleet::ArtifactPreflightErrorKind kind) noexcept {
+    using kairosboot::fleet::ArtifactPreflightErrorKind;
+    switch (kind) {
+        case ArtifactPreflightErrorKind::Cancelled:
+            return KB_E_CANCELLED;
+        case ArtifactPreflightErrorKind::TimedOut:
+            return KB_E_TIMEOUT;
+        case ArtifactPreflightErrorKind::NotFound:
+        case ArtifactPreflightErrorKind::Io:
+            return KB_E_IO;
+        case ArtifactPreflightErrorKind::ResourceExhausted:
+            return KB_E_OUT_OF_MEMORY;
+        case ArtifactPreflightErrorKind::UnexpectedFailure:
+            return KB_E_INTERNAL;
+        case ArtifactPreflightErrorKind::InvalidArgument:
+        case ArtifactPreflightErrorKind::InvalidPlan:
+        case ArtifactPreflightErrorKind::DuplicateArtifactId:
+        case ArtifactPreflightErrorKind::ConflictingDeclaredDigest:
+        case ArtifactPreflightErrorKind::UnsafePath:
+        case ArtifactPreflightErrorKind::LimitExceeded:
+        case ArtifactPreflightErrorKind::Integrity:
+        case ArtifactPreflightErrorKind::HashMismatch:
+        case ArtifactPreflightErrorKind::InvalidImage:
+            return KB_E_INVALID_ARGUMENT;
+    }
+    return KB_E_INTERNAL;
+}
+
+[[nodiscard]] kb_status_t device_preflight_status(
+    const kairosboot::fleet::DevicePreflightError& error) noexcept {
+    using kairosboot::fleet::DevicePreflightErrorKind;
+    switch (error.kind) {
+        case DevicePreflightErrorKind::Cancelled:
+            return KB_E_CANCELLED;
+        case DevicePreflightErrorKind::DeadlineExceeded:
+            return KB_E_TIMEOUT;
+        case DevicePreflightErrorKind::MissingSelectorDevice:
+        case DevicePreflightErrorKind::MissingTargetDevice:
+            return KB_E_NO_DEVICE;
+        case DevicePreflightErrorKind::DuplicateSerial:
+        case DevicePreflightErrorKind::DeviceMatchesMultipleTargets:
+            return KB_E_AMBIGUOUS_DEVICE;
+        case DevicePreflightErrorKind::ResourceExhausted:
+            return KB_E_OUT_OF_MEMORY;
+        case DevicePreflightErrorKind::ProbeFailed:
+            return error.probe_error &&
+                    error.probe_error->code ==
+                        kairosboot::fleet::DevicePreflightProbeErrorCode::DeviceRejected
+                ? KB_E_DEVICE_FAIL
+                : KB_E_PROTOCOL;
+        case DevicePreflightErrorKind::OpenFailed:
+            if (error.open_error) {
+                using kairosboot::fleet::DevicePreflightOpenErrorCode;
+                switch (error.open_error->code) {
+                    case DevicePreflightOpenErrorCode::NotFound:
+                        return KB_E_NO_DEVICE;
+                    case DevicePreflightOpenErrorCode::Busy:
+                        return KB_E_BUSY;
+                    case DevicePreflightOpenErrorCode::Cancelled:
+                        return KB_E_CANCELLED;
+                    case DevicePreflightOpenErrorCode::DeadlineExceeded:
+                        return KB_E_TIMEOUT;
+                    case DevicePreflightOpenErrorCode::ResourceExhausted:
+                        return KB_E_OUT_OF_MEMORY;
+                    case DevicePreflightOpenErrorCode::PermissionDenied:
+                    case DevicePreflightOpenErrorCode::DriverUnavailable:
+                    case DevicePreflightOpenErrorCode::TransportFailure:
+                    case DevicePreflightOpenErrorCode::UnexpectedFailure:
+                        return KB_E_IO;
+                }
+            }
+            return KB_E_IO;
+        case DevicePreflightErrorKind::UnexpectedFailure:
+            return KB_E_INTERNAL;
+        case DevicePreflightErrorKind::InvalidArgument:
+        case DevicePreflightErrorKind::SnapshotLimitExceeded:
+        case DevicePreflightErrorKind::UnreliableTopology:
+        case DevicePreflightErrorKind::DuplicatePhysicalPath:
+        case DevicePreflightErrorKind::OpenContractViolation:
+        case DevicePreflightErrorKind::DeviceChangedDuringOpen:
+        case DevicePreflightErrorKind::ProbeContractViolation:
+        case DevicePreflightErrorKind::ProductMismatch:
+            return KB_E_INVALID_ARGUMENT;
+    }
+    return KB_E_INTERNAL;
+}
+
+[[nodiscard]] kb_status_t actor_prepare_status(
+    const kairosboot::fleet::FleetActorPrepareError& error) noexcept {
+    using kairosboot::fleet::FleetActorPrepareErrorKind;
+    switch (error.kind) {
+        case FleetActorPrepareErrorKind::Cancelled:
+            return KB_E_CANCELLED;
+        case FleetActorPrepareErrorKind::TimedOut:
+            return KB_E_TIMEOUT;
+        case FleetActorPrepareErrorKind::ResourceExhausted:
+            return KB_E_OUT_OF_MEMORY;
+        case FleetActorPrepareErrorKind::UnexpectedFailure:
+            return KB_E_INTERNAL;
+        case FleetActorPrepareErrorKind::TaskPreparationFailed:
+            if (error.device_error &&
+                error.device_error->kind ==
+                    kairosboot::fastboot::UpdateDeviceErrorKind::Unsupported) {
+                return KB_E_NOT_SUPPORTED;
+            }
+            return KB_E_DEVICE_FAIL;
+        case FleetActorPrepareErrorKind::InvalidArgument:
+        case FleetActorPrepareErrorKind::PlanDigestMismatch:
+        case FleetActorPrepareErrorKind::InvalidPlan:
+        case FleetActorPrepareErrorKind::MissingArtifact:
+        case FleetActorPrepareErrorKind::SlotResolutionFailed:
+        case FleetActorPrepareErrorKind::IntegerOutOfRange:
+            return KB_E_INVALID_ARGUMENT;
+    }
+    return KB_E_INTERNAL;
+}
+
 [[nodiscard]] std::string job_id_for_plan(
     const kairosboot::fleet::JobPlan* plan) {
     if (plan == nullptr) {
@@ -560,8 +683,209 @@ job_deadline(const kb_job_options_t& options) noexcept {
     return std::move(*report);
 }
 
+[[nodiscard]] kairosboot::api::FleetRunPrepareError prepare_error(
+    const kb_status_t status,
+    std::string message) {
+    return {.status = status, .message = std::move(message)};
+}
+
+[[nodiscard]] std::expected<kairosboot::api::FleetRunDeviceDependencies,
+                            kairosboot::api::FleetRunPrepareError>
+production_device_dependencies(
+    kb_context_t& context,
+    const kairosboot::fleet::JobPlan& plan,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token cancellation) {
+    auto runtime = kairosboot::api::acquire_fleet_usb_runtime(context);
+    if (!runtime) {
+        return std::unexpected(prepare_error(
+            runtime.error().status, runtime.error().message));
+    }
+
+    kairosboot::fastboot::LibusbReconnectAdapterOptions adapter_options;
+    try {
+        if (!plan.manifest().policy.memory_budget.automatic) {
+            adapter_options.transport.buffer_budget =
+                std::make_shared<kairosboot::transport::BufferBudget>(
+                    static_cast<std::size_t>(
+                        plan.manifest().policy.memory_budget.bytes));
+        }
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(prepare_error(
+            KB_E_OUT_OF_MEMORY,
+            "unable to allocate the fleet USB memory budget"));
+    }
+    auto execution_runtime =
+        kairosboot::fleet::make_libusb_fleet_execution_runtime(
+            *runtime, std::move(adapter_options));
+    if (!execution_runtime) {
+        return std::unexpected(prepare_error(
+            actor_prepare_status(execution_runtime.error()),
+            execution_runtime.error().message));
+    }
+    auto opener =
+        kairosboot::fleet::make_libusb_device_preflight_session_opener(
+            *runtime,
+            execution_runtime->buffer_budget,
+            execution_runtime->data_ring);
+    if (!opener) {
+        auto status = KB_E_IO;
+        using kairosboot::fleet::DevicePreflightOpenErrorCode;
+        switch (opener.error().code) {
+            case DevicePreflightOpenErrorCode::Cancelled:
+                status = KB_E_CANCELLED;
+                break;
+            case DevicePreflightOpenErrorCode::DeadlineExceeded:
+                status = KB_E_TIMEOUT;
+                break;
+            case DevicePreflightOpenErrorCode::NotFound:
+                status = KB_E_NO_DEVICE;
+                break;
+            case DevicePreflightOpenErrorCode::Busy:
+                status = KB_E_BUSY;
+                break;
+            case DevicePreflightOpenErrorCode::ResourceExhausted:
+                status = KB_E_OUT_OF_MEMORY;
+                break;
+            case DevicePreflightOpenErrorCode::PermissionDenied:
+            case DevicePreflightOpenErrorCode::DriverUnavailable:
+            case DevicePreflightOpenErrorCode::TransportFailure:
+            case DevicePreflightOpenErrorCode::UnexpectedFailure:
+                break;
+        }
+        return std::unexpected(prepare_error(status, opener.error().message));
+    }
+
+    kairosboot::transport::UsbInterfaceFilter filter;
+    filter.interface_class = 0xFFU;
+    filter.interface_subclass = 0x42U;
+    filter.interface_protocol = 0x03U;
+    auto snapshot = (*runtime)->enumerate(filter, deadline, cancellation);
+    if (!snapshot) {
+        const auto error = kairosboot::api::normalize_public_error(
+            snapshot.error(), {});
+        return std::unexpected(prepare_error(error.status, error.message));
+    }
+    try {
+        return kairosboot::api::FleetRunDeviceDependencies{
+            .snapshot = std::move(*snapshot),
+            .opener = std::move(*opener),
+            .probe = std::make_unique<
+                kairosboot::fleet::FastbootDevicePreflightProbe>(),
+            .execution_runtime = std::move(*execution_runtime),
+        };
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(prepare_error(
+            KB_E_OUT_OF_MEMORY,
+            "unable to allocate fleet device preflight dependencies"));
+    }
+}
+
+[[nodiscard]] std::expected<kairosboot::api::FleetRunPrepared,
+                            kairosboot::api::FleetRunPrepareError>
+prepare_production_fleet_run(
+    kb_context_t& context,
+    const kairosboot::fleet::JobPlan& plan,
+    const std::filesystem::path& manifest_path,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token cancellation) {
+    try {
+        auto artifact_root = manifest_path.parent_path();
+        if (artifact_root.empty()) {
+            artifact_root = std::filesystem::path{"."};
+        }
+        kairosboot::fleet::ArtifactPreflightOptions artifact_options;
+        artifact_options.deadline = deadline;
+        artifact_options.cancellation = cancellation;
+        auto artifacts = kairosboot::fleet::preflight_fleet_artifacts(
+            plan, artifact_root, artifact_options);
+        if (!artifacts) {
+            return std::unexpected(prepare_error(
+                artifact_preflight_status(artifacts.error().kind),
+                artifacts.error().message));
+        }
+
+        kairosboot::api::FleetRunDeviceDependenciesFactory dependency_factory;
+        {
+            std::scoped_lock lock(g_prepare_factory_mutex);
+            dependency_factory = g_device_dependencies_factory;
+        }
+        auto dependencies = dependency_factory
+            ? dependency_factory(context, plan, deadline, cancellation)
+            : production_device_dependencies(
+                  context, plan, deadline, cancellation);
+        if (!dependencies) {
+            return std::unexpected(std::move(dependencies.error()));
+        }
+        if (dependencies->opener == nullptr || dependencies->probe == nullptr) {
+            return std::unexpected(prepare_error(
+                KB_E_INTERNAL,
+                "fleet device dependencies are incomplete"));
+        }
+
+        auto devices = kairosboot::fleet::preflight_fleet_devices(
+            plan,
+            dependencies->snapshot,
+            *dependencies->opener,
+            *dependencies->probe,
+            deadline,
+            cancellation);
+        if (!devices) {
+            return std::unexpected(prepare_error(
+                device_preflight_status(devices.error()),
+                devices.error().message));
+        }
+        auto consumed = std::move(*devices).consume(plan.sha256());
+        if (!consumed) {
+            return std::unexpected(prepare_error(
+                KB_E_INTERNAL,
+                "prepared fleet device plan digest could not be consumed"));
+        }
+        const kairosboot::fastboot::UpdateOperationContext operation_context{
+            .cancellation = cancellation,
+            .deadline = deadline == std::chrono::steady_clock::time_point::max()
+                ? std::nullopt
+                : std::optional{deadline},
+        };
+        auto batch = kairosboot::fleet::prepare_fleet_device_actors(
+            plan,
+            std::move(*artifacts),
+            std::move(*consumed),
+            std::move(dependencies->execution_runtime),
+            operation_context);
+        if (!batch) {
+            return std::unexpected(prepare_error(
+                actor_prepare_status(batch.error()), batch.error().message));
+        }
+
+        std::vector<kairosboot::fleet::ReportDeviceSpec> report_specs;
+        report_specs.assign(
+            batch->report_specs().begin(), batch->report_specs().end());
+        return kairosboot::api::FleetRunPrepared{
+            .report_specs = std::move(report_specs),
+            .executor = {},
+            .actor_batch =
+                std::make_unique<kairosboot::fleet::PreparedFleetActorBatch>(
+                    std::move(*batch)),
+        };
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(prepare_error(
+            KB_E_OUT_OF_MEMORY,
+            "unable to allocate the prepared fleet execution"));
+    } catch (const std::exception& error) {
+        return std::unexpected(prepare_error(
+            KB_E_INTERNAL,
+            std::string{"unexpected fleet preparation failure: "} +
+                error.what()));
+    } catch (...) {
+        return std::unexpected(prepare_error(
+            KB_E_INTERNAL, "unexpected fleet preparation failure"));
+    }
+}
+
 [[nodiscard]] OperationOutcome run_job_task(
     const std::shared_ptr<JobSharedState>& shared,
+    kb_context_t& context,
     std::string file_path,
     const kb_job_options_t options,
     kairosboot::api::OperationState::TaskContext& task_context) {
@@ -617,19 +941,21 @@ job_deadline(const kb_job_options_t& options) noexcept {
         std::scoped_lock lock(g_prepare_factory_mutex);
         factory = g_prepare_factory;
     }
-    if (!factory) {
-        return terminal_preflight_failure(
-            shared,
-            &*plan,
-            KB_E_NOT_SUPPORTED,
-            "fleet execution requires the production device/session factory");
-    }
-    auto prepared = factory(*plan, shared->cancellation.get_token());
+    auto prepared = factory
+        ? factory(*plan, shared->cancellation.get_token())
+        : prepare_production_fleet_run(
+              context,
+              *plan,
+              utf8_path(file_path),
+              deadline.value_or(
+                  std::chrono::steady_clock::time_point::max()),
+              shared->cancellation.get_token());
     if (!prepared) {
         return terminal_preflight_failure(
             shared, &*plan, prepared.error().status, prepared.error().message);
     }
-    if (prepared->report_specs.empty() || !prepared->executor) {
+    if (prepared->report_specs.empty() ||
+        (!prepared->executor && prepared->actor_batch == nullptr)) {
         return terminal_preflight_failure(
             shared,
             &*plan,
@@ -662,11 +988,16 @@ job_deadline(const kb_job_options_t& options) noexcept {
             static_cast<void>(execution_cancel.request_stop());
         }
     };
-    auto coordinator = kairosboot::fleet::FleetCoordinator::create_for_testing(
-        report_specs.size(),
-        plan->manifest().policy,
-        std::move(prepared->executor),
-        observer);
+    auto coordinator = prepared->actor_batch != nullptr
+        ? kairosboot::fleet::FleetCoordinator::create(
+              std::move(*prepared->actor_batch),
+              plan->manifest().policy,
+              observer)
+        : kairosboot::fleet::FleetCoordinator::create_for_testing(
+              report_specs.size(),
+              plan->manifest().policy,
+              std::move(prepared->executor),
+              observer);
     if (!coordinator) {
         return terminal_preflight_failure(
             shared, &*plan, KB_E_INTERNAL, coordinator.error().message);
@@ -674,11 +1005,11 @@ job_deadline(const kb_job_options_t& options) noexcept {
     if (!report_progress(options, "execute")) {
         static_cast<void>(execution_cancel.request_stop());
     }
-    const kairosboot::fastboot::UpdateOperationContext context{
+    const kairosboot::fastboot::UpdateOperationContext execution_context{
         .cancellation = execution_cancel.get_token(),
         .deadline = deadline,
     };
-    auto result = (*coordinator)->run(context);
+    auto result = (*coordinator)->run(execution_context);
     if (!result) {
         return terminal_preflight_failure(
             shared, &*plan, KB_E_INTERNAL, result.error().message);
@@ -777,6 +1108,12 @@ void set_fleet_run_prepare_factory(FleetRunPrepareFactory factory) {
     g_prepare_factory = std::move(factory);
 }
 
+void set_fleet_run_device_dependencies_factory(
+    FleetRunDeviceDependenciesFactory factory) {
+    std::scoped_lock lock(g_prepare_factory_mutex);
+    g_device_dependencies_factory = std::move(factory);
+}
+
 }  // namespace kairosboot::api
 
 extern "C" {
@@ -842,7 +1179,8 @@ kb_status_t KB_CALL kb_run_job_file_async(
                     g_active_contexts.erase(context);
                 }
             } release{context};
-            return run_job_task(shared, std::move(path), options, task_context);
+            return run_job_task(
+                shared, *context, std::move(path), options, task_context);
         };
         auto operation =
             std::make_unique<kairosboot::api::OperationState>(std::move(task));

@@ -19,7 +19,19 @@ enum {
   KB_TEST_SCRIPT_WAIT_FOR_CANCEL = 2
 };
 
+enum {
+  KB_TEST_PRODUCTION_SUCCESS = 0,
+  KB_TEST_PRODUCTION_NO_DEVICE = 1,
+  KB_TEST_PRODUCTION_AMBIGUOUS = 2,
+  KB_TEST_PRODUCTION_PRODUCT_MISMATCH = 3,
+  KB_TEST_PRODUCTION_CONTINUE_FAILURE = 4
+};
+
 void kb_test_set_fleet_script(int mode);
+void kb_test_set_fleet_production_script(int mode);
+size_t kb_test_fleet_dependency_calls(void);
+size_t kb_test_fleet_permit_bind_count(void);
+size_t kb_test_fleet_payload_count(void);
 
 typedef struct trace_buffer {
   char text[512];
@@ -37,6 +49,17 @@ static kb_progress_action_t KB_CALL trace_progress(
     memcpy(trace->text + trace->size, progress->stage, stage_size);
     trace->size += stage_size;
     trace->text[trace->size] = '\0';
+  }
+  return KB_PROGRESS_CONTINUE;
+}
+
+static kb_progress_action_t KB_CALL cancel_device_execution(
+    const kb_progress_t *progress, void *user_data) {
+  (void)user_data;
+  if (strcmp(progress->stage, "execute") == 0 &&
+      progress->device_identifier != NULL &&
+      progress->device_identifier[0] != '\0') {
+    return KB_PROGRESS_CANCEL;
   }
   return KB_PROGRESS_CONTINUE;
 }
@@ -71,6 +94,67 @@ static int write_manifest(const char *path) {
   return wrote && closed;
 }
 
+static int write_production_fixture(const char *manifest_path,
+                                    const char *artifact_path,
+                                    size_t device_count,
+                                    int valid_hash) {
+  static const char artifact[] = "KairosBootFleet!";
+  static const char digest[] =
+      "5b4857879890c8ea3dc9c345bfbb18703a7f7e96831b038b2e8f0d6061451c5d";
+  FILE *file = fopen(artifact_path, "wb");
+  if (file == NULL) {
+    return 0;
+  }
+  if (fwrite(artifact, 1U, sizeof(artifact) - 1U, file) !=
+          sizeof(artifact) - 1U ||
+      fclose(file) != 0) {
+    return 0;
+  }
+
+  file = fopen(manifest_path, "wb");
+  if (file == NULL) {
+    return 0;
+  }
+  if (fprintf(file,
+              "apiVersion: kairosboot.io/v1\n"
+              "kind: FlashJob\n"
+              "artifacts:\n"
+              "  - id: system\n"
+              "    path: %s\n"
+              "    sha256: \"%s\"\n"
+              "targets:\n"
+              "  - name: product-a\n"
+              "    selector:\n"
+              "      serials: [",
+              artifact_path,
+              valid_hash ? digest
+                         : "0000000000000000000000000000000000000000000000000000000000000000") <
+      0) {
+    fclose(file);
+    return 0;
+  }
+  for (size_t index = 0U; index < device_count; ++index) {
+    if (fprintf(file, "%sSERIAL-%03zu", index == 0U ? "" : ", ", index) <
+        0) {
+      fclose(file);
+      return 0;
+    }
+  }
+  if (fprintf(file,
+              "]\n"
+              "    expectedProduct: product_a\n"
+              "    steps:\n"
+              "      - flash: { partition: system, artifact: system }\n"
+              "policy:\n"
+              "  onDeviceFailure: continue\n"
+              "  maxParallelDevices: 32\n"
+              "  memoryBudget: auto\n") < 0 ||
+      fclose(file) != 0) {
+    return 0;
+  }
+  return 1;
+}
+
 static int report_contains(const kb_job_report_t *report, const char *text) {
   size_t size = 0U;
   const char *json = kb_job_report_json(report, &size);
@@ -79,6 +163,8 @@ static int report_contains(const kb_job_report_t *report, const char *text) {
 
 int main(void) {
   const char *manifest = "kb_fleet_run_test.yaml";
+  const char *production_manifest = "kb_fleet_production_test.yaml";
+  const char *production_artifact = "kb_fleet_production_system.img";
   kb_context_t *context = NULL;
   kb_error_t *error = NULL;
   kb_job_options_t options;
@@ -221,8 +307,126 @@ int main(void) {
     kb_job_release(job);
   }
 
+  /* The default production preparation path performs artifact, device,
+   * actor, scheduler and coordinator work. USB enumeration/open/probe are
+   * scripted below; no hardware success is implied. */
+  {
+    kb_job_report_t *report = NULL;
+    CHECK(write_production_fixture(production_manifest, production_artifact,
+                                   32U, 1));
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_SUCCESS);
+    options.progress_callback = NULL;
+    options.progress_user_data = NULL;
+    CHECK(kb_run_job_file(context, production_manifest, &options, &report,
+                          &error) == KB_OK);
+    CHECK(error == NULL);
+    CHECK(report != NULL);
+    CHECK(report_contains(report, "\"state\":\"succeeded\""));
+    CHECK(report_contains(report, "\"succeeded\":32"));
+    CHECK(kb_test_fleet_dependency_calls() == 1U);
+    CHECK(kb_test_fleet_permit_bind_count() == 32U);
+    CHECK(kb_test_fleet_payload_count() == 32U);
+    kb_job_report_release(report);
+  }
+
+  /* Selection failures remain pre-destructive and map to stable C statuses. */
+  {
+    kb_job_report_t *report = NULL;
+    CHECK(write_production_fixture(production_manifest, production_artifact,
+                                   1U, 1));
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_NO_DEVICE);
+    CHECK(kb_run_job_file(context, production_manifest, NULL, &report,
+                          &error) == KB_E_NO_DEVICE);
+    CHECK(error != NULL);
+    CHECK(kb_error_status(error) == KB_E_NO_DEVICE);
+    CHECK(report != NULL);
+    CHECK(report_contains(report, "\"state\":\"failed\""));
+    CHECK(kb_test_fleet_permit_bind_count() == 0U);
+    kb_error_release(error);
+    kb_job_report_release(report);
+    error = NULL;
+
+    report = NULL;
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_AMBIGUOUS);
+    CHECK(kb_run_job_file(context, production_manifest, NULL, &report,
+                          &error) == KB_E_AMBIGUOUS_DEVICE);
+    CHECK(error != NULL);
+    CHECK(report != NULL);
+    kb_error_release(error);
+    kb_job_report_release(report);
+    error = NULL;
+
+    report = NULL;
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_PRODUCT_MISMATCH);
+    CHECK(kb_run_job_file(context, production_manifest, NULL, &report,
+                          &error) == KB_E_INVALID_ARGUMENT);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "products do not match") != NULL);
+    CHECK(report != NULL);
+    kb_error_release(error);
+    kb_job_report_release(report);
+    error = NULL;
+  }
+
+  /* Artifact hash failure occurs before USB/device dependency acquisition. */
+  {
+    kb_job_report_t *report = NULL;
+    CHECK(write_production_fixture(production_manifest, production_artifact,
+                                   1U, 0));
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_SUCCESS);
+    CHECK(kb_run_job_file(context, production_manifest, NULL, &report,
+                          &error) == KB_E_INVALID_ARGUMENT);
+    CHECK(error != NULL);
+    CHECK(report != NULL);
+    CHECK(kb_test_fleet_dependency_calls() == 0U);
+    CHECK(kb_test_fleet_permit_bind_count() == 0U);
+    kb_error_release(error);
+    kb_job_report_release(report);
+    error = NULL;
+  }
+
+  /* A device-specific progress cancellation reaches the coordinator token and
+   * publishes a drained cancelled report. */
+  {
+    kb_job_report_t *report = NULL;
+    CHECK(write_production_fixture(production_manifest, production_artifact,
+                                   2U, 1));
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_SUCCESS);
+    options.progress_callback = cancel_device_execution;
+    options.progress_user_data = NULL;
+    CHECK(kb_run_job_file(context, production_manifest, &options, &report,
+                          &error) == KB_E_CANCELLED);
+    CHECK(error != NULL);
+    CHECK(report != NULL);
+    CHECK(report_contains(report, "\"state\":\"cancelled\""));
+    kb_error_release(error);
+    kb_job_report_release(report);
+    error = NULL;
+    options.progress_callback = NULL;
+  }
+
+  /* continue isolates one device rejection and lets its sibling complete. */
+  {
+    kb_job_report_t *report = NULL;
+    kb_test_set_fleet_production_script(KB_TEST_PRODUCTION_CONTINUE_FAILURE);
+    CHECK(kb_run_job_file(context, production_manifest, NULL, &report,
+                          &error) == KB_E_DEVICE_FAIL);
+    CHECK(error != NULL);
+    CHECK(report != NULL);
+    CHECK(report_contains(report, "\"state\":\"partially_failed\""));
+    CHECK(report_contains(report, "\"succeeded\":1"));
+    CHECK(report_contains(report, "\"failed\":1"));
+    CHECK(kb_test_fleet_permit_bind_count() == 2U);
+    CHECK(kb_test_fleet_payload_count() == 2U);
+    kb_error_release(error);
+    kb_job_report_release(report);
+    error = NULL;
+  }
+
   kb_context_release(context);
   (void)remove(manifest);
+  (void)remove(production_manifest);
+  (void)remove(production_artifact);
   puts("PASS: C11 fleet run/cancel/report lifecycle");
   return 0;
 }
