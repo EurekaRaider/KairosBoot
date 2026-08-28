@@ -51,9 +51,18 @@ kb_getvar
 kb_getvar_async
 kb_gsi
 kb_gsi_async
+kb_job_cancel
+kb_job_error
+kb_job_get_report
+kb_job_options_init
 kb_job_plan_canonical_json
 kb_job_plan_release
 kb_job_plan_sha256_hex
+kb_job_release
+kb_job_report_json
+kb_job_report_release
+kb_job_state
+kb_job_wait
 kb_oem
 kb_oem_async
 kb_operation_cancel
@@ -69,6 +78,8 @@ kb_reboot
 kb_reboot_async
 kb_resize_logical_partition
 kb_resize_logical_partition_async
+kb_run_job_file
+kb_run_job_file_async
 kb_set_active
 kb_set_active_async
 kb_snapshot_update

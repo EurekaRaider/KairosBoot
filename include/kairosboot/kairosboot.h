@@ -108,6 +108,8 @@ typedef struct kb_error kb_error_t;
 typedef struct kb_operation kb_operation_t;
 typedef struct kb_command_result kb_command_result_t;
 typedef struct kb_job_plan kb_job_plan_t;
+typedef struct kb_job kb_job_t;
+typedef struct kb_job_report kb_job_report_t;
 
 typedef struct kb_version {
   uint32_t struct_size;
@@ -181,6 +183,17 @@ typedef struct kb_command_options {
   uint64_t maximum_receive_bytes;
 } kb_command_options_t;
 
+typedef struct kb_job_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  /* Whole-job deadline in milliseconds, including manifest parsing,
+   * planning, preflight, device execution, cancellation drain and report
+   * publication. The initialized default is infinite. */
+  uint32_t timeout_ms;
+  kb_progress_callback_t progress_callback;
+  void *progress_user_data;
+} kb_job_options_t;
+
 #define KB_VERSION_V1_SIZE                                                   \
   ((uint32_t)(offsetof(kb_version_t, string) +                               \
               sizeof(((kb_version_t *)0)->string)))
@@ -196,11 +209,15 @@ typedef struct kb_command_options {
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))
+#define KB_JOB_OPTIONS_V1_SIZE                                               \
+  ((uint32_t)(offsetof(kb_job_options_t, progress_user_data) +               \
+              sizeof(((kb_job_options_t *)0)->progress_user_data)))
 
 KB_API void KB_CALL kb_context_options_init(kb_context_options_t *options);
 KB_API void KB_CALL kb_flash_options_init(kb_flash_options_t *options);
 KB_API void KB_CALL kb_update_options_init(kb_update_options_t *options);
 KB_API void KB_CALL kb_command_options_init(kb_command_options_t *options);
+KB_API void KB_CALL kb_job_options_init(kb_job_options_t *options);
 KB_API void KB_CALL kb_version_init(kb_version_t *version);
 
 KB_API kb_status_t KB_CALL kb_get_version(kb_version_t *version);
@@ -438,6 +455,34 @@ KB_API const char *KB_CALL kb_job_plan_canonical_json(
     const kb_job_plan_t *plan, size_t *size);
 KB_API const char *KB_CALL kb_job_plan_sha256_hex(const kb_job_plan_t *plan);
 KB_API void KB_CALL kb_job_plan_release(kb_job_plan_t *plan);
+
+/* Runs a versioned Fleet manifest. The blocking entry point always starts the
+ * matching asynchronous job and waits for it. A terminal report is returned
+ * for success, cancellation and execution/preflight failure whenever report
+ * construction itself succeeds. The report is owned by the caller and stays
+ * valid independently of the job handle. */
+KB_API kb_status_t KB_CALL kb_run_job_file_async(
+    kb_context_t *context, const char *file_path,
+    const kb_job_options_t *options_or_null, kb_job_t **job,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_run_job_file(
+    kb_context_t *context, const char *file_path,
+    const kb_job_options_t *options_or_null, kb_job_report_t **report,
+    kb_error_t **error);
+
+KB_API kb_status_t KB_CALL kb_job_wait(kb_job_t *job, uint32_t timeout_ms);
+KB_API kb_status_t KB_CALL kb_job_cancel(kb_job_t *job);
+KB_API kb_operation_state_t KB_CALL kb_job_state(const kb_job_t *job);
+KB_API const kb_error_t *KB_CALL kb_job_error(const kb_job_t *job);
+KB_API kb_status_t KB_CALL kb_job_get_report(
+    const kb_job_t *job, kb_job_report_t **report, kb_error_t **error);
+KB_API void KB_CALL kb_job_release(kb_job_t *job);
+
+/* Borrowed NUL-terminated UTF-8 canonical JSON. *size excludes the terminator;
+ * the borrow remains valid until kb_job_report_release(). */
+KB_API const char *KB_CALL kb_job_report_json(
+    const kb_job_report_t *report, size_t *size);
+KB_API void KB_CALL kb_job_report_release(kb_job_report_t *report);
 
 KB_API kb_status_t KB_CALL kb_operation_wait(kb_operation_t *operation,
                                               uint32_t timeout_ms);
