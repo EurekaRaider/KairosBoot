@@ -3164,11 +3164,15 @@ int run_cli(const int argc, char **argv) {
   }
   if (argc == 3 && std::string_view{argv[1]} == "doctor" &&
       std::string_view{argv[2]} == "--json") {
-    return doctor(GlobalOptions{.json = true});
+    GlobalOptions options{};
+    options.json = true;
+    return doctor(options);
   }
   if (argc == 3 && std::string_view{argv[1]} == "devices" &&
       std::string_view{argv[2]} == "--json") {
-    return print_devices(GlobalOptions{.json = true});
+    GlobalOptions options{};
+    options.json = true;
+    return print_devices(options);
   }
 
   const auto invocation = parse_invocation(argc, argv);

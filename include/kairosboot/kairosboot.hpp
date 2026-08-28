@@ -84,9 +84,19 @@ struct FilesystemOptions {
   bool compress{};
 
   [[nodiscard]] constexpr kb_filesystem_options_t native_flags() const noexcept {
-    return (casefold ? KB_FILESYSTEM_OPTION_CASEFOLD : 0U) |
-           (projid ? KB_FILESYSTEM_OPTION_PROJID : 0U) |
-           (compress ? KB_FILESYSTEM_OPTION_COMPRESS : 0U);
+    kb_filesystem_options_t result{};
+    if (casefold) {
+      result |= static_cast<kb_filesystem_options_t>(
+          KB_FILESYSTEM_OPTION_CASEFOLD);
+    }
+    if (projid) {
+      result |= static_cast<kb_filesystem_options_t>(KB_FILESYSTEM_OPTION_PROJID);
+    }
+    if (compress) {
+      result |= static_cast<kb_filesystem_options_t>(
+          KB_FILESYSTEM_OPTION_COMPRESS);
+    }
+    return result;
   }
 };
 
