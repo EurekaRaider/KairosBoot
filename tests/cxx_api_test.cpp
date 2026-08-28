@@ -44,6 +44,10 @@ static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
 static_assert(std::is_same_v<
               decltype(kairosboot::FlashOptions{}.sparse_limit_bytes),
               std::uint64_t>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.force), bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::FlashOptions{}.filesystem_options),
+              kairosboot::FilesystemOptions>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.disable_verity),
                              bool>);
 static_assert(std::is_same_v<
@@ -63,6 +67,7 @@ static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.active_slot),
 static_assert(std::is_same_v<
               decltype(kairosboot::UpdateOptions{}.sparse_limit_bytes),
               std::uint64_t>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.force), bool>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
@@ -233,15 +238,23 @@ int main() {
     CHECK(defaults.has_value());
     CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
     CHECK(defaults->native.sparse_limit_bytes == 0U);
+    CHECK(defaults->native.force == 0);
+    CHECK(defaults->native.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::FlashOptions finite;
     finite.timeout = 250ms;
     finite.sparse_limit_bytes = 8U * 1024U * 1024U;
+    finite.force = true;
+    finite.filesystem_options.casefold = true;
+    finite.filesystem_options.compress = true;
     const auto prepared = kairosboot::detail::prepare_flash_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 250U);
     CHECK(prepared->native.sparse_limit_bytes == 8U * 1024U * 1024U);
+    CHECK(prepared->native.force == 1);
+    CHECK(prepared->native.filesystem_options ==
+          (KB_FILESYSTEM_OPTION_CASEFOLD | KB_FILESYSTEM_OPTION_COMPRESS));
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_flash_options(finite);
@@ -292,17 +305,22 @@ int main() {
     CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
     CHECK(defaults->native.wipe == 0);
     CHECK(defaults->native.sparse_limit_bytes == 0U);
+    CHECK(defaults->native.force == 0);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::UpdateOptions finite;
     finite.timeout = 625ms;
     finite.wipe = true;
     finite.sparse_limit_bytes = 16U * 1024U * 1024U;
+    finite.force = true;
+    finite.filesystem_options.projid = true;
     const auto prepared = kairosboot::detail::prepare_update_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 625U);
     CHECK(prepared->native.wipe == 1);
     CHECK(prepared->native.sparse_limit_bytes == 16U * 1024U * 1024U);
+    CHECK(prepared->native.force == 1);
+    CHECK(prepared->native.filesystem_options == KB_FILESYSTEM_OPTION_PROJID);
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_update_options(finite);

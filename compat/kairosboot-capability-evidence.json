@@ -294,7 +294,15 @@
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
     },
     {
-      "ids": ["option.disable-super-optimization", "option.force", "option.fs-options"],
+      "ids": ["option.force", "option.fs-options"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_format_partition", "kb_format_partition_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["flash", "flash:raw", "format", "update", "flashall"],
+      "evidence": ["tests/fastboot/update_executor_tests.cpp", "tests/image/filesystem_formatter_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/check_cli.cmake", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence."
+    },
+    {
+      "ids": ["option.disable-super-optimization"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."

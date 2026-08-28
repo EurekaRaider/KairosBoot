@@ -2,6 +2,20 @@ using System;
 
 namespace KairosBoot;
 
+/// <summary>AOSP filesystem features accepted by format operations.</summary>
+[Flags]
+public enum FilesystemOptions : uint
+{
+    /// <summary>Do not request optional filesystem features.</summary>
+    None = 0,
+    /// <summary>Enable Unicode casefolding.</summary>
+    Casefold = 1U << 0,
+    /// <summary>Enable project quotas and extended attributes.</summary>
+    Projid = 1U << 1,
+    /// <summary>Enable filesystem compression and extended attributes.</summary>
+    Compress = 1U << 2,
+}
+
 /// <summary>Controls process-wide resources owned by a KairosBoot context.</summary>
 public readonly struct ContextOptions
 {
@@ -103,8 +117,11 @@ public readonly struct FlashOptions
         string? slot = null,
         bool setActive = false,
         string? activeSlot = null,
-        ulong sparseLimitBytes = 0)
+        ulong sparseLimitBytes = 0,
+        bool force = false,
+        FilesystemOptions filesystemOptions = FilesystemOptions.None)
     {
+        ValidateFilesystemOptions(filesystemOptions);
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
@@ -114,6 +131,8 @@ public readonly struct FlashOptions
         SetActive = setActive;
         ActiveSlot = activeSlot;
         SparseLimitBytes = sparseLimitBytes;
+        Force = force;
+        FilesystemOptions = filesystemOptions;
     }
 
     /// <summary>Creates flash options with an AOSP -S sparse-part limit.</summary>
@@ -128,9 +147,11 @@ public readonly struct FlashOptions
         string? slot,
         bool setActive = false,
         string? activeSlot = null,
-        ulong sparseLimitBytes = 0)
+        ulong sparseLimitBytes = 0,
+        bool force = false,
+        FilesystemOptions filesystemOptions = FilesystemOptions.None)
         : this(timeout, false, false, slot, setActive, activeSlot,
-            sparseLimitBytes)
+            sparseLimitBytes, force, filesystemOptions)
     {
     }
 
@@ -159,6 +180,12 @@ public readonly struct FlashOptions
 
     /// <summary>Gets the AOSP -S sparse-part limit in bytes; zero is automatic.</summary>
     public ulong SparseLimitBytes { get; }
+
+    /// <summary>Gets whether otherwise unsafe flash/format paths may continue.</summary>
+    public bool Force { get; }
+
+    /// <summary>Gets the filesystem features used by format.</summary>
+    public FilesystemOptions FilesystemOptions { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
@@ -194,6 +221,17 @@ public readonly struct FlashOptions
         }
 
         return (uint)milliseconds;
+    }
+
+    private static void ValidateFilesystemOptions(FilesystemOptions options)
+    {
+        const FilesystemOptions supported = FilesystemOptions.Casefold |
+            FilesystemOptions.Projid | FilesystemOptions.Compress;
+        if ((options & ~supported) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), options, "Unsupported filesystem option bits.");
+        }
     }
 }
 
@@ -357,6 +395,8 @@ public readonly struct UpdateOptions
     /// <param name="setActive">Whether to issue set_active before update tasks.</param>
     /// <param name="activeSlot">The explicit set_active target, or null to derive it.</param>
     /// <param name="sparseLimitBytes">AOSP -S sparse-part limit in bytes, or zero for automatic limits.</param>
+    /// <param name="force">Whether ordinary requirement mismatches may be bypassed.</param>
+    /// <param name="filesystemOptions">Filesystem features for generated format images.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
@@ -372,8 +412,11 @@ public readonly struct UpdateOptions
         string? slot = null,
         bool setActive = false,
         string? activeSlot = null,
-        ulong sparseLimitBytes = 0)
+        ulong sparseLimitBytes = 0,
+        bool force = false,
+        FilesystemOptions filesystemOptions = FilesystemOptions.None)
     {
+        ValidateFilesystemOptions(filesystemOptions);
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
@@ -388,6 +431,8 @@ public readonly struct UpdateOptions
         SetActive = setActive;
         ActiveSlot = activeSlot;
         SparseLimitBytes = sparseLimitBytes;
+        Force = force;
+        FilesystemOptions = filesystemOptions;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -431,6 +476,12 @@ public readonly struct UpdateOptions
     /// <summary>Gets the AOSP -S sparse-part limit in bytes; zero is automatic.</summary>
     public ulong SparseLimitBytes { get; }
 
+    /// <summary>Gets whether unmet ordinary package requirements are bypassed.</summary>
+    public bool Force { get; }
+
+    /// <summary>Gets filesystem features for update plans that format partitions.</summary>
+    public FilesystemOptions FilesystemOptions { get; }
+
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
         : uint.MaxValue;
@@ -465,6 +516,17 @@ public readonly struct UpdateOptions
         }
 
         return (uint)milliseconds;
+    }
+
+    private static void ValidateFilesystemOptions(FilesystemOptions options)
+    {
+        const FilesystemOptions supported = FilesystemOptions.Casefold |
+            FilesystemOptions.Projid | FilesystemOptions.Compress;
+        if ((options & ~supported) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), options, "Unsupported filesystem option bits.");
+        }
     }
 }
 

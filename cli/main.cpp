@@ -219,6 +219,9 @@ struct GlobalOptions {
   bool disable_verification{};
   std::uint64_t sparse_limit_bytes{};
   bool sparse_limit_set{false};
+  bool force{};
+  kairosboot::FilesystemOptions filesystem_options{};
+  bool filesystem_options_set{};
   std::optional<std::string> dtb_path;
   bool legacy_boot_options_set{false};
   std::optional<std::string> slot;
@@ -349,7 +352,8 @@ bool is_global_option(const std::string_view value) noexcept {
          value == "--timeout-ms" || value == "--max-receive-bytes" ||
          value == "--disable-verity" ||
          value == "--disable-verification" ||
-         value == "-S" ||
+         value == "-S" || value == "--force" ||
+         value == "--fs-options" || value.starts_with("--fs-options=") ||
          value == "--dtb" ||
          value == "--base" || value == "--cmdline" ||
          value == "--page-size" || value == "--kernel-offset" ||
@@ -430,6 +434,37 @@ bool parse_u32_auto(const std::string_view text, std::uint32_t &value) {
   return error == std::errc{} && end == digits.data() + digits.size();
 }
 
+bool parse_filesystem_options(const std::string_view text,
+                              kairosboot::FilesystemOptions &options) {
+  if (text.empty()) {
+    return false;
+  }
+  std::size_t begin = 0U;
+  while (begin < text.size()) {
+    const auto comma = text.find(',', begin);
+    const auto token = text.substr(begin, comma == std::string_view::npos
+                                              ? std::string_view::npos
+                                              : comma - begin);
+    if (token == "casefold" && !options.casefold) {
+      options.casefold = true;
+    } else if (token == "projid" && !options.projid) {
+      options.projid = true;
+    } else if (token == "compress" && !options.compress) {
+      options.compress = true;
+    } else {
+      return false;
+    }
+    if (comma == std::string_view::npos) {
+      return true;
+    }
+    begin = comma + 1U;
+    if (begin == text.size()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 template <typename Integer>
 bool parse_unsigned_number(const std::string_view text, Integer &value) {
   if (text.empty()) {
@@ -484,6 +519,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool dtb_offset_seen = false;
   bool slot_seen = false;
   bool set_active_seen = false;
+  bool force_seen = false;
+  bool filesystem_options_seen = false;
   const auto error = [&result](std::string message) {
     return std::unexpected(ParseError{result.global.json, std::move(message)});
   };
@@ -593,6 +630,39 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     if (argument == "--disable-verification") {
       result.global.disable_verification = true;
       ++index;
+      continue;
+    }
+    if (argument == "--force") {
+      if (force_seen) {
+        return error("option --force may only be specified once");
+      }
+      result.global.force = true;
+      force_seen = true;
+      ++index;
+      continue;
+    }
+    if (argument == "--fs-options" || argument.starts_with("--fs-options=")) {
+      if (filesystem_options_seen) {
+        return error("option --fs-options may only be specified once");
+      }
+      std::string_view value;
+      if (argument.starts_with("--fs-options=")) {
+        value = argument.substr(std::string_view{"--fs-options="}.size());
+        ++index;
+      } else {
+        if (index + 1 >= argc) {
+          return error(
+              "option --fs-options requires casefold, projid, or compress");
+        }
+        value = argv[index + 1];
+        index += 2;
+      }
+      if (!parse_filesystem_options(value, result.global.filesystem_options)) {
+        return error(
+            "option --fs-options supports only unique casefold, projid, and compress values");
+      }
+      result.global.filesystem_options_set = true;
+      filesystem_options_seen = true;
       continue;
     }
     if (argument == "-S") {
@@ -789,6 +859,16 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       command != "flash:raw" && command != "update" &&
       command != "flashall") {
     return error("option -S is not valid for " + std::string{command});
+  }
+  if (result.global.force && command != "flash" && command != "flash:raw" &&
+      command != "format" && !command.starts_with("format:") &&
+      command != "update" && command != "flashall") {
+    return error("option --force is valid only for flash, flash:raw, format, "
+                 "update, and flashall");
+  }
+  if (result.global.filesystem_options_set && command != "format" &&
+      !command.starts_with("format:")) {
+    return error("option --fs-options is valid only for format");
   }
   if (result.global.dtb_path.has_value() && command != "flash" &&
       command != "boot" && command != "flash:raw") {
@@ -1715,6 +1795,8 @@ kairosboot::FlashOptions flash_options(const GlobalOptions &options) {
   result.set_active = options.set_active;
   result.active_slot = options.active_slot;
   result.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.force = options.force;
+  result.filesystem_options = options.filesystem_options;
   return result;
 }
 
@@ -1729,6 +1811,8 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
   result.set_active = options.set_active;
   result.active_slot = options.active_slot;
   result.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.force = options.force;
+  result.filesystem_options = options.filesystem_options;
   return result;
 }
 
@@ -2949,6 +3033,8 @@ constexpr std::string_view usage_text() noexcept {
                "--max-receive-bytes <bytes>\n"
                "  --disable-verity --disable-verification\n"
                "  -S SIZE[K|M|G] (flash, flash:raw, update and flashall)\n"
+               "  --force (flash, flash:raw, format, update, flashall)\n"
+               "  --fs-options=casefold,projid,compress (format only)\n"
                "  Boot image construction options (boot and flash:raw only):\n"
                "  --cmdline <text> --base <value> --page-size <value>\n"
                "  --kernel-offset <value> --ramdisk-offset <value>\n"

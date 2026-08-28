@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 66
+    implemented: 68
     intentional-deviation: 15
-    missing: 4
+    missing: 2
     partial: 34
 officialDifferentialCoverage:
   status: "not-run"
@@ -793,15 +793,29 @@ entries:
   - id: "option.force"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence."
+    evidence:
+      - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/image/filesystem_formatter_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/check_cli.cmake"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.fs-options"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence."
+    evidence:
+      - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/image/filesystem_formatter_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/check_cli.cmake"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.header-version"
     kind: "option"
     required: true
@@ -1063,6 +1077,4 @@ requiredGaps:
   - "image.boot"
   - "image.system"
   - "option.disable-super-optimization"
-  - "option.force"
-  - "option.fs-options"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"

@@ -21,6 +21,10 @@
     "KB_E_PROTOCOL": 11,
     "KB_E_TIMEOUT": 7,
     "KB_FETCH_UNSPECIFIED": 18446744073709551615,
+    "KB_FILESYSTEM_OPTION_CASEFOLD": 1,
+    "KB_FILESYSTEM_OPTION_COMPRESS": 4,
+    "KB_FILESYSTEM_OPTION_NONE": 0,
+    "KB_FILESYSTEM_OPTION_PROJID": 2,
     "KB_FLASHING_GET_UNLOCK_ABILITY": 4,
     "KB_FLASHING_LOCK": 0,
     "KB_FLASHING_LOCK_CRITICAL": 2,
@@ -56,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "9a35f095c165c4488f36a95d17777076cc680bf9338fe67365bc290e79ee9315",
+  "headerContractSha256": "b32f7c753ce60f445d5e5aa79d731861748cb5b97fcc66dfd6e33d2aa1e66c33",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -191,9 +195,23 @@
           "name": "sparse_limit_bytes",
           "offset": 64,
           "size": 8
+        },
+        {
+          "name": "force",
+          "offset": 72,
+          "size": 4
+        },
+        {
+          "name": "filesystem_options",
+          "offset": 76,
+          "size": 4
         }
       ],
-      "size": 72
+      "size": 80,
+      "versionSize": {
+        "macro": "KB_FLASH_OPTIONS_FORCE_FS_SIZE",
+        "value": 80
+      }
     },
     "kb_job_options_t": {
       "alignment": 8,
@@ -428,9 +446,23 @@
           "name": "sparse_limit_bytes",
           "offset": 80,
           "size": 8
+        },
+        {
+          "name": "force",
+          "offset": 88,
+          "size": 4
+        },
+        {
+          "name": "filesystem_options",
+          "offset": 92,
+          "size": 4
         }
       ],
-      "size": 88
+      "size": 96,
+      "versionSize": {
+        "macro": "KB_UPDATE_OPTIONS_FORCE_FS_SIZE",
+        "value": 96
+      }
     },
     "kb_version_t": {
       "alignment": 8,

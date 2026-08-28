@@ -585,7 +585,7 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
 [[nodiscard]] std::expected<void, PendingFailure>
 validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& device,
                       const std::set<std::string, std::less<>>& known_partitions,
-                      ExecutionState& state,
+                      ExecutionState& state, const bool force,
                       const UpdateOperationContext& context) {
     std::map<std::string, std::string, std::less<>> cache;
     std::string current_product;
@@ -699,6 +699,19 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
             });
         }
         if (!satisfied) {
+            if (force) {
+                ++state.report.validated_requirements;
+                if (auto failure = emit_checked(
+                        state,
+                        event(UpdateExecutionEventKind::RequirementSatisfied, index,
+                              std::nullopt, requirement.location,
+                              requirement.variable, *value,
+                              "requirement not met; proceeding due to force"));
+                    failure) {
+                    return std::unexpected(std::move(*failure));
+                }
+                continue;
+            }
             auto failure = emit_requirement_failure(
                 state, index, requirement, *value,
                 requirement.action == RequirementAction::Reject
@@ -904,7 +917,7 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
         }
 
         auto requirements = validate_requirements(prepared, device, known_partitions,
-                                                  state, context);
+                                                  state, options.force, context);
         if (!requirements) {
             return std::unexpected(
                 finish_error(state, std::move(requirements.error())));

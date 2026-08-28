@@ -33,6 +33,10 @@ KB_ABI_STATIC_ASSERT(KB_E_OUT_OF_MEMORY == 2, "KB_E_OUT_OF_MEMORY value");
 KB_ABI_STATIC_ASSERT(KB_E_PROTOCOL == 11, "KB_E_PROTOCOL value");
 KB_ABI_STATIC_ASSERT(KB_E_TIMEOUT == 7, "KB_E_TIMEOUT value");
 KB_ABI_STATIC_ASSERT(KB_FETCH_UNSPECIFIED == UINT64_MAX, "KB_FETCH_UNSPECIFIED value");
+KB_ABI_STATIC_ASSERT(KB_FILESYSTEM_OPTION_CASEFOLD == 1, "KB_FILESYSTEM_OPTION_CASEFOLD value");
+KB_ABI_STATIC_ASSERT(KB_FILESYSTEM_OPTION_COMPRESS == 4, "KB_FILESYSTEM_OPTION_COMPRESS value");
+KB_ABI_STATIC_ASSERT(KB_FILESYSTEM_OPTION_NONE == 0, "KB_FILESYSTEM_OPTION_NONE value");
+KB_ABI_STATIC_ASSERT(KB_FILESYSTEM_OPTION_PROJID == 2, "KB_FILESYSTEM_OPTION_PROJID value");
 KB_ABI_STATIC_ASSERT(KB_FLASHING_GET_UNLOCK_ABILITY == 4, "KB_FLASHING_GET_UNLOCK_ABILITY value");
 KB_ABI_STATIC_ASSERT(KB_FLASHING_LOCK == 0, "KB_FLASHING_LOCK value");
 KB_ABI_STATIC_ASSERT(KB_FLASHING_LOCK_CRITICAL == 2, "KB_FLASHING_LOCK_CRITICAL value");
@@ -109,7 +113,7 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, usb_vendor_id) == 24, "kb_co
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->usb_vendor_id) == 8, "kb_context_options_t.usb_vendor_id size");
 KB_ABI_STATIC_ASSERT(KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE == 32, "KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE value");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 72, "kb_flash_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 80, "kb_flash_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_flash_options_t) == 8, "kb_flash_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, struct_size) == 0, "kb_flash_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->struct_size) == 4, "kb_flash_options_t.struct_size size");
@@ -133,6 +137,11 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, active_slot) == 56, "kb_flash_
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->active_slot) == 8, "kb_flash_options_t.active_slot size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, sparse_limit_bytes) == 64, "kb_flash_options_t.sparse_limit_bytes offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->sparse_limit_bytes) == 8, "kb_flash_options_t.sparse_limit_bytes size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, force) == 72, "kb_flash_options_t.force offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->force) == 4, "kb_flash_options_t.force size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, filesystem_options) == 76, "kb_flash_options_t.filesystem_options offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->filesystem_options) == 4, "kb_flash_options_t.filesystem_options size");
+KB_ABI_STATIC_ASSERT(KB_FLASH_OPTIONS_FORCE_FS_SIZE == 80, "KB_FLASH_OPTIONS_FORCE_FS_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_job_options_t) == 32, "kb_job_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_job_options_t) == 8, "kb_job_options_t alignment");
@@ -195,7 +204,7 @@ KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->stage) == 8, "kb_progress_t.st
 KB_ABI_STATIC_ASSERT(offsetof(kb_progress_t, device_identifier) == 32, "kb_progress_t.device_identifier offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->device_identifier) == 8, "kb_progress_t.device_identifier size");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 88, "kb_update_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 96, "kb_update_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_update_options_t) == 8, "kb_update_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, struct_size) == 0, "kb_update_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->struct_size) == 4, "kb_update_options_t.struct_size size");
@@ -229,6 +238,11 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, active_slot) == 72, "kb_updat
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->active_slot) == 8, "kb_update_options_t.active_slot size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, sparse_limit_bytes) == 80, "kb_update_options_t.sparse_limit_bytes offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->sparse_limit_bytes) == 8, "kb_update_options_t.sparse_limit_bytes size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, force) == 88, "kb_update_options_t.force offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->force) == 4, "kb_update_options_t.force size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, filesystem_options) == 92, "kb_update_options_t.filesystem_options offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->filesystem_options) == 4, "kb_update_options_t.filesystem_options size");
+KB_ABI_STATIC_ASSERT(KB_UPDATE_OPTIONS_FORCE_FS_SIZE == 96, "KB_UPDATE_OPTIONS_FORCE_FS_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_version_t) == 32, "kb_version_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_version_t) == 8, "kb_version_t alignment");

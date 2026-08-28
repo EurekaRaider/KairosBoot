@@ -586,6 +586,15 @@ bool valid_flash_options(const kb_flash_options_t *options) noexcept {
         options->disable_verification != 1))) {
     return false;
   }
+  if (options->struct_size >=
+          offsetof(kb_flash_options_t, force) + sizeof(options->force) &&
+      options->force != 0 && options->force != 1) {
+    return false;
+  }
+  if (options->struct_size >= KB_FLASH_OPTIONS_FORCE_FS_SIZE &&
+      (options->filesystem_options & ~KB_FILESYSTEM_OPTIONS_ALL) != 0U) {
+    return false;
+  }
   if (options->struct_size <
       offsetof(kb_flash_options_t, set_active) + sizeof(options->set_active)) {
     return true;
@@ -617,6 +626,13 @@ bool valid_flash_options(const kb_flash_options_t *options) noexcept {
       offsetof(kb_flash_options_t, sparse_limit_bytes) +
           sizeof(options->sparse_limit_bytes)) {
     result.sparse_limit_bytes = options->sparse_limit_bytes;
+  }
+  if (options->struct_size >=
+      offsetof(kb_flash_options_t, force) + sizeof(options->force)) {
+    result.force = options->force;
+  }
+  if (options->struct_size >= KB_FLASH_OPTIONS_FORCE_FS_SIZE) {
+    result.filesystem_options = options->filesystem_options;
   }
   return result;
 }
@@ -721,7 +737,12 @@ bool valid_update_options(const kb_update_options_t *options) noexcept {
              offsetof(kb_update_options_t, disable_fastboot_info)) &&
          valid_optional_bool(offsetof(kb_update_options_t, disable_verity)) &&
          valid_optional_bool(
-             offsetof(kb_update_options_t, disable_verification)))) {
+             offsetof(kb_update_options_t, disable_verification)) &&
+         valid_optional_bool(offsetof(kb_update_options_t, force)))) {
+    return false;
+  }
+  if (options->struct_size >= KB_UPDATE_OPTIONS_FORCE_FS_SIZE &&
+      (options->filesystem_options & ~KB_FILESYSTEM_OPTIONS_ALL) != 0U) {
     return false;
   }
   if (options->struct_size <
@@ -886,6 +907,13 @@ update_options_or_default(const kb_update_options_t *options) {
         offsetof(kb_update_options_t, sparse_limit_bytes) +
             sizeof(options->sparse_limit_bytes)) {
       result.native.sparse_limit_bytes = options->sparse_limit_bytes;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, force) + sizeof(options->force)) {
+      result.native.force = options->force;
+    }
+    if (options->struct_size >= KB_UPDATE_OPTIONS_FORCE_FS_SIZE) {
+      result.native.filesystem_options = options->filesystem_options;
     }
     auto policy = copy_slot_policy(slot, set_active, active_slot);
     if (!policy) {
@@ -2566,6 +2594,7 @@ apply_update_slot_policy(
       .deadline = deadline == UpdateClock::time_point::max()
                       ? std::optional<UpdateClock::time_point>{}
                       : std::optional<UpdateClock::time_point>{deadline},
+      .force = options.force != 0,
       .observer = [&options, &identifier, &callback_cancelled](
                       const kairosboot::fastboot::UpdateExecutionEvent &event) {
         if (!report_update_progress(
@@ -2690,16 +2719,32 @@ kb_status_t start_flash_source_async(
     auto cancellation = task_context.register_cancellation_hook(
         [&service] { service.request_cancel(); });
 
-    const std::array<std::string, 3> aosp_flash_preflight{
-        "is-userspace", "has-slot:" + partition_copy,
-        "is-logical:" + partition_copy};
-    for (const auto &variable : aosp_flash_preflight) {
+    std::optional<std::string> is_userspace;
+    std::optional<std::string> is_logical;
+    const std::array<std::pair<std::string, std::optional<std::string> *>, 3>
+        aosp_flash_preflight{{
+            {"is-userspace", &is_userspace},
+            {"has-slot:" + partition_copy, nullptr},
+            {"is-logical:" + partition_copy, &is_logical},
+        }};
+    for (const auto &[variable, captured] : aosp_flash_preflight) {
       auto value = service.getvar(variable);
       if (!value && value.error().code !=
                         kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
         return operation_failure(kairosboot::api::normalize_public_error(
             value.error(), selected_identifier));
       }
+      if (value && captured != nullptr) {
+        *captured = value->terminal.payload;
+      }
+    }
+    if (is_logical == "yes" && is_userspace != "yes" &&
+        flash_options.force == 0) {
+      return operation_failure(update_error(
+          KB_E_NOT_SUPPORTED,
+          "logical partition must be flashed through fastbootd; set force only "
+          "when intentionally overwriting a fixed bootloader partition",
+          selected_identifier));
     }
 
     std::vector<std::string> partitions{partition_copy};
@@ -2907,16 +2952,32 @@ kb_status_t start_vendor_boot_ramdisk_async(
     auto cancellation = task_context.register_cancellation_hook(
         [&service] { service.request_cancel(); });
 
-    const std::array<std::string, 3> aosp_flash_preflight{
-        "is-userspace", "has-slot:" + partition_copy,
-        "is-logical:" + partition_copy};
-    for (const auto &variable : aosp_flash_preflight) {
+    std::optional<std::string> is_userspace;
+    std::optional<std::string> is_logical;
+    const std::array<std::pair<std::string, std::optional<std::string> *>, 3>
+        aosp_flash_preflight{{
+            {"is-userspace", &is_userspace},
+            {"has-slot:" + partition_copy, nullptr},
+            {"is-logical:" + partition_copy, &is_logical},
+        }};
+    for (const auto &[variable, captured] : aosp_flash_preflight) {
       auto value = service.getvar(variable);
       if (!value && value.error().code !=
                         kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
         return operation_failure(kairosboot::api::normalize_public_error(
             value.error(), selected_identifier));
       }
+      if (value && captured != nullptr) {
+        *captured = value->terminal.payload;
+      }
+    }
+    if (is_logical == "yes" && is_userspace != "yes" &&
+        flash_options.force == 0) {
+      return operation_failure(update_error(
+          KB_E_NOT_SUPPORTED,
+          "logical partition must be flashed through fastbootd; set force only "
+          "when intentionally overwriting a fixed bootloader partition",
+          selected_identifier));
     }
 
     std::vector<std::string> partitions{partition_copy};
@@ -4728,13 +4789,7 @@ kb_status_t KB_CALL kb_format_partition_async(
       return fail(error, prepared_target.error());
     }
 
-    kb_flash_options_t format_options;
-    kb_flash_options_init(&format_options);
-    if (options_or_null != nullptr) {
-      format_options.timeout_ms = options_or_null->timeout_ms;
-      format_options.progress_callback = options_or_null->progress_callback;
-      format_options.progress_user_data = options_or_null->progress_user_data;
-    }
+    const auto format_options = flash_options_or_default(options_or_null);
     auto selected_identifier = prepared_target->selector.identifier;
     std::string partition_copy{partition};
 
@@ -4796,6 +4851,32 @@ kb_status_t KB_CALL kb_format_partition_async(
           });
         }
         resolved_partition += "_" + slot;
+      }
+
+      auto is_userspace = service.getvar("is-userspace");
+      if (!is_userspace &&
+          is_userspace.error().code !=
+              kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            is_userspace.error(), selected_identifier));
+      }
+      auto is_logical = service.getvar("is-logical:" + resolved_partition);
+      if (!is_logical &&
+          is_logical.error().code !=
+              kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            is_logical.error(), selected_identifier));
+      }
+      const bool userspace =
+          is_userspace && is_userspace->terminal.payload == "yes";
+      const bool logical =
+          is_logical && is_logical->terminal.payload == "yes";
+      if (logical && !userspace && format_options.force == 0) {
+        return operation_failure(update_error(
+            KB_E_NOT_SUPPORTED,
+            "logical partition must be formatted through fastbootd; set force "
+            "only when intentionally formatting a fixed bootloader partition",
+            selected_identifier));
       }
 
       std::string filesystem_type;
@@ -4873,7 +4954,7 @@ kb_status_t KB_CALL kb_format_partition_async(
       }
       auto generated = kairosboot::image::generate_empty_filesystem_image(
           filesystem_type, partition_size, *erase_block_size,
-          *logical_block_size);
+          *logical_block_size, format_options.filesystem_options);
       if (!generated) {
         return operation_failure(
             format_host_failure(generated.error(), selected_identifier));

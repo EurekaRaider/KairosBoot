@@ -648,7 +648,7 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
         raise AssertionError(f"unknown command error changed: {stderr!r}")
 
     stdout, stderr = local(["-S", "0", "flash"], 2)
-    if b"flash requires exactly <partition> and <file>" not in stderr:
+    if b"flash requires <partition> [file]" not in stderr:
         raise AssertionError(f"zero sparse limit was not accepted: {stderr!r}")
 
     stdout, stderr = local(["-S", "18446744073709551615G", "flash"], 2)
@@ -1147,6 +1147,45 @@ def run(cli: pathlib.Path) -> None:
             "partition": "system",
             "file": str(stage_file),
         }
+
+        def rejected_logical_flash(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYyes")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "system", str(stage_file)],
+            rejected_logical_flash,
+            expected_exit=4,
+        )
+        parse_failure_json(stdout, stderr, "not_supported")
+
+        def forced_logical_flash(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == stage_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:system"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--force", "--json", "flash", "system", str(stage_file)],
+            forced_logical_flash,
+        )
+        parse_success_json(stdout, stderr)
 
         sparse_limited_image = directory / "sparse-limited-raw.img"
         sparse_limited_image.write_bytes(

@@ -38,6 +38,7 @@ using kairosboot::fastboot::UpdateDeviceError;
 using kairosboot::fastboot::UpdateDeviceErrorKind;
 using kairosboot::fastboot::UpdateDeviceTaskInput;
 using kairosboot::fastboot::UpdateExecutionErrorKind;
+using kairosboot::fastboot::UpdateExecutionEvent;
 using kairosboot::fastboot::UpdateExecutionEventKind;
 using kairosboot::fastboot::UpdateExecutorOptions;
 using kairosboot::fastboot::UpdateSuperPreparationState;
@@ -500,6 +501,42 @@ void requirement_and_product_failures_make_zero_destructive_calls() {
     CHECK(getvar_failure.error().kind == UpdateExecutionErrorKind::GetVarFailed);
     CHECK(getvar_failure.error().requirement_index == 0U);
     CHECK(failed_product.task_calls.empty());
+}
+
+void force_bypasses_only_ordinary_requirement_mismatches() {
+    auto prepared = make_package({requirement("version-bootloader", {"2*"}, 31U)},
+                                 {erase_task("userdata", 32U)}, {});
+    ScriptedUpdateDevice device;
+    device.variables = {
+        {"product", "atlas"},
+        {"version-bootloader", "1.9"},
+    };
+    UpdateExecutorOptions options;
+    options.force = true;
+    auto forced = execute_prepared_update(prepared, device, options);
+    CHECK(forced);
+    CHECK(forced->validated_requirements == 1U);
+    CHECK(forced->completed_tasks == 1U);
+    CHECK(device.task_calls == std::vector<std::string>{"erase:userdata"});
+    const auto event = std::ranges::find_if(
+        forced->trace, [](const UpdateExecutionEvent &value) {
+            return value.kind == UpdateExecutionEventKind::RequirementSatisfied &&
+                   value.message == "requirement not met; proceeding due to force";
+        });
+    CHECK(event != forced->trace.end());
+
+    auto partition =
+        make_package({requirement("partition-exists", {"vendor"}, 33U)}, {}, {});
+    ScriptedUpdateDevice missing;
+    missing.variables = {
+        {"product", "atlas"},
+        {"has-slot:vendor", "missing"},
+    };
+    options.known_partitions = {"vendor"};
+    auto still_rejected = execute_prepared_update(partition, missing, options);
+    CHECK(!still_rejected);
+    CHECK(still_rejected.error().kind ==
+          UpdateExecutionErrorKind::RequirementNotMet);
 }
 
 void partition_exists_uses_host_table_and_has_slot_getvar() {
@@ -1106,6 +1143,8 @@ int main() {
              requirements_are_checked_once_before_ordered_tasks},
         Test{"requirement failures are non-destructive",
              requirement_and_product_failures_make_zero_destructive_calls},
+        Test{"force requirement policy",
+             force_bypasses_only_ordinary_requirement_mismatches},
         Test{"partition-exists semantics",
              partition_exists_uses_host_table_and_has_slot_getvar},
         Test{"prepared artifact mapping",

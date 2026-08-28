@@ -139,6 +139,21 @@ expect_text_parse_error(
 expect_text_parse_error(
   trailing_global_option "global options must precede the command" flash boot
   image.img --json)
+expect_text_parse_error(
+  force_scope
+  "option --force is valid only for flash, flash:raw, format, update, and flashall"
+  --force getvar product)
+expect_text_parse_error(
+  fs_options_scope "option --fs-options is valid only for format"
+  --fs-options=casefold flash system image.img)
+expect_text_parse_error(
+  fs_options_unknown
+  "option --fs-options supports only unique casefold, projid, and compress values"
+  --fs-options=casefold,unknown format:ext4 userdata)
+expect_text_parse_error(
+  fs_options_duplicate
+  "option --fs-options supports only unique casefold, projid, and compress values"
+  --fs-options=casefold,casefold format:ext4 userdata)
 
 execute_process(
   COMMAND "${CLI}" --serial "" flash boot image.img

@@ -275,7 +275,15 @@ internal static class Program
                 (IntPtr.Size == 8 ? 64 : 40),
             "flash options sparse limit offset");
         Check(
-            Marshal.SizeOf<NativeFlashOptions>() == (IntPtr.Size == 8 ? 72 : 48),
+            Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.Force)).ToInt32() ==
+                (IntPtr.Size == 8 ? 72 : 48),
+            "flash options force offset");
+        Check(
+            Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.FilesystemOptions)).ToInt32() ==
+                (IntPtr.Size == 8 ? 76 : 52),
+            "flash options filesystem options offset");
+        Check(
+            Marshal.SizeOf<NativeFlashOptions>() == (IntPtr.Size == 8 ? 80 : 56),
             "flash options native size");
         Check(
             NativeMethods.FlashOptionsStructSize == Marshal.SizeOf<NativeFlashOptions>(),
@@ -395,7 +403,15 @@ internal static class Program
                 (IntPtr.Size == 8 ? 80 : 64),
             "update options sparse limit offset");
         Check(
-            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 88 : 72),
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.Force)).ToInt32() ==
+                (IntPtr.Size == 8 ? 88 : 72),
+            "update options force offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.FilesystemOptions)).ToInt32() ==
+                (IntPtr.Size == 8 ? 92 : 76),
+            "update options filesystem options offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 96 : 80),
             "update options native size");
         Check(
             NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
@@ -503,6 +519,9 @@ internal static class Program
         Check(!UpdateOptions.Default.SetActive, "default update set-active");
         Check(UpdateOptions.Default.ActiveSlot == null, "default update active slot");
         Check(UpdateOptions.Default.SparseLimitBytes == 0, "default update sparse limit");
+        Check(!UpdateOptions.Default.Force, "default update force");
+        Check(UpdateOptions.Default.FilesystemOptions == FilesystemOptions.None,
+            "default update filesystem options");
         Check(
             default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct update timeout");
@@ -514,7 +533,9 @@ internal static class Program
             skipSecondary: true,
             excludeDynamicPartitions: true,
             disableFastbootInfo: true,
-            sparseLimitBytes: 8UL * 1024UL * 1024UL);
+            sparseLimitBytes: 8UL * 1024UL * 1024UL,
+            force: true,
+            filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid);
         Check(infiniteWipe.Timeout == Timeout.InfiniteTimeSpan, "explicit infinite update timeout");
         Check(infiniteWipe.Wipe, "explicit update wipe");
         Check(infiniteWipe.SkipReboot, "explicit update skip reboot");
@@ -523,6 +544,10 @@ internal static class Program
         Check(infiniteWipe.DisableFastbootInfo, "explicit update disables fastboot-info");
         Check(infiniteWipe.SparseLimitBytes == 8UL * 1024UL * 1024UL,
             "explicit update sparse limit");
+        Check(infiniteWipe.Force, "explicit update force");
+        Check(infiniteWipe.FilesystemOptions ==
+            (FilesystemOptions.Casefold | FilesystemOptions.Projid),
+            "explicit update filesystem options");
         var slotted = new UpdateOptions(
             Timeout.InfiniteTimeSpan, wipe: false, slot: "other",
             setActive: true, activeSlot: "b");
@@ -538,6 +563,9 @@ internal static class Program
         Expect<ArgumentOutOfRangeException>(
             () => _ = new UpdateOptions(
                 TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new UpdateOptions(TimeSpan.Zero,
+                filesystemOptions: (FilesystemOptions)8U));
 
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
@@ -880,6 +908,9 @@ internal static class Program
         Check(!FlashOptions.Default.SetActive, "default flash set-active");
         Check(FlashOptions.Default.ActiveSlot == null, "default flash active slot");
         Check(FlashOptions.Default.SparseLimitBytes == 0, "default flash sparse limit");
+        Check(!FlashOptions.Default.Force, "default flash force");
+        Check(FlashOptions.Default.FilesystemOptions == FilesystemOptions.None,
+            "default flash filesystem options");
         Check(
             default(FlashOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct flash timeout");
@@ -890,16 +921,23 @@ internal static class Program
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
         Check(new FlashOptions(fractional).Timeout == fractional, "finite flash timeout");
         var slotted = new FlashOptions(
-            Timeout.InfiniteTimeSpan, "all", setActive: true, activeSlot: "a");
+            Timeout.InfiniteTimeSpan, "all", setActive: true, activeSlot: "a",
+            force: true, filesystemOptions: FilesystemOptions.Compress);
         Check(slotted.Slot == "all", "flash slot option");
         Check(slotted.SetActive, "flash set-active option");
         Check(slotted.ActiveSlot == "a", "flash active slot option");
+        Check(slotted.Force, "flash force option");
+        Check(slotted.FilesystemOptions == FilesystemOptions.Compress,
+            "flash filesystem options");
 
         Expect<ArgumentOutOfRangeException>(
             () => _ = new FlashOptions(TimeSpan.FromTicks(-1)));
         Expect<ArgumentOutOfRangeException>(
             () => _ = new FlashOptions(
                 TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new FlashOptions(TimeSpan.Zero, false, false,
+                filesystemOptions: (FilesystemOptions)8U));
 
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
@@ -1009,7 +1047,9 @@ internal static class Program
                     skipSecondary: true,
                     excludeDynamicPartitions: true,
                     disableFastbootInfo: true,
-                    sparseLimitBytes: 8UL * 1024UL * 1024UL),
+                    sparseLimitBytes: 8UL * 1024UL * 1024UL,
+                    force: true,
+                    filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid),
                 "usb:serial:device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);
@@ -1058,7 +1098,11 @@ internal static class Program
             await context.FlashRawAsync(
                 "boot",
                 "images/内核.bin",
-                new FlashOptions(fractional, 64UL * 1024UL),
+                new FlashOptions(fractional, false, false,
+                    sparseLimitBytes: 64UL * 1024UL,
+                    force: true,
+                    filesystemOptions: FilesystemOptions.Casefold |
+                        FilesystemOptions.Projid | FilesystemOptions.Compress),
                 ramdiskPath: "ramdisk.img",
                 deviceSelector: "usb:serial:raw",
                 progress: rawProgress,

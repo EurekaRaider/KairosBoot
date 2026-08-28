@@ -47,6 +47,14 @@ struct FilesystemFormatError final {
   std::string message;
 };
 
+enum FilesystemFeature : std::uint32_t {
+  FilesystemCasefold = 1U << 0,
+  FilesystemProjid = 1U << 1,
+  FilesystemCompress = 1U << 2,
+};
+inline constexpr std::uint32_t kAllFilesystemFeatures =
+    FilesystemCasefold | FilesystemProjid | FilesystemCompress;
+
 class TemporaryFilesystemImage final {
 public:
   TemporaryFilesystemImage(const TemporaryFilesystemImage &) = delete;
@@ -90,10 +98,31 @@ private:
 
   friend std::expected<TemporaryFilesystemImage, FilesystemFormatError>
   generate_empty_filesystem_image(std::string_view, std::uint64_t,
-                                  std::uint32_t, std::uint32_t);
+                                  std::uint32_t, std::uint32_t, std::uint32_t);
 };
 
 namespace detail {
+
+[[nodiscard]] inline std::vector<std::string>
+make_f2fs_arguments(const std::filesystem::path &image,
+                    const std::uint64_t partition_size,
+                    const std::uint32_t features) {
+  std::vector<std::string> arguments{"-S", std::to_string(partition_size), "-g",
+                                     "android"};
+  // Keep the frozen AOSP fs.cpp order. Repeated -O arguments are intentional.
+  if ((features & FilesystemProjid) != 0U) {
+    arguments.insert(arguments.end(), {"-O", "project_quota,extra_attr"});
+  }
+  if ((features & FilesystemCasefold) != 0U) {
+    arguments.insert(arguments.end(), {"-O", "casefold", "-C", "utf8"});
+  }
+  if ((features & FilesystemCompress) != 0U) {
+    arguments.insert(arguments.end(),
+                     {"-O", "compression", "-O", "extra_attr"});
+  }
+  arguments.push_back(image.string());
+  return arguments;
+}
 
 [[nodiscard]] inline FilesystemFormatError
 format_error(const FilesystemFormatErrorKind kind, std::string message,
@@ -381,7 +410,8 @@ run_tool(const std::filesystem::path &tool,
 generate_empty_filesystem_image(const std::string_view filesystem_type,
                                 const std::uint64_t partition_size,
                                 const std::uint32_t erase_block_size,
-                                const std::uint32_t logical_block_size) {
+                                const std::uint32_t logical_block_size,
+                                const std::uint32_t features = 0U) {
   if (partition_size == 0U ||
       partition_size > static_cast<std::uint64_t>(
                            std::numeric_limits<std::int64_t>::max())) {
@@ -393,6 +423,11 @@ generate_empty_filesystem_image(const std::string_view filesystem_type,
     return std::unexpected(
         detail::format_error(FilesystemFormatErrorKind::Unsupported,
                              "format supports only ext4 and f2fs filesystems"));
+  }
+  if ((features & ~kAllFilesystemFeatures) != 0U) {
+    return std::unexpected(detail::format_error(
+        FilesystemFormatErrorKind::InvalidArgument,
+        "filesystem options contain unsupported feature bits"));
   }
   auto path = detail::create_temporary_path();
   if (!path) {
@@ -435,8 +470,8 @@ generate_empty_filesystem_image(const std::string_view filesystem_type,
                  std::to_string(partition_size / block_size)};
   } else {
     tool = detail::resolve_tool("KAIROSBOOT_MAKE_F2FS", "make_f2fs");
-    arguments = {"-S", std::to_string(partition_size), "-g", "android",
-                 image.path().string()};
+    arguments =
+        detail::make_f2fs_arguments(image.path(), partition_size, features);
   }
 
   auto generated = detail::run_tool(tool, arguments, config);

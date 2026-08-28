@@ -102,6 +102,18 @@ enum {
   KB_SNAPSHOT_UPDATE_MERGE = 1
 };
 
+typedef uint32_t kb_filesystem_options_t;
+enum {
+  KB_FILESYSTEM_OPTION_NONE = 0,
+  KB_FILESYSTEM_OPTION_CASEFOLD = UINT32_C(1) << 0,
+  KB_FILESYSTEM_OPTION_PROJID = UINT32_C(1) << 1,
+  KB_FILESYSTEM_OPTION_COMPRESS = UINT32_C(1) << 2
+};
+#define KB_FILESYSTEM_OPTIONS_ALL                                            \
+  ((kb_filesystem_options_t)(KB_FILESYSTEM_OPTION_CASEFOLD |                 \
+                             KB_FILESYSTEM_OPTION_PROJID |                   \
+                             KB_FILESYSTEM_OPTION_COMPRESS))
+
 typedef struct kb_context kb_context_t;
 typedef struct kb_device_list kb_device_list_t;
 typedef struct kb_error kb_error_t;
@@ -174,6 +186,10 @@ typedef struct kb_flash_options {
    * max-download-size behavior. Non-zero values are safely capped by both
    * the device limit and AOSP's 1 GiB resparse ceiling. */
   uint64_t sparse_limit_bytes;
+  /* Permit an otherwise rejected unsafe flash/format path. */
+  int32_t force;
+  /* Bitwise OR of KB_FILESYSTEM_OPTION_*. Used by format operations. */
+  kb_filesystem_options_t filesystem_options;
 } kb_flash_options_t;
 
 /* Android boot image construction options used with KERNEL and optional
@@ -241,6 +257,11 @@ typedef struct kb_update_options {
    * max-download-size behavior. Non-zero values are safely capped by both
    * the device limit and AOSP's 1 GiB resparse ceiling. */
   uint64_t sparse_limit_bytes;
+  /* Continue update/flashall when ordinary android-info requirements do not
+   * match. Structural/package integrity and device I/O errors remain fatal. */
+  int32_t force;
+  /* Reserved for update plans that generate a filesystem image. */
+  kb_filesystem_options_t filesystem_options;
 } kb_update_options_t;
 
 typedef struct kb_command_options {
@@ -283,6 +304,9 @@ typedef struct kb_job_options {
 #define KB_FLASH_OPTIONS_SLOT_POLICY_SIZE                                    \
   ((uint32_t)(offsetof(kb_flash_options_t, active_slot) +                    \
               sizeof(((kb_flash_options_t *)0)->active_slot)))
+#define KB_FLASH_OPTIONS_FORCE_FS_SIZE                                       \
+  ((uint32_t)(offsetof(kb_flash_options_t, filesystem_options) +             \
+              sizeof(((kb_flash_options_t *)0)->filesystem_options)))
 #define KB_LEGACY_BOOT_OPTIONS_V1_SIZE                                       \
   ((uint32_t)(offsetof(kb_legacy_boot_options_t, tags_offset) +              \
               sizeof(((kb_legacy_boot_options_t *)0)->tags_offset)))
@@ -298,6 +322,9 @@ typedef struct kb_job_options {
 #define KB_UPDATE_OPTIONS_SLOT_POLICY_SIZE                                   \
   ((uint32_t)(offsetof(kb_update_options_t, active_slot) +                   \
               sizeof(((kb_update_options_t *)0)->active_slot)))
+#define KB_UPDATE_OPTIONS_FORCE_FS_SIZE                                      \
+  ((uint32_t)(offsetof(kb_update_options_t, filesystem_options) +            \
+              sizeof(((kb_update_options_t *)0)->filesystem_options)))
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))

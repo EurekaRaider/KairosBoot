@@ -64,6 +64,8 @@ internal struct NativeFlashOptions
     internal int SetActive;
     internal IntPtr ActiveSlot;
     internal ulong SparseLimitBytes;
+    internal int Force;
+    internal uint FilesystemOptions;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -104,6 +106,8 @@ internal struct NativeUpdateOptions
     internal int SetActive;
     internal IntPtr ActiveSlot;
     internal ulong SparseLimitBytes;
+    internal int Force;
+    internal uint FilesystemOptions;
 }
 
 [StructLayout(LayoutKind.Sequential)]

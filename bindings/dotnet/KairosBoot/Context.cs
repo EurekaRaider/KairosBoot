@@ -1131,6 +1131,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
             slotPolicy.Apply(ref nativeOptions);
@@ -1200,6 +1202,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
             slotPolicy.Apply(ref nativeOptions);
@@ -1277,6 +1281,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
             slotPolicy.Apply(ref nativeOptions);
@@ -1387,6 +1393,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1513,6 +1521,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1581,6 +1591,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1651,6 +1663,8 @@ public sealed partial class Context : IDisposable
                 options.DisableFastbootInfo ? 1 : 0;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
             slotPolicy.Apply(ref nativeOptions);
@@ -1721,6 +1735,8 @@ public sealed partial class Context : IDisposable
                 options.DisableFastbootInfo ? 1 : 0;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 

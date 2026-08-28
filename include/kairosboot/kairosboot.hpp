@@ -78,6 +78,18 @@ enum class SnapshotUpdateCommand : kb_snapshot_update_command_t {
   Merge = KB_SNAPSHOT_UPDATE_MERGE,
 };
 
+struct FilesystemOptions {
+  bool casefold{};
+  bool projid{};
+  bool compress{};
+
+  [[nodiscard]] constexpr kb_filesystem_options_t native_flags() const noexcept {
+    return (casefold ? KB_FILESYSTEM_OPTION_CASEFOLD : 0U) |
+           (projid ? KB_FILESYSTEM_OPTION_PROJID : 0U) |
+           (compress ? KB_FILESYSTEM_OPTION_COMPRESS : 0U);
+  }
+};
+
 struct FetchRange {
   std::optional<std::uint64_t> offset;
   std::optional<std::uint64_t> size;
@@ -101,6 +113,8 @@ struct FlashOptions {
   std::optional<std::string> active_slot;
   // AOSP -S sparse-part limit in bytes; zero selects automatic device limits.
   std::uint64_t sparse_limit_bytes{};
+  bool force{};
+  FilesystemOptions filesystem_options{};
 };
 
 struct LegacyBootOptions {
@@ -134,6 +148,8 @@ struct UpdateOptions {
   std::optional<std::string> active_slot;
   // AOSP -S sparse-part limit in bytes; zero selects automatic device limits.
   std::uint64_t sparse_limit_bytes{};
+  bool force{};
+  FilesystemOptions filesystem_options{};
 };
 
 struct CommandOptions {
@@ -365,6 +381,8 @@ prepare_update_options(const UpdateOptions &options) {
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
   result.native.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.native.force = options.force ? 1 : 0;
+  result.native.filesystem_options = options.filesystem_options.native_flags();
   if (options.slot) {
     if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
       return std::unexpected(detail_make_error(
@@ -413,6 +431,8 @@ prepare_flash_options(const FlashOptions &options) {
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
   result.native.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.native.force = options.force ? 1 : 0;
+  result.native.filesystem_options = options.filesystem_options.native_flags();
   if (options.slot) {
     if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
       return std::unexpected(detail_make_error(

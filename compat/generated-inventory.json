@@ -1887,28 +1887,70 @@
       "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "format",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/image/filesystem_formatter_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/check_cli.cmake",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.force",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--force",
-      "status": "missing"
+      "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "format",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/image/filesystem_formatter_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/check_cli.cmake",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.fs-options",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--fs-options",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -2504,9 +2546,7 @@
     "command.update",
     "image.boot",
     "image.system",
-    "option.disable-super-optimization",
-    "option.force",
-    "option.fs-options"
+    "option.disable-super-optimization"
   ],
   "schemaVersion": 2,
   "statusVocabulary": [
@@ -2542,9 +2582,9 @@
         "partial": 3
       },
       "option": {
-        "implemented": 26,
+        "implemented": 28,
         "intentional-deviation": 4,
-        "missing": 3,
+        "missing": 1,
         "partial": 0
       },
       "protocol": {
@@ -2561,9 +2601,9 @@
       }
     },
     "byStatus": {
-      "implemented": 66,
+      "implemented": 68,
       "intentional-deviation": 15,
-      "missing": 4,
+      "missing": 2,
       "partial": 34
     },
     "totalEntries": 119

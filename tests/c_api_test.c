@@ -72,6 +72,8 @@ int main(void) {
   CHECK(flash_options.set_active == 0);
   CHECK(flash_options.active_slot == NULL);
   CHECK(flash_options.sparse_limit_bytes == 0);
+  CHECK(flash_options.force == 0);
+  CHECK(flash_options.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
 
   kb_legacy_boot_options_t legacy_boot_options;
   kb_legacy_boot_options_init(&legacy_boot_options);
@@ -101,6 +103,8 @@ int main(void) {
   CHECK(update_options.set_active == 0);
   CHECK(update_options.active_slot == NULL);
   CHECK(update_options.sparse_limit_bytes == 0);
+  CHECK(update_options.force == 0);
+  CHECK(update_options.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
 
   kb_command_options_t command_options;
   kb_command_options_init(&command_options);

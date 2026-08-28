@@ -671,6 +671,17 @@ if(BUILD_TESTING)
            COMMAND kairosboot_update_package_preflight_tests)
   set_tests_properties(update_package_preflight PROPERTIES TIMEOUT 30)
 
+  add_executable(kairosboot_filesystem_formatter_tests
+                 tests/image/filesystem_formatter_tests.cpp)
+  target_compile_features(kairosboot_filesystem_formatter_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_filesystem_formatter_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  kairosboot_enable_strict_warnings(kairosboot_filesystem_formatter_tests)
+  add_test(NAME filesystem_formatter
+           COMMAND kairosboot_filesystem_formatter_tests)
+  set_tests_properties(filesystem_formatter PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_update_executor_tests
                  tests/fastboot/update_executor_tests.cpp)
   target_compile_features(kairosboot_update_executor_tests PRIVATE cxx_std_23)
