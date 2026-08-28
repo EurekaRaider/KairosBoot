@@ -3050,7 +3050,8 @@ kb_status_t start_flash_source_async(
     }
 
     kb_command_options_t transport_options;
-    kb_command_options_init(&transport_options);
+    kb_command_options_init_sized(&transport_options,
+                                  sizeof(transport_options));
     transport_options.timeout_ms = flash_options.timeout_ms;
     auto opened = open_target(target, transport_options,
                               task_context.cancellation_token());
@@ -3286,7 +3287,8 @@ kb_status_t start_vendor_boot_ramdisk_async(
     }
 
     kb_command_options_t transport_options;
-    kb_command_options_init(&transport_options);
+    kb_command_options_init_sized(&transport_options,
+                                  sizeof(transport_options));
     transport_options.timeout_ms = flash_options.timeout_ms;
     auto opened = open_target(target, transport_options,
                               task_context.cancellation_token());
@@ -3732,7 +3734,8 @@ kb_status_t start_boot_source_async(
     }
 
     kb_command_options_t transport_options;
-    kb_command_options_init(&transport_options);
+    kb_command_options_init_sized(&transport_options,
+                                  sizeof(transport_options));
     transport_options.timeout_ms = boot_options.timeout_ms;
     auto opened = open_target(target, transport_options,
                               task_context.cancellation_token());
@@ -3830,69 +3833,92 @@ std::uint16_t fleet_usb_vendor_id(const kb_context_t &context) noexcept {
 extern "C" {
 
 void KB_CALL kb_context_options_init(kb_context_options_t *options) {
-  if (options == nullptr) {
-    return;
-  }
-  *options = {};
-  options->struct_size = sizeof(*options);
-  options->api_version = KB_API_VERSION;
+  kb_context_options_init_sized(options, KB_CONTEXT_OPTIONS_V1_SIZE);
+}
+
+void KB_CALL kb_context_options_init_sized(kb_context_options_t *options,
+                                           const uint32_t struct_size) {
+  kairosboot::api::detail::initialize_struct_header(options, struct_size);
 }
 
 void KB_CALL kb_flash_options_init(kb_flash_options_t *options) {
-  if (options == nullptr) {
-    return;
-  }
-  *options = {};
-  options->struct_size = sizeof(*options);
-  options->api_version = KB_API_VERSION;
-  options->timeout_ms = kDefaultTimeoutMs;
+  kb_flash_options_init_sized(options, KB_FLASH_OPTIONS_V1_SIZE);
+}
+
+void KB_CALL kb_flash_options_init_sized(kb_flash_options_t *options,
+                                         const uint32_t struct_size) {
+  kairosboot::api::detail::initialize_struct_header(options, struct_size);
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_flash_options_t, timeout_ms),
+      kDefaultTimeoutMs);
 }
 
 void KB_CALL kb_legacy_boot_options_init(
     kb_legacy_boot_options_t *options) {
-  if (options == nullptr) {
-    return;
-  }
-  *options = {};
-  options->struct_size = sizeof(*options);
-  options->api_version = KB_API_VERSION;
-  options->base = 0x10000000U;
-  options->page_size = 2048U;
-  options->kernel_offset = 0x00008000U;
-  options->ramdisk_offset = 0x01000000U;
-  options->second_offset = 0x00f00000U;
-  options->tags_offset = 0x00000100U;
-  options->dtb_offset = 0x01100000ULL;
+  kb_legacy_boot_options_init_sized(options, KB_LEGACY_BOOT_OPTIONS_V1_SIZE);
+}
+
+void KB_CALL kb_legacy_boot_options_init_sized(
+    kb_legacy_boot_options_t *options, const uint32_t struct_size) {
+  kairosboot::api::detail::initialize_struct_header(options, struct_size);
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, base),
+      uint32_t{0x10000000U});
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, page_size),
+      uint32_t{2048U});
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, kernel_offset),
+      uint32_t{0x00008000U});
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, ramdisk_offset),
+      uint32_t{0x01000000U});
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, second_offset),
+      uint32_t{0x00f00000U});
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, tags_offset),
+      uint32_t{0x00000100U});
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_legacy_boot_options_t, dtb_offset),
+      uint64_t{0x01100000ULL});
 }
 
 void KB_CALL kb_update_options_init(kb_update_options_t *options) {
-  if (options == nullptr) {
-    return;
-  }
-  *options = {};
-  options->struct_size = sizeof(*options);
-  options->api_version = KB_API_VERSION;
-  options->timeout_ms = kDefaultTimeoutMs;
+  kb_update_options_init_sized(options, KB_UPDATE_OPTIONS_V1_SIZE);
+}
+
+void KB_CALL kb_update_options_init_sized(kb_update_options_t *options,
+                                          const uint32_t struct_size) {
+  kairosboot::api::detail::initialize_struct_header(options, struct_size);
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_update_options_t, timeout_ms),
+      kDefaultTimeoutMs);
 }
 
 void KB_CALL kb_command_options_init(kb_command_options_t *options) {
-  if (options == nullptr) {
-    return;
-  }
-  *options = {};
-  options->struct_size = sizeof(*options);
-  options->api_version = KB_API_VERSION;
-  options->timeout_ms = kDefaultTimeoutMs;
-  options->maximum_receive_bytes = kDefaultMaximumReceiveBytes;
+  kb_command_options_init_sized(options, KB_COMMAND_OPTIONS_V1_SIZE);
+}
+
+void KB_CALL kb_command_options_init_sized(kb_command_options_t *options,
+                                           const uint32_t struct_size) {
+  kairosboot::api::detail::initialize_struct_header(options, struct_size);
+  kairosboot::api::detail::initialize_field(
+      options, struct_size, offsetof(kb_command_options_t, timeout_ms),
+      kDefaultTimeoutMs);
+  kairosboot::api::detail::initialize_field(
+      options, struct_size,
+      offsetof(kb_command_options_t, maximum_receive_bytes),
+      kDefaultMaximumReceiveBytes);
 }
 
 void KB_CALL kb_version_init(kb_version_t *version) {
-  if (version == nullptr) {
-    return;
-  }
-  *version = {};
-  version->struct_size = sizeof(*version);
-  version->api_version = KB_API_VERSION;
+  kb_version_init_sized(version, KB_VERSION_V1_SIZE);
+}
+
+void KB_CALL kb_version_init_sized(kb_version_t *version,
+                                   const uint32_t struct_size) {
+  kairosboot::api::detail::initialize_struct_header(version, struct_size);
 }
 
 kb_status_t KB_CALL kb_get_version(kb_version_t *version) {
@@ -3956,7 +3982,7 @@ kb_status_t KB_CALL kb_context_create(const kb_context_options_t *options,
 
   try {
     auto result = std::make_unique<kb_context>();
-    kb_context_options_init(&result->options);
+    kb_context_options_init_sized(&result->options, sizeof(result->options));
     result->usb_state = std::make_shared<kb_context_usb_state>();
     if (options != nullptr) {
       result->options.log_callback = options->log_callback;
@@ -5157,7 +5183,8 @@ kb_status_t KB_CALL kb_format_partition_async(
                                    KB_TRANSFER_NOT_SENT);
       }
       kb_command_options_t transport_options;
-      kb_command_options_init(&transport_options);
+      kb_command_options_init_sized(&transport_options,
+                                    sizeof(transport_options));
       transport_options.timeout_ms = format_options.timeout_ms;
       auto opened = open_target(target, transport_options,
                                 task_context.cancellation_token());

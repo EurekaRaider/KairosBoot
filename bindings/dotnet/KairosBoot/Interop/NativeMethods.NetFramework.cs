@@ -6,26 +6,26 @@ namespace KairosBoot.Interop;
 
 internal static partial class NativeMethods
 {
-    [DllImport(LibraryName, EntryPoint = "kb_context_options_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void ContextOptionsInit(ref NativeContextOptions options);
+    [DllImport(LibraryName, EntryPoint = "kb_context_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void ContextOptionsInitSized(ref NativeContextOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_flash_options_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void FlashOptionsInit(ref NativeFlashOptions options);
+    [DllImport(LibraryName, EntryPoint = "kb_flash_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FlashOptionsInitSized(ref NativeFlashOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_legacy_boot_options_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void LegacyBootOptionsInit(ref NativeLegacyBootOptions options);
+    [DllImport(LibraryName, EntryPoint = "kb_legacy_boot_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void LegacyBootOptionsInitSized(ref NativeLegacyBootOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_update_options_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void UpdateOptionsInit(ref NativeUpdateOptions options);
+    [DllImport(LibraryName, EntryPoint = "kb_update_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void UpdateOptionsInitSized(ref NativeUpdateOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_command_options_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void CommandOptionsInit(ref NativeCommandOptions options);
+    [DllImport(LibraryName, EntryPoint = "kb_command_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void CommandOptionsInitSized(ref NativeCommandOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_job_options_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void JobOptionsInit(ref NativeJobOptions options);
+    [DllImport(LibraryName, EntryPoint = "kb_job_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void JobOptionsInitSized(ref NativeJobOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_version_init", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void VersionInit(ref NativeVersion version);
+    [DllImport(LibraryName, EntryPoint = "kb_version_init_sized", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void VersionInitSized(ref NativeVersion version, uint structSize);
 
     [DllImport(LibraryName, EntryPoint = "kb_get_version", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int GetVersion(ref NativeVersion version);

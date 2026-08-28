@@ -371,7 +371,7 @@ prepare_update_options(const UpdateOptions &options) {
   }
 
   PreparedUpdateOptions result;
-  kb_update_options_init(&result.native);
+  kb_update_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   result.native.wipe = options.wipe ? 1 : 0;
   result.native.skip_reboot = options.skip_reboot ? 1 : 0;
@@ -429,7 +429,7 @@ prepare_flash_options(const FlashOptions &options) {
   }
 
   PreparedFlashOptions result;
-  kb_flash_options_init(&result.native);
+  kb_flash_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
@@ -481,7 +481,7 @@ prepare_legacy_boot_options(const LegacyBootOptions &options) {
         KB_E_INVALID_ARGUMENT, "boot construction strings must be NUL-free"));
   }
   PreparedLegacyBootOptions result;
-  kb_legacy_boot_options_init(&result.native);
+  kb_legacy_boot_options_init_sized(&result.native, sizeof(result.native));
   result.command_line = options.command_line;
   result.os_version = options.os_version;
   result.os_patch_level = options.os_patch_level;
@@ -537,7 +537,7 @@ prepare_job_options(const JobOptions &options) {
   }
 
   PreparedJobOptions result;
-  kb_job_options_init(&result.native);
+  kb_job_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   if (options.progress) {
     result.callback_state =
@@ -563,7 +563,7 @@ prepare_command_options(const CommandOptions &options) {
   }
 
   PreparedCommandOptions result;
-  kb_command_options_init(&result.native);
+  kb_command_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   result.native.maximum_receive_bytes = options.maximum_receive_bytes;
   if (options.progress) {
@@ -654,7 +654,7 @@ struct Version {
 
 [[nodiscard]] inline Version version() {
   kb_version_t native{};
-  kb_version_init(&native);
+  kb_version_init_sized(&native, sizeof(native));
   (void)kb_get_version(&native);
   return Version{native.major, native.minor, native.patch, native.api_version,
                  native.string};
@@ -1111,7 +1111,7 @@ public:
   static std::expected<Context, Error>
   create(const ContextOptions &options = {}) {
     kb_context_options_t native{};
-    kb_context_options_init(&native);
+    kb_context_options_init_sized(&native, sizeof(native));
     native.usb_vendor_id = options.usb_vendor_id;
     kb_context_t *handle = nullptr;
     kb_error_t *error = nullptr;

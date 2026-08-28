@@ -1123,13 +1123,15 @@ void set_fleet_run_device_dependencies_factory(
 extern "C" {
 
 void KB_CALL kb_job_options_init(kb_job_options_t* options) {
-    if (options == nullptr) {
-        return;
-    }
-    *options = {};
-    options->struct_size = sizeof(*options);
-    options->api_version = KB_API_VERSION;
-    options->timeout_ms = KB_WAIT_INFINITE;
+    kb_job_options_init_sized(options, KB_JOB_OPTIONS_V1_SIZE);
+}
+
+void KB_CALL kb_job_options_init_sized(kb_job_options_t* options,
+                                       const uint32_t struct_size) {
+    kairosboot::api::detail::initialize_struct_header(options, struct_size);
+    kairosboot::api::detail::initialize_field(
+        options, struct_size, offsetof(kb_job_options_t, timeout_ms),
+        uint32_t{KB_WAIT_INFINITE});
 }
 
 kb_status_t KB_CALL kb_run_job_file_async(

@@ -130,7 +130,16 @@ def main() -> int:
         )
         managed = target_path(framework)
         native = compile_shim(managed.parent)
-        require_shim_export(native, "kb_context_options_init")
+        for symbol in (
+            "kb_context_options_init_sized",
+            "kb_command_options_init_sized",
+            "kb_flash_options_init_sized",
+            "kb_legacy_boot_options_init_sized",
+            "kb_update_options_init_sized",
+            "kb_job_options_init_sized",
+            "kb_version_init_sized",
+        ):
+            require_shim_export(native, symbol)
         env = os.environ.copy()
         env["KAIROSBOOT_UPDATE_SHIM"] = "1"
         if framework == "net48":

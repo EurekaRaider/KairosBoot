@@ -126,7 +126,9 @@ internal static class Program
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
         Check(uniqueEntryPoints.Count == 117, "unique entry points");
-        Check(entryPoints.Contains("kb_legacy_boot_options_init"), "legacy boot options import");
+        Check(entryPoints.Contains("kb_context_options_init_sized"), "context options import");
+        Check(entryPoints.Contains("kb_flash_options_init_sized"), "flash options import");
+        Check(entryPoints.Contains("kb_legacy_boot_options_init_sized"), "legacy boot options import");
         Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
         Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
         Check(
@@ -147,13 +149,13 @@ internal static class Program
         Check(entryPoints.Contains("kb_boot_file"), "blocking boot-file import");
         Check(entryPoints.Contains("kb_signature_file_async"), "async signature import");
         Check(entryPoints.Contains("kb_signature_file"), "blocking signature import");
-        Check(entryPoints.Contains("kb_update_options_init"), "update options import");
+        Check(entryPoints.Contains("kb_update_options_init_sized"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
         Check(entryPoints.Contains("kb_wipe_super_async"), "async wipe-super import");
         Check(entryPoints.Contains("kb_wipe_super"), "blocking wipe-super import");
         Check(entryPoints.Contains("kb_format_partition_async"), "async format import");
-        Check(entryPoints.Contains("kb_command_options_init"), "command options import");
+        Check(entryPoints.Contains("kb_command_options_init_sized"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
         Check(entryPoints.Contains("kb_upload_file_async"), "upload-file import");
         Check(entryPoints.Contains("kb_get_staged_file_async"), "get-staged-file import");
@@ -166,7 +168,7 @@ internal static class Program
         Check(entryPoints.Contains("kb_job_plan_canonical_json"), "fleet plan JSON import");
         Check(entryPoints.Contains("kb_job_plan_sha256_hex"), "fleet plan digest import");
         Check(entryPoints.Contains("kb_job_plan_release"), "fleet plan release import");
-        Check(entryPoints.Contains("kb_job_options_init"), "fleet job options import");
+        Check(entryPoints.Contains("kb_job_options_init_sized"), "fleet job options import");
         Check(entryPoints.Contains("kb_run_job_file_async"), "fleet async run import");
         Check(entryPoints.Contains("kb_run_job_file"), "fleet blocking run import");
         Check(entryPoints.Contains("kb_job_wait"), "fleet wait import");
@@ -177,6 +179,7 @@ internal static class Program
         Check(entryPoints.Contains("kb_job_release"), "fleet job release import");
         Check(entryPoints.Contains("kb_job_report_json"), "fleet report JSON import");
         Check(entryPoints.Contains("kb_job_report_release"), "fleet report release import");
+        Check(entryPoints.Contains("kb_version_init_sized"), "version import");
         Check(entryPoints.Contains("kb_flashing_async"), "flashing import");
         Check(entryPoints.Contains("kb_gsi_async"), "GSI import");
         Check(entryPoints.Contains("kb_snapshot_update_async"), "snapshot-update import");
@@ -270,6 +273,9 @@ internal static class Program
 
     private static void CheckNativeLayouts()
     {
+        Check(
+            NativeMethods.VersionStructSize == Marshal.SizeOf<NativeVersion>(),
+            "version declared size");
         Check(
             Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.SparseLimitBytes)).ToInt32() ==
                 (IntPtr.Size == 8 ? 64 : 40),
@@ -1012,7 +1018,7 @@ internal static class Program
         using (var context = new ContextSafeHandle(new IntPtr(1)))
         {
             var nativeOptions = new NativeUpdateOptions();
-            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = 17;
             nativeOptions.Wipe = 1;
             var status = NativeMethods.UpdatePackage(
@@ -1025,7 +1031,7 @@ internal static class Program
             Check(rawError == IntPtr.Zero, "blocking update shim error ownership");
 
             var nativeFlashOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeFlashOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeFlashOptions, NativeMethods.FlashOptionsStructSize);
             nativeFlashOptions.TimeoutMilliseconds = 17;
             status = NativeMethods.FlashRaw(
                 context,
@@ -1180,7 +1186,7 @@ internal static class Program
         using (var context = new ContextSafeHandle(new IntPtr(1)))
         {
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = 17;
             var status = NativeMethods.BootFile(
                 context,
@@ -1265,7 +1271,7 @@ internal static class Program
         using (var context = new ContextSafeHandle(new IntPtr(1)))
         {
             var nativeLegacyOptions = new NativeLegacyBootOptions();
-            NativeMethods.LegacyBootOptionsInit(ref nativeLegacyOptions);
+            NativeMethods.LegacyBootOptionsInitSized(ref nativeLegacyOptions, NativeMethods.LegacyBootOptionsStructSize);
             var commandLine = Utf8String.Allocate("console=blocking");
             try
             {
@@ -1278,7 +1284,7 @@ internal static class Program
                 nativeLegacyOptions.TagsOffset = 0x00000200U;
 
                 var nativeFlashOptions = new NativeFlashOptions();
-                NativeMethods.FlashOptionsInit(ref nativeFlashOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeFlashOptions, NativeMethods.FlashOptionsStructSize);
                 nativeFlashOptions.TimeoutMilliseconds = 17;
                 var status = NativeMethods.FlashRawWithBootOptions(
                     context,

@@ -346,6 +346,52 @@ KB_API void KB_CALL kb_command_options_init(kb_command_options_t *options);
 KB_API void KB_CALL kb_job_options_init(kb_job_options_t *options);
 KB_API void KB_CALL kb_version_init(kb_version_t *version);
 
+/* The legacy initializer symbols above initialize only their frozen v1 prefix
+ * so an older, smaller caller-owned structure cannot be overrun by a newer
+ * library. The source-level macros below route ordinary calls to these sized
+ * forms with the current type size. Bytes beyond the library's known layout
+ * are preserved. */
+KB_API void KB_CALL kb_context_options_init_sized(
+    kb_context_options_t *options, uint32_t struct_size);
+KB_API void KB_CALL kb_flash_options_init_sized(kb_flash_options_t *options,
+                                                uint32_t struct_size);
+KB_API void KB_CALL kb_legacy_boot_options_init_sized(
+    kb_legacy_boot_options_t *options, uint32_t struct_size);
+KB_API void KB_CALL kb_update_options_init_sized(kb_update_options_t *options,
+                                                 uint32_t struct_size);
+KB_API void KB_CALL kb_command_options_init_sized(kb_command_options_t *options,
+                                                  uint32_t struct_size);
+KB_API void KB_CALL kb_job_options_init_sized(kb_job_options_t *options,
+                                              uint32_t struct_size);
+KB_API void KB_CALL kb_version_init_sized(kb_version_t *version,
+                                          uint32_t struct_size);
+
+/* Keep existing source calls easy and complete while retaining the legacy
+ * one-argument symbols for already-built binaries. Define
+ * KAIROSBOOT_DISABLE_SIZED_INITIALIZER_MACROS before including this header to
+ * call those frozen-prefix symbols directly. */
+#if !defined(KAIROSBOOT_BUILDING_LIBRARY) &&                                  \
+    !defined(KAIROSBOOT_DISABLE_SIZED_INITIALIZER_MACROS)
+#define kb_context_options_init(options)                                      \
+  kb_context_options_init_sized((options),                                    \
+                                (uint32_t)sizeof(kb_context_options_t))
+#define kb_flash_options_init(options)                                        \
+  kb_flash_options_init_sized((options), (uint32_t)sizeof(kb_flash_options_t))
+#define kb_legacy_boot_options_init(options)                                  \
+  kb_legacy_boot_options_init_sized(                                          \
+      (options), (uint32_t)sizeof(kb_legacy_boot_options_t))
+#define kb_update_options_init(options)                                       \
+  kb_update_options_init_sized((options),                                     \
+                               (uint32_t)sizeof(kb_update_options_t))
+#define kb_command_options_init(options)                                      \
+  kb_command_options_init_sized((options),                                    \
+                                (uint32_t)sizeof(kb_command_options_t))
+#define kb_job_options_init(options)                                          \
+  kb_job_options_init_sized((options), (uint32_t)sizeof(kb_job_options_t))
+#define kb_version_init(version)                                              \
+  kb_version_init_sized((version), (uint32_t)sizeof(kb_version_t))
+#endif
+
 KB_API kb_status_t KB_CALL kb_get_version(kb_version_t *version);
 KB_API const char *KB_CALL kb_status_string(kb_status_t status);
 

@@ -510,7 +510,7 @@ public sealed partial class Context
         JobProgressCallbackRegistration? registration)
     {
         var native = new NativeJobOptions();
-        NativeMethods.JobOptionsInit(ref native);
+        NativeMethods.JobOptionsInitSized(ref native, NativeMethods.JobOptionsStructSize);
         native.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
         native.ProgressCallback = registration?.CallbackPointer ?? IntPtr.Zero;
         native.ProgressUserData = registration?.UserData ?? IntPtr.Zero;

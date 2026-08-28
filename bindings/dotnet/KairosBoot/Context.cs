@@ -92,7 +92,7 @@ public sealed partial class Context : IDisposable
         get
         {
             var native = new NativeVersion();
-            NativeMethods.VersionInit(ref native);
+            NativeMethods.VersionInitSized(ref native, NativeMethods.VersionStructSize);
             var status = NativeMethods.GetVersion(ref native);
             if (status != (int)KairosBootStatus.Ok)
             {
@@ -119,7 +119,7 @@ public sealed partial class Context : IDisposable
     public static Context Create(ContextOptions options)
     {
         var native = new NativeContextOptions();
-        NativeMethods.ContextOptionsInit(ref native);
+        NativeMethods.ContextOptionsInitSized(ref native, NativeMethods.ContextOptionsStructSize);
         native.UsbVendorId = options.UsbVendorId;
         var status = NativeMethods.ContextCreateWithOptions(
             ref native, out var rawContext, out var rawError);
@@ -1126,7 +1126,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
@@ -1197,7 +1197,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
@@ -1276,7 +1276,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
@@ -1388,7 +1388,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
@@ -1453,7 +1453,7 @@ public sealed partial class Context : IDisposable
         out IntPtr dtbPath)
     {
         var native = new NativeLegacyBootOptions();
-        NativeMethods.LegacyBootOptionsInit(ref native);
+        NativeMethods.LegacyBootOptionsInitSized(ref native, NativeMethods.LegacyBootOptionsStructSize);
         commandLine = IntPtr.Zero;
         osVersion = IntPtr.Zero;
         osPatchLevel = IntPtr.Zero;
@@ -1516,7 +1516,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
@@ -1586,7 +1586,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
@@ -1651,7 +1651,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeUpdateOptions();
-            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.Wipe = options.Wipe ? 1 : 0;
@@ -1725,7 +1725,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeUpdateOptions();
-            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.Wipe = 1;
@@ -1789,7 +1789,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeCommandOptions();
-            NativeMethods.CommandOptionsInit(ref nativeOptions);
+            NativeMethods.CommandOptionsInitSized(ref nativeOptions, NativeMethods.CommandOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.MaximumReceiveBytes = options.NativeMaximumReceiveBytes;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;

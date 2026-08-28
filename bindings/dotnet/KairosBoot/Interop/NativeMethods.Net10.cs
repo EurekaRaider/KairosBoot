@@ -7,33 +7,33 @@ namespace KairosBoot.Interop;
 
 internal static partial class NativeMethods
 {
-    [LibraryImport(LibraryName, EntryPoint = "kb_context_options_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_context_options_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void ContextOptionsInit(ref NativeContextOptions options);
+    internal static partial void ContextOptionsInitSized(ref NativeContextOptions options, uint structSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "kb_flash_options_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_flash_options_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void FlashOptionsInit(ref NativeFlashOptions options);
+    internal static partial void FlashOptionsInitSized(ref NativeFlashOptions options, uint structSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "kb_legacy_boot_options_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_legacy_boot_options_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void LegacyBootOptionsInit(ref NativeLegacyBootOptions options);
+    internal static partial void LegacyBootOptionsInitSized(ref NativeLegacyBootOptions options, uint structSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "kb_update_options_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_update_options_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void UpdateOptionsInit(ref NativeUpdateOptions options);
+    internal static partial void UpdateOptionsInitSized(ref NativeUpdateOptions options, uint structSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "kb_command_options_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_options_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void CommandOptionsInit(ref NativeCommandOptions options);
+    internal static partial void CommandOptionsInitSized(ref NativeCommandOptions options, uint structSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "kb_job_options_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_options_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void JobOptionsInit(ref NativeJobOptions options);
+    internal static partial void JobOptionsInitSized(ref NativeJobOptions options, uint structSize);
 
-    [LibraryImport(LibraryName, EntryPoint = "kb_version_init")]
+    [LibraryImport(LibraryName, EntryPoint = "kb_version_init_sized")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void VersionInit(ref NativeVersion version);
+    internal static partial void VersionInitSized(ref NativeVersion version, uint structSize);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_get_version")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]

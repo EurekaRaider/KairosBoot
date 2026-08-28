@@ -60,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "c0203bfebf00ee2ba5f64499af5b4f4f57e1edee0ce337479d5830da5bf12db6",
+  "headerContractSha256": "bc8491d7b5773e3f2424d5cf52dbea53633a1aec781fda062b6017911c65674e",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -518,6 +518,7 @@
     "kb_boot_raw",
     "kb_boot_raw_async",
     "kb_command_options_init",
+    "kb_command_options_init_sized",
     "kb_command_result_data",
     "kb_command_result_device_identifier",
     "kb_command_result_message_count",
@@ -529,6 +530,7 @@
     "kb_command_result_terminal_payload",
     "kb_context_create",
     "kb_context_options_init",
+    "kb_context_options_init_sized",
     "kb_context_release",
     "kb_continue_boot",
     "kb_continue_boot_async",
@@ -565,6 +567,7 @@
     "kb_flash_file",
     "kb_flash_file_async",
     "kb_flash_options_init",
+    "kb_flash_options_init_sized",
     "kb_flash_raw",
     "kb_flash_raw_async",
     "kb_flash_raw_with_boot_options",
@@ -586,6 +589,7 @@
     "kb_job_error",
     "kb_job_get_report",
     "kb_job_options_init",
+    "kb_job_options_init_sized",
     "kb_job_plan_canonical_json",
     "kb_job_plan_release",
     "kb_job_plan_sha256_hex",
@@ -595,6 +599,7 @@
     "kb_job_state",
     "kb_job_wait",
     "kb_legacy_boot_options_init",
+    "kb_legacy_boot_options_init_sized",
     "kb_oem",
     "kb_oem_async",
     "kb_operation_cancel",
@@ -622,6 +627,7 @@
     "kb_stage_async",
     "kb_status_string",
     "kb_update_options_init",
+    "kb_update_options_init_sized",
     "kb_update_package",
     "kb_update_package_async",
     "kb_upload",
@@ -630,6 +636,7 @@
     "kb_upload_file_async",
     "kb_validate_job_file",
     "kb_version_init",
+    "kb_version_init_sized",
     "kb_wipe_super",
     "kb_wipe_super_async"
   ],

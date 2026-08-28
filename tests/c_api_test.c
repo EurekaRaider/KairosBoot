@@ -14,6 +14,27 @@
     }                                                                           \
   } while (0)
 
+#define CHECK_LEGACY_INIT_BOUND(initializer, type, legacy_size)                \
+  do {                                                                         \
+    _Alignas(type) unsigned char storage[(legacy_size) + 16U];                 \
+    uint32_t initialized_size = 0U;                                            \
+    uint32_t initialized_version = 0U;                                         \
+    size_t canary_index = 0U;                                                  \
+    memset(storage, 0xa5, sizeof(storage));                                    \
+    /* Parenthesizing bypasses the function-like source redirect and calls */  \
+    /* the legacy ABI symbol, as an old binary or dlsym caller would. */        \
+    (initializer)((type *)(void *)storage);                                    \
+    memcpy(&initialized_size, storage, sizeof(initialized_size));              \
+    memcpy(&initialized_version, storage + sizeof(uint32_t),                   \
+           sizeof(initialized_version));                                       \
+    CHECK(initialized_size == (legacy_size));                                  \
+    CHECK(initialized_version == KB_API_VERSION);                              \
+    for (canary_index = (legacy_size); canary_index < sizeof(storage);         \
+         ++canary_index) {                                                     \
+      CHECK(storage[canary_index] == 0xa5U);                                   \
+    }                                                                          \
+  } while (0)
+
 struct update_progress_probe {
   int calls;
   int saw_preflight;
@@ -51,8 +72,7 @@ int main(void) {
       uint64_t future_field;
     } extended;
     extended.future_field = UINT64_C(0x1122334455667788);
-    kb_version_init(&extended.v1);
-    extended.v1.struct_size = sizeof(extended);
+    kb_version_init_sized(&extended.v1, sizeof(extended));
     CHECK(kb_get_version(&extended.v1) == KB_OK);
     CHECK(extended.future_field == UINT64_C(0x1122334455667788));
   }
@@ -116,6 +136,27 @@ int main(void) {
   CHECK(strcmp(kb_status_string(KB_E_PROTOCOL), "protocol") == 0);
   CHECK(strcmp(kb_status_string(KB_E_DEVICE_FAIL), "device_fail") == 0);
 
+  kb_job_options_t job_options;
+  kb_job_options_init(&job_options);
+  CHECK(job_options.struct_size == sizeof(job_options));
+  CHECK(job_options.api_version == KB_API_VERSION);
+  CHECK(job_options.timeout_ms == KB_WAIT_INFINITE);
+
+  CHECK_LEGACY_INIT_BOUND(kb_context_options_init, kb_context_options_t,
+                          KB_CONTEXT_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_flash_options_init, kb_flash_options_t,
+                          KB_FLASH_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_legacy_boot_options_init,
+                          kb_legacy_boot_options_t,
+                          KB_LEGACY_BOOT_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_update_options_init, kb_update_options_t,
+                          KB_UPDATE_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_command_options_init, kb_command_options_t,
+                          KB_COMMAND_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_job_options_init, kb_job_options_t,
+                          KB_JOB_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_version_init, kb_version_t, KB_VERSION_V1_SIZE);
+
   kb_error_t *error = NULL;
   CHECK(kb_context_create(NULL, NULL, &error) == KB_E_INVALID_ARGUMENT);
   CHECK(error != NULL);
@@ -130,7 +171,7 @@ int main(void) {
 
   {
     kb_context_options_t vendor_options;
-    kb_context_options_init(&vendor_options);
+    kb_context_options_init_sized(&vendor_options, sizeof(vendor_options));
     vendor_options.usb_vendor_id = UINT32_C(0x18d1);
     kb_context_t *vendor_context = NULL;
     CHECK(kb_context_create(&vendor_options, &vendor_context, &error) == KB_OK);
@@ -152,9 +193,9 @@ int main(void) {
       kb_command_options_t v1;
       uint64_t future_field;
     } extended_options;
-    kb_command_options_init(&extended_options.v1);
-    extended_options.v1.struct_size = sizeof(extended_options);
     extended_options.future_field = UINT64_C(0x1234);
+    kb_command_options_init_sized(&extended_options.v1,
+                                  sizeof(extended_options));
     kb_operation_t *typed_operation = NULL;
     CHECK(kb_continue_boot_async(context, "unknown:device", &extended_options.v1,
                                  &typed_operation, &error) ==
@@ -173,7 +214,7 @@ int main(void) {
     CHECK(strstr(kb_error_message(error), "command options") != NULL);
     kb_error_release(error);
     error = NULL;
-    kb_command_options_init(&command_options);
+    kb_command_options_init_sized(&command_options, sizeof(command_options));
   }
 
   {
@@ -225,9 +266,9 @@ int main(void) {
       kb_update_options_t v1;
       uint64_t future_field;
     } extended_options;
-    kb_update_options_init(&extended_options.v1);
-    extended_options.v1.struct_size = sizeof(extended_options);
     extended_options.future_field = UINT64_C(0xabcddcba12344321);
+    kb_update_options_init_sized(&extended_options.v1,
+                                 sizeof(extended_options));
     kb_operation_t *update_operation = NULL;
     CHECK(kb_update_package_async(
               context, "unknown:device", "unused-update-package",
@@ -251,7 +292,7 @@ int main(void) {
     CHECK(strstr(kb_error_message(error), "update options") != NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
 
     update_options.wipe = 2;
     CHECK(kb_update_package_async(
@@ -261,7 +302,7 @@ int main(void) {
     CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
 
     update_options.exclude_dynamic_partitions = 2;
     CHECK(kb_update_package_async(
@@ -271,7 +312,7 @@ int main(void) {
     CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
 
     update_options.set_active = 2;
     CHECK(kb_update_package_async(
@@ -281,7 +322,7 @@ int main(void) {
     CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
 
     update_options.disable_super_optimization = 2;
     CHECK(kb_update_package_async(
@@ -291,7 +332,7 @@ int main(void) {
     CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
 
     update_options.active_slot = "b";
     CHECK(kb_update_package_async(
@@ -301,7 +342,7 @@ int main(void) {
     CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
   }
 
   {
@@ -372,7 +413,7 @@ int main(void) {
     CHECK(probe.saw_preflight == 1);
     kb_operation_release(update_operation);
 
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
     update_options.timeout_ms = 0;
     update_operation = NULL;
     CHECK(kb_update_package_async(
@@ -384,7 +425,7 @@ int main(void) {
           KB_TRANSFER_NOT_SENT);
     kb_operation_release(update_operation);
 
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
     CHECK(kb_update_package(
               context, "tcp:127.0.0.1:1", missing_package, &update_options,
               &error) == KB_E_IO);
@@ -426,9 +467,8 @@ int main(void) {
       kb_context_options_t v1;
       uint64_t future_field;
     } extended;
-    kb_context_options_init(&extended.v1);
-    extended.v1.struct_size = sizeof(extended);
     extended.future_field = UINT64_C(0x8877665544332211);
+    kb_context_options_init_sized(&extended.v1, sizeof(extended));
     CHECK(kb_context_create(&extended.v1, &second_context, &error) == KB_OK);
     CHECK(extended.future_field == UINT64_C(0x8877665544332211));
   }

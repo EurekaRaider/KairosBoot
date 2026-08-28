@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,6 +112,24 @@ typedef struct kb_job_options {
   void *progress_user_data;
 } kb_job_options_t;
 
+typedef struct kb_command_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  uint32_t timeout_ms;
+  kb_progress_callback_t progress_callback;
+  void *progress_user_data;
+  uint64_t maximum_receive_bytes;
+} kb_command_options_t;
+
+typedef struct kb_version {
+  uint32_t struct_size;
+  uint32_t api_version;
+  uint32_t major;
+  uint32_t minor;
+  uint32_t patch;
+  const char *string;
+} kb_version_t;
+
 typedef struct kb_job {
   int32_t kind;
   int32_t polls;
@@ -128,6 +147,21 @@ typedef struct kb_error {
   int32_t status;
   const char *message;
 } kb_error_t;
+
+KB_TEST_API void KB_TEST_CALL kb_context_options_init_sized(
+    kb_context_options_t *options, uint32_t struct_size);
+KB_TEST_API void KB_TEST_CALL kb_update_options_init_sized(
+    kb_update_options_t *options, uint32_t struct_size);
+KB_TEST_API void KB_TEST_CALL kb_flash_options_init_sized(
+    kb_flash_options_t *options, uint32_t struct_size);
+KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init_sized(
+    kb_legacy_boot_options_t *options, uint32_t struct_size);
+KB_TEST_API void KB_TEST_CALL kb_job_options_init_sized(
+    kb_job_options_t *options, uint32_t struct_size);
+KB_TEST_API void KB_TEST_CALL kb_command_options_init_sized(
+    kb_command_options_t *options, uint32_t struct_size);
+KB_TEST_API void KB_TEST_CALL kb_version_init_sized(
+    kb_version_t *version, uint32_t struct_size);
 
 static int32_t failure_code;
 static int32_t options_init_count;
@@ -169,6 +203,35 @@ static const char expected_unicode_command_line[] = {
 
 static int same_string(const char *actual, const char *expected) {
   return actual != NULL && strcmp(actual, expected) == 0;
+}
+
+static size_t initialize_known_prefix(void *value,
+                                      uint32_t struct_size,
+                                      size_t known_size) {
+  const size_t writable =
+      (size_t)struct_size < known_size ? (size_t)struct_size : known_size;
+  if (value != NULL) {
+    memset(value, 0, writable);
+  }
+  return writable;
+}
+
+static void initialize_u32_field(void *value,
+                                 size_t writable,
+                                 size_t offset,
+                                 uint32_t field) {
+  if (value != NULL && offset <= writable && sizeof(field) <= writable - offset) {
+    memcpy((unsigned char *)value + offset, &field, sizeof(field));
+  }
+}
+
+static void initialize_u64_field(void *value,
+                                 size_t writable,
+                                 size_t offset,
+                                 uint64_t field) {
+  if (value != NULL && offset <= writable && sizeof(field) <= writable - offset) {
+    memcpy((unsigned char *)value + offset, &field, sizeof(field));
+  }
 }
 
 static int valid_options(const kb_update_options_t *options) {
@@ -382,13 +445,25 @@ KB_TEST_API const char *KB_TEST_CALL kb_status_string(int32_t status) {
 
 KB_TEST_API void KB_TEST_CALL kb_context_options_init(
     kb_context_options_t *options) {
+  kb_context_options_init_sized(
+      options,
+      (uint32_t)(offsetof(kb_context_options_t, log_user_data) +
+                 sizeof(options->log_user_data)));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_context_options_init_sized(
+    kb_context_options_t *options, uint32_t struct_size) {
   if (options == NULL) {
     record_failure(9);
     return;
   }
-  memset(options, 0, sizeof(*options));
-  options->struct_size = (uint32_t)sizeof(*options);
-  options->api_version = 1;
+  const size_t writable =
+      initialize_known_prefix(options, struct_size, sizeof(*options));
+  initialize_u32_field(options, writable,
+                       offsetof(kb_context_options_t, struct_size),
+                       struct_size);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_context_options_t, api_version), 1);
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_context_create(
@@ -420,59 +495,152 @@ KB_TEST_API void KB_TEST_CALL kb_context_release(void *context) {
 
 KB_TEST_API void KB_TEST_CALL kb_update_options_init(
     kb_update_options_t *options) {
+  kb_update_options_init_sized(
+      options,
+      (uint32_t)(offsetof(kb_update_options_t, progress_user_data) +
+                 sizeof(options->progress_user_data)));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_update_options_init_sized(
+    kb_update_options_t *options, uint32_t struct_size) {
   if (options == NULL) {
     record_failure(20);
     return;
   }
-  memset(options, 0, sizeof(*options));
-  options->struct_size = (uint32_t)sizeof(*options);
-  options->api_version = 1;
-  options->timeout_ms = UINT32_MAX;
+  const size_t writable =
+      initialize_known_prefix(options, struct_size, sizeof(*options));
+  initialize_u32_field(options, writable,
+                       offsetof(kb_update_options_t, struct_size),
+                       struct_size);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_update_options_t, api_version), 1);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_update_options_t, timeout_ms), UINT32_MAX);
   ++options_init_count;
 }
 
 KB_TEST_API void KB_TEST_CALL kb_flash_options_init(
     kb_flash_options_t *options) {
+  kb_flash_options_init_sized(
+      options,
+      (uint32_t)(offsetof(kb_flash_options_t, progress_user_data) +
+                 sizeof(options->progress_user_data)));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_flash_options_init_sized(
+    kb_flash_options_t *options, uint32_t struct_size) {
   if (options == NULL) {
     record_failure(21);
     return;
   }
-  memset(options, 0, sizeof(*options));
-  options->struct_size = (uint32_t)sizeof(*options);
-  options->api_version = 1;
-  options->timeout_ms = UINT32_MAX;
+  const size_t writable =
+      initialize_known_prefix(options, struct_size, sizeof(*options));
+  initialize_u32_field(options, writable,
+                       offsetof(kb_flash_options_t, struct_size), struct_size);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_flash_options_t, api_version), 1);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_flash_options_t, timeout_ms), UINT32_MAX);
   ++flash_options_init_count;
 }
 
 KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init(
     kb_legacy_boot_options_t *options) {
+  kb_legacy_boot_options_init_sized(
+      options,
+      (uint32_t)(offsetof(kb_legacy_boot_options_t, tags_offset) +
+                 sizeof(options->tags_offset)));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init_sized(
+    kb_legacy_boot_options_t *options, uint32_t struct_size) {
   if (options == NULL) {
     record_failure(22);
     return;
   }
-  memset(options, 0, sizeof(*options));
-  options->struct_size = (uint32_t)sizeof(*options);
-  options->api_version = 1;
-  options->base = 0x10000000U;
-  options->page_size = 2048U;
-  options->kernel_offset = 0x00008000U;
-  options->ramdisk_offset = 0x01000000U;
-  options->second_offset = 0x00f00000U;
-  options->tags_offset = 0x00000100U;
-  options->dtb_offset = 0x01100000ULL;
+  const size_t writable =
+      initialize_known_prefix(options, struct_size, sizeof(*options));
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, struct_size),
+                       struct_size);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, api_version), 1);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, base), 0x10000000U);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, page_size), 2048U);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, kernel_offset),
+                       0x00008000U);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, ramdisk_offset),
+                       0x01000000U);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, second_offset),
+                       0x00f00000U);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, tags_offset),
+                       0x00000100U);
+  initialize_u64_field(options, writable,
+                       offsetof(kb_legacy_boot_options_t, dtb_offset),
+                       UINT64_C(0x01100000));
   ++legacy_boot_options_init_count;
 }
 
 KB_TEST_API void KB_TEST_CALL kb_job_options_init(kb_job_options_t *options) {
+  kb_job_options_init_sized(options, (uint32_t)sizeof(*options));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_job_options_init_sized(
+    kb_job_options_t *options, uint32_t struct_size) {
   if (options == NULL) {
     record_failure(80);
     return;
   }
-  memset(options, 0, sizeof(*options));
-  options->struct_size = (uint32_t)sizeof(*options);
-  options->api_version = 1;
-  options->timeout_ms = UINT32_MAX;
+  const size_t writable =
+      initialize_known_prefix(options, struct_size, sizeof(*options));
+  initialize_u32_field(options, writable,
+                       offsetof(kb_job_options_t, struct_size), struct_size);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_job_options_t, api_version), 1);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_job_options_t, timeout_ms), UINT32_MAX);
   ++job_options_init_count;
+}
+
+KB_TEST_API void KB_TEST_CALL kb_command_options_init(
+    kb_command_options_t *options) {
+  kb_command_options_init_sized(options, (uint32_t)sizeof(*options));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_command_options_init_sized(
+    kb_command_options_t *options, uint32_t struct_size) {
+  const size_t writable =
+      initialize_known_prefix(options, struct_size, sizeof(*options));
+  initialize_u32_field(options, writable,
+                       offsetof(kb_command_options_t, struct_size), struct_size);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_command_options_t, api_version), 1);
+  initialize_u32_field(options, writable,
+                       offsetof(kb_command_options_t, timeout_ms), UINT32_MAX);
+  initialize_u64_field(
+      options, writable,
+      offsetof(kb_command_options_t, maximum_receive_bytes),
+      UINT64_C(64) * UINT64_C(1024) * UINT64_C(1024));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_version_init(kb_version_t *version) {
+  kb_version_init_sized(version, (uint32_t)sizeof(*version));
+}
+
+KB_TEST_API void KB_TEST_CALL kb_version_init_sized(kb_version_t *version,
+                                                     uint32_t struct_size) {
+  const size_t writable =
+      initialize_known_prefix(version, struct_size, sizeof(*version));
+  initialize_u32_field(version, writable, offsetof(kb_version_t, struct_size),
+                       struct_size);
+  initialize_u32_field(version, writable, offsetof(kb_version_t, api_version),
+                       1);
 }
 
 static kb_job_report_t *make_job_report(const char *json) {

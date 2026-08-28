@@ -179,7 +179,7 @@ int main(void) {
   kb_job_options_t options;
 
   CHECK(write_manifest(manifest));
-  kb_job_options_init(&options);
+  kb_job_options_init_sized(&options, sizeof(options));
   CHECK(options.struct_size == sizeof(options));
   CHECK(options.api_version == KB_API_VERSION);
   CHECK(options.timeout_ms == KB_WAIT_INFINITE);

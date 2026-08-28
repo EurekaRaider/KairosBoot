@@ -13,6 +13,8 @@ internal static partial class NativeMethods
     internal const int PollDelayMilliseconds = 10;
     internal const ulong FetchUnspecified = ulong.MaxValue;
     internal const ulong DefaultMaximumReceiveBytes = 64UL * 1024UL * 1024UL;
+    internal static readonly uint VersionStructSize =
+        checked((uint)Marshal.SizeOf<NativeVersion>());
     internal static readonly uint ProgressStructSize =
         checked((uint)Marshal.SizeOf<NativeProgress>());
     internal static readonly uint FlashOptionsStructSize =

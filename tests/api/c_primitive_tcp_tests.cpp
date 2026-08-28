@@ -1014,7 +1014,7 @@ void run_contract() {
   }
   std::vector<std::uint64_t> watermarks;
   kb_command_options_t options;
-  kb_command_options_init(&options);
+  kb_command_options_init_sized(&options, sizeof(options));
   options.progress_callback = record_progress;
   options.progress_user_data = &watermarks;
   CHECK(kb_stage(context, selector.c_str(), stage_data.data(), stage_data.size(),
@@ -1172,7 +1172,7 @@ void run_contract() {
   kb_error_release(error);
   error = nullptr;
 
-  kb_command_options_init(&options);
+  kb_command_options_init_sized(&options, sizeof(options));
   watermarks.clear();
   options.progress_callback = record_progress;
   options.progress_user_data = &watermarks;
@@ -1211,7 +1211,7 @@ void run_contract() {
   kb_error_release(error);
   error = nullptr;
 
-  kb_command_options_init(&options);
+  kb_command_options_init_sized(&options, sizeof(options));
   options.progress_callback = cancel_flash_at_download;
   signature_operation = nullptr;
   CHECK(kb_signature_file_async(
@@ -1224,7 +1224,7 @@ void run_contract() {
   kb_operation_release(signature_operation);
 
   kb_flash_options_t flash_options;
-  kb_flash_options_init(&flash_options);
+  kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   std::vector<std::uint64_t> flash_watermarks;
   flash_options.progress_callback = record_progress;
   flash_options.progress_user_data = &flash_watermarks;
@@ -1248,7 +1248,7 @@ void run_contract() {
   CHECK(flash_watermarks ==
         std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
 
-  kb_flash_options_init(&flash_options);
+  kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   flash_operation = nullptr;
   CHECK(kb_flash_file_async(
             context, selector.c_str(), "system", image_path.c_str(),
@@ -1276,7 +1276,7 @@ void run_contract() {
   error = nullptr;
   CHECK(blocking_flash_error == asynchronous_flash_error);
 
-  kb_flash_options_init(&flash_options);
+  kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   flash_options.progress_callback = cancel_flash_at_download;
   flash_operation = nullptr;
   CHECK(kb_flash_file_async(
@@ -1305,7 +1305,7 @@ void run_contract() {
 
   std::vector<std::uint64_t> update_watermarks;
   kb_update_options_t update_options;
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.skip_reboot = 1;
   update_options.progress_callback = record_progress;
   update_options.progress_user_data = &update_watermarks;
@@ -1329,7 +1329,7 @@ void run_contract() {
   error = nullptr;
 
   CancelOnTaskFailureProbe cancellation_probe;
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.progress_callback = cancel_on_second_execute;
   update_options.progress_user_data = &cancellation_probe;
   CHECK(kb_update_package(context, selector.c_str(), package_path.c_str(),
@@ -1347,7 +1347,7 @@ void run_contract() {
   TemporaryUpdatePackage wipe_package(
       "version 1\nif-wipe erase userdata\n");
   const auto wipe_path = wipe_package.path().string();
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.wipe = 1;
   update_options.skip_reboot = 1;
   CHECK(kb_update_package(context, selector.c_str(), wipe_path.c_str(),
@@ -1357,7 +1357,7 @@ void run_contract() {
   TemporaryUpdatePackage deadline_package(
       "version 1\nerase cache\nerase metadata\n");
   const auto deadline_path = deadline_package.path().string();
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.timeout_ms = 1000U;
   const auto deadline_started = std::chrono::steady_clock::now();
   CHECK(kb_update_package(context, selector.c_str(), deadline_path.c_str(),
@@ -1399,7 +1399,7 @@ void run_flash_raw_contract() {
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
   kb_legacy_boot_options_t boot_options;
-  kb_legacy_boot_options_init(&boot_options);
+  kb_legacy_boot_options_init_sized(&boot_options, sizeof(boot_options));
   boot_options.header_version = 2U;
   boot_options.os_version = "15.1";
   boot_options.os_patch_level = "2025-02-05";
@@ -1424,7 +1424,7 @@ void context_release_is_safe_after_async_update_start() {
 
   ReleaseContextProbe probe{.context = context, .released = false};
   kb_update_options_t options;
-  kb_update_options_init(&options);
+  kb_update_options_init_sized(&options, sizeof(options));
   options.progress_callback = release_context_during_preflight;
   options.progress_user_data = &probe;
   kb_operation_t* operation = nullptr;
@@ -1448,7 +1448,7 @@ void whole_update_timeout_includes_progress_callbacks() {
 
   DelayOpenProbe probe;
   kb_update_options_t options;
-  kb_update_options_init(&options);
+  kb_update_options_init_sized(&options, sizeof(options));
   options.timeout_ms = 500U;
   options.progress_callback = delay_transport_open;
   options.progress_user_data = &probe;
@@ -1631,7 +1631,7 @@ void run_udp_flash_contract() {
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &c_context, &error) == KB_OK);
   kb_flash_options_t c_options;
-  kb_flash_options_init(&c_options);
+  kb_flash_options_init_sized(&c_options, sizeof(c_options));
   c_options.timeout_ms = 2'000U;
   kb_operation_t* operation = nullptr;
   CHECK(kb_flash_file_async(
@@ -1674,7 +1674,7 @@ void run_udp_flash_contract() {
   error = nullptr;
   CHECK(blocking_flash_error == asynchronous_flash_error);
 
-  kb_flash_options_init(&c_options);
+  kb_flash_options_init_sized(&c_options, sizeof(c_options));
   c_options.timeout_ms = 0U;
   operation = nullptr;
   CHECK(kb_flash_file_async(
