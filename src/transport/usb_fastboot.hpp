@@ -16,6 +16,7 @@ struct UsbFastbootTransportOptions final {
     BulkOutOptions bulk_out{};
     TransferRingConfig data_ring{};
     std::shared_ptr<BufferBudget> buffer_budget;
+    std::shared_ptr<TransferPermitProvider> permit_provider;
     TransferTelemetryConfig data_telemetry{};
 };
 
@@ -41,7 +42,8 @@ namespace detail {
 // interface. write()/read() are serialized; request_cancel()/close() may run
 // from a different thread and use the runtime's bounded drain/quarantine path.
 class UsbFastbootTransport final : public protocol::ITransportSession,
-                                   public protocol::IStreamingTransportSession {
+                                   public protocol::IStreamingTransportSession,
+                                   public ITransferPermitConfigurableTransport {
 public:
     [[nodiscard]] static std::expected<std::unique_ptr<UsbFastbootTransport>,
                                        LibusbRuntimeError>
@@ -77,6 +79,10 @@ public:
         std::chrono::milliseconds timeout,
         const TransferProgressObserver& observer = {}) override;
 
+    [[nodiscard]] bool configure_transfer_permits(
+        std::shared_ptr<TransferPermitProvider> provider,
+        TransferRingConfig config) noexcept override;
+
     [[nodiscard]] protocol::TransferResult read(
         std::span<std::byte> destination,
         std::chrono::milliseconds timeout) override;
@@ -100,12 +106,20 @@ private:
                          UsbFastbootTransportOptions options,
                          std::shared_ptr<BufferBudget> budget);
 
+    [[nodiscard]] protocol::TransferResult write_source_impl(
+        std::shared_ptr<TransferSource> source,
+        std::chrono::milliseconds timeout,
+        const TransferProgressObserver& observer,
+        bool use_permit_provider);
+
     void poison_and_stop() noexcept;
 
     std::unique_ptr<LibusbBulkOutBackend> backend_;
     UsbDeviceInfo verified_identity_;
     UsbFastbootTransportOptions options_;
     std::shared_ptr<BufferBudget> budget_;
+    std::mutex permit_provider_mutex_;
+    std::shared_ptr<TransferPermitProvider> permit_provider_;
     TransferTelemetry data_telemetry_;
     std::atomic<bool> cancellation_requested_{false};
     std::atomic<bool> open_{true};

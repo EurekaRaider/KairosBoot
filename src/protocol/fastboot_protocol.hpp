@@ -16,6 +16,11 @@
 #include <string_view>
 #include <vector>
 
+namespace kairosboot::transport {
+class TransferPermitProvider;
+struct TransferRingConfig;
+}
+
 namespace kairosboot::protocol {
 
 inline constexpr std::size_t kDefaultMaxCommandBytes = 4096;
@@ -171,6 +176,11 @@ public:
 
     [[nodiscard]] SessionState state() const noexcept;
     [[nodiscard]] std::optional<ProtocolError> poison_error() const;
+    // Internal fleet barrier hook. Returns false unless this ready session owns
+    // a transport that can accept scheduler-backed DATA permits.
+    [[nodiscard]] bool configure_transfer_permits(
+        std::shared_ptr<transport::TransferPermitProvider> provider,
+        const transport::TransferRingConfig& config) noexcept;
     void request_cancel() noexcept;
     void close() noexcept;
 

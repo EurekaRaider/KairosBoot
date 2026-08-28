@@ -134,6 +134,14 @@ public:
     prepare_task(UpdateDeviceTaskInput input,
                  const UpdateOperationContext& context) override;
 
+    // Internal fleet construction hooks. The provider is late-bound only
+    // after all immutable tasks have reported their exact DATA byte totals.
+    [[nodiscard]] std::expected<void, UpdateDeviceError>
+    configure_transfer_permits(
+        std::shared_ptr<transport::TransferPermitProvider> provider,
+        const transport::TransferRingConfig& config);
+    [[nodiscard]] PrimitiveService& current_service_for_fleet_actor() noexcept;
+
 private:
     struct ReconnectConstructionTag final {};
 

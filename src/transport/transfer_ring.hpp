@@ -171,6 +171,19 @@ private:
     friend class TransferPermit;
 };
 
+// Internal late-binding capability for transports opened during fleet
+// preflight. Exact per-device DATA bytes are known only after task preparation,
+// so the scheduler provider is attached at the destructive barrier rather than
+// guessed while the USB interface is opened.
+class ITransferPermitConfigurableTransport {
+public:
+    virtual ~ITransferPermitConfigurableTransport() = default;
+
+    [[nodiscard]] virtual bool configure_transfer_permits(
+        std::shared_ptr<TransferPermitProvider> provider,
+        TransferRingConfig config) noexcept = 0;
+};
+
 using TransferTelemetryTimePoint = std::chrono::steady_clock::time_point;
 using TransferTelemetryNow =
     TransferTelemetryTimePoint (*)(void* context) noexcept;

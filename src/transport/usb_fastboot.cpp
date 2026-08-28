@@ -364,6 +364,7 @@ UsbFastbootTransport::UsbFastbootTransport(
       verified_identity_(std::move(verified_identity)),
       options_(std::move(options)),
       budget_(std::move(budget)),
+      permit_provider_(options_.permit_provider),
       data_telemetry_(options_.data_telemetry) {}
 
 UsbFastbootTransport::~UsbFastbootTransport() {
@@ -374,8 +375,8 @@ protocol::TransferResult UsbFastbootTransport::write(
     const std::span<const std::byte> bytes,
     const std::chrono::milliseconds timeout) {
     try {
-        return write_source(
-            std::make_shared<SpanTransferSource>(bytes), timeout);
+        return write_source_impl(
+            std::make_shared<SpanTransferSource>(bytes), timeout, {}, false);
     } catch (const std::bad_alloc&) {
         return {
             .status = protocol::TransportStatus::IoError,
@@ -391,6 +392,15 @@ protocol::TransferResult UsbFastbootTransport::write_source(
     std::shared_ptr<TransferSource> source,
     const std::chrono::milliseconds timeout,
     const TransferProgressObserver& observer) {
+    return write_source_impl(
+        std::move(source), timeout, observer, true);
+}
+
+protocol::TransferResult UsbFastbootTransport::write_source_impl(
+    std::shared_ptr<TransferSource> source,
+    const std::chrono::milliseconds timeout,
+    const TransferProgressObserver& observer,
+    const bool use_permit_provider) {
     std::scoped_lock operation(operation_mutex_);
     data_telemetry_.reset();
     if (!open_.load(std::memory_order_acquire)) {
@@ -439,8 +449,15 @@ protocol::TransferResult UsbFastbootTransport::write_source(
         return failure;
     }
 
+    std::shared_ptr<TransferPermitProvider> provider;
+    if (use_permit_provider) {
+        std::scoped_lock permit_lock(permit_provider_mutex_);
+        provider = permit_provider_;
+    }
+    const bool provider_configured = provider != nullptr;
     TransferRing ring(
-        *backend_, budget_, options_.data_ring, &data_telemetry_);
+        *backend_, budget_, options_.data_ring, &data_telemetry_,
+        std::move(provider));
     try {
         if (!ring.start(std::move(source), true)) {
             auto failure = ring_failure(
@@ -459,6 +476,43 @@ protocol::TransferResult UsbFastbootTransport::write_source(
                 static_cast<void>(ring.pump());
                 if (ring.in_flight() == 0 &&
                     ring.state() == TransferRingState::running) {
+                    if (provider_configured) {
+                        const auto wait_started = data_telemetry_.enabled()
+                            ? data_telemetry_.now()
+                            : TransferTelemetryTimePoint{};
+                        const auto ready = ring.wait_for_permit_until(deadline);
+                        if (data_telemetry_.enabled()) {
+                            data_telemetry_.record_budget_wait(
+                                wait_started, data_telemetry_.now());
+                        }
+                        if (ready) {
+                            continue;
+                        }
+                        const auto explicitly_cancelled =
+                            cancellation_requested_.load(
+                                std::memory_order_acquire);
+                        if (!explicitly_cancelled && Clock::now() < deadline) {
+                            // A scheduler-wide availability notification can
+                            // be consumed by another flow before this ring
+                            // repumps. Wait again instead of misclassifying
+                            // that work-conserving race as cancellation.
+                            continue;
+                        }
+                        ring.cancel();
+                        auto failure = ring_failure(
+                            ring,
+                            explicitly_cancelled
+                                ? protocol::TransportStatus::Cancelled
+                                : protocol::TransportStatus::Timeout,
+                            explicitly_cancelled
+                                ? "USB bulk OUT permit wait was cancelled"
+                                : "USB bulk OUT timed out waiting for a fleet permit");
+                        failure.status = explicitly_cancelled
+                            ? protocol::TransportStatus::Cancelled
+                            : protocol::TransportStatus::Timeout;
+                        poison_and_stop();
+                        return failure;
+                    }
                     if (Clock::now() >= deadline) {
                         ring.cancel();
                         auto failure = ring_failure(
@@ -576,6 +630,24 @@ protocol::TransferResult UsbFastbootTransport::write_source(
     }
 }
 
+bool UsbFastbootTransport::configure_transfer_permits(
+    std::shared_ptr<TransferPermitProvider> provider,
+    const TransferRingConfig config) noexcept {
+    std::scoped_lock operation(operation_mutex_);
+    if (!open_.load(std::memory_order_acquire) || provider == nullptr ||
+        config.chunk_size == 0U || config.depth == 0U ||
+        config.chunk_size >
+            std::numeric_limits<std::size_t>::max() / config.depth) {
+        return false;
+    }
+    options_.data_ring = config;
+    {
+        std::scoped_lock permit_lock(permit_provider_mutex_);
+        permit_provider_ = std::move(provider);
+    }
+    return true;
+}
+
 TransferTelemetrySnapshot UsbFastbootTransport::data_telemetry_snapshot() const {
     std::scoped_lock operation(operation_mutex_);
     return data_telemetry_.snapshot();
@@ -632,6 +704,14 @@ protocol::TransferResult UsbFastbootTransport::read_data(
 void UsbFastbootTransport::request_cancel() noexcept {
     cancellation_requested_.store(true, std::memory_order_release);
     open_.store(false, std::memory_order_release);
+    std::shared_ptr<TransferPermitProvider> provider;
+    {
+        std::scoped_lock permit_lock(permit_provider_mutex_);
+        provider = permit_provider_;
+    }
+    if (provider != nullptr) {
+        provider->cancel_wait();
+    }
     if (backend_ != nullptr) {
         backend_->request_stop();
     }

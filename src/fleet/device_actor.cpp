@@ -3,10 +3,12 @@
 
 #include "src/fastboot/slot_planner.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <stop_token>
 #include <utility>
 
@@ -22,6 +24,15 @@ constexpr std::uint8_t kActorFinished = 2U;
     return context.cancellation.stop_requested() ||
         (context.deadline &&
          std::chrono::steady_clock::now() >= *context.deadline);
+}
+
+[[nodiscard]] bool requires_fastboot_transition(
+    const ManifestTarget& target) noexcept {
+    return std::ranges::any_of(target.steps, [](const ManifestStep& step) {
+        const auto* reboot = std::get_if<ManifestRebootStep>(&step.payload);
+        return reboot != nullptr &&
+            reboot->target == ManifestRebootTarget::Fastboot;
+    });
 }
 
 [[nodiscard]] FleetActorPrepareError interruption_prepare_error(
@@ -403,27 +414,217 @@ private:
 
 }  // namespace
 
+std::expected<FleetExecutionRuntime, FleetActorPrepareError>
+make_libusb_fleet_execution_runtime(
+    std::shared_ptr<transport::LibusbRuntime> runtime,
+    fastboot::LibusbReconnectAdapterOptions adapter_options,
+    fastboot::ReconnectOptions reconnect_options) {
+    try {
+        if (runtime == nullptr ||
+            adapter_options.transport.data_ring.chunk_size == 0U ||
+            adapter_options.transport.data_ring.depth == 0U) {
+            return std::unexpected(FleetActorPrepareError{
+                .kind = FleetActorPrepareErrorKind::InvalidArgument,
+                .message = "fleet execution runtime requires libusb and a valid DATA ring",
+                .device_index = std::nullopt,
+                .step_index = std::nullopt,
+                .device_error = std::nullopt,
+            });
+        }
+        if (adapter_options.transport.buffer_budget == nullptr) {
+            adapter_options.transport.buffer_budget =
+                transport::process_usb_buffer_budget();
+        }
+        adapter_options.transport.permit_provider.reset();
+        return FleetExecutionRuntime{
+            .buffer_budget = adapter_options.transport.buffer_budget,
+            .data_ring = adapter_options.transport.data_ring,
+            .reconnect_factory =
+                [runtime = std::move(runtime), adapter_options](
+                    const PreparedDeviceSession&,
+                    const std::size_t device_index)
+                    -> std::expected<FleetReconnectDependencies,
+                                     FleetActorPrepareError> {
+                    auto adapter = fastboot::LibusbReconnectAdapter::create(
+                        runtime, adapter_options);
+                    if (!adapter) {
+                        return std::unexpected(FleetActorPrepareError{
+                            .kind = adapter.error().code ==
+                                    fastboot::LibusbReconnectAdapterFactoryErrorCode::ResourceExhausted
+                                ? FleetActorPrepareErrorKind::ResourceExhausted
+                                : FleetActorPrepareErrorKind::InvalidArgument,
+                            .message = adapter.error().message,
+                            .device_index = device_index,
+                            .step_index = std::nullopt,
+                            .device_error = std::nullopt,
+                        });
+                    }
+                    auto shared_adapter =
+                        std::shared_ptr<fastboot::LibusbReconnectAdapter>(
+                            std::move(*adapter));
+                    return FleetReconnectDependencies{
+                        .discovery = shared_adapter,
+                        .opener = shared_adapter,
+                        .waiter =
+                            std::make_shared<fastboot::SteadyReconnectWaiter>(),
+                    };
+                },
+            .reconnect_options = reconnect_options,
+        };
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(FleetActorPrepareError{
+            .kind = FleetActorPrepareErrorKind::ResourceExhausted,
+            .message = "unable to allocate the fleet execution runtime",
+            .device_index = std::nullopt,
+            .step_index = std::nullopt,
+            .device_error = std::nullopt,
+        });
+    }
+}
+
 struct FleetDeviceActor::PreparedStep final {
     ReportStepSpec report;
     std::vector<std::unique_ptr<fastboot::IPreparedDeviceTask>> tasks;
 };
 
-FleetDeviceActor::FleetDeviceActor(PreparedDeviceSession&& prepared,
-                                   const ManifestTarget& target)
-    : session_(std::move(prepared).take_session()),
-      service_(std::make_unique<fastboot::PrimitiveService>(*session_)),
-      update_(std::make_unique<fastboot::PrimitiveUpdateDevice>(*service_)),
-      target_(&target) {}
+FleetDeviceActor::FleetDeviceActor(const ManifestTarget& target) noexcept
+    : target_(&target) {}
 
-FleetDeviceActor::~FleetDeviceActor() = default;
+FleetDeviceActor::~FleetDeviceActor() { retire(); }
+
+std::expected<std::unique_ptr<FleetDeviceActor>, FleetActorPrepareError>
+FleetDeviceActor::create(
+    PreparedDeviceSession&& prepared,
+    const ManifestTarget& target,
+    const FleetExecutionRuntime* const runtime,
+    const std::size_t device_index) {
+    try {
+        auto actor = std::unique_ptr<FleetDeviceActor>(
+            new FleetDeviceActor(target));
+        const bool reconnect = runtime != nullptr &&
+            static_cast<bool>(runtime->reconnect_factory) &&
+            prepared.observed_mode() == fastboot::FastbootUsbMode::Bootloader &&
+            requires_fastboot_transition(target);
+        if (!reconnect) {
+            actor->session_ = std::move(prepared).take_session();
+            if (actor->session_ == nullptr) {
+                return std::unexpected(FleetActorPrepareError{
+                    .kind = FleetActorPrepareErrorKind::InvalidArgument,
+                    .message = "prepared device does not own a Fastboot session",
+                    .device_index = device_index,
+                    .step_index = std::nullopt,
+                    .device_error = std::nullopt,
+                });
+            }
+            actor->service_ =
+                std::make_unique<fastboot::PrimitiveService>(*actor->session_);
+            actor->service_view_ = actor->service_.get();
+            actor->update_ = std::make_unique<fastboot::PrimitiveUpdateDevice>(
+                *actor->service_);
+            return actor;
+        }
+
+        auto dependencies = runtime->reconnect_factory(prepared, device_index);
+        if (!dependencies || dependencies->discovery == nullptr ||
+            dependencies->opener == nullptr || dependencies->waiter == nullptr) {
+            return std::unexpected(dependencies
+                ? FleetActorPrepareError{
+                      .kind = FleetActorPrepareErrorKind::InvalidArgument,
+                      .message = "fleet reconnect factory returned incomplete dependencies",
+                      .device_index = device_index,
+                      .step_index = std::nullopt,
+                      .device_error = std::nullopt,
+                  }
+                : std::move(dependencies.error()));
+        }
+        auto prepared_binding =
+            fastboot::make_prepared_reconnect_binding(prepared);
+        if (!prepared_binding || prepared.session_ == nullptr) {
+            return std::unexpected(FleetActorPrepareError{
+                .kind = FleetActorPrepareErrorKind::TaskPreparationFailed,
+                .message = prepared_binding
+                    ? "prepared reconnect session is missing"
+                    : prepared_binding.error().message,
+                .device_index = device_index,
+                .step_index = std::nullopt,
+                .device_error = std::nullopt,
+            });
+        }
+        auto reconnect_target = prepared_binding->target_after_transition(
+            fastboot::FastbootUsbMode::Fastbootd,
+            prepared.session_->state(),
+            protocol::TransferCertainty::FullyTransferred);
+        if (!reconnect_target) {
+            return std::unexpected(FleetActorPrepareError{
+                .kind = FleetActorPrepareErrorKind::TaskPreparationFailed,
+                .message = reconnect_target.error().message,
+                .device_index = device_index,
+                .step_index = std::nullopt,
+                .device_error = std::nullopt,
+            });
+        }
+        auto initial = fastboot::bind_initial_reconnect_session(
+            fastboot::OpenedReconnectSession{
+                .verified_identity = fastboot::ReconnectDeviceIdentity{
+                    .physical_port = reconnect_target->physical_port,
+                    .serial = reconnect_target->serial,
+                    .usb_fingerprint = reconnect_target->usb_fingerprint,
+                    .product = reconnect_target->product,
+                    .mode = reconnect_target->previous_mode,
+                },
+                .session = std::move(prepared).take_session(),
+                .outbound_certainty =
+                    protocol::TransferCertainty::FullyTransferred,
+            },
+            *reconnect_target);
+        if (!initial) {
+            return std::unexpected(FleetActorPrepareError{
+                .kind = FleetActorPrepareErrorKind::TaskPreparationFailed,
+                .message = initial.error().message,
+                .device_index = device_index,
+                .step_index = std::nullopt,
+                .device_error = std::move(initial.error()),
+            });
+        }
+        actor->reconnect_dependencies_ = std::move(*dependencies);
+        actor->reconnect_coordinator_ =
+            std::make_unique<fastboot::ReconnectCoordinator>(
+                *actor->reconnect_dependencies_.discovery,
+                *actor->reconnect_dependencies_.opener,
+                *actor->reconnect_dependencies_.waiter);
+        auto update = fastboot::PrimitiveUpdateDevice::create_with_reconnect(
+            std::move(*initial), *actor->reconnect_coordinator_,
+            runtime->reconnect_options);
+        if (!update) {
+            return std::unexpected(FleetActorPrepareError{
+                .kind = FleetActorPrepareErrorKind::TaskPreparationFailed,
+                .message = update.error().message,
+                .device_index = device_index,
+                .step_index = std::nullopt,
+                .device_error = std::move(update.error()),
+            });
+        }
+        actor->update_ = std::move(*update);
+        actor->service_view_ =
+            &actor->update_->current_service_for_fleet_actor();
+        return actor;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(FleetActorPrepareError{
+            .kind = FleetActorPrepareErrorKind::ResourceExhausted,
+            .message = "unable to allocate a fleet device actor",
+            .device_index = device_index,
+            .step_index = std::nullopt,
+            .device_error = std::nullopt,
+        });
+    }
+}
 
 std::expected<ReportDeviceSpec, FleetActorPrepareError>
 FleetDeviceActor::prepare(
     const PreparedFleetArtifacts& artifacts,
     const fastboot::UpdateOperationContext& context,
     const std::size_t device_index) {
-    if (target_ == nullptr || session_ == nullptr || service_ == nullptr ||
-        update_ == nullptr) {
+    if (target_ == nullptr || service_view_ == nullptr || update_ == nullptr) {
         return std::unexpected(FleetActorPrepareError{
             .kind = FleetActorPrepareErrorKind::InvalidArgument,
             .message = "fleet actor does not own one complete device session",
@@ -446,7 +647,7 @@ FleetDeviceActor::prepare(
     std::uint64_t device_data_bytes = 0U;
     steps_.reserve(target.steps.size());
     report.steps.reserve(target.steps.size());
-    fastboot::SlotPlanner slots(*service_);
+    fastboot::SlotPlanner slots(*service_view_);
 
     for (std::size_t step_index = 0U; step_index < target.steps.size();
          ++step_index) {
@@ -594,7 +795,7 @@ FleetDeviceActor::prepare(
             }
             prepared.tasks.push_back(
                 std::make_unique<PreparedPrimitiveCommandTask>(
-                    *service_, PreparedPrimitiveCommandTask::Kind::SetActive,
+                    *service_view_, PreparedPrimitiveCommandTask::Kind::SetActive,
                     std::move(*resolved), fastboot::RebootTarget::System));
         } else if (const auto* reboot =
                        std::get_if<ManifestRebootStep>(
@@ -621,10 +822,33 @@ FleetDeviceActor::prepare(
                 });
             }
             prepared.report.operation = ReportOperation::Reboot;
-            prepared.tasks.push_back(
-                std::make_unique<PreparedPrimitiveCommandTask>(
-                    *service_, PreparedPrimitiveCommandTask::Kind::Reboot,
-                    std::string{}, *resolved));
+            if (*resolved == fastboot::RebootTarget::Fastboot) {
+                fastboot::UpdateDeviceTaskInput input{
+                    .task = {
+                        .kind = fastboot::UpdateTaskKind::Reboot,
+                        .conditional_on_wipe = false,
+                        .location = {},
+                        .partition = {},
+                        .artifact = {},
+                        .slot = fastboot::PlannedSlot::Default,
+                        .apply_vbmeta = false,
+                        .reboot_target = fastboot::PlannedRebootTarget::Fastboot,
+                    },
+                };
+                auto task = update_->prepare_task(std::move(input), context);
+                if (!task) {
+                    return std::unexpected(device_prepare_error(
+                        std::move(task.error()),
+                        "unable to prepare fleet fastbootd transition",
+                        device_index, step_index));
+                }
+                prepared.tasks.push_back(std::move(*task));
+            } else {
+                prepared.tasks.push_back(
+                    std::make_unique<PreparedPrimitiveCommandTask>(
+                        *service_view_, PreparedPrimitiveCommandTask::Kind::Reboot,
+                        std::string{}, *resolved));
+            }
         } else if (const auto* oem =
                        std::get_if<ManifestOemStep>(&manifest_step.payload)) {
             auto command = fastboot::validate_oem_command_suffix(
@@ -640,7 +864,7 @@ FleetDeviceActor::prepare(
             prepared.report.oem_command = oem->command.value;
             prepared.tasks.push_back(
                 std::make_unique<PreparedPrimitiveCommandTask>(
-                    *service_, PreparedPrimitiveCommandTask::Kind::Oem,
+                    *service_view_, PreparedPrimitiveCommandTask::Kind::Oem,
                     oem->command.value, fastboot::RebootTarget::System));
         } else {
             return std::unexpected(FleetActorPrepareError{
@@ -666,6 +890,7 @@ FleetDeviceActor::prepare(
         report.steps.push_back(prepared.report);
         steps_.push_back(std::move(prepared));
     }
+    host_to_device_data_bytes_ = device_data_bytes;
     return report;
 }
 
@@ -842,17 +1067,60 @@ FleetDeviceActor::execute(
 }
 
 void FleetDeviceActor::retire() noexcept {
+    if (permit_provider_ != nullptr) {
+        permit_provider_->cancel_wait();
+    }
     steps_.clear();
+    permit_provider_.reset();
     update_.reset();
+    reconnect_coordinator_.reset();
+    reconnect_dependencies_ = {};
+    service_view_ = nullptr;
     service_.reset();
     session_.reset();
 }
 
+std::expected<void, FleetActorPrepareError>
+FleetDeviceActor::bind_transfer_provider(
+    std::shared_ptr<transport::TransferPermitProvider> provider,
+    const transport::TransferRingConfig& config,
+    const std::size_t device_index) {
+    if (provider == nullptr || update_ == nullptr) {
+        return std::unexpected(FleetActorPrepareError{
+            .kind = FleetActorPrepareErrorKind::InvalidArgument,
+            .message = "fleet actor cannot bind an empty DATA permit provider",
+            .device_index = device_index,
+            .step_index = std::nullopt,
+            .device_error = std::nullopt,
+        });
+    }
+    auto configured = update_->configure_transfer_permits(provider, config);
+    if (!configured) {
+        return std::unexpected(FleetActorPrepareError{
+            .kind = FleetActorPrepareErrorKind::TaskPreparationFailed,
+            .message = configured.error().message,
+            .device_index = device_index,
+            .step_index = std::nullopt,
+            .device_error = std::move(configured.error()),
+        });
+    }
+    permit_provider_ = std::move(provider);
+    return {};
+}
+
+std::uint64_t FleetDeviceActor::host_to_device_data_bytes() const noexcept {
+    return host_to_device_data_bytes_;
+}
+
 PreparedFleetActorBatch::PreparedFleetActorBatch(
     PreparedFleetArtifacts&& artifacts,
+    std::optional<FleetExecutionRuntime>&& runtime,
+    std::unique_ptr<WeightedControllerScheduler>&& scheduler,
     std::vector<std::unique_ptr<FleetDeviceActor>>&& actors,
     std::vector<ReportDeviceSpec>&& report_specs) noexcept
     : artifacts_(std::move(artifacts)),
+      runtime_(std::move(runtime)),
+      scheduler_(std::move(scheduler)),
       actors_(std::move(actors)),
       report_specs_(std::move(report_specs)) {}
 
@@ -880,6 +1148,7 @@ PreparedFleetActorBatch::prepare(
     const JobPlan& plan,
     PreparedFleetArtifacts&& artifacts,
     PreparedDeviceBatchConsumption&& devices,
+    std::optional<FleetExecutionRuntime>&& runtime,
     const fastboot::UpdateOperationContext& context) {
     // These checks deliberately precede take_sessions_for_actor(). A digest
     // mismatch therefore cannot unwrap or consume the device capability.
@@ -906,6 +1175,18 @@ PreparedFleetActorBatch::prepare(
         .device_error = std::nullopt,
         });
     }
+    if (runtime &&
+        (runtime->buffer_budget == nullptr ||
+         runtime->data_ring.chunk_size == 0U ||
+         runtime->data_ring.depth == 0U)) {
+        return std::unexpected(FleetActorPrepareError{
+            .kind = FleetActorPrepareErrorKind::InvalidArgument,
+            .message = "fleet execution runtime has an invalid budget or DATA ring",
+            .device_index = std::nullopt,
+            .step_index = std::nullopt,
+            .device_error = std::nullopt,
+        });
+    }
     for (std::size_t index = 0U; index < devices.devices().size(); ++index) {
         if (devices.devices()[index].target_index() >=
             plan.manifest().targets.size()) {
@@ -923,8 +1204,12 @@ PreparedFleetActorBatch::prepare(
         auto sessions = std::move(devices).take_sessions_for_actor();
         std::vector<std::unique_ptr<FleetDeviceActor>> actors;
         std::vector<ReportDeviceSpec> specs;
+        std::vector<std::string> device_ids;
+        std::vector<std::string> controller_ids;
         actors.reserve(sessions.size());
         specs.reserve(sessions.size());
+        device_ids.reserve(sessions.size());
+        controller_ids.reserve(sessions.size());
 
         for (std::size_t index = 0U; index < sessions.size(); ++index) {
             if (interrupted(context)) {
@@ -938,23 +1223,61 @@ PreparedFleetActorBatch::prepare(
             auto serial = prepared.usb_identity().serial;
             auto physical_port_path =
                 prepared.usb_identity().physical_port_path;
-            auto actor = std::unique_ptr<FleetDeviceActor>(
-                new FleetDeviceActor(
-                    std::move(prepared),
-                    plan.manifest().targets[target_index]));
-            auto spec = actor->prepare(artifacts, context, index);
+            auto root_controller_id =
+                prepared.usb_identity().root_controller_id;
+            auto actor = FleetDeviceActor::create(
+                std::move(prepared), plan.manifest().targets[target_index],
+                runtime ? &*runtime : nullptr, index);
+            if (!actor) {
+                return std::unexpected(std::move(actor.error()));
+            }
+            auto spec = (*actor)->prepare(artifacts, context, index);
             if (!spec) {
                 return std::unexpected(std::move(spec.error()));
             }
             spec->identifier = physical_port_path;
             spec->serial = std::move(serial);
-            spec->usb_path = std::move(physical_port_path);
+            spec->usb_path = physical_port_path;
             spec->observed_product = std::move(observed_product);
-            actors.push_back(std::move(actor));
+            device_ids.push_back(std::move(physical_port_path));
+            controller_ids.push_back(std::move(root_controller_id));
+            actors.push_back(std::move(*actor));
             specs.push_back(std::move(*spec));
         }
+
+        std::unique_ptr<WeightedControllerScheduler> scheduler;
+        if (runtime) {
+            scheduler = std::make_unique<WeightedControllerScheduler>(
+                runtime->buffer_budget, runtime->data_ring.chunk_size);
+            for (std::size_t index = 0U; index < actors.size(); ++index) {
+                if (!scheduler->add_flow(DeviceFlowSpec{
+                        .device_id = device_ids[index],
+                        .controller_id = controller_ids[index],
+                        .weight = 1U,
+                        .bytes_remaining =
+                            actors[index]->host_to_device_data_bytes(),
+                        .max_outstanding = runtime->data_ring.depth,
+                    })) {
+                    return std::unexpected(FleetActorPrepareError{
+                        .kind = FleetActorPrepareErrorKind::InvalidArgument,
+                        .message = "unable to register the prepared device DATA flow",
+                        .device_index = index,
+                        .step_index = std::nullopt,
+                        .device_error = std::nullopt,
+                    });
+                }
+                auto provider = scheduler->make_permit_provider(
+                    device_ids[index], runtime->data_ring.depth);
+                auto bound = actors[index]->bind_transfer_provider(
+                    std::move(provider), runtime->data_ring, index);
+                if (!bound) {
+                    return std::unexpected(std::move(bound.error()));
+                }
+            }
+        }
         return PreparedFleetActorBatch{
-            std::move(artifacts), std::move(actors), std::move(specs)};
+            std::move(artifacts), std::move(runtime), std::move(scheduler),
+            std::move(actors), std::move(specs)};
     } catch (const std::bad_alloc&) {
         return std::unexpected(FleetActorPrepareError{
             .kind = FleetActorPrepareErrorKind::ResourceExhausted,
@@ -990,7 +1313,19 @@ prepare_fleet_device_actors(
     PreparedDeviceBatchConsumption&& devices,
     const fastboot::UpdateOperationContext& context) {
     return PreparedFleetActorBatch::prepare(
-        plan, std::move(artifacts), std::move(devices), context);
+        plan, std::move(artifacts), std::move(devices), std::nullopt, context);
+}
+
+std::expected<PreparedFleetActorBatch, FleetActorPrepareError>
+prepare_fleet_device_actors(
+    const JobPlan& plan,
+    PreparedFleetArtifacts&& artifacts,
+    PreparedDeviceBatchConsumption&& devices,
+    FleetExecutionRuntime runtime,
+    const fastboot::UpdateOperationContext& context) {
+    return PreparedFleetActorBatch::prepare(
+        plan, std::move(artifacts), std::move(devices),
+        std::optional<FleetExecutionRuntime>{std::move(runtime)}, context);
 }
 
 }  // namespace kairosboot::fleet

@@ -13,6 +13,11 @@
 #include <string_view>
 #include <vector>
 
+namespace kairosboot::transport {
+class TransferPermitProvider;
+struct TransferRingConfig;
+}
+
 namespace kairosboot::fastboot {
 
 enum class PrimitiveOperation : std::uint8_t {
@@ -210,6 +215,10 @@ public:
         std::string_view raw_suffix);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> raw_command(
         std::string_view command_text);
+
+    [[nodiscard]] bool configure_transfer_permits(
+        std::shared_ptr<transport::TransferPermitProvider> provider,
+        const transport::TransferRingConfig& config) noexcept;
 
     void request_cancel() noexcept;
 
