@@ -88,6 +88,9 @@ def serve_udp_flash(
         server.sendto(udp_packet(3, sequence, response), peer)
         sequence += 1
 
+    exchange(b"getvar:is-userspace", b"OKAYno")
+    exchange(b"getvar:has-slot:" + partition, b"OKAYno")
+    exchange(b"getvar:is-logical:" + partition, b"OKAYno")
     exchange(b"getvar:max-download-size", b"OKAY0x00100000")
     encoded_size = f"{len(image):08x}".encode("ascii")
     exchange(b"download:" + encoded_size, b"DATA" + encoded_size)
@@ -917,6 +920,12 @@ def run(cli: pathlib.Path) -> None:
         stage_file.write_bytes(stage_payload)
 
         def flashed_over_tcp(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:max-download-size"
             send_frame(connection, b"OKAY0x00100000")
             assert receive_frame(connection) == b"download:00000010"

@@ -1017,6 +1017,10 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_prepare_libusb.py")
   add_test(
+    NAME official_fastboot_dependency_tooling
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_prepare_official_fastboot.py")
+  add_test(
     NAME abi_tooling
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_check_abi.py")
