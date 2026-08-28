@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/update_package_preflight.hpp"
+#include "src/fastboot/update_executor.hpp"
 #include "src/image/sha256.hpp"
 #include "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
 
@@ -13,6 +14,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -28,14 +31,26 @@
 namespace {
 
 using kairosboot::fastboot::preflight_update_package;
+using kairosboot::fastboot::execute_prepared_update;
+using kairosboot::fastboot::frozen_update_known_partitions;
+using kairosboot::fastboot::IPreparedDeviceTask;
+using kairosboot::fastboot::IUpdateDevice;
+using kairosboot::fastboot::preflight_wipe_super;
 using kairosboot::fastboot::PlannedSlot;
 using kairosboot::fastboot::PreparedUpdatePackage;
+using kairosboot::fastboot::UpdateDeviceError;
+using kairosboot::fastboot::UpdateDeviceTaskInput;
+using kairosboot::fastboot::UpdateExecutionEventKind;
+using kairosboot::fastboot::UpdateExecutorOptions;
+using kairosboot::fastboot::UpdateOperationContext;
 using kairosboot::fastboot::UpdatePackagePreflightErrorKind;
 using kairosboot::fastboot::UpdatePackagePreflightLimits;
+using kairosboot::fastboot::UpdatePackagePolicy;
 using kairosboot::fastboot::UpdateSuperPreparationState;
 using kairosboot::fastboot::UpdateTaskKind;
 using kairosboot::image::ArtifactSourceErrorKind;
 using kairosboot::image::ArtifactSourceLimits;
+using kairosboot::image::ArtifactSourceOrigin;
 using kairosboot::image::ArtifactSourceResolver;
 using kairosboot::image::FlashArtifactKind;
 using kairosboot::image::sha256_hex;
@@ -285,8 +300,7 @@ void write_hardcoded_images(const std::filesystem::path& package,
 
 [[nodiscard]] bool expected_apply_vbmeta(
     const std::string_view partition) noexcept {
-    return partition == "vbmeta" || partition == "vbmeta_system" ||
-           partition == "vbmeta_vendor";
+    return partition == "vbmeta";
 }
 
 void check_hardcoded_plan(const PreparedUpdatePackage& prepared,
@@ -442,6 +456,19 @@ void hardcoded_required_optional_and_bounds_fail_closed() {
     CHECK(without_system.error().artifact_error->kind ==
           ArtifactSourceErrorKind::NotFound);
 
+    const auto promoted_vendor = temporary.path() / "fallback-required-vendor";
+    create_directory_package(
+        promoted_vendor, "require partition-exists=vendor\n");
+    write_hardcoded_images(promoted_vendor, false, false);
+    ArtifactSourceResolver promoted_vendor_resolver;
+    auto without_promoted_vendor = preflight_update_package(
+        promoted_vendor_resolver, promoted_vendor, false);
+    CHECK(!without_promoted_vendor);
+    CHECK(without_promoted_vendor.error().artifact == "vendor.img");
+    CHECK(without_promoted_vendor.error().artifact_error.has_value());
+    CHECK(without_promoted_vendor.error().artifact_error->kind ==
+          ArtifactSourceErrorKind::NotFound);
+
     const auto invalid_optional = temporary.path() / "fallback-invalid-optional";
     create_directory_package(invalid_optional, "");
     write_hardcoded_images(invalid_optional, false, false);
@@ -474,6 +501,166 @@ void hardcoded_required_optional_and_bounds_fail_closed() {
     CHECK(!too_many_artifacts);
     CHECK(too_many_artifacts.error().kind ==
           UpdatePackagePreflightErrorKind::LimitExceeded);
+}
+
+struct BoundZipFlash final {
+    std::string partition;
+    std::string artifact;
+    PlannedSlot slot{PlannedSlot::Default};
+    std::string sha256;
+    std::uint64_t bytes{};
+};
+
+class ZipFallbackUpdateDevice final : public IUpdateDevice {
+public:
+    [[nodiscard]] std::expected<std::string, UpdateDeviceError>
+    getvar(const std::string_view name,
+           const UpdateOperationContext&) override {
+        getvar_calls.emplace_back(name);
+        const auto found = variables.find(name);
+        if (found == variables.end()) {
+            UpdateDeviceError error;
+            error.message = "missing scripted update variable";
+            return std::unexpected(std::move(error));
+        }
+        return found->second;
+    }
+
+    [[nodiscard]] std::expected<std::unique_ptr<IPreparedDeviceTask>,
+                                UpdateDeviceError>
+    prepare_task(UpdateDeviceTaskInput input,
+                 const UpdateOperationContext&) override {
+        CHECK(input.task.kind == UpdateTaskKind::Flash);
+        CHECK(input.flash_artifact.has_value());
+        CHECK(input.flash_artifact->resolved);
+        CHECK(input.flash_artifact->resolved->source);
+        CHECK(input.flash_artifact->artifact);
+        CHECK(!input.super_artifact);
+        CHECK(input.flash_artifact->resolved->origin ==
+              ArtifactSourceOrigin::ZipEntry);
+        CHECK(input.flash_artifact->resolved->logical_name ==
+              input.task.artifact);
+        CHECK(input.flash_artifact->artifact->transfer_source() ==
+              input.flash_artifact->resolved->source);
+
+        const auto bytes = input.flash_artifact->resolved->source->size();
+        prepared.push_back(BoundZipFlash{
+            input.task.partition,
+            input.task.artifact,
+            input.task.slot,
+            sha256_hex(input.flash_artifact->resolved->sha256),
+            bytes,
+        });
+        const auto index = prepared.size() - 1U;
+        std::unique_ptr<IPreparedDeviceTask> token =
+            std::make_unique<Token>(*this, index, bytes);
+        return token;
+    }
+
+    std::map<std::string, std::string, std::less<>> variables;
+    std::vector<std::string> getvar_calls;
+    std::vector<BoundZipFlash> prepared;
+    std::vector<std::string> executed;
+
+private:
+    class Token final : public IPreparedDeviceTask {
+    public:
+        Token(ZipFallbackUpdateDevice& owner, const std::size_t index,
+              const std::uint64_t bytes) noexcept
+            : owner_(owner), index_(index), bytes_(bytes) {}
+
+        [[nodiscard]] std::uint64_t host_to_device_data_bytes()
+            const noexcept override {
+            return bytes_;
+        }
+
+        [[nodiscard]] std::expected<void, UpdateDeviceError>
+        execute(const UpdateOperationContext&) const override {
+            owner_.executed.push_back(owner_.prepared[index_].artifact);
+            return {};
+        }
+
+    private:
+        ZipFallbackUpdateDevice& owner_;
+        std::size_t index_{};
+        std::uint64_t bytes_{};
+    };
+};
+
+void zip_fallback_requirements_hashes_slots_and_executor_form_one_trace() {
+    TemporaryDirectory temporary;
+    const std::array entries{
+        ZipEntry{
+            .name = "android-info.txt",
+            .payload =
+                "require product=atlas\n"
+                "require-for-product:boreal version-baseband=ignored\n"
+                "require partition-exists=vendor\n",
+        },
+        ZipEntry{.name = "boot.img", .payload = "boot-data"},
+        ZipEntry{.name = "boot_other.img", .payload = "boot-other-data"},
+        ZipEntry{.name = "system.img", .payload = "system-data"},
+        ZipEntry{.name = "vendor.img", .payload = "vendor-data"},
+    };
+    const auto archive = write_zip(temporary, entries, "fallback-e2e.zip");
+
+    ArtifactSourceResolver resolver;
+    auto prepared = preflight_update_package(resolver, archive, false);
+    CHECK(prepared);
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::SkippedNotFound);
+    CHECK(!prepared->prepared_super_artifact);
+
+    ZipFallbackUpdateDevice device;
+    device.variables = {
+        {"product", "atlas"},
+        {"has-slot:vendor", "yes"},
+    };
+    UpdateExecutorOptions options;
+    options.known_partitions = frozen_update_known_partitions();
+    auto executed = execute_prepared_update(*prepared, device, options);
+    CHECK(executed);
+    CHECK(executed->validated_requirements == 3U);
+    CHECK(executed->completed_tasks == 4U);
+    CHECK(device.getvar_calls ==
+          std::vector<std::string>({"product", "has-slot:vendor"}));
+
+    const std::array expected_partitions{"boot", "boot", "system", "vendor"};
+    const std::array expected_artifacts{
+        "boot.img", "boot_other.img", "system.img", "vendor.img"};
+    const std::array expected_slots{
+        PlannedSlot::Default,
+        PlannedSlot::Other,
+        PlannedSlot::Default,
+        PlannedSlot::Default,
+    };
+    const std::array expected_hashes{
+        "802627516eda1e6467d94aaea03695d755502a786c651aa7922d3e62348061ca",
+        "5893d718b5369a4a8dd3e3389be19b769b3a2f59860b63aa6cfb1fc369c1a2c9",
+        "6e724f481a3f66516c2794defc974db694e936ba693598747e8b82af00bc1a34",
+        "8625c74aa23fdc1c4c2b88ec90224dee0ed8d59d89142bf13a507658ce9fd733",
+    };
+    const std::array<std::uint64_t, 4U> expected_bytes{9U, 15U, 11U, 11U};
+    CHECK(device.prepared.size() == expected_artifacts.size());
+    for (std::size_t index = 0; index < expected_artifacts.size(); ++index) {
+        CHECK(device.prepared[index].partition == expected_partitions[index]);
+        CHECK(device.prepared[index].artifact == expected_artifacts[index]);
+        CHECK(device.prepared[index].slot == expected_slots[index]);
+        CHECK(device.prepared[index].sha256 == expected_hashes[index]);
+        CHECK(device.prepared[index].bytes == expected_bytes[index]);
+    }
+    CHECK(device.executed == std::vector<std::string>(
+                                 expected_artifacts.begin(),
+                                 expected_artifacts.end()));
+    CHECK(executed->trace.front().kind ==
+          UpdateExecutionEventKind::ValidationStarted);
+    CHECK(executed->trace.back().kind ==
+          UpdateExecutionEventKind::ExecutionCompleted);
+    CHECK(std::ranges::count_if(
+              executed->trace, [](const auto& event) {
+                  return event.kind ==
+                         UpdateExecutionEventKind::RequirementSkipped;
+              }) == 1);
 }
 
 void update_super_three_state_contract_and_unique_mapping() {
@@ -553,6 +740,56 @@ void update_super_three_state_contract_and_unique_mapping() {
     CHECK(byte_failure.error().kind ==
           UpdatePackagePreflightErrorKind::LimitExceeded);
     CHECK(byte_failure.error().artifact == "super_empty.img");
+}
+
+void super_optimization_candidate_is_retained_for_device_validation() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "super-optimization-gap";
+    create_directory_package(
+        package, "",
+        "reboot fastboot\n"
+        "update-super\n"
+        "flash system system.img\n");
+
+    const auto super_empty = valid_empty_sparse_image();
+    write_bytes(package / "super_empty.img", super_empty);
+    write_text(package / "system.img", "system-payload");
+
+    std::vector<std::string> opened_artifacts;
+    ArtifactSourceLimits source_limits;
+    source_limits.package_entry_observer =
+        [&](const std::string_view name) {
+            if (name != "android-info.txt" && name != "fastboot-info.txt") {
+                opened_artifacts.emplace_back(name);
+            }
+        };
+    ArtifactSourceResolver resolver(source_limits);
+    auto prepared = preflight_update_package(resolver, package, false);
+
+    CHECK(prepared);
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::Prepared);
+    CHECK(prepared->prepared_super_artifact);
+
+    // Frozen AOSP recognizes this three-task window as the structural
+    // prerequisite for optimized super flashing, then uses validated LP
+    // metadata to prove that the following flash targets a dynamic partition.
+    // Offline preflight deliberately keeps this sequence: the optimizer must
+    // first compare image metadata with device slot/name/size getvars. The
+    // explicit disable option also uses this exact frozen path.
+    CHECK(prepared->plan.tasks.size() == 3U);
+    CHECK(prepared->plan.tasks[0].kind == UpdateTaskKind::Reboot);
+    CHECK(prepared->plan.tasks[0].reboot_target ==
+          kairosboot::fastboot::PlannedRebootTarget::Fastboot);
+    CHECK(prepared->plan.tasks[1].kind == UpdateTaskKind::UpdateSuper);
+    CHECK(prepared->plan.tasks[2].kind == UpdateTaskKind::Flash);
+    CHECK(prepared->plan.tasks[2].partition == "system");
+    CHECK(prepared->plan.tasks[2].artifact == "system.img");
+
+    CHECK(prepared->artifacts.size() == 1U);
+    CHECK(prepared->artifacts[0].name == "system.img");
+    CHECK(std::ranges::count(opened_artifacts, "super_empty.img") == 1);
+    CHECK(std::ranges::count(opened_artifacts, "system.img") == 1);
 }
 
 void required_manifest_missing_duplicate_and_bounds_fail_closed() {
@@ -1090,6 +1327,98 @@ void cancellation_precedes_manifest_and_artifact_work() {
     CHECK(result.error().kind == UpdatePackagePreflightErrorKind::Cancelled);
 }
 
+void update_policy_switches_change_the_immutable_plan() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "policy";
+    create_directory_package(
+        package, "",
+        "flash boot boot.img\n"
+        "flash --slot-other vendor vendor.img\n"
+        "reboot fastboot\n"
+        "update-super\n"
+        "erase cache\n");
+    write_text(package / "boot.img", "boot");
+    write_text(package / "vendor.img", "vendor");
+
+    ArtifactSourceResolver resolver;
+    auto prepared = preflight_update_package(
+        resolver, package, false,
+        UpdatePackagePolicy{
+            .append_final_reboot = true,
+            .skip_secondary = true,
+            .exclude_dynamic_partitions = true,
+        },
+        {}, std::chrono::steady_clock::time_point::max());
+    CHECK(prepared);
+    CHECK(prepared->plan.tasks.size() == 2U);
+    CHECK(prepared->plan.tasks[0].kind == UpdateTaskKind::Flash);
+    CHECK(prepared->plan.tasks[0].partition == "boot");
+    CHECK(prepared->plan.tasks[0].exclude_if_dynamic);
+    CHECK(prepared->plan.tasks[1].kind == UpdateTaskKind::Reboot);
+    CHECK(!prepared->plan.tasks[1].exclude_if_dynamic);
+    CHECK(prepared->artifacts.size() == 1U);
+    CHECK(prepared->artifacts[0].name == "boot.img");
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::NotRequired);
+
+    const auto fallback = temporary.path() / "disabled-fastboot-info";
+    create_directory_package(fallback, "", "not-a-valid-command\n");
+    write_text(fallback / "boot.img", "boot");
+    write_text(fallback / "system.img", "system");
+    ArtifactSourceResolver fallback_resolver;
+    auto disabled = preflight_update_package(
+        fallback_resolver, fallback, false,
+        UpdatePackagePolicy{.disable_fastboot_info = true}, {},
+        std::chrono::steady_clock::time_point::max());
+    CHECK(disabled);
+    CHECK(disabled->plan.tasks.size() == 2U);
+    CHECK(disabled->plan.tasks[0].partition == "boot");
+    CHECK(disabled->plan.tasks[1].partition == "system");
+    CHECK(disabled->artifacts.size() == 2U);
+}
+
+void wipe_super_preflight_binds_one_immutable_wipe_transaction() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "custom-empty.img";
+    const auto payload = valid_empty_sparse_image();
+    write_bytes(image, payload);
+
+    ArtifactSourceResolver resolver;
+    auto prepared = preflight_wipe_super(resolver, image);
+    CHECK(prepared);
+    CHECK(prepared->plan.requirements.empty());
+    CHECK(prepared->plan.tasks.size() == 1U);
+    CHECK(prepared->plan.tasks.front().kind == UpdateTaskKind::UpdateSuper);
+    CHECK(prepared->artifacts.empty());
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::Prepared);
+    CHECK(prepared->prepared_super_artifact);
+    CHECK(prepared->prepared_super_artifact->wants_wipe());
+    CHECK(prepared->prepared_super_artifact->resolved()->logical_name ==
+          "super_empty.img");
+    CHECK(prepared->prepared_super_artifact->resolved()->source->size() ==
+          payload.size());
+    CHECK(prepared->prepared_super_artifact->artifact()->metadata().kind ==
+          FlashArtifactKind::AndroidSparse);
+    CHECK(!prepared->requires_device_validation);
+
+    ArtifactSourceResolver missing_resolver;
+    auto missing = preflight_wipe_super(
+        missing_resolver, temporary.path() / "missing-super-empty.img");
+    CHECK(!missing);
+    CHECK(missing.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(missing.error().artifact == "super_empty.img");
+
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    ArtifactSourceResolver cancelled_resolver;
+    auto stopped = preflight_wipe_super(
+        cancelled_resolver, image, cancelled.get_token());
+    CHECK(!stopped);
+    CHECK(stopped.error().kind ==
+          UpdatePackagePreflightErrorKind::Cancelled);
+}
+
 struct Test final {
     std::string_view name;
     void (*run)();
@@ -1105,8 +1434,12 @@ int main() {
              missing_fallback_and_present_empty_manifest_remain_distinct},
         Test{"hardcoded fallback required optional and bounds",
              hardcoded_required_optional_and_bounds_fail_closed},
+        Test{"ZIP fallback end-to-end execution trace",
+             zip_fallback_requirements_hashes_slots_and_executor_form_one_trace},
         Test{"update-super three-state artifact contract",
              update_super_three_state_contract_and_unique_mapping},
+        Test{"super optimization candidate waits for device validation",
+             super_optimization_candidate_is_retained_for_device_validation},
         Test{"required manifest validation",
              required_manifest_missing_duplicate_and_bounds_fail_closed},
         Test{"wipe path validation",
@@ -1131,6 +1464,10 @@ int main() {
              crc_missing_and_budget_failures_publish_no_prepared_plan},
         Test{"preflight cancellation",
              cancellation_precedes_manifest_and_artifact_work},
+        Test{"update policy switches",
+             update_policy_switches_change_the_immutable_plan},
+        Test{"wipe-super immutable preflight",
+             wipe_super_preflight_binds_one_immutable_wipe_transaction},
     };
 
     std::size_t failures = 0;

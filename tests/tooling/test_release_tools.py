@@ -216,6 +216,129 @@ class ReleaseToolTests(unittest.TestCase):
         cache.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return cache
 
+    def test_repository_release_fixtures_cover_distribution_contract(self) -> None:
+        environment = json.loads(
+            (
+                ROOT / ".github" / "environments" / "github-release.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(environment["wait_timer"], 0)
+        self.assertFalse(environment["prevent_self_review"])
+        self.assertEqual(
+            environment["reviewers"], [{"type": "User", "id": 299445952}]
+        )
+        self.assertEqual(
+            environment["deployment_branch_policy"],
+            {"protected_branches": False, "custom_branch_policies": True},
+        )
+
+        policies = json.loads(
+            (
+                ROOT
+                / ".github"
+                / "environments"
+                / "github-release-deployment-policies.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            policies,
+            {
+                "schemaVersion": 1,
+                "policies": [{"name": "v*", "type": "tag"}],
+            },
+        )
+
+        main_ruleset = json.loads(
+            (ROOT / ".github" / "rulesets" / "main.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        main_rules = {entry["type"]: entry for entry in main_ruleset["rules"]}
+        self.assertTrue(
+            main_rules["pull_request"]["parameters"][
+                "require_extra_approval_for_unattributed_changes"
+            ]
+        )
+        self.assertEqual(
+            main_rules["required_status_checks"]["parameters"],
+            {
+                "strict_required_status_checks_policy": True,
+                "do_not_enforce_on_create": False,
+                "required_status_checks": [
+                    {"context": "ci-required", "integration_id": 15368},
+                    {"context": "policy", "integration_id": 15368},
+                ],
+            },
+        )
+
+        tag_ruleset = json.loads(
+            (ROOT / ".github" / "rulesets" / "release-tags.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            tag_ruleset["conditions"]["ref_name"]["include"], ["refs/tags/v*"]
+        )
+        self.assertEqual(
+            {entry["type"] for entry in tag_ruleset["rules"]},
+            {"creation", "update", "deletion", "non_fast_forward"},
+        )
+
+        contract = json.loads(
+            (ROOT / "release" / "expected-assets.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["nativeKinds"], ["cli", "sdk", "symbols"])
+        self.assertEqual(
+            {entry["id"]: entry["archiveExtension"] for entry in contract["platforms"]},
+            {
+                "linux-arm64": "tar.gz",
+                "linux-x64": "tar.gz",
+                "macos-arm64": "tar.gz",
+                "macos-x64": "tar.gz",
+                "windows-arm64": "zip",
+                "windows-x64": "zip",
+            },
+        )
+        self.assertTrue(
+            {
+                "KairosBoot.{version}.nupkg",
+                "KairosBoot.{version}.snupkg",
+                "KairosBoot.spdx.json",
+                "KairosBoot-v{version}-UNSIGNED.txt",
+                "KairosBoot-v{version}-source.tar.gz",
+                "SHA256SUMS",
+                "libusb-1.0.30-COPYING",
+                "libusb-1.0.30.tar.bz2",
+                "provenance.intoto.json",
+                "signing-status.json",
+            }.issubset(set(contract["additionalAssets"]))
+        )
+
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        for platform in (
+            "linux-arm64",
+            "linux-x64",
+            "macos-arm64",
+            "macos-x64",
+            "windows-arm64",
+            "windows-x64",
+        ):
+            self.assertIn(f"id: {platform}", workflow)
+        for marker in (
+            "-DCMAKE_BUILD_TYPE=Release",
+            "cmake --build build --config Release",
+            "/p:Configuration=Release",
+            "environment: github-release",
+            "SIGNING_MODE: off",
+            "require_success ci.yml",
+            "require_success policy.yml",
+            "require_success hil.yml",
+        ):
+            self.assertIn(marker, workflow)
+        self.assertNotIn("dotnet nuget push", workflow.lower())
+
     def test_native_archives_have_expected_shape_and_modes(self) -> None:
         install = self.create_install_tree()
         # The archive contract must not depend on Unix mode bits being available

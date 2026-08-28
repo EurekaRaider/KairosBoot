@@ -1,16 +1,24 @@
 EXPORTS
     kb_boot
     kb_boot_async
+    kb_boot_file
+    kb_boot_file_async
+    kb_boot_raw
+    kb_boot_raw_async
     kb_command_options_init
+    kb_command_options_init_sized
     kb_command_result_data
     kb_command_result_device_identifier
     kb_command_result_message_count
     kb_command_result_message_kind
     kb_command_result_message_payload
+    kb_command_result_output_path
+    kb_command_result_received_bytes
     kb_command_result_release
     kb_command_result_terminal_payload
     kb_context_create
     kb_context_options_init
+    kb_context_options_init_sized
     kb_context_release
     kb_continue_boot
     kb_continue_boot_async
@@ -42,11 +50,24 @@ EXPORTS
     kb_error_transfer_state
     kb_fetch
     kb_fetch_async
+    kb_fetch_file
+    kb_fetch_file_async
     kb_flash_file
     kb_flash_file_async
     kb_flash_options_init
+    kb_flash_options_init_sized
+    kb_flash_raw
+    kb_flash_raw_async
+    kb_flash_raw_with_boot_options
+    kb_flash_raw_with_boot_options_async
+    kb_flash_vendor_boot_ramdisk
+    kb_flash_vendor_boot_ramdisk_async
     kb_flashing
     kb_flashing_async
+    kb_format_partition
+    kb_format_partition_async
+    kb_get_staged_file
+    kb_get_staged_file_async
     kb_get_version
     kb_getvar
     kb_getvar_async
@@ -56,6 +77,7 @@ EXPORTS
     kb_job_error
     kb_job_get_report
     kb_job_options_init
+    kb_job_options_init_sized
     kb_job_plan_canonical_json
     kb_job_plan_release
     kb_job_plan_sha256_hex
@@ -64,6 +86,8 @@ EXPORTS
     kb_job_report_release
     kb_job_state
     kb_job_wait
+    kb_legacy_boot_options_init
+    kb_legacy_boot_options_init_sized
     kb_oem
     kb_oem_async
     kb_operation_cancel
@@ -83,15 +107,23 @@ EXPORTS
     kb_run_job_file_async
     kb_set_active
     kb_set_active_async
+    kb_signature_file
+    kb_signature_file_async
     kb_snapshot_update
     kb_snapshot_update_async
     kb_stage
     kb_stage_async
     kb_status_string
     kb_update_options_init
+    kb_update_options_init_sized
     kb_update_package
     kb_update_package_async
     kb_upload
     kb_upload_async
+    kb_upload_file
+    kb_upload_file_async
     kb_validate_job_file
     kb_version_init
+    kb_version_init_sized
+    kb_wipe_super
+    kb_wipe_super_async

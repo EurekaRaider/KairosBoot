@@ -41,8 +41,36 @@ static_assert(std::is_nothrow_move_assignable_v<kairosboot::CommandResult>);
 static_assert(std::is_copy_constructible_v<kairosboot::Error>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
                              std::chrono::milliseconds>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::FlashOptions{}.sparse_limit_bytes),
+              std::uint64_t>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.force), bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::FlashOptions{}.filesystem_options),
+              kairosboot::FilesystemOptions>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.disable_verity),
+                             bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::FlashOptions{}.disable_verification), bool>);
 static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.timeout),
                              std::chrono::milliseconds>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.disable_verity), bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.disable_verification), bool>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.slot),
+                             std::optional<std::string>>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.timeout),
+                             std::chrono::milliseconds>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.active_slot),
+                             std::optional<std::string>>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.sparse_limit_bytes),
+              std::uint64_t>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.force), bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.disable_super_optimization),
+              bool>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
@@ -63,8 +91,11 @@ static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
 static_assert(requires(kairosboot::Context &context,
                        kairosboot::DeviceSelector selector,
                        kairosboot::CommandOptions options,
+                       kairosboot::FlashOptions flash_options,
+                       kairosboot::LegacyBootOptions legacy_boot_options,
                        kairosboot::UpdateOptions update_options,
                        std::filesystem::path package,
+                       std::filesystem::path kernel,
                        std::span<const std::byte> bytes,
                        kairosboot::FetchRange range) {
   { context.getvar_async(selector, "product", options) } ->
@@ -74,6 +105,39 @@ static_assert(requires(kairosboot::Context &context,
   { context.update_package_async(selector, package, update_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.update_package(selector, package, update_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_raw_async(selector, "boot", kernel) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.flash_raw(selector, "boot", kernel) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk_async(selector, "vendor_boot", package,
+                                             "default", std::nullopt,
+                                             flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk(selector, "vendor_boot", package,
+                                      "default", std::nullopt,
+                                      flash_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk_async("vendor_boot", package) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.flash_vendor_boot_ramdisk("vendor_boot", package) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_raw_async(selector, "boot", kernel, std::nullopt,
+                            std::nullopt, legacy_boot_options, flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.boot_raw_async(selector, kernel, std::nullopt, std::nullopt,
+                           legacy_boot_options, flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.boot_raw(selector, kernel, std::nullopt, std::nullopt,
+                     legacy_boot_options, flash_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.boot_file_async(selector, package, flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.boot_file(selector, package, flash_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.wipe_super_async(selector, package, update_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.wipe_super(selector, package, update_options) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
   context.erase_async(selector, "userdata", options);
   context.erase(selector, "userdata", options);
@@ -116,6 +180,8 @@ static_assert(requires(kairosboot::Context &context,
   context.oem(selector, "device-info", options);
   context.raw_command_async(selector, "getvar:all", options);
   context.raw_command(selector, "getvar:all", options);
+  context.signature_file_async(selector, package, options);
+  context.signature_file(selector, package, options);
   context.boot_async(selector, options);
   context.boot(selector, options);
   context.stage_async(selector, bytes, options);
@@ -174,13 +240,24 @@ int main() {
         kairosboot::detail::prepare_flash_options(kairosboot::FlashOptions{});
     CHECK(defaults.has_value());
     CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
+    CHECK(defaults->native.sparse_limit_bytes == 0U);
+    CHECK(defaults->native.force == 0);
+    CHECK(defaults->native.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::FlashOptions finite;
     finite.timeout = 250ms;
+    finite.sparse_limit_bytes = 8U * 1024U * 1024U;
+    finite.force = true;
+    finite.filesystem_options.casefold = true;
+    finite.filesystem_options.compress = true;
     const auto prepared = kairosboot::detail::prepare_flash_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 250U);
+    CHECK(prepared->native.sparse_limit_bytes == 8U * 1024U * 1024U);
+    CHECK(prepared->native.force == 1);
+    CHECK(prepared->native.filesystem_options ==
+          (KB_FILESYSTEM_OPTION_CASEFOLD | KB_FILESYSTEM_OPTION_COMPRESS));
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_flash_options(finite);
@@ -196,20 +273,60 @@ int main() {
   }
 
   {
+    kairosboot::LegacyBootOptions options;
+    options.command_line = "console=ttyS0";
+    options.page_size = 4096U;
+    options.header_version = 2U;
+    options.os_version = "15.0.1";
+    options.os_patch_level = "2025-02-05";
+    options.dtb = std::filesystem::path{"board.dtb"};
+    options.dtb_offset = 0x01200000ULL;
+    auto prepared = kairosboot::detail::prepare_legacy_boot_options(options);
+    CHECK(prepared.has_value());
+    CHECK(prepared->command_line == "console=ttyS0");
+    CHECK(prepared->native.page_size == 4096U);
+    CHECK(prepared->native.header_version == 2U);
+    CHECK(prepared->os_version == "15.0.1");
+    CHECK(prepared->os_patch_level == "2025-02-05");
+    CHECK(prepared->dtb_path == "board.dtb");
+    CHECK(prepared->native.dtb_offset == 0x01200000ULL);
+    kairosboot::detail::bind_legacy_boot_option_strings(*prepared);
+    CHECK(std::string_view{prepared->native.os_version} == "15.0.1");
+    CHECK(std::string_view{prepared->native.os_patch_level} == "2025-02-05");
+    CHECK(std::string_view{prepared->native.dtb_path} == "board.dtb");
+
+    options.command_line = std::string{"bad\0cmdline", 11U};
+    prepared = kairosboot::detail::prepare_legacy_boot_options(options);
+    CHECK(!prepared.has_value());
+    CHECK(prepared.error().status() == KB_E_INVALID_ARGUMENT);
+  }
+
+  {
     const auto defaults =
         kairosboot::detail::prepare_update_options(kairosboot::UpdateOptions{});
     CHECK(defaults.has_value());
     CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
     CHECK(defaults->native.wipe == 0);
+    CHECK(defaults->native.sparse_limit_bytes == 0U);
+    CHECK(defaults->native.force == 0);
+    CHECK(defaults->native.disable_super_optimization == 0);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::UpdateOptions finite;
     finite.timeout = 625ms;
     finite.wipe = true;
+    finite.sparse_limit_bytes = 16U * 1024U * 1024U;
+    finite.force = true;
+    finite.filesystem_options.projid = true;
+    finite.disable_super_optimization = true;
     const auto prepared = kairosboot::detail::prepare_update_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 625U);
     CHECK(prepared->native.wipe == 1);
+    CHECK(prepared->native.sparse_limit_bytes == 16U * 1024U * 1024U);
+    CHECK(prepared->native.force == 1);
+    CHECK(prepared->native.filesystem_options == KB_FILESYSTEM_OPTION_PROJID);
+    CHECK(prepared->native.disable_super_optimization == 1);
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_update_options(finite);
@@ -335,6 +452,9 @@ int main() {
 
   auto context = kairosboot::Context::create();
   CHECK(context.has_value());
+  auto vendor_context = kairosboot::Context::create(
+      kairosboot::ContextOptions{.usb_vendor_id = 0x18d1U});
+  CHECK(vendor_context.has_value());
 
   const auto invalid_selector = context->getvar_async(
       kairosboot::DeviceSelector{"unknown:device"}, "product");
@@ -358,6 +478,35 @@ int main() {
       invalid_update_timeout);
   CHECK(!rejected_update_timeout.has_value());
   CHECK(rejected_update_timeout.error().status() == KB_E_INVALID_ARGUMENT);
+
+  kairosboot::UpdateOptions invalid_update_slot;
+  invalid_update_slot.active_slot = "b";
+  const auto rejected_update_slot = context->update_package_async(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      std::filesystem::path{"unused-update-package"}, invalid_update_slot);
+  CHECK(!rejected_update_slot.has_value());
+  CHECK(rejected_update_slot.error().status() == KB_E_INVALID_ARGUMENT);
+
+  kairosboot::FlashOptions invalid_flash_slot;
+  invalid_flash_slot.active_slot = "b";
+  auto rejected_flash_slot = kairosboot::detail::prepare_flash_options(
+      invalid_flash_slot);
+  CHECK(!rejected_flash_slot.has_value());
+  CHECK(rejected_flash_slot.error().status() == KB_E_INVALID_ARGUMENT);
+
+  const auto invalid_wipe_selector = context->wipe_super_async(
+      kairosboot::DeviceSelector{"unknown:device"},
+      std::filesystem::path{"unused-super-empty.img"});
+  CHECK(!invalid_wipe_selector.has_value());
+  CHECK(invalid_wipe_selector.error().status() == KB_E_INVALID_ARGUMENT);
+
+  auto missing_wipe = context->wipe_super(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      std::filesystem::path{
+          "kairosboot-hermetic-super-empty-does-not-exist.img"});
+  CHECK(!missing_wipe.has_value());
+  CHECK(missing_wipe.error().status() == KB_E_IO);
+  CHECK(missing_wipe.error().transfer_state() == KB_TRANSFER_NOT_SENT);
 
   const kairosboot::DeviceSelector invalid_target{"unknown:device"};
   const auto invalid_flashing = context->flashing_async(
@@ -454,5 +603,16 @@ int main() {
   CHECK(!flash.has_value());
   CHECK(flash.error().status() == KB_E_IO);
   CHECK(flash.error().device_identifier() == "ABC");
+  auto invalid_format = context->format_partition_async(
+      "system", std::optional<std::string_view>{"xfs"});
+  CHECK(!invalid_format.has_value());
+  CHECK(invalid_format.error().status() == KB_E_INVALID_ARGUMENT);
+
+  auto signature = context->signature_file(
+      kairosboot::DeviceSelector{"ABC"},
+      std::filesystem::path{"kairosboot-signature-missing.bin"});
+  CHECK(!signature.has_value());
+  CHECK(signature.error().status() == KB_E_IO);
+  CHECK(signature.error().device_identifier() == "ABC");
   return 0;
 }

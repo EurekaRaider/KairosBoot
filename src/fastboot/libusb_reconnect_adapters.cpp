@@ -716,8 +716,13 @@ LibusbReconnectAdapter::open(
             });
         }
 
+        auto transport_options = options_.transport;
+        transport_options.absolute_deadline =
+            transport_options.absolute_deadline.has_value()
+            ? std::min(*transport_options.absolute_deadline, deadline)
+            : deadline;
         auto transport = transport::UsbFastbootTransport::adopt_verified(
-            std::move(*verified), options_.transport);
+            std::move(*verified), std::move(transport_options));
         if (!transport.has_value()) {
             return std::unexpected(open_runtime_error(transport.error()));
         }

@@ -14,6 +14,23 @@
     }                                                                           \
   } while (0)
 
+#define CHECK_CURRENT_INIT_DESIGNATORS(initializer, type)                     \
+  do {                                                                         \
+    type pointer_value;                                                        \
+    type parenthesized_value;                                                  \
+    void(KB_CALL *initializer_pointer)(type *) = (initializer);                \
+    memset(&pointer_value, 0xa5, sizeof(pointer_value));                       \
+    memset(&parenthesized_value, 0xa5, sizeof(parenthesized_value));           \
+    initializer_pointer(&pointer_value);                                       \
+    (initializer)(&parenthesized_value);                                       \
+    CHECK(pointer_value.struct_size == sizeof(type));                          \
+    CHECK(pointer_value.api_version == KB_API_VERSION);                        \
+    CHECK(parenthesized_value.struct_size == sizeof(type));                    \
+    CHECK(parenthesized_value.api_version == KB_API_VERSION);                  \
+  } while (0)
+
+int kb_test_legacy_initializer_bounds(void);
+
 struct update_progress_probe {
   int calls;
   int saw_preflight;
@@ -51,8 +68,7 @@ int main(void) {
       uint64_t future_field;
     } extended;
     extended.future_field = UINT64_C(0x1122334455667788);
-    kb_version_init(&extended.v1);
-    extended.v1.struct_size = sizeof(extended);
+    kb_version_init_sized(&extended.v1, sizeof(extended));
     CHECK(kb_get_version(&extended.v1) == KB_OK);
     CHECK(extended.future_field == UINT64_C(0x1122334455667788));
   }
@@ -61,12 +77,36 @@ int main(void) {
   kb_context_options_init(&context_options);
   CHECK(context_options.struct_size == sizeof(context_options));
   CHECK(context_options.api_version == KB_API_VERSION);
+  CHECK(context_options.usb_vendor_id == 0U);
 
   kb_flash_options_t flash_options;
   kb_flash_options_init(&flash_options);
   CHECK(flash_options.struct_size == sizeof(flash_options));
   CHECK(flash_options.api_version == KB_API_VERSION);
   CHECK(flash_options.timeout_ms == KB_WAIT_INFINITE);
+  CHECK(flash_options.slot == NULL);
+  CHECK(flash_options.set_active == 0);
+  CHECK(flash_options.active_slot == NULL);
+  CHECK(flash_options.sparse_limit_bytes == 0);
+  CHECK(flash_options.force == 0);
+  CHECK(flash_options.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
+
+  kb_legacy_boot_options_t legacy_boot_options;
+  kb_legacy_boot_options_init(&legacy_boot_options);
+  CHECK(legacy_boot_options.struct_size == sizeof(legacy_boot_options));
+  CHECK(legacy_boot_options.api_version == KB_API_VERSION);
+  CHECK(legacy_boot_options.command_line == NULL);
+  CHECK(legacy_boot_options.base == UINT32_C(0x10000000));
+  CHECK(legacy_boot_options.page_size == 2048U);
+  CHECK(legacy_boot_options.kernel_offset == UINT32_C(0x00008000));
+  CHECK(legacy_boot_options.ramdisk_offset == UINT32_C(0x01000000));
+  CHECK(legacy_boot_options.second_offset == UINT32_C(0x00f00000));
+  CHECK(legacy_boot_options.tags_offset == UINT32_C(0x00000100));
+  CHECK(legacy_boot_options.header_version == 0U);
+  CHECK(legacy_boot_options.os_version == NULL);
+  CHECK(legacy_boot_options.os_patch_level == NULL);
+  CHECK(legacy_boot_options.dtb_path == NULL);
+  CHECK(legacy_boot_options.dtb_offset == UINT64_C(0x01100000));
 
   kb_update_options_t update_options;
   kb_update_options_init(&update_options);
@@ -75,6 +115,13 @@ int main(void) {
   CHECK(update_options.timeout_ms == KB_WAIT_INFINITE);
   CHECK(update_options.wipe == 0);
   CHECK(update_options.progress_callback == NULL);
+  CHECK(update_options.slot == NULL);
+  CHECK(update_options.set_active == 0);
+  CHECK(update_options.active_slot == NULL);
+  CHECK(update_options.sparse_limit_bytes == 0);
+  CHECK(update_options.force == 0);
+  CHECK(update_options.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
+  CHECK(update_options.disable_super_optimization == 0);
 
   kb_command_options_t command_options;
   kb_command_options_init(&command_options);
@@ -84,6 +131,24 @@ int main(void) {
   CHECK(command_options.maximum_receive_bytes == UINT64_C(64) * 1024U * 1024U);
   CHECK(strcmp(kb_status_string(KB_E_PROTOCOL), "protocol") == 0);
   CHECK(strcmp(kb_status_string(KB_E_DEVICE_FAIL), "device_fail") == 0);
+
+  kb_job_options_t job_options;
+  kb_job_options_init(&job_options);
+  CHECK(job_options.struct_size == sizeof(job_options));
+  CHECK(job_options.api_version == KB_API_VERSION);
+  CHECK(job_options.timeout_ms == KB_WAIT_INFINITE);
+
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_context_options_init,
+                                 kb_context_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_flash_options_init, kb_flash_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_legacy_boot_options_init,
+                                 kb_legacy_boot_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_update_options_init, kb_update_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_command_options_init,
+                                 kb_command_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_job_options_init, kb_job_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_version_init, kb_version_t);
+  CHECK(kb_test_legacy_initializer_bounds() == 0);
 
   kb_error_t *error = NULL;
   CHECK(kb_context_create(NULL, NULL, &error) == KB_E_INVALID_ARGUMENT);
@@ -98,13 +163,32 @@ int main(void) {
   CHECK(error == NULL);
 
   {
+    kb_context_options_t vendor_options;
+    kb_context_options_init_sized(&vendor_options, sizeof(vendor_options));
+    vendor_options.usb_vendor_id = UINT32_C(0x18d1);
+    kb_context_t *vendor_context = NULL;
+    CHECK(kb_context_create(&vendor_options, &vendor_context, &error) == KB_OK);
+    CHECK(vendor_context != NULL);
+    CHECK(error == NULL);
+    kb_context_release(vendor_context);
+
+    vendor_options.usb_vendor_id = UINT32_C(0x10000);
+    CHECK(kb_context_create(&vendor_options, &vendor_context, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(vendor_context == NULL);
+    CHECK(error != NULL);
+    kb_error_release(error);
+    error = NULL;
+  }
+
+  {
     struct extended_command_options {
       kb_command_options_t v1;
       uint64_t future_field;
     } extended_options;
-    kb_command_options_init(&extended_options.v1);
-    extended_options.v1.struct_size = sizeof(extended_options);
     extended_options.future_field = UINT64_C(0x1234);
+    kb_command_options_init_sized(&extended_options.v1,
+                                  sizeof(extended_options));
     kb_operation_t *typed_operation = NULL;
     CHECK(kb_continue_boot_async(context, "unknown:device", &extended_options.v1,
                                  &typed_operation, &error) ==
@@ -123,17 +207,61 @@ int main(void) {
     CHECK(strstr(kb_error_message(error), "command options") != NULL);
     kb_error_release(error);
     error = NULL;
-    kb_command_options_init(&command_options);
+    kb_command_options_init_sized(&command_options, sizeof(command_options));
   }
 
   {
+    struct legacy_flash_options_v1 {
+      uint32_t struct_size;
+      uint32_t api_version;
+      uint32_t timeout_ms;
+      kb_progress_callback_t progress_callback;
+      void *progress_user_data;
+    } legacy_flash_options = {0};
+    legacy_flash_options.struct_size = sizeof(legacy_flash_options);
+    legacy_flash_options.api_version = KB_API_VERSION;
+    legacy_flash_options.timeout_ms = KB_WAIT_INFINITE;
+    kb_operation_t *legacy_flash_operation = NULL;
+    CHECK(kb_flash_file_async(
+              context, "tcp:127.0.0.1:1", "system",
+              "kairosboot-hermetic-sparse-limit-missing.img",
+              (const kb_flash_options_t *)&legacy_flash_options,
+              &legacy_flash_operation, &error) == KB_E_IO);
+    CHECK(legacy_flash_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "flash options") == NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    struct legacy_update_options_v1 {
+      uint32_t struct_size;
+      uint32_t api_version;
+      uint32_t timeout_ms;
+      int32_t wipe;
+      kb_progress_callback_t progress_callback;
+      void *progress_user_data;
+    } legacy_options = {0};
+    legacy_options.struct_size = sizeof(legacy_options);
+    legacy_options.api_version = KB_API_VERSION;
+    legacy_options.timeout_ms = KB_WAIT_INFINITE;
+    kb_operation_t *legacy_operation = NULL;
+    CHECK(kb_update_package_async(
+              context, "unknown:device", "unused-update-package",
+              (const kb_update_options_t *)&legacy_options,
+              &legacy_operation, &error) == KB_E_INVALID_ARGUMENT);
+    CHECK(legacy_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "unknown scheme") != NULL);
+    kb_error_release(error);
+    error = NULL;
+
     struct extended_update_options {
       kb_update_options_t v1;
       uint64_t future_field;
     } extended_options;
-    kb_update_options_init(&extended_options.v1);
-    extended_options.v1.struct_size = sizeof(extended_options);
     extended_options.future_field = UINT64_C(0xabcddcba12344321);
+    kb_update_options_init_sized(&extended_options.v1,
+                                 sizeof(extended_options));
     kb_operation_t *update_operation = NULL;
     CHECK(kb_update_package_async(
               context, "unknown:device", "unused-update-package",
@@ -157,7 +285,7 @@ int main(void) {
     CHECK(strstr(kb_error_message(error), "update options") != NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
 
     update_options.wipe = 2;
     CHECK(kb_update_package_async(
@@ -167,7 +295,77 @@ int main(void) {
     CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
+
+    update_options.exclude_dynamic_partitions = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
+
+    update_options.set_active = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
+
+    update_options.disable_super_optimization = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
+
+    update_options.active_slot = "b";
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
+  }
+
+  {
+    kb_operation_t *wipe_operation = NULL;
+    CHECK(kb_wipe_super_async(context, "tcp:127.0.0.1:1", "",
+                              &update_options, &wipe_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(wipe_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "super_empty") != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    CHECK(kb_wipe_super_async(
+              context, "unknown:device", "unused-super-empty.img",
+              &update_options, &wipe_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(wipe_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "unknown scheme") != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    CHECK(kb_wipe_super(context, "tcp:127.0.0.1:1",
+                        "kairosboot-hermetic-super-empty-does-not-exist.img",
+                        &update_options, &error) == KB_E_IO);
+    CHECK(error != NULL);
+    CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+    kb_error_release(error);
+    error = NULL;
   }
 
   {
@@ -208,7 +406,7 @@ int main(void) {
     CHECK(probe.saw_preflight == 1);
     kb_operation_release(update_operation);
 
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
     update_options.timeout_ms = 0;
     update_operation = NULL;
     CHECK(kb_update_package_async(
@@ -220,7 +418,7 @@ int main(void) {
           KB_TRANSFER_NOT_SENT);
     kb_operation_release(update_operation);
 
-    kb_update_options_init(&update_options);
+    kb_update_options_init_sized(&update_options, sizeof(update_options));
     CHECK(kb_update_package(
               context, "tcp:127.0.0.1:1", missing_package, &update_options,
               &error) == KB_E_IO);
@@ -262,9 +460,8 @@ int main(void) {
       kb_context_options_t v1;
       uint64_t future_field;
     } extended;
-    kb_context_options_init(&extended.v1);
-    extended.v1.struct_size = sizeof(extended);
     extended.future_field = UINT64_C(0x8877665544332211);
+    kb_context_options_init_sized(&extended.v1, sizeof(extended));
     CHECK(kb_context_create(&extended.v1, &second_context, &error) == KB_OK);
     CHECK(extended.future_field == UINT64_C(0x8877665544332211));
   }
@@ -276,6 +473,37 @@ int main(void) {
   error = NULL;
   CHECK(kb_flash_file_async(context, NULL, "", "system.img", NULL,
                             &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_vendor_boot_ramdisk_async(
+            context, NULL, "boot", "default", "vendor_ramdisk.img", NULL,
+            NULL, &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_vendor_boot_ramdisk_async(
+            context, "tcp:127.0.0.1", "vendor_boot", "default",
+            "kairosboot-test-does-not-exist-vendor-ramdisk", NULL, NULL,
+            &operation, &error) == KB_E_IO);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "tcp:127.0.0.1") == 0);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_boot_raw_async(context, NULL, "kernel", NULL, "second",
+                          &legacy_boot_options, NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
   CHECK(operation == NULL);
   CHECK(error != NULL);
   kb_error_release(error);
@@ -306,6 +534,76 @@ int main(void) {
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   kb_error_release(error);
 
+  error = NULL;
+  CHECK(kb_flash_vendor_boot_ramdisk(
+            context, NULL, "vendor_boot", NULL,
+            "kairosboot-test-does-not-exist-vendor-ramdisk", NULL, NULL,
+            &error) == KB_E_IO);
+  CHECK(error != NULL);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_raw_async(context, NULL, "", "kernel", NULL, NULL, NULL,
+                           &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_signature_file_async(context, NULL, "", NULL, &operation,
+                                &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_boot_file_async(context, "tcp:127.0.0.1", "", NULL, &operation,
+                           &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_raw_async(context, NULL, "boot", "kernel", NULL, "second",
+                           NULL, &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_raw_async(context, "tcp:127.0.0.1", "boot",
+                           "kairosboot-test-does-not-exist-kernel", NULL, NULL,
+                           NULL, &operation, &error) == KB_E_IO);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "tcp:127.0.0.1") == 0);
+  kb_error_release(error);
+
+  error = NULL;
+  CHECK(kb_boot_file(context, "ABC", "kairosboot-test-does-not-exist.img",
+                     NULL, &error) == KB_E_IO);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "ABC") == 0);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_signature_file_async(
+            context, "tcp:127.0.0.1", "kairosboot-signature-missing.bin",
+            NULL, &operation, &error) == KB_E_IO);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "tcp:127.0.0.1") == 0);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
   CHECK(kb_operation_wait(NULL, 0U) == KB_E_INVALID_ARGUMENT);
   CHECK(kb_operation_cancel(NULL) == KB_E_INVALID_ARGUMENT);
   CHECK(kb_operation_state(NULL) == KB_OPERATION_FAILED);
@@ -315,6 +613,8 @@ int main(void) {
   CHECK(kb_command_result_terminal_payload(NULL, NULL) == NULL);
   CHECK(kb_command_result_message_payload(NULL, 0U, NULL) == NULL);
   CHECK(kb_command_result_data(NULL, NULL) == NULL);
+  CHECK(strcmp(kb_command_result_output_path(NULL), "") == 0);
+  CHECK(kb_command_result_received_bytes(NULL) == 0U);
   CHECK(strcmp(kb_command_result_device_identifier(NULL), "") == 0);
   kb_command_result_release(NULL);
 
@@ -335,6 +635,12 @@ int main(void) {
   error = NULL;
   CHECK(kb_erase_async(context, NULL, "", NULL, &operation, &error) ==
         KB_E_INVALID_ARGUMENT);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_format_partition_async(context, NULL, "system", "xfs", 0U, NULL,
+                                  &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
   kb_error_release(error);
   error = NULL;
   CHECK(kb_set_active_async(context, NULL, "", NULL, &operation, &error) ==
@@ -415,6 +721,33 @@ int main(void) {
   CHECK(kb_fetch_async(context, NULL, "system", KB_FETCH_UNSPECIFIED, 4U,
                        NULL, &operation, &error) == KB_E_INVALID_ARGUMENT);
   kb_error_release(error);
+  error = NULL;
+  CHECK(kb_upload_file_async(context, NULL, "", NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_get_staged_file_async(context, NULL, NULL, NULL, &operation,
+                                 &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_fetch_file_async(context, NULL, "system", KB_FETCH_UNSPECIFIED, 4U,
+                            "output.img", NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  {
+    kb_command_result_t *file_result = NULL;
+    CHECK(kb_upload_file(context, "tcp:127.0.0.1:1",
+                         "kairosboot-unreachable-upload.bin", NULL,
+                         &file_result, &error) == KB_E_IO);
+    CHECK(file_result == NULL);
+    CHECK(error != NULL);
+    CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+    kb_error_release(error);
+  }
   kb_operation_release(NULL);
   kb_device_list_release(NULL);
   kb_context_release(context);

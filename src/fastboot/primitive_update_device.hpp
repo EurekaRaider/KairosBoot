@@ -17,6 +17,11 @@
 #include <string_view>
 #include <vector>
 
+namespace kairosboot::fleet {
+struct DevicePreflightProbeResult;
+struct OpenedDevicePreflightSession;
+}
+
 namespace kairosboot::fastboot {
 
 class PrimitiveUpdateSessionActor;
@@ -63,6 +68,15 @@ bind_initial_reconnect_session(
     OpenedReconnectSession opened,
     ReconnectTarget reconnect_target);
 
+// Converts the production verified-open plus live product/mode probe into the
+// same sealed bootloader binding used by fleet execution. The probe must attest
+// both queries and the session must still be Ready; no passive USB product text
+// is accepted.
+[[nodiscard]] std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
+bind_initial_libusb_update_session(
+    fleet::OpenedDevicePreflightSession opened,
+    const fleet::DevicePreflightProbeResult& probe);
+
 struct PrimitiveUpdateProgress final {
     std::size_t part_index{};
     std::size_t part_count{};
@@ -82,6 +96,7 @@ using PrimitiveUpdateProgressObserver =
 
 struct PrimitiveUpdateDeviceOptions final {
     std::uint64_t host_resparse_limit{image::kDefaultResparseLimitBytes};
+    std::uint64_t explicit_sparse_limit{};
     PrimitiveUpdateProgressObserver progress{};
 };
 

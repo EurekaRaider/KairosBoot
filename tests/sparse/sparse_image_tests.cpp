@@ -31,6 +31,7 @@ using kairosboot::image::SparseErrorKind;
 using kairosboot::image::SparseFlashPlan;
 using kairosboot::image::SparseFlashPlanErrorKind;
 using kairosboot::image::SparseImage;
+using kairosboot::image::effective_sparse_download_limit;
 using kairosboot::image::kAndroidSparseMagic;
 using kairosboot::image::kMaxSparseChunks;
 using kairosboot::image::kSparseChunkCrc32;
@@ -1249,6 +1250,20 @@ void malformed_sizes_and_magic_are_rejected() {
     }
 }
 
+void explicit_sparse_limit_is_safely_bounded() {
+    constexpr std::uint64_t gib = 1024ULL * 1024ULL * 1024ULL;
+    CHECK(effective_sparse_download_limit(0U, 0U) == 0U);
+    CHECK(effective_sparse_download_limit(4U * 1024U, 0U) ==
+          4U * 1024U);
+    CHECK(effective_sparse_download_limit(0U, 8U * 1024U) ==
+          8U * 1024U);
+    CHECK(effective_sparse_download_limit(4U * 1024U, 8U * 1024U) ==
+          4U * 1024U);
+    CHECK(effective_sparse_download_limit(16U * 1024U, 8U * 1024U) ==
+          8U * 1024U);
+    CHECK(effective_sparse_download_limit(2U * gib, 2U * gib) == gib);
+}
+
 }  // namespace
 
 int main() {
@@ -1299,6 +1314,7 @@ int main() {
         {"huge virtual CRC", huge_virtual_chunks_have_logarithmic_crc_cost},
         {"metadata chunk limit", metadata_chunk_limit_is_enforced_before_reserve},
         {"malformed fields", malformed_sizes_and_magic_are_rejected},
+        {"explicit sparse limit", explicit_sparse_limit_is_safely_bounded},
     };
 
     std::size_t failures = 0;

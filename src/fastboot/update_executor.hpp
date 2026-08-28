@@ -126,6 +126,7 @@ enum class UpdateExecutionEventKind : std::uint8_t {
     ValidationCompleted,
     TaskStarted,
     TaskCompleted,
+    TaskSkipped,
     TaskFailed,
     ExecutionCompleted,
 };
@@ -150,6 +151,9 @@ struct UpdateExecutorOptions final {
     // One absolute package/job deadline, shared unchanged by validation,
     // getvar, preparation and execution. nullopt means no deadline.
     std::optional<std::chrono::steady_clock::time_point> deadline{};
+    // Continue past ordinary require/reject mismatches. Invalid package data,
+    // partition-exists failures and device errors remain fatal.
+    bool force{};
     UpdateExecutionObserver observer{};
 };
 

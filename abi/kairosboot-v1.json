@@ -21,6 +21,10 @@
     "KB_E_PROTOCOL": 11,
     "KB_E_TIMEOUT": 7,
     "KB_FETCH_UNSPECIFIED": 18446744073709551615,
+    "KB_FILESYSTEM_OPTION_CASEFOLD": 1,
+    "KB_FILESYSTEM_OPTION_COMPRESS": 4,
+    "KB_FILESYSTEM_OPTION_NONE": 0,
+    "KB_FILESYSTEM_OPTION_PROJID": 2,
     "KB_FLASHING_GET_UNLOCK_ABILITY": 4,
     "KB_FLASHING_LOCK": 0,
     "KB_FLASHING_LOCK_CRITICAL": 2,
@@ -56,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "eaae9b821fc06301c3b155ade5e37bae00f49032cc8bd77e1d527f4233803379",
+  "headerContractSha256": "6a6fe966c693c73d7f2a6cbb178c0f9d934dcaab9d8defc3cf63bdc793628fe8",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -121,12 +125,17 @@
           "name": "log_user_data",
           "offset": 16,
           "size": 8
+        },
+        {
+          "name": "usb_vendor_id",
+          "offset": 24,
+          "size": 8
         }
       ],
-      "size": 24,
+      "size": 32,
       "versionSize": {
-        "macro": "KB_CONTEXT_OPTIONS_V1_SIZE",
-        "value": 24
+        "macro": "KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE",
+        "value": 32
       }
     },
     "kb_flash_options_t": {
@@ -156,12 +165,52 @@
           "name": "progress_user_data",
           "offset": 24,
           "size": 8
+        },
+        {
+          "name": "disable_verity",
+          "offset": 32,
+          "size": 4
+        },
+        {
+          "name": "disable_verification",
+          "offset": 36,
+          "size": 4
+        },
+        {
+          "name": "slot",
+          "offset": 40,
+          "size": 8
+        },
+        {
+          "name": "set_active",
+          "offset": 48,
+          "size": 4
+        },
+        {
+          "name": "active_slot",
+          "offset": 56,
+          "size": 8
+        },
+        {
+          "name": "sparse_limit_bytes",
+          "offset": 64,
+          "size": 8
+        },
+        {
+          "name": "force",
+          "offset": 72,
+          "size": 4
+        },
+        {
+          "name": "filesystem_options",
+          "offset": 76,
+          "size": 4
         }
       ],
-      "size": 32,
+      "size": 80,
       "versionSize": {
-        "macro": "KB_FLASH_OPTIONS_V1_SIZE",
-        "value": 32
+        "macro": "KB_FLASH_OPTIONS_FORCE_FS_SIZE",
+        "value": 80
       }
     },
     "kb_job_options_t": {
@@ -197,6 +246,86 @@
       "versionSize": {
         "macro": "KB_JOB_OPTIONS_V1_SIZE",
         "value": 32
+      }
+    },
+    "kb_legacy_boot_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "command_line",
+          "offset": 8,
+          "size": 8
+        },
+        {
+          "name": "base",
+          "offset": 16,
+          "size": 4
+        },
+        {
+          "name": "page_size",
+          "offset": 20,
+          "size": 4
+        },
+        {
+          "name": "kernel_offset",
+          "offset": 24,
+          "size": 4
+        },
+        {
+          "name": "ramdisk_offset",
+          "offset": 28,
+          "size": 4
+        },
+        {
+          "name": "second_offset",
+          "offset": 32,
+          "size": 4
+        },
+        {
+          "name": "tags_offset",
+          "offset": 36,
+          "size": 4
+        },
+        {
+          "name": "header_version",
+          "offset": 40,
+          "size": 4
+        },
+        {
+          "name": "os_version",
+          "offset": 48,
+          "size": 8
+        },
+        {
+          "name": "os_patch_level",
+          "offset": 56,
+          "size": 8
+        },
+        {
+          "name": "dtb_path",
+          "offset": 64,
+          "size": 8
+        },
+        {
+          "name": "dtb_offset",
+          "offset": 72,
+          "size": 8
+        }
+      ],
+      "size": 80,
+      "versionSize": {
+        "macro": "KB_LEGACY_BOOT_OPTIONS_MODERN_SIZE",
+        "value": 80
       }
     },
     "kb_progress_t": {
@@ -267,12 +396,77 @@
           "name": "progress_user_data",
           "offset": 24,
           "size": 8
+        },
+        {
+          "name": "skip_reboot",
+          "offset": 32,
+          "size": 4
+        },
+        {
+          "name": "skip_secondary",
+          "offset": 36,
+          "size": 4
+        },
+        {
+          "name": "exclude_dynamic_partitions",
+          "offset": 40,
+          "size": 4
+        },
+        {
+          "name": "disable_fastboot_info",
+          "offset": 44,
+          "size": 4
+        },
+        {
+          "name": "disable_verity",
+          "offset": 48,
+          "size": 4
+        },
+        {
+          "name": "disable_verification",
+          "offset": 52,
+          "size": 4
+        },
+        {
+          "name": "slot",
+          "offset": 56,
+          "size": 8
+        },
+        {
+          "name": "set_active",
+          "offset": 64,
+          "size": 4
+        },
+        {
+          "name": "active_slot",
+          "offset": 72,
+          "size": 8
+        },
+        {
+          "name": "sparse_limit_bytes",
+          "offset": 80,
+          "size": 8
+        },
+        {
+          "name": "force",
+          "offset": 88,
+          "size": 4
+        },
+        {
+          "name": "filesystem_options",
+          "offset": 92,
+          "size": 4
+        },
+        {
+          "name": "disable_super_optimization",
+          "offset": 96,
+          "size": 4
         }
       ],
-      "size": 32,
+      "size": 104,
       "versionSize": {
-        "macro": "KB_UPDATE_OPTIONS_V1_SIZE",
-        "value": 32
+        "macro": "KB_UPDATE_OPTIONS_SUPER_OPTIMIZATION_SIZE",
+        "value": 104
       }
     },
     "kb_version_t": {
@@ -319,16 +513,24 @@
   "symbols": [
     "kb_boot",
     "kb_boot_async",
+    "kb_boot_file",
+    "kb_boot_file_async",
+    "kb_boot_raw",
+    "kb_boot_raw_async",
     "kb_command_options_init",
+    "kb_command_options_init_sized",
     "kb_command_result_data",
     "kb_command_result_device_identifier",
     "kb_command_result_message_count",
     "kb_command_result_message_kind",
     "kb_command_result_message_payload",
+    "kb_command_result_output_path",
+    "kb_command_result_received_bytes",
     "kb_command_result_release",
     "kb_command_result_terminal_payload",
     "kb_context_create",
     "kb_context_options_init",
+    "kb_context_options_init_sized",
     "kb_context_release",
     "kb_continue_boot",
     "kb_continue_boot_async",
@@ -360,11 +562,24 @@
     "kb_error_transfer_state",
     "kb_fetch",
     "kb_fetch_async",
+    "kb_fetch_file",
+    "kb_fetch_file_async",
     "kb_flash_file",
     "kb_flash_file_async",
     "kb_flash_options_init",
+    "kb_flash_options_init_sized",
+    "kb_flash_raw",
+    "kb_flash_raw_async",
+    "kb_flash_raw_with_boot_options",
+    "kb_flash_raw_with_boot_options_async",
+    "kb_flash_vendor_boot_ramdisk",
+    "kb_flash_vendor_boot_ramdisk_async",
     "kb_flashing",
     "kb_flashing_async",
+    "kb_format_partition",
+    "kb_format_partition_async",
+    "kb_get_staged_file",
+    "kb_get_staged_file_async",
     "kb_get_version",
     "kb_getvar",
     "kb_getvar_async",
@@ -374,6 +589,7 @@
     "kb_job_error",
     "kb_job_get_report",
     "kb_job_options_init",
+    "kb_job_options_init_sized",
     "kb_job_plan_canonical_json",
     "kb_job_plan_release",
     "kb_job_plan_sha256_hex",
@@ -382,6 +598,8 @@
     "kb_job_report_release",
     "kb_job_state",
     "kb_job_wait",
+    "kb_legacy_boot_options_init",
+    "kb_legacy_boot_options_init_sized",
     "kb_oem",
     "kb_oem_async",
     "kb_operation_cancel",
@@ -401,18 +619,26 @@
     "kb_run_job_file_async",
     "kb_set_active",
     "kb_set_active_async",
+    "kb_signature_file",
+    "kb_signature_file_async",
     "kb_snapshot_update",
     "kb_snapshot_update_async",
     "kb_stage",
     "kb_stage_async",
     "kb_status_string",
     "kb_update_options_init",
+    "kb_update_options_init_sized",
     "kb_update_package",
     "kb_update_package_async",
     "kb_upload",
     "kb_upload_async",
+    "kb_upload_file",
+    "kb_upload_file_async",
     "kb_validate_job_file",
-    "kb_version_init"
+    "kb_version_init",
+    "kb_version_init_sized",
+    "kb_wipe_super",
+    "kb_wipe_super_async"
   ],
   "typedefs": {
     "kb_command_message_kind_t": {

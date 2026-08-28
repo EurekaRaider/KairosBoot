@@ -5,10 +5,12 @@
 #include "src/transport/libusb_runtime.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace kairosboot::transport {
 
@@ -18,6 +20,10 @@ struct UsbFastbootTransportOptions final {
     std::shared_ptr<BufferBudget> buffer_budget;
     std::shared_ptr<TransferPermitProvider> permit_provider;
     TransferTelemetryConfig data_telemetry{};
+    // Optional whole-operation boundary. Every command, response, and DATA
+    // transfer clamps its caller-provided timeout to this same steady-clock
+    // deadline, so time consumed before or between operations is not reset.
+    std::optional<std::chrono::steady_clock::time_point> absolute_deadline;
 };
 
 using TransferProgressAction = protocol::TransferProgressAction;

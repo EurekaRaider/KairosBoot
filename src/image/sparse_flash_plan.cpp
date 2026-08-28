@@ -998,6 +998,19 @@ build_part(const std::shared_ptr<const IImageSource>& input,
 
 }  // namespace
 
+std::uint64_t effective_sparse_download_limit(
+    const std::uint64_t target_max_download_size,
+    const std::uint64_t explicit_host_limit) noexcept {
+    if (explicit_host_limit == 0) {
+        return target_max_download_size;
+    }
+    const auto host_limit =
+        std::min(explicit_host_limit, kDefaultResparseLimitBytes);
+    return target_max_download_size == 0
+        ? host_limit
+        : std::min(target_max_download_size, host_limit);
+}
+
 std::expected<SparseFlashPlan, SparseFlashPlanError>
 SparseFlashPlan::create_impl(
     const FlashArtifact& artifact,

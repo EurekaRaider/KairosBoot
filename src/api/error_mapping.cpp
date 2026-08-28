@@ -2,6 +2,7 @@
 #include "src/api/error_mapping.hpp"
 
 #include "src/api/device_selection.hpp"
+#include "src/fastboot/file_receive_service.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/update_executor.hpp"
 #include "src/fastboot/update_package_preflight.hpp"
@@ -357,6 +358,48 @@ OperationErrorPayload normalize_public_error(
     const std::string_view device_identifier) {
     auto result = make_error(
         primitive_status(error.code),
+        error.message,
+        static_cast<std::int32_t>(error.native_code),
+        transfer_state(error.outbound_certainty),
+        device_identifier);
+    result.device_message = error.device_message;
+    result.command_messages = command_messages(error.informational);
+    result.inbound_expected = error.inbound_expected;
+    result.inbound_transferred = error.inbound_transferred;
+    result.inbound_transfer_state = transfer_state(error.inbound_certainty);
+    result.session_poisoned = error.session_poisoned;
+    return result;
+}
+
+OperationErrorPayload normalize_public_error(
+    const fastboot::FileReceiveError& error,
+    const std::string_view device_identifier) {
+    kb_status_t status = KB_E_INTERNAL;
+    switch (error.code) {
+        case fastboot::FileReceiveErrorCode::InvalidArgument:
+            status = KB_E_INVALID_ARGUMENT;
+            break;
+        case fastboot::FileReceiveErrorCode::LimitExceeded:
+            status = error.phase == protocol::ProtocolPhase::Validation
+                         ? KB_E_INVALID_ARGUMENT
+                         : KB_E_PROTOCOL;
+            break;
+        case fastboot::FileReceiveErrorCode::DestinationCreate:
+        case fastboot::FileReceiveErrorCode::DestinationPublish:
+            status = KB_E_IO;
+            break;
+        case fastboot::FileReceiveErrorCode::DeviceFail:
+            status = KB_E_DEVICE_FAIL;
+            break;
+        case fastboot::FileReceiveErrorCode::Protocol:
+            status = error.primitive_code.has_value()
+                         ? primitive_status(*error.primitive_code)
+                         : KB_E_PROTOCOL;
+            break;
+    }
+
+    auto result = make_error(
+        status,
         error.message,
         static_cast<std::int32_t>(error.native_code),
         transfer_state(error.outbound_certainty),

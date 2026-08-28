@@ -21,6 +21,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
 
       - name: Validate repository invariants
         run: python3 scripts/check_repository_policy.py
@@ -37,6 +40,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
 
       - name: Prepare locked dynamic libusb
         run: >-
@@ -63,7 +69,7 @@ jobs:
       - name: Validate ABI, symbols, dependency lock, and release notices
         run: >-
           ctest --test-dir build --output-on-failure
-          -R 'abi_symbols|libusb_dependency_tooling|release_tooling'
+          -R 'abi_symbols|compatibility_inventory_tooling|libusb_dependency_tooling|release_tooling'
 
       - name: Analyze
         uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
@@ -99,6 +105,12 @@ jobs:
 
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Trust the container checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Prepare locked dynamic libusb
         run: >-

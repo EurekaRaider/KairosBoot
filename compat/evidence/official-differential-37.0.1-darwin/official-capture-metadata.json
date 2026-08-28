@@ -1,0 +1,267 @@
+{
+  "aospFastboot": {
+    "platform": "darwin",
+    "sha256": "c97aa28970ba9a46023a8ca52a78dd6547c2c1c4133f9715d4fe551e1dfae152",
+    "versionOutput": "fastboot version 37.0.1-15733141"
+  },
+  "baseline": {
+    "platformToolsVersion": "37.0.1",
+    "sourceCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d"
+  },
+  "captureFiles": {
+    "aosp": {
+      "path": "aosp-fastboot-normalized-trace.json",
+      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
+    },
+    "kairosboot": {
+      "path": "kairosboot-normalized-trace.json",
+      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
+    }
+  },
+  "documentType": "kairosboot.official-fastboot-differential-evidence",
+  "kairosboot": {
+    "releaseArtifactSha256": "8d57733d586553d2fe5a9642d2f60d581be2e9e253204f55a5b68d65c4cc8de2",
+    "sha256": "8d57733d586553d2fe5a9642d2f60d581be2e9e253204f55a5b68d65c4cc8de2",
+    "sourceCommit": "eb2c9dadaaf2fbb1a5dc85730afc84cf2a92ecd7"
+  },
+  "result": "matched",
+  "scenarios": [
+    {
+      "coverageIds": [
+        "command.getvar",
+        "transport.tcp"
+      ],
+      "id": "official-tcp-getvar",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.getvar",
+        "transport.udp"
+      ],
+      "id": "official-udp-getvar",
+      "result": "matched",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "command.flash",
+        "protocol.command",
+        "protocol.download",
+        "capability.raw-image",
+        "image.system"
+      ],
+      "id": "official-tcp-flash",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flash",
+        "protocol.command",
+        "protocol.download",
+        "capability.raw-image",
+        "image.system"
+      ],
+      "id": "official-udp-flash",
+      "result": "matched",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "command.flash",
+        "protocol.command",
+        "protocol.download",
+        "capability.raw-image",
+        "image.system"
+      ],
+      "id": "official-tcp-flash-default-file",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.signature"
+      ],
+      "id": "official-tcp-signature",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.signature"
+      ],
+      "id": "official-udp-signature",
+      "result": "matched",
+      "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "command.reboot"
+      ],
+      "id": "official-tcp-reboot",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.reboot-bootloader"
+      ],
+      "id": "official-tcp-reboot-bootloader",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.continue"
+      ],
+      "id": "official-tcp-continue",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.oem"
+      ],
+      "id": "official-tcp-oem",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.stage"
+      ],
+      "id": "official-tcp-stage",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flashing-get-unlock-ability"
+      ],
+      "id": "official-tcp-flashing-get-unlock-ability",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.create-logical-partition"
+      ],
+      "id": "official-tcp-create-logical-partition",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.delete-logical-partition"
+      ],
+      "id": "official-tcp-delete-logical-partition",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.gsi-wipe"
+      ],
+      "id": "official-tcp-gsi-wipe",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.snapshot-cancel"
+      ],
+      "id": "official-tcp-snapshot-cancel",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.boot",
+        "capability.boot-image-construction"
+      ],
+      "id": "official-tcp-boot-raw",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flash-raw",
+        "capability.boot-image-construction"
+      ],
+      "id": "official-tcp-flash-raw",
+      "result": "matched",
+      "transport": "tcp"
+    }
+  ],
+  "schemaVersion": 1,
+  "uncoveredScenarios": [
+    {
+      "coverageIds": [
+        "command.erase"
+      ],
+      "id": "official-scripted-erase",
+      "reason": "official Fastboot probes has-slot and partition-type before erase while KairosBoot sends the protocol command directly, so strict wire order differs"
+    },
+    {
+      "coverageIds": [
+        "command.set-active",
+        "option.slot",
+        "option.set-active",
+        "capability.a-b-slots"
+      ],
+      "id": "official-scripted-slot-policy",
+      "reason": "official Fastboot probes slot-count before the operation while KairosBoot uses a different getvar sequence, so the strict wire event order differs"
+    },
+    {
+      "coverageIds": [
+        "option.disable-verity",
+        "option.disable-verification",
+        "capability.vbmeta-avb-mutation"
+      ],
+      "id": "official-scripted-avb-flags",
+      "reason": "the mutated DATA hash matches in a real capture, but official Fastboot performs additional is-logical and partition-size probes; strict wire event parity therefore does not pass"
+    },
+    {
+      "coverageIds": [
+        "option.sparse-limit",
+        "capability.android-sparse"
+      ],
+      "id": "official-scripted-sparse-limit",
+      "reason": "official Fastboot performs additional partition probes before sparse download, so the strict normalized wire event sequence differs"
+    },
+    {
+      "coverageIds": [
+        "command.format",
+        "option.fs-options"
+      ],
+      "id": "official-scripted-format",
+      "reason": "format delegates filesystem construction to platform mkfs tools; their filesystem bytes are not deterministic across hosted platforms"
+    },
+    {
+      "coverageIds": [
+        "command.wipe-super",
+        "capability.dynamic-partitions"
+      ],
+      "id": "official-scripted-wipe-super",
+      "reason": "wipe-super requires a valid device-specific liblp metadata image and fastbootd state that the transport-only scripted device cannot infer"
+    },
+    {
+      "coverageIds": [
+        "command.update",
+        "command.flashall",
+        "capability.update-zip"
+      ],
+      "id": "official-scripted-update-flashall",
+      "reason": "update and flashall may reboot between bootloader and fastbootd and reopen the device; the single-session TCP/UDP scripted transport cannot model that lifecycle without turning the device plan into a fixture oracle"
+    },
+    {
+      "coverageIds": [
+        "command.resize-logical-partition"
+      ],
+      "id": "official-scripted-resize-logical-partition",
+      "reason": "official Fastboot fetches and parses device-specific super metadata before resizing; a transport-only scripted device cannot synthesize that metadata without becoming a fixture oracle"
+    }
+  ]
+}

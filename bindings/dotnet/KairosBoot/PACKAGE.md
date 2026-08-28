@@ -38,6 +38,13 @@ Use `FlashOptions` for a strongly typed per-I/O deadline and pass
 infinite timeout. The binding retains the managed progress callback until
 native operation release has drained every callback.
 
+`BootRawAsync` and the `LegacyBootOptions` overloads of `FlashRawAsync` build a
+legacy Android boot header v0 image from kernel, optional ramdisk, and optional
+second-stage component files. They use the same `Task`, `FlashOptions`,
+`IProgress<FlashProgress>`, `CancellationToken`, and drained SafeHandle lifetime
+contract on both target frameworks. This surface does not construct modern boot
+headers, `vendor_boot`, or AVB metadata.
+
 Use `UpdatePackageAsync` for a complete `update.zip`/flash-all operation.
 `UpdateOptions` supplies a whole-operation deadline and an explicit `Wipe`
 policy; its default has no deadline and preserves user data. Progress is

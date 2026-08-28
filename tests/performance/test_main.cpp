@@ -1345,7 +1345,8 @@ void test_scheduler_weighted_fairness_without_starvation() {
     const auto many_budget = std::make_shared<BufferBudget>(64);
     WeightedControllerScheduler many(many_budget, 64);
     for (std::size_t index = 0; index < 32; ++index) {
-        KB_CHECK(many.add_flow(DeviceFlowSpec{"device-" + std::to_string(index),
+        const auto device = std::string{"device-"} + std::to_string(index);
+        KB_CHECK(many.add_flow(DeviceFlowSpec{device,
                                               "controller-0",
                                               1,
                                               64}));
@@ -1813,7 +1814,7 @@ void test_scheduler_permit_broker_fairness_and_controller_progress() {
         std::vector<std::shared_ptr<TransferPermitProvider>> providers;
         providers.reserve(actors);
         for (std::size_t index = 0; index < actors; ++index) {
-            const auto device = "device-" + std::to_string(index);
+            const auto device = std::string{"device-"} + std::to_string(index);
             KB_CHECK(scheduler.add_flow(
                 DeviceFlowSpec{device, "controller", 1, 64}));
             providers.push_back(scheduler.make_permit_provider(device));

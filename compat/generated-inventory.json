@@ -1,113 +1,2740 @@
 {
-  "documentType": "kairosboot.fastboot-compatibility-inventory",
-  "schemaVersion": 1,
-  "inventoryStatus": "source-audited",
-  "claimCompatibility": false,
   "baseline": {
-    "platformToolsVersion": "37.0.1",
-    "platformToolsBuild": "15733141",
     "aospCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d",
-    "sources": [
-      "fastboot --help",
-      "platform/system/core/fastboot/fastboot.cpp",
-      "platform/system/core/fastboot/README.md"
-    ]
+    "platformToolsVersion": "37.0.1",
+    "sourceInventoryPath": "compat/aosp-platform-tools-37.0.1-source-inventory.json",
+    "sourceInventorySha256": "ce51a9b97906d0537ce9eb070c04e9c3782ff2b4876fdf9288a89e312e0f3ec8"
   },
-  "transports": [
-    { "id": "usb", "required": true, "status": "implemented-core" },
-    { "id": "tcp", "required": true, "status": "implemented-core" },
-    { "id": "udp", "required": true, "status": "implemented-core" }
-  ],
-  "protocolCapabilities": [
-    { "id": "command", "required": true, "status": "implemented-core" },
-    { "id": "download", "required": true, "status": "implemented-core" },
-    { "id": "upload", "required": true, "status": "planned" },
-    { "id": "info-text-terminal-responses", "required": true, "status": "implemented-core" },
-    { "id": "poison-on-ambiguous-transfer", "required": true, "status": "implemented-core" }
-  ],
-  "commands": [
-    "devices", "getvar", "reboot", "reboot-bootloader", "reboot-recovery",
-    "reboot-fastboot", "continue", "boot", "flash", "flash:raw", "flashall",
-    "update", "erase", "format", "signature", "set_active", "stage",
-    "get_staged", "oem", "flashing lock", "flashing unlock",
-    "flashing lock_critical", "flashing unlock_critical",
-    "flashing get_unlock_ability", "create-logical-partition",
-    "delete-logical-partition", "resize-logical-partition", "gsi wipe",
-    "gsi disable", "gsi status", "wipe-super", "snapshot-update cancel",
-    "snapshot-update merge", "fetch"
-  ],
-  "options": [
-    "-a", "-h", "-l", "-s", "-S", "-v", "-w", "--base", "--cmdline",
-    "--disable-verification", "--disable-verity", "--disable-super-optimization",
-    "--exclude-dynamic-partitions", "--disable-fastboot-info", "--force",
-    "--fs-options", "--header-version", "--help", "--kernel-offset",
-    "--os-patch-level", "--os-version", "--page-size", "--ramdisk-offset",
-    "--set-active", "--skip-reboot", "--skip-secondary", "--slot",
-    "--tags-offset", "--dtb", "--dtb-offset", "--unbuffered", "--verbose",
-    "--version"
-  ],
-  "imageAndPlanCapabilities": [
-    "raw-image", "android-sparse", "update-zip", "fastboot-info",
-    "boot-image", "vendor-boot", "vbmeta-avb", "super-image",
-    "dynamic-partitions", "a-b-slots", "fastbootd-reenumeration"
-  ],
-  "implementedPlanSlices": [
+  "claimCompatibility": false,
+  "completionRule": "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence from a Release artifact built at the current source commit (or an evidence-only descendant), and no partial, missing, unknown, or unassessed entry remains",
+  "documentType": "kairosboot.fastboot-compatibility-inventory",
+  "entries": [
     {
-      "id": "update-manifest-parser",
-      "status": "implemented-core",
-      "scope": "offline-manifest-parse-only",
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--slot",
+        "--set-active",
+        "-a"
+      ],
       "evidence": [
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "capability.a-b-slots",
+      "kind": "image-plan",
+      "note": "Explicit, other, and all slot policies are resolved from device evidence; set-active is serialized on the same session.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async"
+      ],
+      "cliCommands": [
+        "flash"
+      ],
+      "evidence": [
+        "tests/sparse/sparse_image_tests.cpp",
+        "tests/fastboot/primitive_service_tests.cpp"
+      ],
+      "id": "capability.android-sparse",
+      "kind": "image-plan",
+      "note": "Sparse parsing, validation and bounded resparse planning are implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw",
+        "make-boot-image"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs",
+        "scripts/run_official_fastboot_differential.py"
+      ],
+      "id": "capability.boot-image-construction",
+      "kind": "image-plan",
+      "note": "The bounded shared builder emits Android boot headers v0-v4 through C11, C++23, .NET and CLI, and its frozen v0 construction matches Platform-Tools 37.0.1 exact bytes including the zero identity field and raw v0/v1 DTB address template field.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+      ],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
         "tests/fastboot/update_plan_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/fastboot/update_operation_tests.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
         "tests/compat/aosp-update-plan-37.0.1.json"
       ],
-      "excluded": [
-        "ZIP extraction",
-        "hardcoded image-list fallback",
-        "device requirement evaluation",
-        "slot discovery",
-        "dynamic partition classification",
-        "resize task insertion",
-        "optimized super rewriting",
-        "task execution"
-      ]
+      "id": "capability.dynamic-partitions",
+      "kind": "image-plan",
+      "note": "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_plan_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/fastboot/update_operation_tests.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "capability.fastboot-info",
+      "kind": "image-plan",
+      "note": "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/libusb_reconnect_adapters_tests.cpp",
+        "tests/fastboot/reconnect_coordinator_tests.cpp",
+        "tests/fleet/fleet_coordinator_tests.cpp"
+      ],
+      "id": "capability.fastbootd-reenumeration",
+      "kind": "image-plan",
+      "note": "Physical-port keyed fastbootd re-enumeration and controller-permit rebinding are implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async"
+      ],
+      "cliCommands": [
+        "flash"
+      ],
+      "evidence": [
+        "tests/fastboot/primitive_service_tests.cpp"
+      ],
+      "id": "capability.raw-image",
+      "kind": "image-plan",
+      "note": "Raw image download and flash are implemented.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "src/fastboot/super_optimizer.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp",
+        "tests/compat/aosp-super-optimization-37.0.1.json",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "capability.super-image-optimization",
+      "kind": "image-plan",
+      "note": "Update/flashall validates redundant LP geometry and metadata, rewrites canonical empty single-device A/B super layouts into one deterministic low-memory sparse physical-super flash, preserves AOSP fallback cases, and exposes the disable-super-optimization escape hatch across all public APIs.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_plan_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/fastboot/update_operation_tests.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "capability.update-zip",
+      "kind": "image-plan",
+      "note": "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-verification",
+        "--disable-verity"
+      ],
+      "evidence": [
+        "tests/image/vbmeta_flag_source_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "capability.vbmeta-avb-mutation",
+      "kind": "image-plan",
+      "note": "KairosBoot applies the locked Fastboot vbmeta disable flags through a validated immutable transformation source.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "capability.vendor-boot-construction",
+      "kind": "image-plan",
+      "note": "The locked vendor_boot v3/v4 workflow fetches the existing partition, strictly repacks the default ramdisk or one named v4 fragment with an optional DTB, and flashes in the same session with bounded memory.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot",
+        "kb_boot_async",
+        "kb_boot_file",
+        "kb_boot_file_async",
+        "kb_boot_raw",
+        "kb_boot_raw_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "boot-staged"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs",
+        "scripts/run_official_fastboot_differential.py"
+      ],
+      "id": "command.boot",
+      "kind": "command",
+      "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI; the frozen Platform-Tools 37.0.1 raw boot scenario matches exact DATA bytes, wire events and device state.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
+      ],
+      "required": true,
+      "spelling": "boot",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_continue_boot",
+        "kb_continue_boot_async"
+      ],
+      "cliCommands": [
+        "continue"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.continue",
+      "kind": "command",
+      "note": "Continue is exposed on every language surface.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue"
+      ],
+      "required": true,
+      "spelling": "continue",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_create_logical_partition",
+        "kb_delete_logical_partition",
+        "kb_resize_logical_partition"
+      ],
+      "cliCommands": [
+        "create-logical-partition",
+        "delete-logical-partition",
+        "resize-logical-partition"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.create-logical-partition",
+      "kind": "command",
+      "note": "Logical partition management is implemented.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition"
+      ],
+      "required": true,
+      "spelling": "create-logical-partition",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_create_logical_partition",
+        "kb_delete_logical_partition",
+        "kb_resize_logical_partition"
+      ],
+      "cliCommands": [
+        "create-logical-partition",
+        "delete-logical-partition",
+        "resize-logical-partition"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.delete-logical-partition",
+      "kind": "command",
+      "note": "Logical partition management is implemented.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition"
+      ],
+      "required": true,
+      "spelling": "delete-logical-partition",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_enumerate_devices"
+      ],
+      "cliCommands": [
+        "devices"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.devices",
+      "kind": "command",
+      "note": "Device enumeration is a first-class public API and CLI command.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "devices",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_erase",
+        "kb_erase_async"
+      ],
+      "cliCommands": [
+        "erase"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.erase",
+      "kind": "command",
+      "note": "Typed erase is implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "erase",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_fetch",
+        "kb_fetch_async",
+        "kb_fetch_file",
+        "kb_fetch_file_async"
+      ],
+      "cliCommands": [
+        "fetch"
+      ],
+      "evidence": [
+        "tests/fastboot/file_receive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.fetch",
+      "kind": "command",
+      "note": "Bounded fetch with optional offset and size can return memory or stream to an atomically replaced host file.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "fetch",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async"
+      ],
+      "cliCommands": [
+        "flash"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/sparse/sparse_image_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "scripts/run_official_fastboot_differential.py"
+      ],
+      "id": "command.flash",
+      "kind": "command",
+      "note": "Raw and sparse flashing is implemented, and the CLI reproduces the frozen Platform-Tools 37.0.1 `flash <partition>` fixed-nickname lookup under ANDROID_PRODUCT_OUT. The public C, C++, and .NET file-flash APIs intentionally continue to require an explicit file path; the optional operand is a CLI contract, not a C ABI optional-file parameter.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
+      "required": true,
+      "spelling": "flash",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_raw",
+        "kb_flash_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs",
+        "scripts/run_official_fastboot_differential.py"
+      ],
+      "id": "command.flash-raw",
+      "kind": "command",
+      "note": "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+      ],
+      "required": true,
+      "spelling": "flash:raw",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flashall"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py",
+        "tests/check_cli.cmake",
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_plan_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp"
+      ],
+      "id": "command.flashall",
+      "kind": "command",
+      "note": "Flashall resolves ANDROID_PRODUCT_OUT and executes the same fail-closed production image plan as update with the complete locked wipe, reboot, slot, sparse, dynamic-partition, fastboot-info, super-optimization, vbmeta, force and filesystem option surface.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "flashall",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flashing",
+        "kb_flashing_async"
+      ],
+      "cliCommands": [
+        "flashing"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.flashing-get-unlock-ability",
+      "kind": "command",
+      "note": "All locked flashing subcommands are typed API operations.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
+      ],
+      "required": true,
+      "spelling": "flashing get_unlock_ability",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flashing",
+        "kb_flashing_async"
+      ],
+      "cliCommands": [
+        "flashing"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.flashing-lock",
+      "kind": "command",
+      "note": "All locked flashing subcommands are typed API operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "flashing lock",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flashing",
+        "kb_flashing_async"
+      ],
+      "cliCommands": [
+        "flashing"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.flashing-lock-critical",
+      "kind": "command",
+      "note": "All locked flashing subcommands are typed API operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "flashing lock_critical",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flashing",
+        "kb_flashing_async"
+      ],
+      "cliCommands": [
+        "flashing"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.flashing-unlock",
+      "kind": "command",
+      "note": "All locked flashing subcommands are typed API operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "flashing unlock",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flashing",
+        "kb_flashing_async"
+      ],
+      "cliCommands": [
+        "flashing"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.flashing-unlock-critical",
+      "kind": "command",
+      "note": "All locked flashing subcommands are typed API operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "flashing unlock_critical",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_signature_file",
+        "kb_signature_file_async",
+        "kb_wipe_super",
+        "kb_wipe_super_async"
+      ],
+      "cliCommands": [
+        "format",
+        "signature",
+        "wipe-super"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp"
+      ],
+      "id": "command.format",
+      "kind": "command",
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "format",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_get_staged_file",
+        "kb_get_staged_file_async"
+      ],
+      "cliCommands": [
+        "get-staged"
+      ],
+      "evidence": [
+        "tests/fastboot/file_receive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.get-staged",
+      "kind": "command",
+      "note": "The AOSP get-staged command streams the standard upload response to an atomically replaced host file.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "get_staged",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_getvar",
+        "kb_getvar_async"
+      ],
+      "cliCommands": [
+        "getvar"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.getvar",
+      "kind": "command",
+      "note": "Typed getvar is available synchronously and asynchronously.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+      ],
+      "required": true,
+      "spelling": "getvar",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_gsi",
+        "kb_gsi_async"
+      ],
+      "cliCommands": [
+        "gsi"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.gsi-disable",
+      "kind": "command",
+      "note": "GSI wipe, disable, and status are typed operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "gsi disable",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_gsi",
+        "kb_gsi_async"
+      ],
+      "cliCommands": [
+        "gsi"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.gsi-status",
+      "kind": "command",
+      "note": "GSI wipe, disable, and status are typed operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "gsi status",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_gsi",
+        "kb_gsi_async"
+      ],
+      "cliCommands": [
+        "gsi"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.gsi-wipe",
+      "kind": "command",
+      "note": "GSI wipe, disable, and status are typed operations.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe"
+      ],
+      "required": true,
+      "spelling": "gsi wipe",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_oem",
+        "kb_oem_async"
+      ],
+      "cliCommands": [
+        "oem"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.oem",
+      "kind": "command",
+      "note": "OEM passthrough is implemented with a separate raw-command escape hatch.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem"
+      ],
+      "required": true,
+      "spelling": "oem",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_reboot",
+        "kb_reboot_async"
+      ],
+      "cliCommands": [
+        "reboot"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.reboot",
+      "kind": "command",
+      "note": "System reboot uses the same spelling and wire command.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot"
+      ],
+      "required": true,
+      "spelling": "reboot",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_reboot",
+        "kb_reboot_async"
+      ],
+      "cliCommands": [
+        "reboot"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.reboot-bootloader",
+      "kind": "command",
+      "note": "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader"
+      ],
+      "required": true,
+      "spelling": "reboot-bootloader",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_reboot",
+        "kb_reboot_async"
+      ],
+      "cliCommands": [
+        "reboot"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.reboot-fastboot",
+      "kind": "command",
+      "note": "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "reboot-fastboot",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_reboot",
+        "kb_reboot_async"
+      ],
+      "cliCommands": [
+        "reboot"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.reboot-recovery",
+      "kind": "command",
+      "note": "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "reboot-recovery",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_create_logical_partition",
+        "kb_delete_logical_partition",
+        "kb_resize_logical_partition"
+      ],
+      "cliCommands": [
+        "create-logical-partition",
+        "delete-logical-partition",
+        "resize-logical-partition"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.resize-logical-partition",
+      "kind": "command",
+      "note": "Logical partition management is implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "resize-logical-partition",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_set_active",
+        "kb_set_active_async"
+      ],
+      "cliCommands": [
+        "set-active"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.set-active",
+      "kind": "command",
+      "note": "KairosBoot uses the hyphenated `set-active` spelling while preserving the protocol behavior.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "set_active",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_signature_file",
+        "kb_signature_file_async",
+        "kb_wipe_super",
+        "kb_wipe_super_async"
+      ],
+      "cliCommands": [
+        "format",
+        "signature",
+        "wipe-super"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp"
+      ],
+      "id": "command.signature",
+      "kind": "command",
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-signature",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature"
+      ],
+      "required": true,
+      "spelling": "signature",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_snapshot_update",
+        "kb_snapshot_update_async"
+      ],
+      "cliCommands": [
+        "snapshot-update"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.snapshot-cancel",
+      "kind": "command",
+      "note": "Snapshot cancel and merge are typed operations.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel"
+      ],
+      "required": true,
+      "spelling": "snapshot-update cancel",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_snapshot_update",
+        "kb_snapshot_update_async"
+      ],
+      "cliCommands": [
+        "snapshot-update"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.snapshot-merge",
+      "kind": "command",
+      "note": "Snapshot cancel and merge are typed operations.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "snapshot-update merge",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_stage",
+        "kb_stage_async"
+      ],
+      "cliCommands": [
+        "stage"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "command.stage",
+      "kind": "command",
+      "note": "Stage download is implemented.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage"
+      ],
+      "required": true,
+      "spelling": "stage",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_plan_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/fastboot/update_operation_tests.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "command.update",
+      "kind": "command",
+      "note": "Update performs fail-closed ZIP/directory preflight, frozen fastboot-info and fallback planning, device validation, dynamic-partition transitions, sparse and vbmeta transforms, slot policy, deterministic super optimization, execution, cancellation, progress and reboot policy across the complete locked option surface.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "update",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_signature_file",
+        "kb_signature_file_async",
+        "kb_wipe_super",
+        "kb_wipe_super_async"
+      ],
+      "cliCommands": [
+        "format",
+        "signature",
+        "wipe-super"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp"
+      ],
+      "id": "command.wipe-super",
+      "kind": "command",
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "wipe-super",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-artifact-paths",
+      "kind": "deviation",
+      "note": "artifact absolute paths, backslashes, empty components, dot components, and parent traversal are rejected",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-bounds",
+      "kind": "deviation",
+      "note": "all input, line, field, token, option, requirement, and task counts are bounded",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-duplicates",
+      "kind": "deviation",
+      "note": "duplicate version declarations, duplicate flash flags, and duplicate symbolic flash targets are rejected",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-embedded-nul",
+      "kind": "deviation",
+      "note": "embedded NUL bytes are rejected",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-inactive-if-wipe-validation",
+      "kind": "deviation",
+      "note": "inactive if-wipe bodies are validated before condition expansion",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-malformed-android-info",
+      "kind": "deviation",
+      "note": "malformed android-info lines are fatal instead of warnings",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/compat/aosp-update-plan-37.0.1.json"
+      ],
+      "id": "deviation.update-plan-reboot-targets",
+      "kind": "deviation",
+      "note": "unknown reboot targets are rejected during planning instead of during execution",
+      "officialDifferentialEvidence": [],
+      "required": false,
+      "scope": "command.update",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "file": "boot.img",
+      "id": "image.boot",
+      "kind": "image",
+      "note": "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence.",
+      "officialDifferentialEvidence": [],
+      "partition": "boot",
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "boot_other.img",
+      "id": "image.boot-other",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "boot",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "bootloader.img",
+      "id": "image.bootloader",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "bootloader",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "cache.img",
+      "id": "image.cache",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "cache",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "dtbo.img",
+      "id": "image.dtbo",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "dtbo",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "dt.img",
+      "id": "image.dts",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "dts",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "init_boot.img",
+      "id": "image.init-boot",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "init_boot",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "odm.img",
+      "id": "image.odm",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "odm",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "odm_dlkm.img",
+      "id": "image.odm-dlkm",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "odm_dlkm",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "product.img",
+      "id": "image.product",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "product",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "pvmfw.img",
+      "id": "image.pvmfw",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "pvmfw",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "radio.img",
+      "id": "image.radio",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "radio",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "recovery.img",
+      "id": "image.recovery",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "recovery",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "super.img",
+      "id": "image.super",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "super",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "file": "system.img",
+      "id": "image.system",
+      "kind": "image",
+      "note": "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
+      "partition": "system",
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "system_dlkm.img",
+      "id": "image.system-dlkm",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "system_dlkm",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "system_ext.img",
+      "id": "image.system-ext",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "system_ext",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "system_other.img",
+      "id": "image.system-other",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "system",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "userdata.img",
+      "id": "image.userdata",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "userdata",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vbmeta.img",
+      "id": "image.vbmeta",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vbmeta",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vbmeta_system.img",
+      "id": "image.vbmeta-system",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vbmeta_system",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vbmeta_vendor.img",
+      "id": "image.vbmeta-vendor",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vbmeta_vendor",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vendor.img",
+      "id": "image.vendor",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vendor",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vendor_boot.img",
+      "id": "image.vendor-boot",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vendor_boot",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vendor_dlkm.img",
+      "id": "image.vendor-dlkm",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vendor_dlkm",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vendor_kernel_boot.img",
+      "id": "image.vendor-kernel-boot",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vendor_kernel_boot",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp",
+        "tests/fastboot/update_package_preflight_tests.cpp"
+      ],
+      "file": "vendor_other.img",
+      "id": "image.vendor-other",
+      "kind": "image",
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete.",
+      "officialDifferentialEvidence": [],
+      "partition": "vendor",
+      "required": false,
+      "status": "partial"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "-a",
+        "-h"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "option.a",
+      "kind": "option",
+      "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-a",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
+      "id": "option.base",
+      "kind": "option",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--base",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
+      "id": "option.cmdline",
+      "kind": "option",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--cmdline",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "--device"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py",
+        "tests/api/device_selector_tests.cpp"
+      ],
+      "id": "option.device-path",
+      "kind": "option",
+      "note": "One `--device` selector accepts serial, USB path, TCP, or UDP endpoint instead of separate -s/-l options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-l",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.disable-fastboot-info",
+      "kind": "option",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--disable-fastboot-info",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-super-optimization",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "src/fastboot/super_optimizer.cpp",
+        "tests/fastboot/super_optimizer_tests.cpp",
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/check_cli.cmake",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.disable-super-optimization",
+      "kind": "option",
+      "note": "The disable-super-optimization policy is exposed by C11, C++23, .NET and CLI and selects the frozen unoptimized update/flashall plan before any destructive operation.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--disable-super-optimization",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-verification",
+        "--disable-verity"
+      ],
+      "evidence": [
+        "tests/image/vbmeta_flag_source_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.disable-verification",
+      "kind": "option",
+      "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--disable-verification",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-verification",
+        "--disable-verity"
+      ],
+      "evidence": [
+        "tests/image/vbmeta_flag_source_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.disable-verity",
+      "kind": "option",
+      "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--disable-verity",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async",
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw",
+        "make-boot-image",
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.dtb",
+      "kind": "option",
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--dtb",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async",
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw",
+        "make-boot-image",
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.dtb-offset",
+      "kind": "option",
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--dtb-offset",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.exclude-dynamic-partitions",
+      "kind": "option",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--exclude-dynamic-partitions",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "format",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/image/filesystem_formatter_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/check_cli.cmake",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.force",
+      "kind": "option",
+      "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--force",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "format",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/image/filesystem_formatter_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/check_cli.cmake",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.fs-options",
+      "kind": "option",
+      "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--fs-options",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async",
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw",
+        "make-boot-image",
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.header-version",
+      "kind": "option",
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--header-version",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "--help",
+        "--version"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "option.help",
+      "kind": "option",
+      "note": "Long help and version options are implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--help",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "-a",
+        "-h"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "option.help-short",
+      "kind": "option",
+      "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-h",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
+      "id": "option.kernel-offset",
+      "kind": "option",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--kernel-offset",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async",
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw",
+        "make-boot-image",
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.os-patch-level",
+      "kind": "option",
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--os-patch-level",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async",
+        "kb_flash_vendor_boot_ramdisk",
+        "kb_flash_vendor_boot_ramdisk_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw",
+        "make-boot-image",
+        "flash"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/boot_image_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/vendor_boot_repacker_tests.cpp",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.os-version",
+      "kind": "option",
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--os-version",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
+      "id": "option.page-size",
+      "kind": "option",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--page-size",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
+      "id": "option.ramdisk-offset",
+      "kind": "option",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--ramdisk-offset",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "--device"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py",
+        "tests/api/device_selector_tests.cpp"
+      ],
+      "id": "option.serial",
+      "kind": "option",
+      "note": "One `--device` selector accepts serial, USB path, TCP, or UDP endpoint instead of separate -s/-l options.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-s",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.set-active",
+      "kind": "option",
+      "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--set-active",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.skip-reboot",
+      "kind": "option",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--skip-reboot",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.skip-secondary",
+      "kind": "option",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--skip-secondary",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.slot",
+      "kind": "option",
+      "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--slot",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "-S",
+        "flash",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/sparse/sparse_image_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.sparse-limit",
+      "kind": "option",
+      "note": "-S SIZE[K|M|G] is exposed by C, C++23, .NET and CLI; explicit limits force raw-to-sparse or sparse resparse segmentation and are safely bounded by max-download-size and AOSP's 1 GiB ceiling for flash, update and flashall.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-S",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
+      "id": "option.tags-offset",
+      "kind": "option",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--tags-offset",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/image/file_source_tests.cpp",
+        "tests/performance/test_main.cpp"
+      ],
+      "id": "option.unbuffered",
+      "kind": "option",
+      "note": "KairosBoot always streams through bounded buffers and does not expose an unbuffered mode switch.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--unbuffered",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [
+        "kb_context_create"
+      ],
+      "cliCommands": [
+        "-i",
+        "--vendor-id"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
+      "id": "option.vendor-id",
+      "kind": "option",
+      "note": "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-v",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "-v",
+        "--verbose"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "option.verbose",
+      "kind": "option",
+      "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--verbose",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "--help",
+        "--version"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "option.version",
+      "kind": "option",
+      "note": "Long help and version options are implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "--version",
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [
+        "update"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/update_executor_tests.cpp"
+      ],
+      "id": "option.wipe",
+      "kind": "option",
+      "note": "Wipe is an update-local `--wipe` option instead of global `-w`.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "spelling": "-w",
+      "status": "intentional-deviation"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/protocol/protocol_tests.cpp",
+        "tests/api/operation_state_tests.cpp"
+      ],
+      "id": "protocol.command",
+      "kind": "protocol",
+      "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/protocol/protocol_tests.cpp",
+        "tests/api/operation_state_tests.cpp"
+      ],
+      "id": "protocol.download",
+      "kind": "protocol",
+      "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/protocol/protocol_tests.cpp",
+        "tests/api/operation_state_tests.cpp"
+      ],
+      "id": "protocol.responses",
+      "kind": "protocol",
+      "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [
+        "kb_upload",
+        "kb_upload_async"
+      ],
+      "cliCommands": [
+        "upload"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
+      "id": "protocol.upload",
+      "kind": "protocol",
+      "note": "Bounded upload is exposed by C/C++/.NET and CLI.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/tcp/tcp_fastboot_tests.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp"
+      ],
+      "id": "transport.tcp",
+      "kind": "transport",
+      "note": "Boost.Asio TCP transport is covered through the public C API.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
+      ],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/udp/udp_fastboot_tests.cpp",
+        "tests/udp/udp_loopback_smoke.cpp"
+      ],
+      "id": "transport.udp",
+      "kind": "transport",
+      "note": "Boost.Asio UDP v1 transport is implemented.",
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+      ],
+      "required": true,
+      "status": "implemented"
+    },
+    {
+      "cSymbols": [],
+      "cliCommands": [],
+      "evidence": [
+        "tests/libusb_runtime/test_main.cpp",
+        "tests/api/c_primitive_tcp_tests.cpp"
+      ],
+      "id": "transport.usb",
+      "kind": "transport",
+      "note": "Production libusb transport and public session selection are implemented.",
+      "officialDifferentialEvidence": [],
+      "required": true,
+      "status": "implemented"
     }
   ],
-  "intentionalDeviations": [
-    {
-      "id": "update-plan-malformed-android-info",
-      "scope": "update-manifest-parser",
-      "description": "malformed android-info lines are fatal instead of warnings"
-    },
-    {
-      "id": "update-plan-inactive-if-wipe-validation",
-      "scope": "update-manifest-parser",
-      "description": "inactive if-wipe bodies are validated before condition expansion"
-    },
-    {
-      "id": "update-plan-embedded-nul",
-      "scope": "update-manifest-parser",
-      "description": "embedded NUL bytes are rejected"
-    },
-    {
-      "id": "update-plan-artifact-paths",
-      "scope": "update-manifest-parser",
-      "description": "artifact absolute paths, backslashes, empty components, dot components, and parent traversal are rejected"
-    },
-    {
-      "id": "update-plan-duplicates",
-      "scope": "update-manifest-parser",
-      "description": "duplicate version declarations, duplicate flash flags, and duplicate symbolic flash targets are rejected"
-    },
-    {
-      "id": "update-plan-reboot-targets",
-      "scope": "update-manifest-parser",
-      "description": "unknown reboot targets are rejected during planning instead of during execution"
-    },
-    {
-      "id": "update-plan-bounds",
-      "scope": "update-manifest-parser",
-      "description": "all input, line, field, token, option, requirement, and task counts are bounded"
-    }
+  "generationInputs": {
+    "cHeader": "include/kairosboot/kairosboot.h",
+    "capabilityEvidence": "compat/kairosboot-capability-evidence.json",
+    "cliRegistry": "cli/main.cpp",
+    "officialDifferentialEvidence": "compat/official-differential-evidence.json"
+  },
+  "inventoryStatus": "generated-known-gaps",
+  "officialDifferentialCoverage": {
+    "matchedScenarios": 19,
+    "requiredEntries": 87,
+    "requiredEntriesWithEvidence": 22,
+    "status": "partial",
+    "uncoveredCandidateScenarios": 8
+  },
+  "requiredGaps": [],
+  "schemaVersion": 2,
+  "statusVocabulary": [
+    "implemented",
+    "intentional-deviation",
+    "missing",
+    "partial"
   ],
-  "completionRule": "claimCompatibility may become true only when every required entry has differential trace evidence and no unknown inventory entries remain"
+  "summary": {
+    "byKind": {
+      "command": {
+        "implemented": 30,
+        "intentional-deviation": 4,
+        "missing": 0,
+        "partial": 0
+      },
+      "deviation": {
+        "implemented": 0,
+        "intentional-deviation": 7,
+        "missing": 0,
+        "partial": 0
+      },
+      "image": {
+        "implemented": 2,
+        "intentional-deviation": 0,
+        "missing": 0,
+        "partial": 25
+      },
+      "image-plan": {
+        "implemented": 11,
+        "intentional-deviation": 0,
+        "missing": 0,
+        "partial": 0
+      },
+      "option": {
+        "implemented": 29,
+        "intentional-deviation": 4,
+        "missing": 0,
+        "partial": 0
+      },
+      "protocol": {
+        "implemented": 4,
+        "intentional-deviation": 0,
+        "missing": 0,
+        "partial": 0
+      },
+      "transport": {
+        "implemented": 3,
+        "intentional-deviation": 0,
+        "missing": 0,
+        "partial": 0
+      }
+    },
+    "byStatus": {
+      "implemented": 79,
+      "intentional-deviation": 15,
+      "missing": 0,
+      "partial": 25
+    },
+    "totalEntries": 119
+  }
 }

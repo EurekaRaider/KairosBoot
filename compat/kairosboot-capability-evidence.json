@@ -1,0 +1,461 @@
+{
+  "documentType": "kairosboot.capability-evidence",
+  "schemaVersion": 1,
+  "assessments": [
+    {
+      "ids": ["transport.usb"],
+      "status": "implemented",
+      "evidence": ["tests/libusb_runtime/test_main.cpp", "tests/api/c_primitive_tcp_tests.cpp"],
+      "note": "Production libusb transport and public session selection are implemented."
+    },
+    {
+      "ids": ["transport.tcp"],
+      "status": "implemented",
+      "evidence": ["tests/tcp/tcp_fastboot_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp"],
+      "note": "Boost.Asio TCP transport is covered through the public C API."
+    },
+    {
+      "ids": ["transport.udp"],
+      "status": "implemented",
+      "evidence": ["tests/udp/udp_fastboot_tests.cpp", "tests/udp/udp_loopback_smoke.cpp"],
+      "note": "Boost.Asio UDP v1 transport is implemented."
+    },
+    {
+      "ids": ["protocol.command", "protocol.download", "protocol.responses"],
+      "status": "implemented",
+      "evidence": ["tests/protocol/protocol_tests.cpp", "tests/api/operation_state_tests.cpp"],
+      "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered."
+    },
+    {
+      "ids": ["protocol.upload"],
+      "status": "implemented",
+      "cSymbols": ["kb_upload", "kb_upload_async"],
+      "cliCommands": ["upload"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Bounded upload is exposed by C/C++/.NET and CLI."
+    },
+
+    {
+      "ids": ["command.devices"],
+      "status": "implemented",
+      "cSymbols": ["kb_enumerate_devices"],
+      "cliCommands": ["devices"],
+      "evidence": ["tests/c_api_test.c", "tests/cli/scripted_cli_test.py"],
+      "note": "Device enumeration is a first-class public API and CLI command."
+    },
+    {
+      "ids": ["command.getvar"],
+      "status": "implemented",
+      "cSymbols": ["kb_getvar", "kb_getvar_async"],
+      "cliCommands": ["getvar"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Typed getvar is available synchronously and asynchronously."
+    },
+    {
+      "ids": ["command.reboot"],
+      "status": "implemented",
+      "cSymbols": ["kb_reboot", "kb_reboot_async"],
+      "cliCommands": ["reboot"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "System reboot uses the same spelling and wire command."
+    },
+    {
+      "ids": ["command.reboot-bootloader", "command.reboot-recovery", "command.reboot-fastboot"],
+      "status": "intentional-deviation",
+      "cSymbols": ["kb_reboot", "kb_reboot_async"],
+      "cliCommands": ["reboot"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands."
+    },
+    {
+      "ids": ["command.continue"],
+      "status": "implemented",
+      "cSymbols": ["kb_continue_boot", "kb_continue_boot_async"],
+      "cliCommands": ["continue"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Continue is exposed on every language surface."
+    },
+    {
+      "ids": ["command.flash"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async"],
+      "cliCommands": ["flash"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/sparse/sparse_image_tests.cpp", "tests/cli/scripted_cli_test.py", "scripts/run_official_fastboot_differential.py"],
+      "note": "Raw and sparse flashing is implemented, and the CLI reproduces the frozen Platform-Tools 37.0.1 `flash <partition>` fixed-nickname lookup under ANDROID_PRODUCT_OUT. The public C, C++, and .NET file-flash APIs intentionally continue to require an explicit file path; the optional operand is a CLI contract, not a C ABI optional-file parameter."
+    },
+    {
+      "ids": ["command.update"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update"],
+      "evidence": ["tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_plan_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/fastboot/update_operation_tests.cpp", "tests/fastboot/super_optimizer_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "Update performs fail-closed ZIP/directory preflight, frozen fastboot-info and fallback planning, device validation, dynamic-partition transitions, sparse and vbmeta transforms, slot policy, deterministic super optimization, execution, cancellation, progress and reboot policy across the complete locked option surface."
+    },
+    {
+      "ids": ["command.erase"],
+      "status": "implemented",
+      "cSymbols": ["kb_erase", "kb_erase_async"],
+      "cliCommands": ["erase"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Typed erase is implemented."
+    },
+    {
+      "ids": ["command.set-active"],
+      "status": "intentional-deviation",
+      "cSymbols": ["kb_set_active", "kb_set_active_async"],
+      "cliCommands": ["set-active"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "KairosBoot uses the hyphenated `set-active` spelling while preserving the protocol behavior."
+    },
+    {
+      "ids": ["command.stage"],
+      "status": "implemented",
+      "cSymbols": ["kb_stage", "kb_stage_async"],
+      "cliCommands": ["stage"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Stage download is implemented."
+    },
+    {
+      "ids": ["command.get-staged"],
+      "status": "implemented",
+      "cSymbols": ["kb_get_staged_file", "kb_get_staged_file_async"],
+      "cliCommands": ["get-staged"],
+      "evidence": ["tests/fastboot/file_receive_service_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "The AOSP get-staged command streams the standard upload response to an atomically replaced host file."
+    },
+    {
+      "ids": ["command.oem"],
+      "status": "implemented",
+      "cSymbols": ["kb_oem", "kb_oem_async"],
+      "cliCommands": ["oem"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "OEM passthrough is implemented with a separate raw-command escape hatch."
+    },
+    {
+      "ids": ["command.flashing-lock", "command.flashing-unlock", "command.flashing-lock-critical", "command.flashing-unlock-critical", "command.flashing-get-unlock-ability"],
+      "status": "implemented",
+      "cSymbols": ["kb_flashing", "kb_flashing_async"],
+      "cliCommands": ["flashing"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "All locked flashing subcommands are typed API operations."
+    },
+    {
+      "ids": ["command.create-logical-partition", "command.delete-logical-partition", "command.resize-logical-partition"],
+      "status": "implemented",
+      "cSymbols": ["kb_create_logical_partition", "kb_delete_logical_partition", "kb_resize_logical_partition"],
+      "cliCommands": ["create-logical-partition", "delete-logical-partition", "resize-logical-partition"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Logical partition management is implemented."
+    },
+    {
+      "ids": ["command.gsi-wipe", "command.gsi-disable", "command.gsi-status"],
+      "status": "implemented",
+      "cSymbols": ["kb_gsi", "kb_gsi_async"],
+      "cliCommands": ["gsi"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "GSI wipe, disable, and status are typed operations."
+    },
+    {
+      "ids": ["command.snapshot-cancel", "command.snapshot-merge"],
+      "status": "implemented",
+      "cSymbols": ["kb_snapshot_update", "kb_snapshot_update_async"],
+      "cliCommands": ["snapshot-update"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Snapshot cancel and merge are typed operations."
+    },
+    {
+      "ids": ["command.fetch"],
+      "status": "implemented",
+      "cSymbols": ["kb_fetch", "kb_fetch_async", "kb_fetch_file", "kb_fetch_file_async"],
+      "cliCommands": ["fetch"],
+      "evidence": ["tests/fastboot/file_receive_service_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Bounded fetch with optional offset and size can return memory or stream to an atomically replaced host file."
+    },
+    {
+      "ids": ["command.boot"],
+      "status": "implemented",
+      "cSymbols": ["kb_boot", "kb_boot_async", "kb_boot_file", "kb_boot_file_async", "kb_boot_raw", "kb_boot_raw_async"],
+      "cliCommands": ["boot", "boot-staged"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_file_cli_test.py", "tests/cli/boot_image_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs", "scripts/run_official_fastboot_differential.py"],
+      "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI; the frozen Platform-Tools 37.0.1 raw boot scenario matches exact DATA bytes, wire events and device state."
+    },
+    {
+      "ids": ["command.flash-raw"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_raw", "kb_flash_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async"],
+      "cliCommands": ["flash:raw"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_image_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs", "scripts/run_official_fastboot_differential.py"],
+      "note": "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state."
+    },
+    {
+      "ids": ["command.flashall"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["flashall"],
+      "evidence": ["tests/cli/scripted_cli_test.py", "tests/check_cli.cmake", "tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_plan_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/fastboot/super_optimizer_tests.cpp"],
+      "note": "Flashall resolves ANDROID_PRODUCT_OUT and executes the same fail-closed production image plan as update with the complete locked wipe, reboot, slot, sparse, dynamic-partition, fastboot-info, super-optimization, vbmeta, force and filesystem option surface."
+    },
+    {
+      "ids": ["command.format", "command.signature", "command.wipe-super"],
+      "status": "implemented",
+      "cSymbols": ["kb_format_partition", "kb_format_partition_async", "kb_signature_file", "kb_signature_file_async", "kb_wipe_super", "kb_wipe_super_async"],
+      "cliCommands": ["format", "signature", "wipe-super"],
+      "evidence": ["tests/c_api_test.c", "tests/cxx_api_test.cpp", "tests/cli/scripted_cli_test.py", "tests/fastboot/primitive_service_tests.cpp", "tests/fastboot/primitive_update_device_tests.cpp"],
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction."
+    },
+
+    {
+      "ids": ["option.help", "option.version"],
+      "status": "implemented",
+      "cliCommands": ["--help", "--version"],
+      "evidence": ["tests/cli/scripted_cli_test.py"],
+      "note": "Long help and version options are implemented."
+    },
+    {
+      "ids": ["option.serial", "option.device-path"],
+      "status": "intentional-deviation",
+      "cliCommands": ["--device"],
+      "evidence": ["tests/cli/scripted_cli_test.py", "tests/api/device_selector_tests.cpp"],
+      "note": "One `--device` selector accepts serial, USB path, TCP, or UDP endpoint instead of separate -s/-l options."
+    },
+    {
+      "ids": ["option.wipe"],
+      "status": "intentional-deviation",
+      "cliCommands": ["update"],
+      "evidence": ["tests/cli/scripted_cli_test.py", "tests/fastboot/update_executor_tests.cpp"],
+      "note": "Wipe is an update-local `--wipe` option instead of global `-w`."
+    },
+    {
+      "ids": ["option.unbuffered"],
+      "status": "intentional-deviation",
+      "evidence": ["tests/image/file_source_tests.cpp", "tests/performance/test_main.cpp"],
+      "note": "KairosBoot always streams through bounded buffers and does not expose an unbuffered mode switch."
+    },
+    {
+      "ids": ["option.base", "option.cmdline", "option.kernel-offset", "option.page-size", "option.ramdisk-offset", "option.tags-offset"],
+      "status": "implemented",
+      "cSymbols": ["kb_boot_raw", "kb_boot_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async"],
+      "cliCommands": ["boot", "flash:raw"],
+      "evidence": ["tests/cli/boot_file_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    },
+    {
+      "ids": ["option.skip-reboot", "option.skip-secondary", "option.exclude-dynamic-partitions", "option.disable-fastboot-info"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--skip-reboot", "--skip-secondary", "--exclude-dynamic-partitions", "--disable-fastboot-info"],
+      "evidence": ["tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/cli/scripted_cli_test.py", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared."
+    },
+    {
+      "ids": ["option.sparse-limit"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["-S", "flash", "update", "flashall"],
+      "evidence": ["tests/sparse/sparse_image_tests.cpp", "tests/fastboot/primitive_update_device_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "-S SIZE[K|M|G] is exposed by C, C++23, .NET and CLI; explicit limits force raw-to-sparse or sparse resparse segmentation and are safely bounded by max-download-size and AOSP's 1 GiB ceiling for flash, update and flashall."
+    },
+    {
+      "ids": ["option.a", "option.help-short"],
+      "status": "implemented",
+      "cliCommands": ["-a", "-h"],
+      "evidence": ["tests/cli/scripted_cli_test.py"],
+      "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
+    },
+    {
+      "ids": ["option.vendor-id"],
+      "status": "implemented",
+      "cSymbols": ["kb_context_create"],
+      "cliCommands": ["-i", "--vendor-id"],
+      "evidence": ["tests/c_api_test.c", "tests/cxx_api_test.cpp", "tests/cli/scripted_cli_test.py", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected."
+    },
+    {
+      "ids": ["option.verbose"],
+      "status": "implemented",
+      "cliCommands": ["-v", "--verbose"],
+      "evidence": ["tests/cli/scripted_cli_test.py"],
+      "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
+    },
+    {
+      "ids": ["option.disable-verification", "option.disable-verity"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--disable-verification", "--disable-verity"],
+      "evidence": ["tests/image/vbmeta_flag_source_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans."
+    },
+    {
+      "ids": ["option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset"],
+      "status": "implemented",
+      "cSymbols": ["kb_boot_raw", "kb_boot_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async", "kb_flash_vendor_boot_ramdisk", "kb_flash_vendor_boot_ramdisk_async"],
+      "cliCommands": ["boot", "flash:raw", "make-boot-image", "flash"],
+      "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_image_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/image/vendor_boot_repacker_tests.cpp", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options."
+    },
+    {
+      "ids": ["option.force", "option.fs-options"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_format_partition", "kb_format_partition_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["flash", "flash:raw", "format", "update", "flashall"],
+      "evidence": ["tests/fastboot/update_executor_tests.cpp", "tests/image/filesystem_formatter_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/check_cli.cmake", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence."
+    },
+    {
+      "ids": ["option.disable-super-optimization"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--disable-super-optimization", "update", "flashall"],
+      "evidence": ["src/fastboot/super_optimizer.cpp", "tests/fastboot/super_optimizer_tests.cpp", "tests/fastboot/update_package_preflight_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/check_cli.cmake", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The disable-super-optimization policy is exposed by C11, C++23, .NET and CLI and selects the frozen unoptimized update/flashall plan before any destructive operation."
+    },
+    {
+      "ids": ["option.slot", "option.set-active"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["flash", "flash:raw", "update", "flashall"],
+      "evidence": ["tests/fastboot/primitive_service_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks."
+    },
+    {
+      "ids": ["capability.raw-image"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async"],
+      "cliCommands": ["flash"],
+      "evidence": ["tests/fastboot/primitive_service_tests.cpp"],
+      "note": "Raw image download and flash are implemented."
+    },
+    {
+      "ids": ["capability.android-sparse"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async"],
+      "cliCommands": ["flash"],
+      "evidence": ["tests/sparse/sparse_image_tests.cpp", "tests/fastboot/primitive_service_tests.cpp"],
+      "note": "Sparse parsing, validation and bounded resparse planning are implemented."
+    },
+    {
+      "ids": ["capability.update-zip", "capability.fastboot-info", "capability.dynamic-partitions"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update", "flashall"],
+      "evidence": ["tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_plan_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/fastboot/update_operation_tests.cpp", "tests/fastboot/super_optimizer_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "The update pipeline validates and streams ZIP or directory artifacts, implements the frozen fastboot-info task grammar and fallback image table, and resolves fastbootd, update-super, logical-partition exclusion and deterministic super optimization before destructive execution."
+    },
+    {
+      "ids": ["capability.a-b-slots"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--slot", "--set-active", "-a"],
+      "evidence": ["tests/fastboot/primitive_service_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Explicit, other, and all slot policies are resolved from device evidence; set-active is serialized on the same session."
+    },
+    {
+      "ids": ["capability.fastbootd-reenumeration"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update"],
+      "evidence": ["tests/fastboot/libusb_reconnect_adapters_tests.cpp", "tests/fastboot/reconnect_coordinator_tests.cpp", "tests/fleet/fleet_coordinator_tests.cpp"],
+      "note": "Physical-port keyed fastbootd re-enumeration and controller-permit rebinding are implemented."
+    },
+    {
+      "ids": ["capability.boot-image-construction"],
+      "status": "implemented",
+      "cSymbols": ["kb_boot_raw", "kb_boot_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async"],
+      "cliCommands": ["boot", "flash:raw", "make-boot-image"],
+      "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_image_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs", "scripts/run_official_fastboot_differential.py"],
+      "note": "The bounded shared builder emits Android boot headers v0-v4 through C11, C++23, .NET and CLI, and its frozen v0 construction matches Platform-Tools 37.0.1 exact bytes including the zero identity field and raw v0/v1 DTB address template field."
+    },
+    {
+      "ids": ["capability.vendor-boot-construction"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_vendor_boot_ramdisk", "kb_flash_vendor_boot_ramdisk_async"],
+      "cliCommands": ["flash"],
+      "evidence": ["tests/image/vendor_boot_repacker_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The locked vendor_boot v3/v4 workflow fetches the existing partition, strictly repacks the default ramdisk or one named v4 fragment with an optional DTB, and flashes in the same session with bounded memory."
+    },
+    {
+      "ids": ["capability.vbmeta-avb-mutation"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--disable-verification", "--disable-verity"],
+      "evidence": ["tests/image/vbmeta_flag_source_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "KairosBoot applies the locked Fastboot vbmeta disable flags through a validated immutable transformation source."
+    },
+    {
+      "ids": ["capability.super-image-optimization"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update"],
+      "evidence": ["src/fastboot/super_optimizer.cpp", "tests/fastboot/super_optimizer_tests.cpp", "tests/compat/aosp-super-optimization-37.0.1.json", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Update/flashall validates redundant LP geometry and metadata, rewrites canonical empty single-device A/B super layouts into one deterministic low-memory sparse physical-super flash, preserves AOSP fallback cases, and exposes the disable-super-optimization escape hatch across all public APIs."
+    },
+
+    {
+      "ids": ["image.boot", "image.system"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update", "flashall"],
+      "evidence": ["tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp", "tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence."
+    },
+    {
+      "ids": ["image.bootloader", "image.init-boot", "image.boot-other", "image.cache", "image.dtbo", "image.dts", "image.odm", "image.odm-dlkm", "image.product", "image.pvmfw", "image.radio", "image.recovery", "image.super", "image.system-dlkm", "image.system-ext", "image.system-other", "image.userdata", "image.vbmeta", "image.vbmeta-system", "image.vbmeta-vendor", "image.vendor", "image.vendor-boot", "image.vendor-dlkm", "image.vendor-kernel-boot", "image.vendor-other"],
+      "status": "partial",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update"],
+      "evidence": ["tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp", "tests/fastboot/update_package_preflight_tests.cpp"],
+      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    }
+  ],
+  "additionalDeviations": [
+    {
+      "id": "deviation.update-plan-malformed-android-info",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "malformed android-info lines are fatal instead of warnings"
+    },
+    {
+      "id": "deviation.update-plan-inactive-if-wipe-validation",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "inactive if-wipe bodies are validated before condition expansion"
+    },
+    {
+      "id": "deviation.update-plan-embedded-nul",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "embedded NUL bytes are rejected"
+    },
+    {
+      "id": "deviation.update-plan-artifact-paths",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "artifact absolute paths, backslashes, empty components, dot components, and parent traversal are rejected"
+    },
+    {
+      "id": "deviation.update-plan-duplicates",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "duplicate version declarations, duplicate flash flags, and duplicate symbolic flash targets are rejected"
+    },
+    {
+      "id": "deviation.update-plan-reboot-targets",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "unknown reboot targets are rejected during planning instead of during execution"
+    },
+    {
+      "id": "deviation.update-plan-bounds",
+      "status": "intentional-deviation",
+      "scope": "command.update",
+      "evidence": ["tests/compat/aosp-update-plan-37.0.1.json"],
+      "note": "all input, line, field, token, option, requirement, and task counts are bounded"
+    }
+  ]
+}

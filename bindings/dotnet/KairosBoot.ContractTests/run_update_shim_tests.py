@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build and run the deterministic managed update-package contract shim."""
+"""Build and run the deterministic managed native-operation contract shim."""
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 from pathlib import Path
 import platform
@@ -90,6 +91,16 @@ def compile_shim(output_directory: Path) -> Path:
     return output
 
 
+def require_shim_export(library: Path, name: str) -> None:
+    try:
+        native = ctypes.CDLL(str(library))
+        getattr(native, name)
+    except (OSError, AttributeError) as error:
+        raise RuntimeError(
+            f"scripted native shim is missing required export {name}: {library}"
+        ) from error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -119,6 +130,16 @@ def main() -> int:
         )
         managed = target_path(framework)
         native = compile_shim(managed.parent)
+        for symbol in (
+            "kb_context_options_init_sized",
+            "kb_command_options_init_sized",
+            "kb_flash_options_init_sized",
+            "kb_legacy_boot_options_init_sized",
+            "kb_update_options_init_sized",
+            "kb_job_options_init_sized",
+            "kb_version_init_sized",
+        ):
+            require_shim_export(native, symbol)
         env = os.environ.copy()
         env["KAIROSBOOT_UPDATE_SHIM"] = "1"
         if framework == "net48":
@@ -126,7 +147,7 @@ def main() -> int:
             run([str(executable)], env=env)
         else:
             run(["dotnet", str(managed)], env=env)
-        print(f"scripted update contract passed: {framework}, {native.name}")
+        print(f"scripted native contract passed: {framework}, {native.name}")
 
     return 0
 
@@ -135,5 +156,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        print(f"update shim test failed: {error}", file=sys.stderr)
+        print(f"native shim test failed: {error}", file=sys.stderr)
         sys.exit(1)

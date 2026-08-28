@@ -23,13 +23,76 @@ public sealed partial class Context : IDisposable
         out IntPtr operation,
         out IntPtr error);
 
+    private sealed class NativeSlotPolicy : IDisposable
+    {
+        private IntPtr slot;
+        private IntPtr activeSlot;
+        private readonly bool setActive;
+
+        internal NativeSlotPolicy(string? slot, bool setActive, string? activeSlot)
+        {
+            Validate(slot, nameof(slot));
+            Validate(activeSlot, nameof(activeSlot));
+            if (activeSlot != null && !setActive)
+            {
+                throw new ArgumentException(
+                    "An active slot requires setActive.", nameof(activeSlot));
+            }
+
+            this.setActive = setActive;
+            try
+            {
+                this.slot = slot == null ? IntPtr.Zero : Utf8String.Allocate(slot);
+                this.activeSlot = activeSlot == null
+                    ? IntPtr.Zero
+                    : Utf8String.Allocate(activeSlot);
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        internal void Apply(ref NativeFlashOptions options)
+        {
+            options.Slot = slot;
+            options.SetActive = setActive ? 1 : 0;
+            options.ActiveSlot = activeSlot;
+        }
+
+        internal void Apply(ref NativeUpdateOptions options)
+        {
+            options.Slot = slot;
+            options.SetActive = setActive ? 1 : 0;
+            options.ActiveSlot = activeSlot;
+        }
+
+        public void Dispose()
+        {
+            Utf8String.Free(slot);
+            Utf8String.Free(activeSlot);
+            slot = IntPtr.Zero;
+            activeSlot = IntPtr.Zero;
+        }
+
+        private static void Validate(string? value, string name)
+        {
+            if (value != null && (value.Length == 0 || value.IndexOf('\0') >= 0))
+            {
+                throw new ArgumentException(
+                    "A slot must be non-empty and NUL-free.", name);
+            }
+        }
+    }
+
     /// <summary>Gets the runtime and ABI version of the loaded native library.</summary>
     public static KairosBootVersion Version
     {
         get
         {
             var native = new NativeVersion();
-            NativeMethods.VersionInit(ref native);
+            NativeMethods.VersionInitSized(ref native, NativeMethods.VersionStructSize);
             var status = NativeMethods.GetVersion(ref native);
             if (status != (int)KairosBootStatus.Ok)
             {
@@ -49,6 +112,22 @@ public sealed partial class Context : IDisposable
     public static Context Create()
     {
         var status = NativeMethods.ContextCreate(IntPtr.Zero, out var rawContext, out var rawError);
+        return CompleteCreate(status, rawContext, rawError);
+    }
+
+    /// <summary>Creates a KairosBoot context with explicit USB selection options.</summary>
+    public static Context Create(ContextOptions options)
+    {
+        var native = new NativeContextOptions();
+        NativeMethods.ContextOptionsInitSized(ref native, NativeMethods.ContextOptionsStructSize);
+        native.UsbVendorId = options.UsbVendorId;
+        var status = NativeMethods.ContextCreateWithOptions(
+            ref native, out var rawContext, out var rawError);
+        return CompleteCreate(status, rawContext, rawError);
+    }
+
+    private static Context CompleteCreate(int status, IntPtr rawContext, IntPtr rawError)
+    {
         if (status != (int)KairosBootStatus.Ok)
         {
             if (rawContext != IntPtr.Zero)
@@ -154,6 +233,289 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>
+    /// Generates an empty ext4 or f2fs Android sparse image and flashes it to
+    /// a partition. Null filesystem type and zero size use device-reported
+    /// partition metadata.
+    /// </summary>
+    public Task FormatPartitionAsync(
+        string partition,
+        string? filesystemType = null,
+        ulong partitionSize = 0,
+        FlashOptions options = default,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FormatPartitionCoreAsync(
+            partition,
+            filesystemType,
+            partitionSize,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Fetches an existing vendor_boot image, replaces one vendor ramdisk and
+    /// optionally its DTB, then flashes the repacked image in the same session.
+    /// </summary>
+    public Task FlashVendorBootRamdiskAsync(
+        string partition,
+        string ramdiskPath,
+        string ramdiskName = "default",
+        string? dtbPath = null,
+        FlashOptions options = default,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashVendorBootRamdiskCoreAsync(
+            partition,
+            ramdiskPath,
+            ramdiskName,
+            dtbPath,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a default Android boot image.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            null,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a default Android boot image with a typed timeout.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            null,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a legacy Android boot image with a custom layout.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a legacy Android boot image with a custom layout and timeout.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            LegacyBootOptions.Default,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image with a typed timeout.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            LegacyBootOptions.Default,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image with a custom layout.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds, downloads and boots a legacy Android boot image with a custom layout and timeout.</summary>
+    public Task BootRawAsync(
+        string kernelPath,
+        LegacyBootOptions legacyBootOptions,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootRawCoreAsync(
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            legacyBootOptions,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Downloads an image file and boots it with native default options.</summary>
+    public Task BootFileAsync(
+        string filePath,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootFileCoreAsync(
+            filePath,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Downloads an image file and boots it with a typed per-I/O timeout.</summary>
+    public Task BootFileAsync(
+        string filePath,
+        FlashOptions options,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootFileCoreAsync(
+            filePath,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Streams an existing 256-byte signature blob and sends the AOSP Fastboot
+    /// <c>signature</c> command on the same device session.
+    /// </summary>
+    public Task<CommandResult> SignatureFileAsync(
+        string filePath,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(filePath, nameof(filePath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.SignatureFileAsync(
+                    handle,
+                    deviceSelector,
+                    filePath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
     /// <summary>Starts a complete update-package operation with safe defaults.</summary>
     public Task UpdatePackageAsync(
         string packagePath,
@@ -164,6 +526,37 @@ public sealed partial class Context : IDisposable
         return UpdatePackageCoreAsync(
             packagePath,
             UpdateOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Wipes dynamic partitions using the AOSP super_empty image lookup.</summary>
+    public Task WipeSuperAsync(
+        string? superEmptyImage = null,
+        string? deviceSelector = null,
+        IProgress<UpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return WipeSuperCoreAsync(
+            superEmptyImage,
+            UpdateOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Wipes dynamic partitions with typed timeout and progress options.</summary>
+    public Task WipeSuperAsync(
+        string? superEmptyImage,
+        UpdateOptions options,
+        string? deviceSelector = null,
+        IProgress<UpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return WipeSuperCoreAsync(
+            superEmptyImage,
+            options,
             deviceSelector,
             progress,
             cancellationToken);
@@ -618,6 +1011,85 @@ public sealed partial class Context : IDisposable
                     out error));
     }
 
+    /// <summary>Receives the Fastboot upload command directly into an atomic output file.</summary>
+    public Task<CommandResult> UploadFileAsync(
+        string outputPath,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(outputPath, nameof(outputPath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.UploadFileAsync(
+                    handle,
+                    deviceSelector,
+                    outputPath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Receives staged Fastboot data directly into an atomic output file.</summary>
+    public Task<CommandResult> GetStagedFileAsync(
+        string outputPath,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(outputPath, nameof(outputPath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.GetStagedFileAsync(
+                    handle,
+                    deviceSelector,
+                    outputPath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Fetches a bounded partition range directly into an atomic output file.</summary>
+    public Task<CommandResult> FetchFileAsync(
+        string partition,
+        string outputPath,
+        ulong? offset = null,
+        ulong? size = null,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(outputPath, nameof(outputPath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.FetchFileAsync(
+                    handle,
+                    deviceSelector,
+                    partition,
+                    offset ?? NativeMethods.FetchUnspecified,
+                    size ?? NativeMethods.FetchUnspecified,
+                    outputPath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
     /// <summary>Releases the native context.</summary>
     public void Dispose()
     {
@@ -638,6 +1110,8 @@ public sealed partial class Context : IDisposable
 
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
 
         ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
         var contextReferenceAdded = false;
@@ -652,16 +1126,482 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeFlashOptions();
-            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
 
             var status = NativeMethods.FlashFileAsync(
                 handle,
                 serial,
                 partition,
                 filePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task FlashVendorBootRamdiskCoreAsync(
+        string partition,
+        string ramdiskPath,
+        string ramdiskName,
+        string? dtbPath,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(ramdiskPath, nameof(ramdiskPath));
+        ValidateRequiredText(ramdiskName, nameof(ramdiskName));
+        ValidateOptionalText(dtbPath, nameof(dtbPath));
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
+
+            var status = NativeMethods.FlashVendorBootRamdiskAsync(
+                handle,
+                deviceSelector,
+                partition,
+                ramdiskName,
+                ramdiskPath,
+                dtbPath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task FlashRawCoreAsync(
+        string partition,
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        LegacyBootOptions? legacyBootOptions,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(kernelPath, nameof(kernelPath));
+        ValidateOptionalText(ramdiskPath, nameof(ramdiskPath));
+        ValidateOptionalText(secondStagePath, nameof(secondStagePath));
+        if (secondStagePath != null && ramdiskPath == null)
+        {
+            throw new ArgumentException(
+                "A second-stage path requires a ramdisk path.",
+                nameof(secondStagePath));
+        }
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
+
+            int status;
+            IntPtr rawOperation;
+            IntPtr rawError;
+            if (legacyBootOptions.HasValue)
+            {
+                var nativeLegacyOptions = CreateNativeLegacyBootOptions(
+                    legacyBootOptions.Value,
+                    out var commandLine,
+                    out var osVersion,
+                    out var osPatchLevel,
+                    out var dtbPath);
+                try
+                {
+                    status = NativeMethods.FlashRawWithBootOptionsAsync(
+                        handle,
+                        deviceSelector,
+                        partition,
+                        kernelPath,
+                        ramdiskPath,
+                        secondStagePath,
+                        ref nativeLegacyOptions,
+                        ref nativeOptions,
+                        out rawOperation,
+                        out rawError);
+                }
+                finally
+                {
+                    Utf8String.Free(commandLine);
+                    Utf8String.Free(osVersion);
+                    Utf8String.Free(osPatchLevel);
+                    Utf8String.Free(dtbPath);
+                }
+            }
+            else
+            {
+                status = NativeMethods.FlashRawAsync(
+                    handle,
+                    deviceSelector,
+                    partition,
+                    kernelPath,
+                    ramdiskPath,
+                    secondStagePath,
+                    ref nativeOptions,
+                    out rawOperation,
+                    out rawError);
+            }
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task BootRawCoreAsync(
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        LegacyBootOptions legacyBootOptions,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(kernelPath, nameof(kernelPath));
+        ValidateOptionalText(ramdiskPath, nameof(ramdiskPath));
+        ValidateOptionalText(secondStagePath, nameof(secondStagePath));
+        if (secondStagePath != null && ramdiskPath == null)
+        {
+            throw new ArgumentException(
+                "A second-stage path requires a ramdisk path.",
+                nameof(secondStagePath));
+        }
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var nativeLegacyOptions = CreateNativeLegacyBootOptions(
+                legacyBootOptions,
+                out var commandLine,
+                out var osVersion,
+                out var osPatchLevel,
+                out var dtbPath);
+            int status;
+            IntPtr rawOperation;
+            IntPtr rawError;
+            try
+            {
+                status = NativeMethods.BootRawAsync(
+                    handle,
+                    deviceSelector,
+                    kernelPath,
+                    ramdiskPath,
+                    secondStagePath,
+                    ref nativeLegacyOptions,
+                    ref nativeOptions,
+                    out rawOperation,
+                    out rawError);
+            }
+            finally
+            {
+                Utf8String.Free(commandLine);
+                Utf8String.Free(osVersion);
+                Utf8String.Free(osPatchLevel);
+                Utf8String.Free(dtbPath);
+            }
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private static NativeLegacyBootOptions CreateNativeLegacyBootOptions(
+        LegacyBootOptions options,
+        out IntPtr commandLine,
+        out IntPtr osVersion,
+        out IntPtr osPatchLevel,
+        out IntPtr dtbPath)
+    {
+        var native = new NativeLegacyBootOptions();
+        NativeMethods.LegacyBootOptionsInitSized(ref native, NativeMethods.LegacyBootOptionsStructSize);
+        commandLine = IntPtr.Zero;
+        osVersion = IntPtr.Zero;
+        osPatchLevel = IntPtr.Zero;
+        dtbPath = IntPtr.Zero;
+        try
+        {
+            commandLine = Utf8String.Allocate(options.CommandLine);
+            osVersion = Utf8String.Allocate(options.OsVersion);
+            osPatchLevel = Utf8String.Allocate(options.OsPatchLevel);
+            dtbPath = options.DtbPath == null
+                ? IntPtr.Zero
+                : Utf8String.Allocate(options.DtbPath);
+        }
+        catch
+        {
+            Utf8String.Free(commandLine);
+            Utf8String.Free(osVersion);
+            Utf8String.Free(osPatchLevel);
+            Utf8String.Free(dtbPath);
+            throw;
+        }
+        native.CommandLine = commandLine;
+        native.BaseAddress = options.BaseAddress;
+        native.PageSize = options.PageSize;
+        native.KernelOffset = options.KernelOffset;
+        native.RamdiskOffset = options.RamdiskOffset;
+        native.SecondOffset = options.SecondOffset;
+        native.TagsOffset = options.TagsOffset;
+        native.HeaderVersion = options.HeaderVersion;
+        native.OsVersion = osVersion;
+        native.OsPatchLevel = osPatchLevel;
+        native.DtbPath = dtbPath;
+        native.DtbOffset = options.DtbOffset;
+        return native;
+    }
+
+    private async Task BootFileCoreAsync(
+        string filePath,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(filePath, nameof(filePath));
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.BootFileAsync(
+                handle,
+                deviceSelector,
+                filePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task FormatPartitionCoreAsync(
+        string partition,
+        string? filesystemType,
+        ulong partitionSize,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        if (filesystemType != null &&
+            !string.Equals(filesystemType, "ext4", StringComparison.Ordinal) &&
+            !string.Equals(filesystemType, "f2fs", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Filesystem type must be ext4 or f2fs.",
+                nameof(filesystemType));
+        }
+        ValidateSelector(deviceSelector);
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.FormatPartitionAsync(
+                handle,
+                deviceSelector,
+                partition,
+                filesystemType,
+                partitionSize,
                 ref nativeOptions,
                 out var rawOperation,
                 out var rawError);
@@ -695,6 +1635,8 @@ public sealed partial class Context : IDisposable
 
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
 
         ProgressCallbackRegistration<UpdateProgress>? progressRegistration = null;
         var contextReferenceAdded = false;
@@ -709,16 +1651,101 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeUpdateOptions();
-            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.Wipe = options.Wipe ? 1 : 0;
+            nativeOptions.SkipReboot = options.SkipReboot ? 1 : 0;
+            nativeOptions.SkipSecondary = options.SkipSecondary ? 1 : 0;
+            nativeOptions.ExcludeDynamicPartitions =
+                options.ExcludeDynamicPartitions ? 1 : 0;
+            nativeOptions.DisableFastbootInfo =
+                options.DisableFastbootInfo ? 1 : 0;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.DisableSuperOptimization =
+                options.DisableSuperOptimization ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
 
             var status = NativeMethods.UpdatePackageAsync(
                 handle,
                 deviceSelector,
                 packagePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task WipeSuperCoreAsync(
+        string? superEmptyImage,
+        UpdateOptions options,
+        string? deviceSelector,
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (superEmptyImage != null)
+        {
+            ValidateRequiredText(superEmptyImage, nameof(superEmptyImage));
+        }
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<UpdateProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<UpdateProgress>(
+                    progress,
+                    CreateUpdateProgress);
+            }
+
+            var nativeOptions = new NativeUpdateOptions();
+            NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
+            nativeOptions.Wipe = 1;
+            nativeOptions.SkipReboot = options.SkipReboot ? 1 : 0;
+            nativeOptions.SkipSecondary = options.SkipSecondary ? 1 : 0;
+            nativeOptions.ExcludeDynamicPartitions =
+                options.ExcludeDynamicPartitions ? 1 : 0;
+            nativeOptions.DisableFastbootInfo =
+                options.DisableFastbootInfo ? 1 : 0;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
+            nativeOptions.Force = options.Force ? 1 : 0;
+            nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.WipeSuperAsync(
+                handle,
+                deviceSelector,
+                superEmptyImage,
                 ref nativeOptions,
                 out var rawOperation,
                 out var rawError);
@@ -762,7 +1789,7 @@ public sealed partial class Context : IDisposable
             }
 
             var nativeOptions = new NativeCommandOptions();
-            NativeMethods.CommandOptionsInit(ref nativeOptions);
+            NativeMethods.CommandOptionsInitSized(ref nativeOptions, NativeMethods.CommandOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.MaximumReceiveBytes = options.NativeMaximumReceiveBytes;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
@@ -890,6 +1917,14 @@ public sealed partial class Context : IDisposable
         if (value.IndexOf('\0') >= 0)
         {
             throw new ArgumentException("Value must not contain a NUL character.", parameterName);
+        }
+    }
+
+    private static void ValidateOptionalText(string? value, string parameterName)
+    {
+        if (value != null)
+        {
+            ValidateRequiredText(value, parameterName);
         }
     }
 

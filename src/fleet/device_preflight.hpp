@@ -115,7 +115,8 @@ public:
 make_libusb_device_preflight_session_opener(
     std::shared_ptr<transport::LibusbRuntime> runtime,
     std::shared_ptr<transport::BufferBudget> buffer_budget,
-    transport::TransferRingConfig data_ring) noexcept;
+    transport::TransferRingConfig data_ring,
+    protocol::SessionOptions session_options = {}) noexcept;
 
 struct DevicePreflightProbeResult final {
     std::string product;

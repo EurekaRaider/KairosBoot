@@ -226,6 +226,7 @@ add_library(
   src/fastboot/update_executor.cpp
   src/fastboot/update_operation.cpp
   src/fastboot/update_package_preflight.cpp
+  src/fastboot/super_optimizer.cpp
   src/fastboot/update_plan.cpp
   src/fleet/artifact_preflight.cpp
   src/fleet/canonical_json.cpp
@@ -237,10 +238,13 @@ add_library(
   src/fleet/job_report.cpp
   src/fleet/manifest.cpp
   src/image/artifact_source.cpp
+  src/image/boot_image_builder.cpp
   src/image/file_source.cpp
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
   src/image/sparse_image.cpp
+  src/image/vendor_boot_repacker.cpp
+  src/image/vbmeta_flag_source.cpp
   src/protocol/file_transfer_sink.cpp
   src/protocol/fastboot_protocol.cpp
   src/transport/adaptive_tuner.cpp
@@ -415,7 +419,7 @@ elseif(UNIX)
     kairosboot_cli PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif()
 target_compile_features(kairosboot_cli PRIVATE cxx_std_23)
-target_link_libraries(kairosboot_cli PRIVATE KairosBoot::Cxx)
+target_link_libraries(kairosboot_cli PRIVATE KairosBoot::Cxx kairosboot_internal)
 kairosboot_enable_strict_warnings(kairosboot_cli)
 
 option(KAIROSBOOT_BUILD_EXAMPLES "Build KairosBoot examples" ON)
@@ -454,6 +458,30 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_boot_image_builder_tests
+                 tests/image/boot_image_builder_tests.cpp)
+  target_compile_features(kairosboot_boot_image_builder_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_boot_image_builder_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_boot_image_builder_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_boot_image_builder_tests)
+  add_test(NAME boot_image_builder COMMAND kairosboot_boot_image_builder_tests)
+  set_tests_properties(boot_image_builder PROPERTIES TIMEOUT 20)
+
+  add_executable(kairosboot_vendor_boot_repacker_tests
+                 tests/image/vendor_boot_repacker_tests.cpp)
+  target_compile_features(kairosboot_vendor_boot_repacker_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_vendor_boot_repacker_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_vendor_boot_repacker_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_vendor_boot_repacker_tests)
+  add_test(NAME vendor_boot_repacker
+           COMMAND kairosboot_vendor_boot_repacker_tests)
+  set_tests_properties(vendor_boot_repacker PROPERTIES TIMEOUT 20)
+
   add_executable(kairosboot_canonical_json_tests
                  tests/fleet/canonical_json_tests.cpp)
   target_compile_features(kairosboot_canonical_json_tests PRIVATE cxx_std_23)
@@ -620,6 +648,17 @@ if(BUILD_TESTING)
   add_test(NAME update_plan COMMAND kairosboot_update_plan_tests)
   set_tests_properties(update_plan PROPERTIES TIMEOUT 30)
 
+  add_executable(kairosboot_vbmeta_flag_source_tests
+                 tests/image/vbmeta_flag_source_tests.cpp)
+  target_compile_features(kairosboot_vbmeta_flag_source_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_vbmeta_flag_source_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_vbmeta_flag_source_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_vbmeta_flag_source_tests)
+  add_test(NAME vbmeta_flag_source COMMAND kairosboot_vbmeta_flag_source_tests)
+  set_tests_properties(vbmeta_flag_source PROPERTIES TIMEOUT 10)
+
   add_executable(kairosboot_update_package_preflight_tests
                  tests/fastboot/update_package_preflight_tests.cpp)
   target_compile_features(kairosboot_update_package_preflight_tests
@@ -632,6 +671,28 @@ if(BUILD_TESTING)
   add_test(NAME update_package_preflight
            COMMAND kairosboot_update_package_preflight_tests)
   set_tests_properties(update_package_preflight PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_filesystem_formatter_tests
+                 tests/image/filesystem_formatter_tests.cpp)
+  target_compile_features(kairosboot_filesystem_formatter_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_filesystem_formatter_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  kairosboot_enable_strict_warnings(kairosboot_filesystem_formatter_tests)
+  add_test(NAME filesystem_formatter
+           COMMAND kairosboot_filesystem_formatter_tests)
+  set_tests_properties(filesystem_formatter PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_super_optimizer_tests
+                 tests/fastboot/super_optimizer_tests.cpp)
+  target_compile_features(kairosboot_super_optimizer_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_super_optimizer_tests
+                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(kairosboot_super_optimizer_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_super_optimizer_tests)
+  add_test(NAME super_optimizer COMMAND kairosboot_super_optimizer_tests)
+  set_tests_properties(super_optimizer PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_update_executor_tests
                  tests/fastboot/update_executor_tests.cpp)
@@ -730,7 +791,9 @@ if(BUILD_TESTING)
            COMMAND kairosboot_sequential_streaming_transport_tests)
   set_tests_properties(sequential_streaming_transport PROPERTIES TIMEOUT 10)
 
-  add_executable(kairosboot_c_api_test tests/c_api_test.c)
+  add_executable(kairosboot_c_api_test
+                 tests/c_api_test.c
+                 tests/c_api_legacy_initializer_test.c)
   set_target_properties(
     kairosboot_c_api_test
     PROPERTIES C_STANDARD 11
@@ -1013,6 +1076,10 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_release_tools.py")
   add_test(
+    NAME compatibility_inventory_tooling
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_compatibility_inventory.py")
+  add_test(
     NAME libusb_dependency_tooling
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_prepare_libusb.py")
@@ -1054,6 +1121,18 @@ if(BUILD_TESTING)
       "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:kairosboot_cli>"
       "-DEXPECTED_VERSION=${KAIROSBOOT_VERSION_STRING}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli.cmake")
+  add_test(
+    NAME boot_image_cli
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_image_cli_test.py"
+            --cli "$<TARGET_FILE:kairosboot_cli>")
+  set_tests_properties(boot_image_cli PROPERTIES TIMEOUT 30)
+  add_test(
+    NAME boot_file_cli
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_file_cli_test.py"
+            --cli "$<TARGET_FILE:kairosboot_cli>")
+  set_tests_properties(boot_file_cli PROPERTIES TIMEOUT 45)
 endif()
 
 install(

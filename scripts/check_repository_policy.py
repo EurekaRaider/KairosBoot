@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -136,6 +137,177 @@ def check_workflows() -> None:
         if '"/p:Version=${package_version}"' not in ci:
             fail("CI package build must align the managed assembly and package version")
 
+    policy_workflow = workflow_dir / "policy.yml"
+    if policy_workflow.is_file():
+        policy = policy_workflow.read_text(encoding="utf-8")
+        if "compatibility_inventory_tooling" not in policy:
+            fail("Policy must execute the compatibility inventory tooling suite")
+        if "ctest --test-dir build --output-on-failure" not in policy:
+            fail("Policy compatibility tooling must propagate CTest failures")
+
+    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    for marker in (
+        "NAME compatibility_inventory_tooling",
+        "tests/tooling/test_compatibility_inventory.py",
+    ):
+        if marker not in cmake:
+            fail(f"root CTest is missing the compatibility inventory gate: {marker}")
+
+
+def check_release_distribution_contract() -> None:
+    environment = json.loads(
+        (ROOT / ".github" / "environments" / "github-release.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_environment = {
+        "wait_timer": 0,
+        "prevent_self_review": False,
+        "reviewers": [{"type": "User", "id": 299445952}],
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+    }
+    if environment != expected_environment:
+        fail("github-release Environment fixture differs from the reviewed contract")
+
+    deployment_policies = json.loads(
+        (
+            ROOT
+            / ".github"
+            / "environments"
+            / "github-release-deployment-policies.json"
+        ).read_text(encoding="utf-8")
+    )
+    if deployment_policies != {
+        "schemaVersion": 1,
+        "policies": [{"name": "v*", "type": "tag"}],
+    }:
+        fail("github-release must allow deployments only from v* tags")
+
+    main_ruleset = json.loads(
+        (ROOT / ".github" / "rulesets" / "main.json").read_text(encoding="utf-8")
+    )
+    owner_bypass = [
+        {
+            "actor_id": 299445952,
+            "actor_type": "User",
+            "bypass_mode": "always",
+        }
+    ]
+    if (
+        main_ruleset.get("target") != "branch"
+        or main_ruleset.get("enforcement") != "active"
+        or main_ruleset.get("bypass_actors") != owner_bypass
+        or main_ruleset.get("conditions")
+        != {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+    ):
+        fail("main ruleset fixture must protect only main with owner-only bypass")
+    main_rules = {
+        rule.get("type"): rule for rule in main_ruleset.get("rules", [])
+    }
+    if set(main_rules) != {
+        "deletion",
+        "non_fast_forward",
+        "required_linear_history",
+        "pull_request",
+        "required_status_checks",
+    }:
+        fail("main ruleset fixture is missing a required protection rule")
+    pull_request = main_rules["pull_request"].get("parameters", {})
+    required_pull_request = {
+        "allowed_merge_methods": ["squash", "rebase"],
+        "dismiss_stale_reviews_on_push": True,
+        "require_code_owner_review": True,
+        "require_extra_approval_for_unattributed_changes": True,
+        "require_last_push_approval": True,
+        "required_approving_review_count": 1,
+        "required_review_thread_resolution": True,
+    }
+    if pull_request != required_pull_request:
+        fail("main ruleset pull-request review contract differs from policy")
+    status_checks = main_rules["required_status_checks"].get("parameters", {})
+    if status_checks != {
+        "strict_required_status_checks_policy": True,
+        "do_not_enforce_on_create": False,
+        "required_status_checks": [
+            {"context": "ci-required", "integration_id": 15368},
+            {"context": "policy", "integration_id": 15368},
+        ],
+    }:
+        fail("main ruleset must require strict ci-required and policy checks")
+
+    tag_ruleset = json.loads(
+        (ROOT / ".github" / "rulesets" / "release-tags.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if (
+        tag_ruleset.get("target") != "tag"
+        or tag_ruleset.get("enforcement") != "active"
+        or tag_ruleset.get("bypass_actors") != owner_bypass
+        or tag_ruleset.get("conditions")
+        != {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}}
+        or {rule.get("type") for rule in tag_ruleset.get("rules", [])}
+        != {"creation", "update", "deletion", "non_fast_forward"}
+    ):
+        fail("release tag ruleset fixture differs from the reviewed contract")
+
+    assets = json.loads(
+        (ROOT / "release" / "expected-assets.json").read_text(encoding="utf-8")
+    )
+    expected_platforms = {
+        "linux-arm64": "tar.gz",
+        "linux-x64": "tar.gz",
+        "macos-arm64": "tar.gz",
+        "macos-x64": "tar.gz",
+        "windows-arm64": "zip",
+        "windows-x64": "zip",
+    }
+    actual_platforms = {
+        platform.get("id"): platform.get("archiveExtension")
+        for platform in assets.get("platforms", [])
+        if isinstance(platform, dict)
+    }
+    if assets.get("schemaVersion") != 1 or actual_platforms != expected_platforms:
+        fail("Release assets must cover the exact six native target platforms")
+    if assets.get("nativeKinds") != ["cli", "sdk", "symbols"]:
+        fail("each native Release platform must publish CLI, SDK, and symbols")
+
+    required_assets = {
+        "KairosBoot.{version}.nupkg",
+        "KairosBoot.{version}.snupkg",
+        "KairosBoot.spdx.json",
+        "KairosBoot-v{version}-UNSIGNED.txt",
+        "KairosBoot-v{version}-source.tar.gz",
+        "SHA256SUMS",
+        "libusb-1.0.30-COPYING",
+        "libusb-1.0.30.tar.bz2",
+        "provenance.intoto.json",
+        "signing-status.json",
+    }
+    additional_assets = assets.get("additionalAssets")
+    if not isinstance(additional_assets, list) or not required_assets.issubset(
+        set(additional_assets)
+    ):
+        fail("Release asset contract is missing required managed or supply-chain assets")
+
+    managed_project = (
+        ROOT / "bindings" / "dotnet" / "KairosBoot" / "KairosBoot.csproj"
+    ).read_text(encoding="utf-8")
+    managed_contract = {
+        "target frameworks": "<TargetFrameworks>net48;net10.0</TargetFrameworks>",
+        "net48 Windows x64 RID": "<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>",
+        "net10 six RIDs": (
+            "<RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;"
+            "osx-x64;osx-arm64</RuntimeIdentifiers>"
+        ),
+    }
+    for contract, marker in managed_contract.items():
+        if marker not in managed_project:
+            fail(f"managed Release contract is missing {contract}: {marker}")
+
 
 def check_required_files() -> None:
     for name in ("LICENSE", "README.md", "SECURITY.md", "CONTRIBUTING.md"):
@@ -187,40 +359,46 @@ def check_compatibility_baseline() -> None:
     ) != archives["darwin"].get("fastbootSha256"):
         fail("update-plan golden and AOSP lock use different fastboot binaries")
 
-    update_plan_slices = inventory.get("implementedPlanSlices", [])
-    expected_update_plan_slice = {
-        "id": "update-manifest-parser",
-        "status": "implemented-core",
-        "scope": "offline-manifest-parse-only",
-        "evidence": [
-            "tests/fastboot/update_plan_tests.cpp",
-            "tests/compat/aosp-update-plan-37.0.1.json",
-        ],
-        "excluded": update_plan_golden.get("scope", {}).get("excluded", []),
+    if inventory.get("schemaVersion") != 2:
+        fail("compatibility inventory has an unsupported generated schema")
+    if inventory.get("claimCompatibility") is not False:
+        fail("compatibility claim must remain false before official differentials")
+    allowed_statuses = {
+        "implemented",
+        "partial",
+        "missing",
+        "intentional-deviation",
     }
-    if update_plan_slices != [expected_update_plan_slice]:
-        fail("compatibility inventory must lock the offline update-plan slice")
-
-    deviation_descriptions = [
-        deviation.get("description")
-        for deviation in inventory.get("intentionalDeviations", [])
-        if isinstance(deviation, dict)
-        and deviation.get("scope") == "update-manifest-parser"
-    ]
-    if deviation_descriptions != update_plan_golden.get("intentionalDeviations"):
-        fail("update-plan intentional deviations differ from the locked golden")
-
-    compatibility = (ROOT / "compat" / "compatibility.yaml").read_text(
-        encoding="utf-8"
+    if set(inventory.get("statusVocabulary", [])) != allowed_statuses:
+        fail("compatibility inventory status vocabulary is not frozen")
+    entries = inventory.get("entries", [])
+    if not isinstance(entries, list) or not entries:
+        fail("compatibility inventory must contain generated entries")
+    if any(entry.get("status") not in allowed_statuses for entry in entries):
+        fail("compatibility inventory contains an unknown status")
+    deviation_descriptions = sorted(
+        entry.get("note")
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("kind") == "deviation"
+        and entry.get("scope") == "command.update"
     )
-    for marker in (
-        "id: plan.update-manifest-parser",
-        "scope: offline-manifest-parse-only",
-        "tests/fastboot/update_plan_tests.cpp",
-        "tests/compat/aosp-update-plan-37.0.1.json",
-    ):
-        if marker not in compatibility:
-            fail(f"compatibility matrix is missing update-plan evidence: {marker}")
+    if deviation_descriptions != sorted(update_plan_golden.get("intentionalDeviations")):
+        fail("update-plan intentional deviations differ from the locked golden")
+    generator = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "generate_compatibility_inventory.py"),
+            "--repository-root",
+            str(ROOT),
+            "--check",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if generator.returncode != 0:
+        fail(generator.stderr.strip() or generator.stdout.strip())
     libusb = lock.get("libusb", {})
     if libusb.get("requiredVersion") != "1.0.30":
         fail("libusb baseline must remain fixed at 1.0.30")
@@ -432,6 +610,7 @@ def main() -> None:
     check_codeowners()
     check_version()
     check_workflows()
+    check_release_distribution_contract()
     check_compatibility_baseline()
     print("repository policy checks passed")
 

@@ -2,6 +2,37 @@ using System;
 
 namespace KairosBoot;
 
+/// <summary>AOSP filesystem features accepted by format operations.</summary>
+[Flags]
+public enum FilesystemOptions : uint
+{
+    /// <summary>Do not request optional filesystem features.</summary>
+    None = 0,
+    /// <summary>Enable Unicode casefolding.</summary>
+    Casefold = 1U << 0,
+    /// <summary>Enable project quotas and extended attributes.</summary>
+    Projid = 1U << 1,
+    /// <summary>Enable filesystem compression and extended attributes.</summary>
+    Compress = 1U << 2,
+}
+
+/// <summary>Controls process-wide resources owned by a KairosBoot context.</summary>
+public readonly struct ContextOptions
+{
+    /// <summary>Creates context options with an optional Fastboot USB vendor filter.</summary>
+    /// <param name="usbVendorId">
+    /// A non-zero USB vendor identifier, or zero to accept every Fastboot vendor.
+    /// TCP and UDP selectors are unaffected.
+    /// </param>
+    public ContextOptions(ushort usbVendorId)
+    {
+        UsbVendorId = usbVendorId;
+    }
+
+    /// <summary>Gets the USB vendor filter, or zero when no filter is applied.</summary>
+    public ushort UsbVendorId { get; }
+}
+
 /// <summary>Runtime and ABI version of the loaded KairosBoot native library.</summary>
 public sealed class KairosBootVersion
 {
@@ -74,10 +105,54 @@ public readonly struct FlashOptions
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
     public FlashOptions(TimeSpan timeout)
+        : this(timeout, false, false)
     {
+    }
+
+    /// <summary>Creates flash options with AOSP-compatible vbmeta flags.</summary>
+    public FlashOptions(
+        TimeSpan timeout,
+        bool disableVerity,
+        bool disableVerification,
+        string? slot = null,
+        bool setActive = false,
+        string? activeSlot = null,
+        ulong sparseLimitBytes = 0,
+        bool force = false,
+        FilesystemOptions filesystemOptions = FilesystemOptions.None)
+    {
+        ValidateFilesystemOptions(filesystemOptions);
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
+        DisableVerity = disableVerity;
+        DisableVerification = disableVerification;
+        Slot = slot;
+        SetActive = setActive;
+        ActiveSlot = activeSlot;
+        SparseLimitBytes = sparseLimitBytes;
+        Force = force;
+        FilesystemOptions = filesystemOptions;
+    }
+
+    /// <summary>Creates flash options with an AOSP -S sparse-part limit.</summary>
+    public FlashOptions(TimeSpan timeout, ulong sparseLimitBytes)
+        : this(timeout, false, false, null, false, null, sparseLimitBytes)
+    {
+    }
+
+    /// <summary>Creates flash options with an A/B slot policy.</summary>
+    public FlashOptions(
+        TimeSpan timeout,
+        string? slot,
+        bool setActive = false,
+        string? activeSlot = null,
+        ulong sparseLimitBytes = 0,
+        bool force = false,
+        FilesystemOptions filesystemOptions = FilesystemOptions.None)
+        : this(timeout, false, false, slot, setActive, activeSlot,
+            sparseLimitBytes, force, filesystemOptions)
+    {
     }
 
     /// <summary>Gets options that use the native infinite timeout default.</summary>
@@ -87,6 +162,30 @@ public readonly struct FlashOptions
     public TimeSpan Timeout => hasExplicitTimeout
         ? timeout
         : System.Threading.Timeout.InfiniteTimeSpan;
+
+    /// <summary>Gets whether vbmeta disables dm-verity.</summary>
+    public bool DisableVerity { get; }
+
+    /// <summary>Gets whether vbmeta disables verification.</summary>
+    public bool DisableVerification { get; }
+
+    /// <summary>Gets the requested slot, or null for the device default.</summary>
+    public string? Slot { get; }
+
+    /// <summary>Gets whether set_active is issued before flash tasks.</summary>
+    public bool SetActive { get; }
+
+    /// <summary>Gets the explicit set_active slot, or null to derive it.</summary>
+    public string? ActiveSlot { get; }
+
+    /// <summary>Gets the AOSP -S sparse-part limit in bytes; zero is automatic.</summary>
+    public ulong SparseLimitBytes { get; }
+
+    /// <summary>Gets whether otherwise unsafe flash/format paths may continue.</summary>
+    public bool Force { get; }
+
+    /// <summary>Gets the filesystem features used by format.</summary>
+    public FilesystemOptions FilesystemOptions { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
@@ -123,6 +222,143 @@ public readonly struct FlashOptions
 
         return (uint)milliseconds;
     }
+
+    private static void ValidateFilesystemOptions(FilesystemOptions options)
+    {
+        const FilesystemOptions supported = FilesystemOptions.Casefold |
+            FilesystemOptions.Projid | FilesystemOptions.Compress;
+        if ((options & ~supported) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), options, "Unsupported filesystem option bits.");
+        }
+    }
+}
+
+/// <summary>Controls Android boot image construction for header versions 0 through 4.</summary>
+public readonly struct LegacyBootOptions
+{
+    private const uint DefaultBaseAddress = 0x10000000U;
+    private const uint DefaultPageSize = 2048U;
+    private const uint DefaultKernelOffset = 0x00008000U;
+    private const uint DefaultRamdiskOffset = 0x01000000U;
+    private const uint DefaultSecondOffset = 0x00f00000U;
+    private const uint DefaultTagsOffset = 0x00000100U;
+    private const ulong DefaultDtbOffset = 0x01100000UL;
+
+    private readonly bool hasExplicitValues;
+    private readonly string? commandLine;
+    private readonly uint baseAddress;
+    private readonly uint pageSize;
+    private readonly uint kernelOffset;
+    private readonly uint ramdiskOffset;
+    private readonly uint secondOffset;
+    private readonly uint tagsOffset;
+    private readonly uint headerVersion;
+    private readonly string? osVersion;
+    private readonly string? osPatchLevel;
+    private readonly string? dtbPath;
+    private readonly ulong dtbOffset;
+
+    /// <summary>Creates an Android boot image layout.</summary>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="commandLine"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="commandLine"/> contains a NUL character.
+    /// </exception>
+    public LegacyBootOptions(
+        string commandLine = "",
+        uint baseAddress = DefaultBaseAddress,
+        uint pageSize = DefaultPageSize,
+        uint kernelOffset = DefaultKernelOffset,
+        uint ramdiskOffset = DefaultRamdiskOffset,
+        uint secondOffset = DefaultSecondOffset,
+        uint tagsOffset = DefaultTagsOffset,
+        uint headerVersion = 0,
+        string osVersion = "",
+        string osPatchLevel = "",
+        string? dtbPath = null,
+        ulong dtbOffset = DefaultDtbOffset)
+    {
+        if (commandLine == null)
+        {
+            throw new ArgumentNullException(nameof(commandLine));
+        }
+        if (commandLine.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException(
+                "Legacy boot command line must not contain a NUL character.",
+                nameof(commandLine));
+        }
+        if (osVersion == null)
+        {
+            throw new ArgumentNullException(nameof(osVersion));
+        }
+        if (osPatchLevel == null)
+        {
+            throw new ArgumentNullException(nameof(osPatchLevel));
+        }
+        if (osVersion.IndexOf('\0') >= 0 || osPatchLevel.IndexOf('\0') >= 0 ||
+            (dtbPath != null && dtbPath.IndexOf('\0') >= 0))
+        {
+            throw new ArgumentException(
+                "Boot construction strings must not contain a NUL character.");
+        }
+
+        this.commandLine = commandLine;
+        this.baseAddress = baseAddress;
+        this.pageSize = pageSize;
+        this.kernelOffset = kernelOffset;
+        this.ramdiskOffset = ramdiskOffset;
+        this.secondOffset = secondOffset;
+        this.tagsOffset = tagsOffset;
+        this.headerVersion = headerVersion;
+        this.osVersion = osVersion;
+        this.osPatchLevel = osPatchLevel;
+        this.dtbPath = dtbPath;
+        this.dtbOffset = dtbOffset;
+        hasExplicitValues = true;
+    }
+
+    /// <summary>Gets the AOSP-compatible legacy boot defaults.</summary>
+    public static LegacyBootOptions Default => default;
+
+    /// <summary>Gets the kernel command line.</summary>
+    public string CommandLine => hasExplicitValues ? commandLine! : string.Empty;
+
+    /// <summary>Gets the physical base address.</summary>
+    public uint BaseAddress => hasExplicitValues ? baseAddress : DefaultBaseAddress;
+
+    /// <summary>Gets the boot image page size.</summary>
+    public uint PageSize => hasExplicitValues ? pageSize : DefaultPageSize;
+
+    /// <summary>Gets the kernel offset from the base address.</summary>
+    public uint KernelOffset => hasExplicitValues ? kernelOffset : DefaultKernelOffset;
+
+    /// <summary>Gets the ramdisk offset from the base address.</summary>
+    public uint RamdiskOffset => hasExplicitValues ? ramdiskOffset : DefaultRamdiskOffset;
+
+    /// <summary>Gets the second-stage offset from the base address.</summary>
+    public uint SecondOffset => hasExplicitValues ? secondOffset : DefaultSecondOffset;
+
+    /// <summary>Gets the tags offset from the base address.</summary>
+    public uint TagsOffset => hasExplicitValues ? tagsOffset : DefaultTagsOffset;
+
+    /// <summary>Gets the Android boot header version (0 through 4).</summary>
+    public uint HeaderVersion => hasExplicitValues ? headerVersion : 0U;
+
+    /// <summary>Gets MAJOR[.MINOR[.PATCH]], or an empty string for 0.0.0.</summary>
+    public string OsVersion => hasExplicitValues ? osVersion! : string.Empty;
+
+    /// <summary>Gets YYYY-MM-DD, or an empty string when unset.</summary>
+    public string OsPatchLevel => hasExplicitValues ? osPatchLevel! : string.Empty;
+
+    /// <summary>Gets the optional DTB file path for header version 2.</summary>
+    public string? DtbPath => hasExplicitValues ? dtbPath : null;
+
+    /// <summary>Gets the DTB offset relative to the base address.</summary>
+    public ulong DtbOffset => hasExplicitValues ? dtbOffset : DefaultDtbOffset;
 }
 
 /// <summary>Controls a complete update-package operation.</summary>
@@ -145,15 +381,61 @@ public readonly struct UpdateOptions
     /// <param name="wipe">
     /// Whether wipe-conditioned package tasks may erase user data.
     /// </param>
+    /// <param name="skipReboot">Whether to omit the final system reboot.</param>
+    /// <param name="skipSecondary">Whether to omit secondary-slot flashes.</param>
+    /// <param name="excludeDynamicPartitions">
+    /// Whether to exclude partitions reported as logical by the device.
+    /// </param>
+    /// <param name="disableFastbootInfo">
+    /// Whether to use the frozen image-list plan instead of fastboot-info.txt.
+    /// </param>
+    /// <param name="disableVerity">Whether vbmeta disables dm-verity.</param>
+    /// <param name="disableVerification">Whether vbmeta disables verification.</param>
+    /// <param name="slot">The global update slot, or null to preserve the package plan.</param>
+    /// <param name="setActive">Whether to issue set_active before update tasks.</param>
+    /// <param name="activeSlot">The explicit set_active target, or null to derive it.</param>
+    /// <param name="sparseLimitBytes">AOSP -S sparse-part limit in bytes, or zero for automatic limits.</param>
+    /// <param name="force">Whether ordinary requirement mismatches may be bypassed.</param>
+    /// <param name="filesystemOptions">Filesystem features for generated format images.</param>
+    /// <param name="disableSuperOptimization">Whether to preserve the unoptimized fastbootd path.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
-    public UpdateOptions(TimeSpan timeout, bool wipe = false)
+    public UpdateOptions(
+        TimeSpan timeout,
+        bool wipe = false,
+        bool skipReboot = false,
+        bool skipSecondary = false,
+        bool excludeDynamicPartitions = false,
+        bool disableFastbootInfo = false,
+        bool disableVerity = false,
+        bool disableVerification = false,
+        string? slot = null,
+        bool setActive = false,
+        string? activeSlot = null,
+        ulong sparseLimitBytes = 0,
+        bool force = false,
+        FilesystemOptions filesystemOptions = FilesystemOptions.None,
+        bool disableSuperOptimization = false)
     {
+        ValidateFilesystemOptions(filesystemOptions);
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
         Wipe = wipe;
+        SkipReboot = skipReboot;
+        SkipSecondary = skipSecondary;
+        ExcludeDynamicPartitions = excludeDynamicPartitions;
+        DisableFastbootInfo = disableFastbootInfo;
+        DisableVerity = disableVerity;
+        DisableVerification = disableVerification;
+        Slot = slot;
+        SetActive = setActive;
+        ActiveSlot = activeSlot;
+        SparseLimitBytes = sparseLimitBytes;
+        Force = force;
+        FilesystemOptions = filesystemOptions;
+        DisableSuperOptimization = disableSuperOptimization;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -166,6 +448,45 @@ public readonly struct UpdateOptions
 
     /// <summary>Gets whether wipe-conditioned package tasks may erase user data.</summary>
     public bool Wipe { get; }
+
+    /// <summary>Gets whether the final system reboot is omitted.</summary>
+    public bool SkipReboot { get; }
+
+    /// <summary>Gets whether secondary-slot flash tasks are omitted.</summary>
+    public bool SkipSecondary { get; }
+
+    /// <summary>Gets whether logical partitions are excluded.</summary>
+    public bool ExcludeDynamicPartitions { get; }
+
+    /// <summary>Gets whether the frozen image-list plan replaces fastboot-info.txt.</summary>
+    public bool DisableFastbootInfo { get; }
+
+    /// <summary>Gets whether update vbmeta images disable dm-verity.</summary>
+    public bool DisableVerity { get; }
+
+    /// <summary>Gets whether update vbmeta images disable verification.</summary>
+    public bool DisableVerification { get; }
+
+    /// <summary>Gets the global update slot, or null to preserve the package plan.</summary>
+    public string? Slot { get; }
+
+    /// <summary>Gets whether set_active is issued before update tasks.</summary>
+    public bool SetActive { get; }
+
+    /// <summary>Gets the explicit set_active slot, or null to derive it.</summary>
+    public string? ActiveSlot { get; }
+
+    /// <summary>Gets the AOSP -S sparse-part limit in bytes; zero is automatic.</summary>
+    public ulong SparseLimitBytes { get; }
+
+    /// <summary>Gets whether unmet ordinary package requirements are bypassed.</summary>
+    public bool Force { get; }
+
+    /// <summary>Gets filesystem features for update plans that format partitions.</summary>
+    public FilesystemOptions FilesystemOptions { get; }
+
+    /// <summary>Gets whether direct optimized physical-super flashing is disabled.</summary>
+    public bool DisableSuperOptimization { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
@@ -201,6 +522,17 @@ public readonly struct UpdateOptions
         }
 
         return (uint)milliseconds;
+    }
+
+    private static void ValidateFilesystemOptions(FilesystemOptions options)
+    {
+        const FilesystemOptions supported = FilesystemOptions.Casefold |
+            FilesystemOptions.Projid | FilesystemOptions.Compress;
+        if ((options & ~supported) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), options, "Unsupported filesystem option bits.");
+        }
     }
 }
 

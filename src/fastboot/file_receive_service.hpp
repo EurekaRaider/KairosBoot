@@ -76,6 +76,12 @@ public:
         std::uint64_t maximum_bytes,
         const protocol::TransferProgressObserver& observer = {});
 
+    [[nodiscard]] std::expected<FileReceiveResult, FileReceiveError>
+    get_staged(
+        const std::filesystem::path& destination,
+        std::uint64_t maximum_bytes,
+        const protocol::TransferProgressObserver& observer = {});
+
     [[nodiscard]] std::expected<FileReceiveResult, FileReceiveError> fetch(
         std::string_view partition,
         FetchRange range,

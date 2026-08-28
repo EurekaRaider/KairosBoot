@@ -7,6 +7,7 @@
 #include <string_view>
 
 namespace kairosboot::fastboot {
+struct FileReceiveError;
 struct PrimitiveError;
 enum class PrimitiveOperation : std::uint8_t;
 struct UpdateExecutionError;
@@ -54,6 +55,10 @@ struct DeviceSelectionError;
 
 [[nodiscard]] OperationErrorPayload normalize_public_error(
     const fastboot::PrimitiveError& error,
+    std::string_view device_identifier);
+
+[[nodiscard]] OperationErrorPayload normalize_public_error(
+    const fastboot::FileReceiveError& error,
     std::string_view device_identifier);
 
 [[nodiscard]] OperationErrorPayload normalize_public_error(

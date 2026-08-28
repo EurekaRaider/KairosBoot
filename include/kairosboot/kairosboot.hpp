@@ -78,6 +78,28 @@ enum class SnapshotUpdateCommand : kb_snapshot_update_command_t {
   Merge = KB_SNAPSHOT_UPDATE_MERGE,
 };
 
+struct FilesystemOptions {
+  bool casefold{};
+  bool projid{};
+  bool compress{};
+
+  [[nodiscard]] constexpr kb_filesystem_options_t native_flags() const noexcept {
+    kb_filesystem_options_t result{};
+    if (casefold) {
+      result |= static_cast<kb_filesystem_options_t>(
+          KB_FILESYSTEM_OPTION_CASEFOLD);
+    }
+    if (projid) {
+      result |= static_cast<kb_filesystem_options_t>(KB_FILESYSTEM_OPTION_PROJID);
+    }
+    if (compress) {
+      result |= static_cast<kb_filesystem_options_t>(
+          KB_FILESYSTEM_OPTION_COMPRESS);
+    }
+    return result;
+  }
+};
+
 struct FetchRange {
   std::optional<std::uint64_t> offset;
   std::optional<std::uint64_t> size;
@@ -85,17 +107,60 @@ struct FetchRange {
 
 using DeviceSelector = std::optional<std::string_view>;
 
+struct ContextOptions {
+  // Zero accepts every Fastboot USB vendor. Network transports are unaffected.
+  std::uint16_t usb_vendor_id{};
+};
+
 struct FlashOptions {
   // Per-I/O timeout. milliseconds::max() selects the native infinite default.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
+  bool disable_verity{};
+  bool disable_verification{};
   std::function<ProgressAction(const FlashProgress &)> progress;
+  std::optional<std::string> slot;
+  bool set_active{};
+  std::optional<std::string> active_slot;
+  // AOSP -S sparse-part limit in bytes; zero selects automatic device limits.
+  std::uint64_t sparse_limit_bytes{};
+  bool force{};
+  FilesystemOptions filesystem_options{};
+};
+
+struct LegacyBootOptions {
+  std::string command_line;
+  std::uint32_t base{0x10000000U};
+  std::uint32_t page_size{2048U};
+  std::uint32_t kernel_offset{0x00008000U};
+  std::uint32_t ramdisk_offset{0x01000000U};
+  std::uint32_t second_offset{0x00f00000U};
+  std::uint32_t tags_offset{0x00000100U};
+  std::uint32_t header_version{};
+  std::string os_version;
+  std::string os_patch_level;
+  std::optional<std::filesystem::path> dtb;
+  std::uint64_t dtb_offset{0x01100000ULL};
 };
 
 struct UpdateOptions {
   // Whole-operation timeout. milliseconds::max() selects no deadline.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
   bool wipe{};
+  bool skip_reboot{};
+  bool skip_secondary{};
+  bool exclude_dynamic_partitions{};
+  bool disable_fastboot_info{};
+  bool disable_verity{};
+  bool disable_verification{};
   std::function<ProgressAction(const Progress &)> progress;
+  std::optional<std::string> slot;
+  bool set_active{};
+  std::optional<std::string> active_slot;
+  // AOSP -S sparse-part limit in bytes; zero selects automatic device limits.
+  std::uint64_t sparse_limit_bytes{};
+  bool force{};
+  FilesystemOptions filesystem_options{};
+  bool disable_super_optimization{};
 };
 
 struct CommandOptions {
@@ -270,11 +335,23 @@ progress_trampoline(const kb_progress_t *progress, void *user_data) noexcept {
 struct PreparedFlashOptions final {
   kb_flash_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
+  std::shared_ptr<std::string> slot;
+  std::shared_ptr<std::string> active_slot;
+};
+
+struct PreparedLegacyBootOptions final {
+  kb_legacy_boot_options_t native{};
+  std::string command_line;
+  std::string os_version;
+  std::string os_patch_level;
+  std::string dtb_path;
 };
 
 struct PreparedUpdateOptions final {
   kb_update_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
+  std::shared_ptr<std::string> slot;
+  std::shared_ptr<std::string> active_slot;
 };
 
 [[nodiscard]] inline std::expected<std::uint32_t, Error>
@@ -304,9 +381,45 @@ prepare_update_options(const UpdateOptions &options) {
   }
 
   PreparedUpdateOptions result;
-  kb_update_options_init(&result.native);
+  kb_update_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   result.native.wipe = options.wipe ? 1 : 0;
+  result.native.skip_reboot = options.skip_reboot ? 1 : 0;
+  result.native.skip_secondary = options.skip_secondary ? 1 : 0;
+  result.native.exclude_dynamic_partitions =
+      options.exclude_dynamic_partitions ? 1 : 0;
+  result.native.disable_fastboot_info = options.disable_fastboot_info ? 1 : 0;
+  result.native.disable_verity = options.disable_verity ? 1 : 0;
+  result.native.disable_verification = options.disable_verification ? 1 : 0;
+  result.native.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.native.force = options.force ? 1 : 0;
+  result.native.filesystem_options = options.filesystem_options.native_flags();
+  result.native.disable_super_optimization =
+      options.disable_super_optimization ? 1 : 0;
+  if (options.slot) {
+    if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "update slot must be non-empty and NUL-free"));
+    }
+    result.slot = std::make_shared<std::string>(*options.slot);
+    result.native.slot = result.slot->c_str();
+  }
+  result.native.set_active = options.set_active ? 1 : 0;
+  if (options.active_slot) {
+    if (!options.set_active) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT,
+          "update active_slot requires set_active"));
+    }
+    if (options.active_slot->empty() ||
+        options.active_slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT,
+          "update active_slot must be non-empty and NUL-free"));
+    }
+    result.active_slot = std::make_shared<std::string>(*options.active_slot);
+    result.native.active_slot = result.active_slot->c_str();
+  }
   if (options.progress) {
     result.callback_state =
         std::make_shared<ProgressCallbackState>(ProgressCallbackState{
@@ -326,8 +439,36 @@ prepare_flash_options(const FlashOptions &options) {
   }
 
   PreparedFlashOptions result;
-  kb_flash_options_init(&result.native);
+  kb_flash_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
+  result.native.disable_verity = options.disable_verity ? 1 : 0;
+  result.native.disable_verification = options.disable_verification ? 1 : 0;
+  result.native.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.native.force = options.force ? 1 : 0;
+  result.native.filesystem_options = options.filesystem_options.native_flags();
+  if (options.slot) {
+    if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "flash slot must be non-empty and NUL-free"));
+    }
+    result.slot = std::make_shared<std::string>(*options.slot);
+    result.native.slot = result.slot->c_str();
+  }
+  result.native.set_active = options.set_active ? 1 : 0;
+  if (options.active_slot) {
+    if (!options.set_active) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "flash active_slot requires set_active"));
+    }
+    if (options.active_slot->empty() ||
+        options.active_slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT,
+          "flash active_slot must be non-empty and NUL-free"));
+    }
+    result.active_slot = std::make_shared<std::string>(*options.active_slot);
+    result.native.active_slot = result.active_slot->c_str();
+  }
   if (options.progress) {
     // This ordinary C++ allocation/copy happens before calling the C ABI and
     // may propagate std::bad_alloc or a callable-defined copy exception.
@@ -339,6 +480,53 @@ prepare_flash_options(const FlashOptions &options) {
     result.native.progress_user_data = result.callback_state.get();
   }
   return result;
+}
+
+[[nodiscard]] inline std::expected<PreparedLegacyBootOptions, Error>
+prepare_legacy_boot_options(const LegacyBootOptions &options) {
+  if (options.command_line.find('\0') != std::string::npos ||
+      options.os_version.find('\0') != std::string::npos ||
+      options.os_patch_level.find('\0') != std::string::npos) {
+    return std::unexpected(detail_make_error(
+        KB_E_INVALID_ARGUMENT, "boot construction strings must be NUL-free"));
+  }
+  PreparedLegacyBootOptions result;
+  kb_legacy_boot_options_init_sized(&result.native, sizeof(result.native));
+  result.command_line = options.command_line;
+  result.os_version = options.os_version;
+  result.os_patch_level = options.os_patch_level;
+  if (options.dtb) {
+    const auto encoded = options.dtb->u8string();
+    result.dtb_path.assign(encoded.begin(), encoded.end());
+    if (result.dtb_path.find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "boot DTB path must be NUL-free"));
+    }
+  }
+  result.native.base = options.base;
+  result.native.page_size = options.page_size;
+  result.native.kernel_offset = options.kernel_offset;
+  result.native.ramdisk_offset = options.ramdisk_offset;
+  result.native.second_offset = options.second_offset;
+  result.native.tags_offset = options.tags_offset;
+  result.native.header_version = options.header_version;
+  result.native.dtb_offset = options.dtb_offset;
+  return result;
+}
+
+inline void bind_legacy_boot_option_strings(
+    PreparedLegacyBootOptions &options) noexcept {
+  options.native.command_line = options.command_line.empty()
+                                    ? nullptr
+                                    : options.command_line.c_str();
+  options.native.os_version = options.os_version.empty()
+                                  ? nullptr
+                                  : options.os_version.c_str();
+  options.native.os_patch_level = options.os_patch_level.empty()
+                                      ? nullptr
+                                      : options.os_patch_level.c_str();
+  options.native.dtb_path =
+      options.dtb_path.empty() ? nullptr : options.dtb_path.c_str();
 }
 
 struct PreparedCommandOptions final {
@@ -359,7 +547,7 @@ prepare_job_options(const JobOptions &options) {
   }
 
   PreparedJobOptions result;
-  kb_job_options_init(&result.native);
+  kb_job_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   if (options.progress) {
     result.callback_state =
@@ -385,7 +573,7 @@ prepare_command_options(const CommandOptions &options) {
   }
 
   PreparedCommandOptions result;
-  kb_command_options_init(&result.native);
+  kb_command_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
   result.native.maximum_receive_bytes = options.maximum_receive_bytes;
   if (options.progress) {
@@ -476,7 +664,7 @@ struct Version {
 
 [[nodiscard]] inline Version version() {
   kb_version_t native{};
-  kb_version_init(&native);
+  kb_version_init_sized(&native, sizeof(native));
   (void)kb_get_version(&native);
   return Version{native.major, native.minor, native.patch, native.api_version,
                  native.string};
@@ -570,6 +758,15 @@ public:
     std::size_t size = 0;
     const auto *data = kb_command_result_data(handle_, &size);
     return detail_byte_view(data, size);
+  }
+
+  [[nodiscard]] std::string_view output_path() const noexcept {
+    const char *path = kb_command_result_output_path(handle_);
+    return path == nullptr ? std::string_view{} : std::string_view{path};
+  }
+
+  [[nodiscard]] std::uint64_t received_bytes() const noexcept {
+    return kb_command_result_received_bytes(handle_);
   }
 
   [[nodiscard]] std::string_view device_identifier() const noexcept {
@@ -921,10 +1118,14 @@ private:
 
 class Context {
 public:
-  static std::expected<Context, Error> create() {
+  static std::expected<Context, Error>
+  create(const ContextOptions &options = {}) {
+    kb_context_options_t native{};
+    kb_context_options_init_sized(&native, sizeof(native));
+    native.usb_vendor_id = options.usb_vendor_id;
     kb_context_t *handle = nullptr;
     kb_error_t *error = nullptr;
-    const kb_status_t status = kb_context_create(nullptr, &handle, &error);
+    const kb_status_t status = kb_context_create(&native, &handle, &error);
     if (status != KB_OK) {
       return std::unexpected(detail_take_error(status, error));
     }
@@ -1027,6 +1228,65 @@ public:
   erase(const std::string_view partition,
         const CommandOptions &options = {}) const {
     return erase(std::nullopt, partition, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> format_partition_async(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    const std::optional<std::string> type_storage =
+        filesystem_type.has_value()
+            ? std::optional<std::string>{std::string{*filesystem_type}}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_format_partition_async(
+        handle_, selector_value, partition_storage.c_str(),
+        type_storage.has_value() ? type_storage->c_str() : nullptr,
+        partition_size, &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> format_partition_async(
+      const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    return format_partition_async(std::nullopt, partition, filesystem_type,
+                                  partition_size, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> format_partition(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    auto operation = format_partition_async(
+        selector, partition, filesystem_type, partition_size, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> format_partition(
+      const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    return format_partition(std::nullopt, partition, filesystem_type,
+                            partition_size, options);
   }
 
   [[nodiscard]] std::expected<Operation, Error> set_active_async(
@@ -1585,6 +1845,128 @@ public:
     return fetch(std::nullopt, partition, range, options);
   }
 
+  [[nodiscard]] std::expected<Operation, Error> upload_file_async(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto output_u8 = output.u8string();
+    const std::string output_storage{output_u8.begin(), output_u8.end()};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_upload_file_async(handle_, selector_value,
+                                        output_storage.c_str(), native,
+                                        operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> upload_file_async(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return upload_file_async(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> upload_file(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    auto operation = upload_file_async(selector, output, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> upload_file(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return upload_file(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> get_staged_file_async(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto output_u8 = output.u8string();
+    const std::string output_storage{output_u8.begin(), output_u8.end()};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_get_staged_file_async(
+              handle_, selector_value, output_storage.c_str(), native,
+              operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> get_staged_file_async(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return get_staged_file_async(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> get_staged_file(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    auto operation = get_staged_file_async(selector, output, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> get_staged_file(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return get_staged_file(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> fetch_file_async(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::filesystem::path &output, const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    const auto output_u8 = output.u8string();
+    const std::string output_storage{output_u8.begin(), output_u8.end()};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_fetch_file_async(
+              handle_, selector_value, partition_storage.c_str(),
+              detail::native_fetch_value(range.offset),
+              detail::native_fetch_value(range.size), output_storage.c_str(),
+              native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> fetch_file_async(
+      const std::string_view partition, const std::filesystem::path &output,
+      const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    return fetch_file_async(std::nullopt, partition, output, range, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> fetch_file(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::filesystem::path &output, const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    auto operation = fetch_file_async(selector, partition, output, range,
+                                      options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> fetch_file(
+      const std::string_view partition, const std::filesystem::path &output,
+      const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    return fetch_file(std::nullopt, partition, output, range, options);
+  }
+
   [[nodiscard]] std::expected<Job, Error> run_job_file_async(
       const std::filesystem::path &manifest,
       const JobOptions &options = {}) const {
@@ -1673,6 +2055,62 @@ public:
       const std::string_view selector, const std::filesystem::path &package,
       const UpdateOptions &options = {}) const {
     return update_package(DeviceSelector{selector}, package, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> wipe_super_async(
+      const DeviceSelector selector,
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    auto prepared = detail::prepare_update_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    std::string path_storage;
+    const char *path_value = nullptr;
+    if (super_empty_image.has_value()) {
+      const auto path_u8 = super_empty_image->u8string();
+      path_storage.assign(path_u8.begin(), path_u8.end());
+      path_value = path_storage.c_str();
+    }
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_wipe_super_async(
+        handle_, selector_value, path_value, &prepared->native, &operation,
+        &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> wipe_super_async(
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    return wipe_super_async(std::nullopt, super_empty_image, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> wipe_super(
+      const DeviceSelector selector,
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    auto operation = wipe_super_async(selector, super_empty_image, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> wipe_super(
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    return wipe_super(std::nullopt, super_empty_image, options);
   }
 
   [[nodiscard]] std::expected<Operation, Error> flash_file_async(
@@ -1777,6 +2215,354 @@ public:
   flash_file(std::string_view serial, std::string_view partition,
              const std::filesystem::path &file) const {
     return flash_file(std::optional<std::string_view>{serial}, partition, file);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  flash_vendor_boot_ramdisk_async(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    const std::string name_storage{ramdisk_name};
+    const std::string ramdisk_storage = to_utf8(ramdisk);
+    const std::optional<std::string> dtb_storage =
+        dtb.has_value() ? std::optional<std::string>{to_utf8(*dtb)}
+                        : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_flash_vendor_boot_ramdisk_async(
+        handle_, selector_value, partition_storage.c_str(),
+        name_storage.c_str(), ramdisk_storage.c_str(),
+        dtb_storage.has_value() ? dtb_storage->c_str() : nullptr,
+        &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error>
+  flash_vendor_boot_ramdisk_async(
+      std::string_view partition, const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    return flash_vendor_boot_ramdisk_async(
+        std::nullopt, partition, ramdisk, ramdisk_name, dtb, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_vendor_boot_ramdisk(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto operation = flash_vendor_boot_ramdisk_async(
+        selector, partition, ramdisk, ramdisk_name, dtb, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_vendor_boot_ramdisk(
+      std::string_view partition, const std::filesystem::path &ramdisk,
+      std::string_view ramdisk_name = "default",
+      const std::optional<std::filesystem::path> &dtb = std::nullopt,
+      const FlashOptions &options = {}) const {
+    return flash_vendor_boot_ramdisk(
+        std::nullopt, partition, ramdisk, ramdisk_name, dtb, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> flash_raw_async(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    const std::string selector_string =
+        selector.has_value() ? std::string{*selector} : std::string{};
+    const std::string partition_string{partition};
+    const std::string kernel_string = to_utf8(kernel);
+    const std::optional<std::string> ramdisk_string =
+        ramdisk.has_value()
+            ? std::optional<std::string>{to_utf8(*ramdisk)}
+            : std::nullopt;
+    const std::optional<std::string> second_string =
+        second_stage.has_value()
+            ? std::optional<std::string>{to_utf8(*second_stage)}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_flash_raw_async(
+        handle_, selector.has_value() ? selector_string.c_str() : nullptr,
+        partition_string.c_str(), kernel_string.c_str(),
+        ramdisk_string.has_value() ? ramdisk_string->c_str() : nullptr,
+        second_string.has_value() ? second_string->c_str() : nullptr,
+        &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_raw(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto operation = flash_raw_async(selector, partition, kernel, ramdisk,
+                                     second_stage, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> flash_raw_async(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk,
+      const std::optional<std::filesystem::path> &second_stage,
+      const LegacyBootOptions &legacy_options,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    auto legacy = detail::prepare_legacy_boot_options(legacy_options);
+    if (!legacy) {
+      return std::unexpected(std::move(legacy.error()));
+    }
+    detail::bind_legacy_boot_option_strings(*legacy);
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    const std::string selector_string =
+        selector.has_value() ? std::string{*selector} : std::string{};
+    const std::string partition_string{partition};
+    const std::string kernel_string = to_utf8(kernel);
+    const std::optional<std::string> ramdisk_string =
+        ramdisk.has_value()
+            ? std::optional<std::string>{to_utf8(*ramdisk)}
+            : std::nullopt;
+    const std::optional<std::string> second_string =
+        second_stage.has_value()
+            ? std::optional<std::string>{to_utf8(*second_stage)}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_flash_raw_with_boot_options_async(
+        handle_, selector.has_value() ? selector_string.c_str() : nullptr,
+        partition_string.c_str(), kernel_string.c_str(),
+        ramdisk_string.has_value() ? ramdisk_string->c_str() : nullptr,
+        second_string.has_value() ? second_string->c_str() : nullptr,
+        &legacy->native, &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_raw(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk,
+      const std::optional<std::filesystem::path> &second_stage,
+      const LegacyBootOptions &legacy_options,
+      const FlashOptions &options = {}) const {
+    auto operation = flash_raw_async(selector, partition, kernel, ramdisk,
+                                     second_stage, legacy_options, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_raw_async(
+      DeviceSelector selector, const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const LegacyBootOptions &legacy_options = {},
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    auto legacy = detail::prepare_legacy_boot_options(legacy_options);
+    if (!legacy) {
+      return std::unexpected(std::move(legacy.error()));
+    }
+    detail::bind_legacy_boot_option_strings(*legacy);
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string kernel_string = to_utf8(kernel);
+    const std::optional<std::string> ramdisk_string =
+        ramdisk.has_value()
+            ? std::optional<std::string>{to_utf8(*ramdisk)}
+            : std::nullopt;
+    const std::optional<std::string> second_string =
+        second_stage.has_value()
+            ? std::optional<std::string>{to_utf8(*second_stage)}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_boot_raw_async(
+        handle_, selector_value, kernel_string.c_str(),
+        ramdisk_string.has_value() ? ramdisk_string->c_str() : nullptr,
+        second_string.has_value() ? second_string->c_str() : nullptr,
+        &legacy->native, &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_raw(
+      DeviceSelector selector, const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const LegacyBootOptions &legacy_options = {},
+      const FlashOptions &options = {}) const {
+    auto operation = boot_raw_async(selector, kernel, ramdisk, second_stage,
+                                    legacy_options, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_file_async(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto path_u8 = file.u8string();
+    const std::string path_string{path_u8.begin(), path_u8.end()};
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_boot_file_async(
+        handle_, selector_value, path_string.c_str(), &prepared->native,
+        &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_file_async(
+      const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file_async(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_file_async(
+      const std::string_view selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file_async(DeviceSelector{selector}, file, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_file(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    auto operation = boot_file_async(selector, file, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_file(
+      const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_file(
+      const std::string_view selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file(DeviceSelector{selector}, file, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> signature_file_async(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto path_u8 = file.u8string();
+    const std::string path_storage{path_u8.begin(), path_u8.end()};
+    return start_typed_operation(
+        options,
+        [&](const kb_command_options_t *native, kb_operation_t **operation,
+            kb_error_t **error) {
+          return ::kb_signature_file_async(
+              handle_, selector_value, path_storage.c_str(), native,
+              operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> signature_file_async(
+      const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file_async(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> signature_file_async(
+      const std::string_view selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file_async(DeviceSelector{selector}, file, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> signature_file(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    auto operation = signature_file_async(selector, file, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> signature_file(
+      const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> signature_file(
+      const std::string_view selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file(DeviceSelector{selector}, file, options);
   }
 
 private:

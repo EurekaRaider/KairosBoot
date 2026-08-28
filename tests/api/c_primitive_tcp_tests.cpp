@@ -261,6 +261,31 @@ private:
     CHECK(closed);
   }
 
+  void serve_signature(const bool accepted) {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "download:00000100");
+    write_frame(socket, "DATA00000100");
+    const auto payload = read_frame(socket);
+    CHECK(payload.size() == 256U);
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+      CHECK(payload[index] == std::byte{static_cast<unsigned char>(index)});
+    }
+    write_frame(socket, "OKAYdownloaded");
+    CHECK(as_string(read_frame(socket)) == "signature");
+    write_frame(socket, "INFOsignature policy");
+    write_frame(socket, accepted ? "OKAYaccepted" : "FAILsignature rejected");
+  }
+
+  void serve_cancelled_signature() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "download:00000100");
+    write_frame(socket, "DATA00000100");
+    std::array<std::byte, 1> trailing{};
+    boost::system::error_code closed;
+    static_cast<void>(socket.read_some(boost::asio::buffer(trailing), closed));
+    CHECK(closed);
+  }
+
   void run() noexcept {
     try {
       {
@@ -346,6 +371,10 @@ private:
         write_frame(socket, "INFOpolicy");
         write_frame(socket, std::string("FAILdenied\0x", 12));
       }
+      serve_signature(true);
+      serve_signature(true);
+      serve_signature(false);
+      serve_cancelled_signature();
       serve_flash_success();
       serve_flash_success();
       serve_flash_failure();
@@ -397,6 +426,94 @@ private:
         CHECK(as_string(read_frame(socket)) == "erase:metadata");
         std::this_thread::sleep_for(std::chrono::milliseconds{1000});
       }
+    } catch (...) {
+      failure_ = std::current_exception();
+    }
+  }
+
+  boost::asio::io_context context_;
+  tcp::acceptor acceptor_;
+  std::uint16_t port_;
+  std::thread worker_;
+  std::exception_ptr failure_;
+};
+
+class FlashRawServer final {
+public:
+  FlashRawServer()
+      : acceptor_(context_, tcp::endpoint(tcp::v4(), 0)),
+        port_(acceptor_.local_endpoint().port()),
+        worker_([this] { run(); }) {}
+
+  ~FlashRawServer() {
+    if (worker_.joinable()) {
+      boost::system::error_code ignored;
+      acceptor_.close(ignored);
+      worker_.join();
+    }
+  }
+
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+  void finish() {
+    worker_.join();
+    if (failure_ != nullptr) {
+      std::rethrow_exception(failure_);
+    }
+  }
+
+private:
+  void run() noexcept {
+    try {
+      tcp::socket socket(context_);
+      acceptor_.accept(socket);
+      std::array<char, 4> handshake{};
+      boost::asio::read(socket, boost::asio::buffer(handshake));
+      CHECK((handshake == std::array<char, 4>{'F', 'B', '0', '1'}));
+      boost::asio::write(socket, boost::asio::buffer(handshake));
+
+      CHECK(as_string(read_frame(socket)) == "getvar:has-slot:boot");
+      write_frame(socket, "OKAYno");
+      CHECK(as_string(read_frame(socket)) == "download:00002000");
+      write_frame(socket, "DATA00002000");
+      const auto image = read_frame(socket);
+      CHECK(image.size() == 8192U);
+      CHECK(std::memcmp(image.data(), "ANDROID!", 8U) == 0);
+      const auto le32 = [&image](const std::size_t offset) {
+        std::uint32_t result = 0;
+        for (std::size_t byte = 0; byte < 4U; ++byte) {
+          result |= std::to_integer<std::uint32_t>(image[offset + byte])
+                    << (byte * 8U);
+        }
+        return result;
+      };
+      CHECK(le32(8U) == 2048U);
+      CHECK(le32(12U) == 0x10008000U);
+      CHECK(le32(16U) == 3U);
+      CHECK(le32(20U) == 0x11000000U);
+      CHECK(le32(24U) == 0U);
+      CHECK(le32(32U) == 0x10000100U);
+      CHECK(le32(36U) == 2048U);
+      CHECK(le32(40U) == 2U);
+      CHECK(le32(44U) ==
+            ((15U << 25U) | (1U << 18U) | (25U << 4U) | 2U));
+      CHECK(le32(1644U) == 1660U);
+      CHECK(le32(1648U) == 3U);
+      CHECK(le32(1652U) == 0x11200000U);
+      CHECK(le32(1656U) == 0U);
+      for (std::size_t index = 0; index < 2048U; ++index) {
+        CHECK(image[2048U + index] ==
+              std::byte{static_cast<unsigned char>(index & 0xffU)});
+      }
+      CHECK(image[4096U] == std::byte{'r'});
+      CHECK(image[4097U] == std::byte{0});
+      CHECK(image[4098U] == std::byte{'d'});
+      CHECK(image[6144U] == std::byte{'d'});
+      CHECK(image[6145U] == std::byte{'t'});
+      CHECK(image[6146U] == std::byte{'b'});
+      write_frame(socket, "OKAYdownloaded");
+      CHECK(as_string(read_frame(socket)) == "flash:boot");
+      write_frame(socket, "OKAYflashed");
     } catch (...) {
       failure_ = std::current_exception();
     }
@@ -891,7 +1008,7 @@ void run_contract() {
   }
   std::vector<std::uint64_t> watermarks;
   kb_command_options_t options;
-  kb_command_options_init(&options);
+  kb_command_options_init_sized(&options, sizeof(options));
   options.progress_callback = record_progress;
   options.progress_user_data = &watermarks;
   CHECK(kb_stage(context, selector.c_str(), stage_data.data(), stage_data.size(),
@@ -1030,8 +1147,78 @@ void run_contract() {
       "version 1\nflash system system.img\n", update_image);
   const auto image_path = (update_package.path() / "system.img").string();
 
+  std::array<std::byte, 256> signature_bytes{};
+  for (std::size_t index = 0; index < signature_bytes.size(); ++index) {
+    signature_bytes[index] =
+        std::byte{static_cast<unsigned char>(index)};
+  }
+  TemporaryUpdatePackage signature_package("version 1\n", signature_bytes);
+  const auto signature_path =
+      (signature_package.path() / "system.img").string();
+
+  kb_operation_t* signature_operation = nullptr;
+  CHECK(kb_signature_file_async(
+            context, selector.c_str(), image_path.c_str(), nullptr,
+            &signature_operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(signature_operation == nullptr);
+  CHECK(error != nullptr);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+  error = nullptr;
+
+  kb_command_options_init_sized(&options, sizeof(options));
+  watermarks.clear();
+  options.progress_callback = record_progress;
+  options.progress_user_data = &watermarks;
+  result = nullptr;
+  CHECK(kb_signature_file(context, selector.c_str(), signature_path.c_str(),
+                          &options, &result, &error) == KB_OK);
+  CHECK(result != nullptr);
+  CHECK(error == nullptr);
+  terminal = kb_command_result_terminal_payload(result, &size);
+  CHECK(std::string(reinterpret_cast<const char*>(terminal), size) ==
+        "accepted");
+  CHECK(kb_command_result_message_count(result) == 1U);
+  CHECK(watermarks == std::vector<std::uint64_t>({0U, 256U}));
+  kb_command_result_release(result);
+  result = nullptr;
+
+  signature_operation = nullptr;
+  CHECK(kb_signature_file_async(
+            context, selector.c_str(), signature_path.c_str(), &options,
+            &signature_operation, &error) == KB_OK);
+  CHECK(signature_operation != nullptr);
+  CHECK(kb_operation_wait(signature_operation, KB_WAIT_INFINITE) == KB_OK);
+  CHECK(kb_operation_command_result(signature_operation, &result, &error) ==
+        KB_OK);
+  kb_operation_release(signature_operation);
+  kb_command_result_release(result);
+  result = nullptr;
+
+  CHECK(kb_signature_file(context, selector.c_str(), signature_path.c_str(),
+                          &options, &result, &error) == KB_E_DEVICE_FAIL);
+  CHECK(result == nullptr);
+  CHECK(error != nullptr);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_FULLY_TRANSFERRED);
+  CHECK(kb_error_session_poisoned(error) == 0);
+  CHECK(kb_error_command_message_count(error) == 1U);
+  kb_error_release(error);
+  error = nullptr;
+
+  kb_command_options_init_sized(&options, sizeof(options));
+  options.progress_callback = cancel_flash_at_download;
+  signature_operation = nullptr;
+  CHECK(kb_signature_file_async(
+            context, selector.c_str(), signature_path.c_str(), &options,
+            &signature_operation, &error) == KB_OK);
+  CHECK(kb_operation_wait(signature_operation, KB_WAIT_INFINITE) ==
+        KB_E_CANCELLED);
+  CHECK(kb_error_transfer_state(kb_operation_error(signature_operation)) ==
+        KB_TRANSFER_NOT_SENT);
+  kb_operation_release(signature_operation);
+
   kb_flash_options_t flash_options;
-  kb_flash_options_init(&flash_options);
+  kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   std::vector<std::uint64_t> flash_watermarks;
   flash_options.progress_callback = record_progress;
   flash_options.progress_user_data = &flash_watermarks;
@@ -1055,7 +1242,7 @@ void run_contract() {
   CHECK(flash_watermarks ==
         std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
 
-  kb_flash_options_init(&flash_options);
+  kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   flash_operation = nullptr;
   CHECK(kb_flash_file_async(
             context, selector.c_str(), "system", image_path.c_str(),
@@ -1083,7 +1270,7 @@ void run_contract() {
   error = nullptr;
   CHECK(blocking_flash_error == asynchronous_flash_error);
 
-  kb_flash_options_init(&flash_options);
+  kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   flash_options.progress_callback = cancel_flash_at_download;
   flash_operation = nullptr;
   CHECK(kb_flash_file_async(
@@ -1112,7 +1299,8 @@ void run_contract() {
 
   std::vector<std::uint64_t> update_watermarks;
   kb_update_options_t update_options;
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
+  update_options.skip_reboot = 1;
   update_options.progress_callback = record_progress;
   update_options.progress_user_data = &update_watermarks;
   const auto package_path = update_package.path().string();
@@ -1135,7 +1323,7 @@ void run_contract() {
   error = nullptr;
 
   CancelOnTaskFailureProbe cancellation_probe;
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.progress_callback = cancel_on_second_execute;
   update_options.progress_user_data = &cancellation_probe;
   CHECK(kb_update_package(context, selector.c_str(), package_path.c_str(),
@@ -1153,8 +1341,9 @@ void run_contract() {
   TemporaryUpdatePackage wipe_package(
       "version 1\nif-wipe erase userdata\n");
   const auto wipe_path = wipe_package.path().string();
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.wipe = 1;
+  update_options.skip_reboot = 1;
   CHECK(kb_update_package(context, selector.c_str(), wipe_path.c_str(),
                           &update_options, &error) == KB_OK);
   CHECK(error == nullptr);
@@ -1162,7 +1351,7 @@ void run_contract() {
   TemporaryUpdatePackage deadline_package(
       "version 1\nerase cache\nerase metadata\n");
   const auto deadline_path = deadline_package.path().string();
-  kb_update_options_init(&update_options);
+  kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.timeout_ms = 1000U;
   const auto deadline_started = std::chrono::steady_clock::now();
   CHECK(kb_update_package(context, selector.c_str(), deadline_path.c_str(),
@@ -1181,6 +1370,44 @@ void run_contract() {
   server.finish();
 }
 
+void run_flash_raw_contract() {
+  FlashRawServer server;
+  const auto selector = "tcp:127.0.0.1:" + std::to_string(server.port());
+
+  std::vector<std::byte> kernel(2048U);
+  for (std::size_t index = 0; index < kernel.size(); ++index) {
+    kernel[index] = std::byte{static_cast<unsigned char>(index & 0xffU)};
+  }
+  const std::array<std::byte, 3> ramdisk{std::byte{'r'}, std::byte{0},
+                                        std::byte{'d'}};
+  const std::array<std::byte, 3> dtb{std::byte{'d'}, std::byte{'t'},
+                                    std::byte{'b'}};
+  TemporaryUpdatePackage kernel_files("version 1\n", kernel);
+  TemporaryUpdatePackage ramdisk_files("version 1\n", ramdisk);
+  TemporaryUpdatePackage dtb_files("version 1\n", dtb);
+  const auto kernel_path = (kernel_files.path() / "system.img").string();
+  const auto ramdisk_path = (ramdisk_files.path() / "system.img").string();
+  const auto dtb_path = (dtb_files.path() / "system.img").string();
+
+  kb_context_t* context = nullptr;
+  kb_error_t* error = nullptr;
+  CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+  kb_legacy_boot_options_t boot_options;
+  kb_legacy_boot_options_init_sized(&boot_options, sizeof(boot_options));
+  boot_options.header_version = 2U;
+  boot_options.os_version = "15.1";
+  boot_options.os_patch_level = "2025-02-05";
+  boot_options.dtb_path = dtb_path.c_str();
+  boot_options.dtb_offset = 0x01200000ULL;
+  CHECK(kb_flash_raw_with_boot_options(
+            context, selector.c_str(), "boot", kernel_path.c_str(),
+            ramdisk_path.c_str(), nullptr, &boot_options, nullptr, &error) ==
+        KB_OK);
+  CHECK(error == nullptr);
+  kb_context_release(context);
+  server.finish();
+}
+
 void context_release_is_safe_after_async_update_start() {
   TemporaryUpdatePackage package("version 1\n");
   kb_context_t* context = nullptr;
@@ -1191,7 +1418,7 @@ void context_release_is_safe_after_async_update_start() {
 
   ReleaseContextProbe probe{.context = context, .released = false};
   kb_update_options_t options;
-  kb_update_options_init(&options);
+  kb_update_options_init_sized(&options, sizeof(options));
   options.progress_callback = release_context_during_preflight;
   options.progress_user_data = &probe;
   kb_operation_t* operation = nullptr;
@@ -1215,7 +1442,7 @@ void whole_update_timeout_includes_progress_callbacks() {
 
   DelayOpenProbe probe;
   kb_update_options_t options;
-  kb_update_options_init(&options);
+  kb_update_options_init_sized(&options, sizeof(options));
   options.timeout_ms = 500U;
   options.progress_callback = delay_transport_open;
   options.progress_user_data = &probe;
@@ -1398,7 +1625,7 @@ void run_udp_flash_contract() {
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &c_context, &error) == KB_OK);
   kb_flash_options_t c_options;
-  kb_flash_options_init(&c_options);
+  kb_flash_options_init_sized(&c_options, sizeof(c_options));
   c_options.timeout_ms = 2'000U;
   kb_operation_t* operation = nullptr;
   CHECK(kb_flash_file_async(
@@ -1441,7 +1668,7 @@ void run_udp_flash_contract() {
   error = nullptr;
   CHECK(blocking_flash_error == asynchronous_flash_error);
 
-  kb_flash_options_init(&c_options);
+  kb_flash_options_init_sized(&c_options, sizeof(c_options));
   c_options.timeout_ms = 0U;
   operation = nullptr;
   CHECK(kb_flash_file_async(
@@ -1513,6 +1740,7 @@ void run_udp_flash_contract() {
 int main() {
   try {
     run_contract();
+    run_flash_raw_contract();
     context_release_is_safe_after_async_update_start();
     whole_update_timeout_includes_progress_callbacks();
     run_cxx_contract();

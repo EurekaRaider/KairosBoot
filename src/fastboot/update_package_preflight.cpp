@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "update_package_preflight.hpp"
 
+#include "src/image/vbmeta_flag_source.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -173,8 +175,7 @@ read_manifest(const image::ResolvedArtifact& resolved, const std::string_view na
 
 [[nodiscard]] bool is_vbmeta_partition(
     const std::string_view partition) noexcept {
-    return partition == "vbmeta" || partition == "vbmeta_system" ||
-           partition == "vbmeta_vendor";
+    return image::is_vbmeta_partition(partition);
 }
 
 [[nodiscard]] UpdateSourceLocation hardcoded_location(
@@ -195,6 +196,25 @@ make_hardcoded_update_plan(
     const std::stop_token cancellation) {
     DeterministicUpdatePlan plan{.requirements = std::move(requirements)};
 
+    // AOSP HandlePartitionExists promotes the matching host image-table
+    // nickname from optional to required before the fallback task list is
+    // collected. Preserve that package-level effect during transport-free
+    // preflight so a successful device requirement can never leave a required
+    // partition silently unflashed. Like the frozen implementation, only the
+    // first option and a non-empty nickname participate in the lookup.
+    const auto required_by_partition_exists =
+        [&plan](const HardcodedImage& specification) noexcept {
+            return !specification.nickname.empty() &&
+                   std::ranges::any_of(
+                       plan.requirements,
+                       [&specification](const PlannedRequirement& requirement) {
+                           return requirement.variable == "partition-exists" &&
+                                  !requirement.options.empty() &&
+                                  requirement.options.front() ==
+                                      specification.nickname;
+                       });
+        };
+
     const auto add_phase = [&](const HardcodedImageType phase)
         -> std::expected<void, UpdatePackagePreflightError> {
         for (std::size_t index = 0; index < kHardcodedImages.size(); ++index) {
@@ -212,6 +232,7 @@ make_hardcoded_update_plan(
             auto resolved = snapshot.resolve(specification.image_name);
             if (!resolved) {
                 if (specification.optional_if_missing &&
+                    !required_by_partition_exists(specification) &&
                     resolved.error().kind ==
                         image::ArtifactSourceErrorKind::NotFound) {
                     continue;
@@ -397,6 +418,85 @@ bool PreparedSuperArtifact::wants_wipe() const noexcept {
 }
 
 std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_wipe_super(image::ArtifactSourceResolver& resolver,
+                     const std::filesystem::path& super_empty_image,
+                     const std::stop_token cancellation) {
+    try {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(failure(
+                UpdatePackagePreflightErrorKind::Cancelled,
+                "wipe-super preflight was cancelled",
+                std::string(kSuperEmptyName)));
+        }
+        auto preflight = image::preflight_flash_artifact(
+            resolver, super_empty_image, {}, cancellation);
+        if (!preflight) {
+            return std::unexpected(
+                artifact_failure(kSuperEmptyName, std::move(preflight.error())));
+        }
+        auto resolved = std::make_shared<const image::ResolvedArtifact>(
+            image::ResolvedArtifact{
+                .source = preflight->resolved->source,
+                .sha256 = preflight->resolved->sha256,
+                .origin = preflight->resolved->origin,
+                .logical_name = std::string(kSuperEmptyName),
+            });
+        if (!super_metadata_is_consistent(*resolved, preflight->artifact)) {
+            return std::unexpected(artifact_failure(
+                kSuperEmptyName,
+                image::ArtifactSourceError{
+                    .kind = image::ArtifactSourceErrorKind::InvalidImage,
+                    .message =
+                        "prepared super_empty.img metadata or source mapping "
+                        "is inconsistent",
+                }));
+        }
+
+        auto artifact = std::make_shared<const image::FlashArtifact>(
+            std::move(preflight->artifact));
+        PreparedUpdatePackage prepared{
+            .plan =
+                {
+                    .tasks =
+                        {
+                            PlannedUpdateTask{
+                                .kind = UpdateTaskKind::UpdateSuper,
+                            },
+                        },
+                },
+            .update_super_state = UpdateSuperPreparationState::Prepared,
+            .prepared_super_artifact =
+                std::make_shared<const PreparedSuperArtifact>(
+                    std::move(resolved), std::move(artifact), true),
+            .requires_device_validation = false,
+        };
+        return prepared;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(failure(
+            UpdatePackagePreflightErrorKind::Artifact,
+            "unable to allocate wipe-super preflight state",
+            std::string(kSuperEmptyName)));
+    } catch (const std::filesystem::filesystem_error& error) {
+        auto result = failure(
+            UpdatePackagePreflightErrorKind::Artifact,
+            "filesystem failure during wipe-super preflight: " +
+                std::string(error.what()),
+            std::string(kSuperEmptyName));
+        result.artifact_error = image::ArtifactSourceError{
+            .kind = image::ArtifactSourceErrorKind::Io,
+            .native_code = error.code().value(),
+            .message = result.message,
+        };
+        return std::unexpected(std::move(result));
+    } catch (...) {
+        return std::unexpected(failure(
+            UpdatePackagePreflightErrorKind::Artifact,
+            "unexpected failure during wipe-super preflight",
+            std::string(kSuperEmptyName)));
+    }
+}
+
+std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
 preflight_update_package(image::ArtifactSourceResolver& resolver,
                          const std::filesystem::path& package_directory_or_zip,
                          const bool wants_wipe,
@@ -412,6 +512,20 @@ preflight_update_package(
     image::ArtifactSourceResolver& resolver,
     const std::filesystem::path& package_directory_or_zip,
     const bool wants_wipe,
+    const UpdatePackagePreflightLimits& limits,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token cancellation) {
+    return preflight_update_package(
+        resolver, package_directory_or_zip, wants_wipe, UpdatePackagePolicy{},
+        limits, deadline, cancellation);
+}
+
+std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_update_package(
+    image::ArtifactSourceResolver& resolver,
+    const std::filesystem::path& package_directory_or_zip,
+    const bool wants_wipe,
+    const UpdatePackagePolicy& policy,
     const UpdatePackagePreflightLimits& limits,
     const std::chrono::steady_clock::time_point deadline,
     const std::stop_token cancellation) {
@@ -449,21 +563,26 @@ preflight_update_package(
 
         std::string fastboot_text;
         bool use_hardcoded_fallback = false;
-        auto fastboot = snapshot.resolve(kFastbootInfoName);
-        if (fastboot) {
-            auto contents =
-                read_manifest(**fastboot, kFastbootInfoName,
-                              limits.manifest.maximum_file_bytes, cancellation);
-            if (!contents) {
-                return std::unexpected(std::move(contents.error()));
-            }
-            fastboot_text = std::move(*contents);
-        } else {
-            if (fastboot.error().kind != image::ArtifactSourceErrorKind::NotFound) {
-                return std::unexpected(
-                    artifact_failure(kFastbootInfoName, std::move(fastboot.error())));
-            }
+        if (policy.disable_fastboot_info) {
             use_hardcoded_fallback = true;
+        } else {
+            auto fastboot = snapshot.resolve(kFastbootInfoName);
+            if (fastboot) {
+                auto contents = read_manifest(
+                    **fastboot, kFastbootInfoName,
+                    limits.manifest.maximum_file_bytes, cancellation);
+                if (!contents) {
+                    return std::unexpected(std::move(contents.error()));
+                }
+                fastboot_text = std::move(*contents);
+            } else {
+                if (fastboot.error().kind !=
+                    image::ArtifactSourceErrorKind::NotFound) {
+                    return std::unexpected(artifact_failure(
+                        kFastbootInfoName, std::move(fastboot.error())));
+                }
+                use_hardcoded_fallback = true;
+            }
         }
 
         auto parsed =
@@ -487,16 +606,47 @@ preflight_update_package(
             plan = make_update_plan(*parsed, wants_wipe);
         }
 
+        if (policy.skip_secondary) {
+            std::erase_if(plan.tasks, [](const PlannedUpdateTask& task) {
+                return task.kind == UpdateTaskKind::Flash &&
+                       task.slot == PlannedSlot::Other;
+            });
+        }
+        if (policy.exclude_dynamic_partitions) {
+            std::erase_if(plan.tasks, [](const PlannedUpdateTask& task) {
+                return task.kind != UpdateTaskKind::Flash;
+            });
+            for (auto& task : plan.tasks) {
+                task.exclude_if_dynamic = true;
+            }
+        }
+
         auto prepared_super = prepare_update_super(
             snapshot, &plan, wants_wipe, cancellation);
         if (!prepared_super) {
             return std::unexpected(std::move(prepared_super.error()));
         }
-        if (use_hardcoded_fallback &&
-            plan.tasks.size() > limits.manifest.maximum_tasks) {
+        if (policy.append_final_reboot) {
+            if (plan.tasks.size() >= limits.manifest.maximum_tasks) {
+                return std::unexpected(failure(
+                    UpdatePackagePreflightErrorKind::LimitExceeded,
+                    "update plan has no capacity for the final reboot task"));
+            }
+            plan.tasks.push_back(PlannedUpdateTask{
+                .kind = UpdateTaskKind::Reboot,
+                .location = UpdateSourceLocation{
+                    .manifest = UpdateManifestKind::FastbootInfo,
+                    .line = plan.tasks.size() + 1U,
+                    .column = 1U,
+                    .byte_offset = 0U,
+                },
+                .reboot_target = PlannedRebootTarget::System,
+            });
+        }
+        if (plan.tasks.size() > limits.manifest.maximum_tasks) {
             return std::unexpected(failure(
                 UpdatePackagePreflightErrorKind::LimitExceeded,
-                "hardcoded update plan exceeds the configured task limit"));
+                "update plan exceeds the configured task limit"));
         }
 
         std::vector<std::string> artifact_names;

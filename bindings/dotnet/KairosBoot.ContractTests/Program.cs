@@ -47,6 +47,7 @@ internal static class Program
             CheckCommandOptions();
             CheckUpdateOptions();
             CheckJobOptions();
+            CheckLegacyBootOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
             CheckFleetPublicSurface();
@@ -57,8 +58,10 @@ internal static class Program
             if (Environment.GetEnvironmentVariable("KAIROSBOOT_UPDATE_SHIM") == "1")
             {
                 await CheckScriptedUpdateShim().ConfigureAwait(false);
+                await CheckScriptedBootShim().ConfigureAwait(false);
+                await CheckScriptedLegacyBootShim().ConfigureAwait(false);
                 await CheckScriptedFleetShim().ConfigureAwait(false);
-                Console.WriteLine($"KairosBoot scripted update checks passed: {checks}");
+                Console.WriteLine($"KairosBoot scripted native checks passed: {checks}");
                 return 0;
             }
 
@@ -75,7 +78,7 @@ internal static class Program
             await CheckFlashFailsAccurately().ConfigureAwait(false);
             await CheckPreCancellation().ConfigureAwait(false);
             await CheckTypedPreCancellation().ConfigureAwait(false);
-            CheckTypedManagedPreflight();
+            await CheckTypedManagedPreflight().ConfigureAwait(false);
 #if NET10_0_OR_GREATER
             await CheckScriptedTcpParity().ConfigureAwait(false);
 #endif
@@ -114,27 +117,58 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 96)
+        if (uniqueEntryPoints.Count != 117)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 96 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 117 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 96, "unique entry points");
-        Check(entryPoints.Contains("kb_update_options_init"), "update options import");
+        Check(uniqueEntryPoints.Count == 117, "unique entry points");
+        Check(entryPoints.Contains("kb_context_options_init_sized"), "context options import");
+        Check(entryPoints.Contains("kb_flash_options_init_sized"), "flash options import");
+        Check(entryPoints.Contains("kb_legacy_boot_options_init_sized"), "legacy boot options import");
+        Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
+        Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
+        Check(
+            entryPoints.Contains("kb_flash_vendor_boot_ramdisk_async"),
+            "async vendor_boot ramdisk import");
+        Check(
+            entryPoints.Contains("kb_flash_vendor_boot_ramdisk"),
+            "blocking vendor_boot ramdisk import");
+        Check(
+            entryPoints.Contains("kb_flash_raw_with_boot_options_async"),
+            "configured async flash:raw import");
+        Check(
+            entryPoints.Contains("kb_flash_raw_with_boot_options"),
+            "configured blocking flash:raw import");
+        Check(entryPoints.Contains("kb_boot_raw_async"), "async boot:raw import");
+        Check(entryPoints.Contains("kb_boot_raw"), "blocking boot:raw import");
+        Check(entryPoints.Contains("kb_boot_file_async"), "async boot-file import");
+        Check(entryPoints.Contains("kb_boot_file"), "blocking boot-file import");
+        Check(entryPoints.Contains("kb_signature_file_async"), "async signature import");
+        Check(entryPoints.Contains("kb_signature_file"), "blocking signature import");
+        Check(entryPoints.Contains("kb_update_options_init_sized"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
-        Check(entryPoints.Contains("kb_command_options_init"), "command options import");
+        Check(entryPoints.Contains("kb_wipe_super_async"), "async wipe-super import");
+        Check(entryPoints.Contains("kb_wipe_super"), "blocking wipe-super import");
+        Check(entryPoints.Contains("kb_format_partition_async"), "async format import");
+        Check(entryPoints.Contains("kb_command_options_init_sized"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
+        Check(entryPoints.Contains("kb_upload_file_async"), "upload-file import");
+        Check(entryPoints.Contains("kb_get_staged_file_async"), "get-staged-file import");
+        Check(entryPoints.Contains("kb_fetch_file_async"), "fetch-file import");
+        Check(entryPoints.Contains("kb_command_result_output_path"), "result output path import");
+        Check(entryPoints.Contains("kb_command_result_received_bytes"), "result received bytes import");
         Check(entryPoints.Contains("kb_error_session_poisoned"), "extended error import");
         Check(entryPoints.Contains("kb_validate_job_file"), "fleet validate import");
         Check(entryPoints.Contains("kb_plan_job_file"), "fleet plan import");
         Check(entryPoints.Contains("kb_job_plan_canonical_json"), "fleet plan JSON import");
         Check(entryPoints.Contains("kb_job_plan_sha256_hex"), "fleet plan digest import");
         Check(entryPoints.Contains("kb_job_plan_release"), "fleet plan release import");
-        Check(entryPoints.Contains("kb_job_options_init"), "fleet job options import");
+        Check(entryPoints.Contains("kb_job_options_init_sized"), "fleet job options import");
         Check(entryPoints.Contains("kb_run_job_file_async"), "fleet async run import");
         Check(entryPoints.Contains("kb_run_job_file"), "fleet blocking run import");
         Check(entryPoints.Contains("kb_job_wait"), "fleet wait import");
@@ -145,6 +179,7 @@ internal static class Program
         Check(entryPoints.Contains("kb_job_release"), "fleet job release import");
         Check(entryPoints.Contains("kb_job_report_json"), "fleet report JSON import");
         Check(entryPoints.Contains("kb_job_report_release"), "fleet report release import");
+        Check(entryPoints.Contains("kb_version_init_sized"), "version import");
         Check(entryPoints.Contains("kb_flashing_async"), "flashing import");
         Check(entryPoints.Contains("kb_gsi_async"), "GSI import");
         Check(entryPoints.Contains("kb_snapshot_update_async"), "snapshot-update import");
@@ -190,7 +225,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 96, "net48 DllImport count");
+        Check(methods.Count == 117, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -199,7 +234,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 66, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 126, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -217,7 +252,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 96, "net10 LibraryImport count");
+        Check(groups.Count == 117, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -228,7 +263,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 42, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 60, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -238,6 +273,90 @@ internal static class Program
 
     private static void CheckNativeLayouts()
     {
+        Check(
+            NativeMethods.VersionStructSize == Marshal.SizeOf<NativeVersion>(),
+            "version declared size");
+        Check(
+            Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.SparseLimitBytes)).ToInt32() ==
+                (IntPtr.Size == 8 ? 64 : 40),
+            "flash options sparse limit offset");
+        Check(
+            Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.Force)).ToInt32() ==
+                (IntPtr.Size == 8 ? 72 : 48),
+            "flash options force offset");
+        Check(
+            Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.FilesystemOptions)).ToInt32() ==
+                (IntPtr.Size == 8 ? 76 : 52),
+            "flash options filesystem options offset");
+        Check(
+            Marshal.SizeOf<NativeFlashOptions>() == (IntPtr.Size == 8 ? 80 : 56),
+            "flash options native size");
+        Check(
+            NativeMethods.FlashOptionsStructSize == Marshal.SizeOf<NativeFlashOptions>(),
+            "flash options declared size");
+        Check(
+            Marshal.OffsetOf<NativeContextOptions>(nameof(NativeContextOptions.UsbVendorId)).ToInt32() ==
+                (IntPtr.Size == 8 ? 24 : 16),
+            "context options vendor id offset");
+        Check(
+            Marshal.SizeOf<NativeContextOptions>() == (IntPtr.Size == 8 ? 32 : 24),
+            "context options native size");
+        Check(
+            NativeMethods.ContextOptionsStructSize == Marshal.SizeOf<NativeContextOptions>(),
+            "context options declared size");
+
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.StructSize)).ToInt32() == 0,
+            "legacy boot options struct_size offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.ApiVersion)).ToInt32() == 4,
+            "legacy boot options api_version offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.CommandLine)).ToInt32() == 8,
+            "legacy boot options command line offset");
+        var legacyAddressOffset = IntPtr.Size == 8 ? 16 : 12;
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.BaseAddress)).ToInt32() == legacyAddressOffset,
+            "legacy boot options base offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.PageSize)).ToInt32() == legacyAddressOffset + 4,
+            "legacy boot options page size offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.KernelOffset)).ToInt32() == legacyAddressOffset + 8,
+            "legacy boot options kernel offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.RamdiskOffset)).ToInt32() == legacyAddressOffset + 12,
+            "legacy boot options ramdisk offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.SecondOffset)).ToInt32() == legacyAddressOffset + 16,
+            "legacy boot options second offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.TagsOffset)).ToInt32() == legacyAddressOffset + 20,
+            "legacy boot options tags offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.HeaderVersion)).ToInt32() == legacyAddressOffset + 24,
+            "boot options header version offset");
+        var bootStringOffset = IntPtr.Size == 8 ? 48 : 40;
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.OsVersion)).ToInt32() == bootStringOffset,
+            "boot options OS version offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.OsPatchLevel)).ToInt32() == bootStringOffset + IntPtr.Size,
+            "boot options OS patch offset");
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.DtbPath)).ToInt32() == bootStringOffset + 2 * IntPtr.Size,
+            "boot options DTB path offset");
+        var dtbOffsetOffset = IntPtr.Size == 8 ? 72 : 56;
+        Check(
+            Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.DtbOffset)).ToInt32() == dtbOffsetOffset,
+            "boot options DTB offset field");
+        Check(
+            Marshal.SizeOf<NativeLegacyBootOptions>() == (IntPtr.Size == 8 ? 80 : 64),
+            "legacy boot options native size");
+        Check(
+            NativeMethods.LegacyBootOptionsStructSize == Marshal.SizeOf<NativeLegacyBootOptions>(),
+            "legacy boot options declared size");
+
         Check(
             Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.StructSize)).ToInt32() == 0,
             "update options struct_size offset");
@@ -258,7 +377,51 @@ internal static class Program
                 (IntPtr.Size == 8 ? 24 : 20),
             "update options callback state offset");
         Check(
-            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 32 : 24),
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SkipReboot)).ToInt32() ==
+                (IntPtr.Size == 8 ? 32 : 24),
+            "update options skip reboot offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SkipSecondary)).ToInt32() ==
+                (IntPtr.Size == 8 ? 36 : 28),
+            "update options skip secondary offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ExcludeDynamicPartitions)).ToInt32() ==
+                (IntPtr.Size == 8 ? 40 : 32),
+            "update options exclude dynamic offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.DisableFastbootInfo)).ToInt32() ==
+                (IntPtr.Size == 8 ? 44 : 36),
+            "update options disable fastboot-info offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.Slot)).ToInt32() ==
+                (IntPtr.Size == 8 ? 56 : 48),
+            "update options slot offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SetActive)).ToInt32() ==
+                (IntPtr.Size == 8 ? 64 : 52),
+            "update options set-active offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ActiveSlot)).ToInt32() ==
+                (IntPtr.Size == 8 ? 72 : 56),
+            "update options active slot offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SparseLimitBytes)).ToInt32() ==
+                (IntPtr.Size == 8 ? 80 : 64),
+            "update options sparse limit offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.Force)).ToInt32() ==
+                (IntPtr.Size == 8 ? 88 : 72),
+            "update options force offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.FilesystemOptions)).ToInt32() ==
+                (IntPtr.Size == 8 ? 92 : 76),
+            "update options filesystem options offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.DisableSuperOptimization)).ToInt32() ==
+                (IntPtr.Size == 8 ? 96 : 80),
+            "update options disable super optimization offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 104 : 88),
             "update options native size");
         Check(
             NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
@@ -358,13 +521,54 @@ internal static class Program
             UpdateOptions.Default.Timeout == Timeout.InfiniteTimeSpan,
             "default update timeout");
         Check(!UpdateOptions.Default.Wipe, "default update preserves data");
+        Check(!UpdateOptions.Default.SkipReboot, "default update reboots");
+        Check(!UpdateOptions.Default.SkipSecondary, "default update flashes secondary");
+        Check(!UpdateOptions.Default.ExcludeDynamicPartitions, "default update includes dynamic");
+        Check(!UpdateOptions.Default.DisableFastbootInfo, "default update uses fastboot-info");
+        Check(UpdateOptions.Default.Slot == null, "default update slot");
+        Check(!UpdateOptions.Default.SetActive, "default update set-active");
+        Check(UpdateOptions.Default.ActiveSlot == null, "default update active slot");
+        Check(UpdateOptions.Default.SparseLimitBytes == 0, "default update sparse limit");
+        Check(!UpdateOptions.Default.Force, "default update force");
+        Check(UpdateOptions.Default.FilesystemOptions == FilesystemOptions.None,
+            "default update filesystem options");
+        Check(!UpdateOptions.Default.DisableSuperOptimization,
+            "default update enables super optimization");
         Check(
             default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct update timeout");
 
-        var infiniteWipe = new UpdateOptions(Timeout.InfiniteTimeSpan, wipe: true);
+        var infiniteWipe = new UpdateOptions(
+            Timeout.InfiniteTimeSpan,
+            wipe: true,
+            skipReboot: true,
+            skipSecondary: true,
+            excludeDynamicPartitions: true,
+            disableFastbootInfo: true,
+            sparseLimitBytes: 8UL * 1024UL * 1024UL,
+            force: true,
+            filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid,
+            disableSuperOptimization: true);
         Check(infiniteWipe.Timeout == Timeout.InfiniteTimeSpan, "explicit infinite update timeout");
         Check(infiniteWipe.Wipe, "explicit update wipe");
+        Check(infiniteWipe.SkipReboot, "explicit update skip reboot");
+        Check(infiniteWipe.SkipSecondary, "explicit update skip secondary");
+        Check(infiniteWipe.ExcludeDynamicPartitions, "explicit update excludes dynamic");
+        Check(infiniteWipe.DisableFastbootInfo, "explicit update disables fastboot-info");
+        Check(infiniteWipe.SparseLimitBytes == 8UL * 1024UL * 1024UL,
+            "explicit update sparse limit");
+        Check(infiniteWipe.Force, "explicit update force");
+        Check(infiniteWipe.FilesystemOptions ==
+            (FilesystemOptions.Casefold | FilesystemOptions.Projid),
+            "explicit update filesystem options");
+        Check(infiniteWipe.DisableSuperOptimization,
+            "explicit update disables super optimization");
+        var slotted = new UpdateOptions(
+            Timeout.InfiniteTimeSpan, wipe: false, slot: "other",
+            setActive: true, activeSlot: "b");
+        Check(slotted.Slot == "other", "update slot option");
+        Check(slotted.SetActive, "update set-active option");
+        Check(slotted.ActiveSlot == "b", "update active slot option");
 
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
         Check(new UpdateOptions(fractional).Timeout == fractional, "finite update timeout");
@@ -374,6 +578,9 @@ internal static class Program
         Expect<ArgumentOutOfRangeException>(
             () => _ = new UpdateOptions(
                 TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new UpdateOptions(TimeSpan.Zero,
+                filesystemOptions: (FilesystemOptions)8U));
 
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
@@ -396,6 +603,8 @@ internal static class Program
         Check(result.Messages[1].Kind == CommandMessageKind.Text, "TEXT order");
         Check(result.Messages[1].Payload.SequenceEqual(new byte[] { 0xff, 0x54 }), "TEXT binary payload");
         Check(result.Data.SequenceEqual(new byte[] { 1, 0, 0xff, 2 }), "data lifetime");
+        Check(result.OutputPath == "结果.bin", "result UTF-8 output path");
+        Check(result.ReceivedBytes == 4, "result received byte count");
         Check(result.DeviceIdentifier == "设备-一", "result UTF-8 device identifier");
         Expect<InvalidOperationException>(
             () => CommandMessageKindMapping.FromNative(2, "contract test"));
@@ -416,6 +625,95 @@ internal static class Program
 
     private static void CheckTypedPublicSurface()
     {
+        var bootFileMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "BootFileAsync")
+            .ToList();
+        Check(bootFileMethods.Count == 2, "managed boot-file overloads");
+        Check(
+            bootFileMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed boot-file returns Task");
+        Check(
+            bootFileMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>))),
+            "managed boot-file progress type");
+        Check(
+            bootFileMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed boot-file cancellation");
+
+        var flashRawMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "FlashRawAsync")
+            .ToList();
+        Check(flashRawMethods.Count == 4, "managed flash:raw overloads");
+        Check(
+            flashRawMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed flash:raw returns Task");
+        Check(
+            flashRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(FlashOptions))) == 2,
+            "managed flash:raw typed options overload");
+        Check(
+            flashRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(LegacyBootOptions))) == 2,
+            "managed flash:raw legacy layout overloads");
+        Check(
+            flashRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>))),
+            "managed flash:raw progress type");
+        Check(
+            flashRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed flash:raw cancellation");
+
+        var vendorBootMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "FlashVendorBootRamdiskAsync")
+            .ToList();
+        Check(vendorBootMethods.Count == 1, "managed vendor_boot ramdisk method");
+        Check(
+            vendorBootMethods[0].ReturnType == typeof(Task),
+            "managed vendor_boot ramdisk returns Task");
+        Check(
+            vendorBootMethods[0].GetParameters().Any(parameter =>
+                parameter.Name == "dtbPath" &&
+                parameter.ParameterType == typeof(string)),
+            "managed vendor_boot optional DTB");
+        Check(
+            vendorBootMethods[0].GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>)),
+            "managed vendor_boot progress type");
+        Check(
+            vendorBootMethods[0].GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken)),
+            "managed vendor_boot cancellation");
+
+        var bootRawMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "BootRawAsync")
+            .ToList();
+        Check(bootRawMethods.Count == 4, "managed boot:raw overloads");
+        Check(
+            bootRawMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed boot:raw returns Task");
+        Check(
+            bootRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(FlashOptions))) == 2,
+            "managed boot:raw typed options overloads");
+        Check(
+            bootRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(LegacyBootOptions))) == 2,
+            "managed boot:raw legacy layout overloads");
+        Check(
+            bootRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>))),
+            "managed boot:raw progress type");
+        Check(
+            bootRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed boot:raw cancellation");
+
         var updateMethods = typeof(Context)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "UpdatePackageAsync")
@@ -433,6 +731,36 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed update cancellation");
 
+        var wipeSuperMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "WipeSuperAsync")
+            .ToList();
+        Check(wipeSuperMethods.Count == 2, "managed wipe-super overloads");
+        Check(
+            wipeSuperMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed wipe-super returns Task");
+        Check(
+            wipeSuperMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<UpdateProgress>))),
+            "managed wipe-super progress type");
+        Check(
+            wipeSuperMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed wipe-super cancellation");
+
+        var formatMethod = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == "FormatPartitionAsync");
+        Check(formatMethod.ReturnType == typeof(Task), "managed format returns Task");
+        Check(
+            formatMethod.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>)),
+            "managed format progress type");
+        Check(
+            formatMethod.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken)),
+            "managed format cancellation");
+
         var expected = new[]
         {
             "GetVarAsync",
@@ -449,9 +777,13 @@ internal static class Program
             "OemAsync",
             "RawCommandAsync",
             "BootAsync",
+            "SignatureFileAsync",
             "StageAsync",
             "UploadAsync",
             "FetchAsync",
+            "UploadFileAsync",
+            "GetStagedFileAsync",
+            "FetchFileAsync",
         };
 
         foreach (var name in expected)
@@ -587,6 +919,13 @@ internal static class Program
         Check(
             FlashOptions.Default.Timeout == Timeout.InfiniteTimeSpan,
             "default flash timeout");
+        Check(FlashOptions.Default.Slot == null, "default flash slot");
+        Check(!FlashOptions.Default.SetActive, "default flash set-active");
+        Check(FlashOptions.Default.ActiveSlot == null, "default flash active slot");
+        Check(FlashOptions.Default.SparseLimitBytes == 0, "default flash sparse limit");
+        Check(!FlashOptions.Default.Force, "default flash force");
+        Check(FlashOptions.Default.FilesystemOptions == FilesystemOptions.None,
+            "default flash filesystem options");
         Check(
             default(FlashOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct flash timeout");
@@ -596,26 +935,90 @@ internal static class Program
 
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
         Check(new FlashOptions(fractional).Timeout == fractional, "finite flash timeout");
+        var slotted = new FlashOptions(
+            Timeout.InfiniteTimeSpan, "all", setActive: true, activeSlot: "a",
+            force: true, filesystemOptions: FilesystemOptions.Compress);
+        Check(slotted.Slot == "all", "flash slot option");
+        Check(slotted.SetActive, "flash set-active option");
+        Check(slotted.ActiveSlot == "a", "flash active slot option");
+        Check(slotted.Force, "flash force option");
+        Check(slotted.FilesystemOptions == FilesystemOptions.Compress,
+            "flash filesystem options");
 
         Expect<ArgumentOutOfRangeException>(
             () => _ = new FlashOptions(TimeSpan.FromTicks(-1)));
         Expect<ArgumentOutOfRangeException>(
             () => _ = new FlashOptions(
                 TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new FlashOptions(TimeSpan.Zero, false, false,
+                filesystemOptions: (FilesystemOptions)8U));
 
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
         Check(new FlashOptions(maximum).Timeout == maximum, "maximum finite flash timeout");
+        Check(new FlashOptions(maximum, 64UL * 1024UL).SparseLimitBytes ==
+            64UL * 1024UL, "explicit flash sparse limit");
+    }
+
+    private static void CheckLegacyBootOptions()
+    {
+        var defaults = LegacyBootOptions.Default;
+        Check(defaults.CommandLine == string.Empty, "default legacy command line");
+        Check(defaults.BaseAddress == 0x10000000U, "default legacy base");
+        Check(defaults.PageSize == 2048U, "default legacy page size");
+        Check(defaults.KernelOffset == 0x00008000U, "default legacy kernel offset");
+        Check(defaults.RamdiskOffset == 0x01000000U, "default legacy ramdisk offset");
+        Check(defaults.SecondOffset == 0x00f00000U, "default legacy second offset");
+        Check(defaults.TagsOffset == 0x00000100U, "default legacy tags offset");
+        Check(defaults.HeaderVersion == 0U, "default boot header version");
+        Check(defaults.OsVersion == string.Empty, "default boot OS version");
+        Check(defaults.OsPatchLevel == string.Empty, "default boot OS patch level");
+        Check(defaults.DtbPath == null, "default boot DTB path");
+        Check(defaults.DtbOffset == 0x01100000UL, "default boot DTB offset");
+
+        var custom = new LegacyBootOptions(
+            "console=ttyS0",
+            0x12000000U,
+            4096U,
+            0x00010000U,
+            0x02000000U,
+            0x01f00000U,
+            0x00000200U,
+            2U,
+            "15.0.1",
+            "2025-02-05",
+            "board.dtb",
+            0x01200000UL);
+        Check(custom.CommandLine == "console=ttyS0", "custom legacy command line");
+        Check(custom.BaseAddress == 0x12000000U, "custom legacy base");
+        Check(custom.PageSize == 4096U, "custom legacy page size");
+        Check(custom.KernelOffset == 0x00010000U, "custom legacy kernel offset");
+        Check(custom.RamdiskOffset == 0x02000000U, "custom legacy ramdisk offset");
+        Check(custom.SecondOffset == 0x01f00000U, "custom legacy second offset");
+        Check(custom.TagsOffset == 0x00000200U, "custom legacy tags offset");
+        Check(custom.HeaderVersion == 2U, "custom boot header version");
+        Check(custom.OsVersion == "15.0.1", "custom boot OS version");
+        Check(custom.OsPatchLevel == "2025-02-05", "custom boot OS patch level");
+        Check(custom.DtbPath == "board.dtb", "custom boot DTB path");
+        Check(custom.DtbOffset == 0x01200000UL, "custom boot DTB offset");
+        Expect<ArgumentNullException>(() => _ = new LegacyBootOptions(null!));
+        Expect<ArgumentException>(() => _ = new LegacyBootOptions("console=x\0ignored"));
     }
 
     private static async Task CheckScriptedUpdateShim()
     {
         ScriptedUpdateNativeMethods.Reset();
 
+        using (var context = Context.Create(new ContextOptions(0x18D1)))
+        {
+            Check(context != null, "context USB vendor options");
+        }
+
         using (var context = new ContextSafeHandle(new IntPtr(1)))
         {
             var nativeOptions = new NativeUpdateOptions();
-            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = 17;
             nativeOptions.Wipe = 1;
             var status = NativeMethods.UpdatePackage(
@@ -626,6 +1029,21 @@ internal static class Program
                 out var rawError);
             Check(status == (int)KairosBootStatus.Ok, "blocking update shim status");
             Check(rawError == IntPtr.Zero, "blocking update shim error ownership");
+
+            var nativeFlashOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeFlashOptions, NativeMethods.FlashOptionsStructSize);
+            nativeFlashOptions.TimeoutMilliseconds = 17;
+            status = NativeMethods.FlashRaw(
+                context,
+                "usb:serial:blocking-raw",
+                "boot",
+                "blocking-kernel.bin",
+                null,
+                null,
+                ref nativeFlashOptions,
+                out rawError);
+            Check(status == (int)KairosBootStatus.Ok, "blocking flash:raw shim status");
+            Check(rawError == IntPtr.Zero, "blocking flash:raw shim error ownership");
         }
 
         var reports = new List<UpdateProgress>();
@@ -637,7 +1055,17 @@ internal static class Program
             var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
             await context.UpdatePackageAsync(
                 "images/升级.zip",
-                new UpdateOptions(fractional, wipe: true),
+                new UpdateOptions(
+                    fractional,
+                    wipe: true,
+                    skipReboot: true,
+                    skipSecondary: true,
+                    excludeDynamicPartitions: true,
+                    disableFastbootInfo: true,
+                    sparseLimitBytes: 8UL * 1024UL * 1024UL,
+                    force: true,
+                    filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid,
+                    disableSuperOptimization: true),
                 "usb:serial:device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);
@@ -680,15 +1108,332 @@ internal static class Program
                 () => context.UpdatePackageAsync(
                     "update.zip",
                     deviceSelector: string.Empty)).ConfigureAwait(false);
+
+            var rawReports = new List<FlashProgress>();
+            var rawProgress = new InlineProgress<FlashProgress>(rawReports.Add);
+            await context.FlashRawAsync(
+                "boot",
+                "images/内核.bin",
+                new FlashOptions(fractional, false, false,
+                    sparseLimitBytes: 64UL * 1024UL,
+                    force: true,
+                    filesystemOptions: FilesystemOptions.Casefold |
+                        FilesystemOptions.Projid | FilesystemOptions.Compress),
+                ramdiskPath: "ramdisk.img",
+                deviceSelector: "usb:serial:raw",
+                progress: rawProgress,
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            Check(rawReports.Count == 3, "flash:raw progress count");
+            Check(
+                rawReports[0].Stage == "download" &&
+                rawReports[0].BytesCompleted == 0 &&
+                rawReports[0].BytesTotal == 4,
+                "flash:raw initial progress");
+            Check(
+                rawReports[1].Stage == "download" &&
+                rawReports[1].BytesCompleted == 2,
+                "flash:raw transfer progress");
+            Check(rawReports[2].Stage == "complete", "flash:raw completion progress");
+            Check(
+                rawReports.All(report => report.DeviceIdentifier == "usb:serial:raw"),
+                "flash:raw progress device identifier");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var cancellationProgress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "cancel-kernel.bin",
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: cancellationProgress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            using (var source = new CancellationTokenSource())
+            {
+                source.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "not-started-kernel.bin",
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
         }
 
         Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "scripted native assertions");
         Check(ScriptedUpdateNativeMethods.OptionsInitCount() == 4, "update options init calls");
         Check(ScriptedUpdateNativeMethods.AsyncStartCount() == 3, "async update starts");
         Check(ScriptedUpdateNativeMethods.BlockingCount() == 1, "blocking update import call");
-        Check(ScriptedUpdateNativeMethods.CancelCount() == 1, "native update cancellation");
-        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 3, "update operation release");
-        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "update context release");
+        Check(
+            ScriptedUpdateNativeMethods.FlashOptionsInitCount() == 3,
+            "flash:raw options init calls");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawAsyncStartCount() == 2,
+            "async flash:raw starts");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawBlockingCount() == 1,
+            "blocking flash:raw import call");
+        Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "native operation cancellation");
+        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 5, "operation release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 3, "update context release");
+    }
+
+    private static async Task CheckScriptedBootShim()
+    {
+        ScriptedUpdateNativeMethods.Reset();
+
+        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        {
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
+            nativeOptions.TimeoutMilliseconds = 17;
+            var status = NativeMethods.BootFile(
+                context,
+                "usb:serial:blocking-boot",
+                "blocking-boot.img",
+                ref nativeOptions,
+                out var rawError);
+            Check(status == (int)KairosBootStatus.Ok, "blocking boot-file shim status");
+            Check(rawError == IntPtr.Zero, "blocking boot-file shim error ownership");
+        }
+
+        var reports = new List<FlashProgress>();
+        using (var context = Context.Create())
+        {
+            await context.BootFileAsync("default-boot.img").ConfigureAwait(false);
+
+            var progress = new InlineProgress<FlashProgress>(reports.Add);
+            var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+            await context.BootFileAsync(
+                "images/启动.img",
+                new FlashOptions(fractional),
+                "usb:serial:boot-device",
+                progress,
+                CancellationToken.None).ConfigureAwait(false);
+
+            Check(reports.Count == 3, "boot-file progress count");
+            Check(reports[0].Stage == "preflight", "boot-file preflight progress");
+            Check(reports[1].Stage == "download", "boot-file download progress");
+            Check(
+                reports[1].BytesCompleted == 2 && reports[1].BytesTotal == 4,
+                "boot-file byte progress");
+            Check(reports[2].Stage == "complete", "boot-file completion progress");
+            Check(
+                reports.All(report => report.DeviceIdentifier == "usb:serial:boot-device"),
+                "boot-file progress device identifier");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var cancellationProgress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.BootFileAsync(
+                        "cancel-boot.img",
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: cancellationProgress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            using (var source = new CancellationTokenSource())
+            {
+                source.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.BootFileAsync(
+                        "not-started-boot.img",
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            await ExpectAsync<ArgumentException>(
+                () => context.BootFileAsync(string.Empty)).ConfigureAwait(false);
+            await ExpectAsync<ArgumentException>(
+                () => context.BootFileAsync(
+                    "boot.img",
+                    deviceSelector: string.Empty)).ConfigureAwait(false);
+        }
+
+        Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "boot-file native assertions");
+        Check(
+            ScriptedUpdateNativeMethods.FlashOptionsInitCount() == 4,
+            "boot-file options init calls");
+        Check(ScriptedUpdateNativeMethods.BootAsyncStartCount() == 3, "async boot-file starts");
+        Check(ScriptedUpdateNativeMethods.BootBlockingCount() == 1, "blocking boot-file import call");
+        Check(ScriptedUpdateNativeMethods.CancelCount() == 1, "native boot-file cancellation");
+        Check(
+            ScriptedUpdateNativeMethods.OperationReleaseCount() == 3,
+            "boot-file operation release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "boot-file context release");
+    }
+
+    private static async Task CheckScriptedLegacyBootShim()
+    {
+        ScriptedUpdateNativeMethods.Reset();
+
+        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        {
+            var nativeLegacyOptions = new NativeLegacyBootOptions();
+            NativeMethods.LegacyBootOptionsInitSized(ref nativeLegacyOptions, NativeMethods.LegacyBootOptionsStructSize);
+            var commandLine = Utf8String.Allocate("console=blocking");
+            try
+            {
+                nativeLegacyOptions.CommandLine = commandLine;
+                nativeLegacyOptions.BaseAddress = 0x12000000U;
+                nativeLegacyOptions.PageSize = 4096U;
+                nativeLegacyOptions.KernelOffset = 0x00010000U;
+                nativeLegacyOptions.RamdiskOffset = 0x02000000U;
+                nativeLegacyOptions.SecondOffset = 0x01f00000U;
+                nativeLegacyOptions.TagsOffset = 0x00000200U;
+
+                var nativeFlashOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInitSized(ref nativeFlashOptions, NativeMethods.FlashOptionsStructSize);
+                nativeFlashOptions.TimeoutMilliseconds = 17;
+                var status = NativeMethods.FlashRawWithBootOptions(
+                    context,
+                    "usb:serial:blocking-configured-raw",
+                    "boot",
+                    "blocking-configured-kernel.bin",
+                    null,
+                    null,
+                    ref nativeLegacyOptions,
+                    ref nativeFlashOptions,
+                    out var rawError);
+                Check(status == (int)KairosBootStatus.Ok, "blocking configured flash:raw status");
+                Check(rawError == IntPtr.Zero, "blocking configured flash:raw error ownership");
+
+                status = NativeMethods.BootRaw(
+                    context,
+                    "usb:serial:blocking-boot-raw",
+                    "blocking-boot-raw-kernel.bin",
+                    null,
+                    null,
+                    ref nativeLegacyOptions,
+                    ref nativeFlashOptions,
+                    out rawError);
+                Check(status == (int)KairosBootStatus.Ok, "blocking boot:raw status");
+                Check(rawError == IntPtr.Zero, "blocking boot:raw error ownership");
+            }
+            finally
+            {
+                Utf8String.Free(commandLine);
+            }
+        }
+
+        var custom = new LegacyBootOptions(
+            "console=启动",
+            0x12000000U,
+            4096U,
+            0x00010000U,
+            0x02000000U,
+            0x01f00000U,
+            0x00000200U,
+            2U,
+            "15.0.1",
+            "2025-02-05",
+            "board.dtb",
+            0x01200000UL);
+        var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+
+        using (var context = Context.Create())
+        {
+            var flashReports = new List<FlashProgress>();
+            await context.FlashRawAsync(
+                "boot",
+                "configured-kernel.bin",
+                custom,
+                new FlashOptions(fractional),
+                ramdiskPath: "configured-ramdisk.img",
+                secondStagePath: "configured-second.bin",
+                deviceSelector: "usb:serial:configured-raw",
+                progress: new InlineProgress<FlashProgress>(flashReports.Add),
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            Check(flashReports.Count == 3, "configured flash:raw progress count");
+            Check(flashReports[0].Stage == "download", "configured flash:raw initial stage");
+            Check(flashReports[2].Stage == "complete", "configured flash:raw completion stage");
+            Check(
+                flashReports.All(report => report.DeviceIdentifier == "usb:serial:configured-raw"),
+                "configured flash:raw progress device");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var progress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "cancel-configured-kernel.bin",
+                        LegacyBootOptions.Default,
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: progress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            var bootReports = new List<FlashProgress>();
+            await context.BootRawAsync(
+                "boot-raw-kernel.bin",
+                custom,
+                new FlashOptions(fractional),
+                ramdiskPath: "boot-raw-ramdisk.img",
+                secondStagePath: "boot-raw-second.bin",
+                deviceSelector: "usb:serial:boot-raw",
+                progress: new InlineProgress<FlashProgress>(bootReports.Add),
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            Check(bootReports.Count == 3, "boot:raw progress count");
+            Check(bootReports[0].Stage == "preflight", "boot:raw initial stage");
+            Check(bootReports[2].Stage == "complete", "boot:raw completion stage");
+            Check(
+                bootReports.All(report => report.DeviceIdentifier == "usb:serial:boot-raw"),
+                "boot:raw progress device");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var progress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.BootRawAsync(
+                        "cancel-boot-raw-kernel.bin",
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: progress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            using (var source = new CancellationTokenSource())
+            {
+                source.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.BootRawAsync(
+                        "not-started-boot-raw-kernel.bin",
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "not-started-configured-kernel.bin",
+                        LegacyBootOptions.Default,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            await ExpectAsync<ArgumentException>(
+                () => context.BootRawAsync(string.Empty)).ConfigureAwait(false);
+            await ExpectAsync<ArgumentException>(
+                () => context.BootRawAsync(
+                    "kernel.bin",
+                    secondStagePath: "second.bin")).ConfigureAwait(false);
+        }
+
+        Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "legacy boot native assertions");
+        Check(
+            ScriptedUpdateNativeMethods.LegacyBootOptionsInitCount() == 5,
+            "legacy boot options init calls");
+        Check(
+            ScriptedUpdateNativeMethods.FlashOptionsInitCount() == 5,
+            "legacy boot flash options init calls");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawAsyncStartCount() == 2,
+            "configured async flash:raw starts");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawBlockingCount() == 1,
+            "configured blocking flash:raw call");
+        Check(ScriptedUpdateNativeMethods.BootAsyncStartCount() == 2, "async boot:raw starts");
+        Check(ScriptedUpdateNativeMethods.BootBlockingCount() == 1, "blocking boot:raw call");
+        Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "legacy boot cancellation");
+        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 4, "legacy boot operation release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "legacy boot context release");
     }
 
     private static void CheckFleetPublicSurface()
@@ -1181,6 +1926,17 @@ internal static class Program
             Check(exception.DeviceIdentifier == "设备-一", "UTF-8 serial");
             Check(!exception.InboundExpectedBytes.HasValue, "flash inbound size unspecified");
             Check(reports == 0, "no fabricated progress");
+
+            var rawException = await ExpectAsync<KairosBootException>(
+                () => context.FlashRawAsync(
+                    "boot",
+                    "missing-内核.bin",
+                    deviceSelector: "tcp:127.0.0.1:5554")).ConfigureAwait(false);
+            Check(rawException.Status == KairosBootStatus.Io, "flash:raw file status");
+            Check(rawException.TransferState == TransferState.NotSent, "flash:raw transfer state");
+            Check(
+                rawException.DeviceIdentifier == "tcp:127.0.0.1:5554",
+                "flash:raw selector");
         }
     }
 
@@ -1192,6 +1948,9 @@ internal static class Program
             source.Cancel();
             await ExpectAsync<OperationCanceledException>(
                 () => context.FlashFileAsync("system", "system.img", cancellationToken: source.Token))
+                .ConfigureAwait(false);
+            await ExpectAsync<OperationCanceledException>(
+                () => context.FlashRawAsync("boot", "kernel", cancellationToken: source.Token))
                 .ConfigureAwait(false);
         }
     }
@@ -1205,16 +1964,30 @@ internal static class Program
             await ExpectAsync<OperationCanceledException>(
                 () => context.GetVarAsync("product", cancellationToken: source.Token))
                 .ConfigureAwait(false);
+            await ExpectAsync<OperationCanceledException>(
+                () => context.SignatureFileAsync(
+                    "signature.bin", cancellationToken: source.Token))
+                .ConfigureAwait(false);
         }
     }
 
-    private static void CheckTypedManagedPreflight()
+    private static async Task CheckTypedManagedPreflight()
     {
         using (var context = Context.Create())
         {
             Expect<ArgumentException>(() => _ = context.StageAsync(Array.Empty<byte>()));
             Expect<ArgumentException>(
                 () => _ = context.CreateLogicalPartitionAsync("system\0other", 0));
+            await ExpectAsync<ArgumentException>(
+                () => context.FlashRawAsync(
+                    "boot",
+                    "kernel",
+                    secondStagePath: "second")).ConfigureAwait(false);
+            await ExpectAsync<ArgumentException>(
+                () => context.FlashRawAsync(
+                    "boot",
+                    "kernel",
+                    ramdiskPath: string.Empty)).ConfigureAwait(false);
         }
     }
 
@@ -1563,12 +2336,15 @@ internal static class Program
         private readonly byte[] info = { 0x49, 0 };
         private readonly byte[] text = { 0xff, 0x54 };
         private readonly byte[] data = { 1, 0, 0xff, 2 };
+        private readonly byte[] outputPath =
+            System.Text.Encoding.UTF8.GetBytes("结果.bin\0");
         private readonly byte[] device =
             System.Text.Encoding.UTF8.GetBytes("设备-一\0");
         private readonly GCHandle terminalHandle;
         private readonly GCHandle infoHandle;
         private readonly GCHandle textHandle;
         private readonly GCHandle dataHandle;
+        private readonly GCHandle outputPathHandle;
         private readonly GCHandle deviceHandle;
 
         internal FakeCommandResultSource()
@@ -1577,6 +2353,7 @@ internal static class Program
             infoHandle = GCHandle.Alloc(info, GCHandleType.Pinned);
             textHandle = GCHandle.Alloc(text, GCHandleType.Pinned);
             dataHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
+            outputPathHandle = GCHandle.Alloc(outputPath, GCHandleType.Pinned);
             deviceHandle = GCHandle.Alloc(device, GCHandleType.Pinned);
         }
 
@@ -1613,6 +2390,10 @@ internal static class Program
             return dataHandle.AddrOfPinnedObject();
         }
 
+        public IntPtr OutputPath() => outputPathHandle.AddrOfPinnedObject();
+
+        public ulong ReceivedBytes() => (ulong)data.LongLength;
+
         public IntPtr DeviceIdentifier() => deviceHandle.AddrOfPinnedObject();
 
         internal void Overwrite()
@@ -1621,6 +2402,7 @@ internal static class Program
             Overwrite(info);
             Overwrite(text);
             Overwrite(data);
+            Overwrite(outputPath);
             Overwrite(device);
         }
 
@@ -1630,6 +2412,7 @@ internal static class Program
             infoHandle.Free();
             textHandle.Free();
             dataHandle.Free();
+            outputPathHandle.Free();
             deviceHandle.Free();
         }
 
@@ -1747,6 +2530,24 @@ internal static class Program
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_blocking_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int BlockingCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_options_init_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FlashOptionsInitCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_legacy_boot_options_init_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int LegacyBootOptionsInitCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_boot_async_start_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int BootAsyncStartCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_boot_blocking_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int BootBlockingCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_raw_async_start_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FlashRawAsyncStartCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_raw_blocking_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FlashRawBlockingCount();
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_cancel_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int CancelCount();

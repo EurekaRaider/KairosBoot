@@ -21,7 +21,7 @@ execute_process(
 if(NOT HELP_RESULT EQUAL 0 OR NOT HELP_ERROR STREQUAL "")
   message(FATAL_ERROR "--help failed: ${HELP_RESULT} ${HELP_ERROR}")
 endif()
-foreach(HELP_COMMAND IN ITEMS validate plan update flashing gsi
+foreach(HELP_COMMAND IN ITEMS validate plan update flashall flash:raw flashing gsi
                               snapshot-update create-logical-partition
                               delete-logical-partition
                               resize-logical-partition)
@@ -115,7 +115,21 @@ function(expect_text_parse_error NAME EXPECTED_MESSAGE)
 endfunction()
 
 expect_text_parse_error(
-  flash_arity "flash requires exactly <partition> and <file>" flash boot)
+  flash_arity "flash requires <partition> [file]" flash)
+expect_text_parse_error(
+  flash_excess_operands "flash requires <partition> [file]" flash boot boot.img
+  extra.img)
+expect_text_parse_error(
+  flash_raw_arity
+  "flash:raw requires <partition> <kernel> [ramdisk [second]]" flash:raw boot)
+expect_text_parse_error(
+  boot_arity "boot requires <kernel> [ramdisk [second]]" boot)
+expect_text_parse_error(
+  boot_excess_operands "boot requires <kernel> [ramdisk [second]]" boot kernel
+  ramdisk second extra)
+expect_text_parse_error(
+  legacy_option_scope "legacy boot layout options are not valid for flash"
+  --base 0x10000000 flash boot image.img)
 expect_text_parse_error(
   update_arity "update requires <package>" update)
 expect_text_parse_error(
@@ -128,6 +142,21 @@ expect_text_parse_error(
 expect_text_parse_error(
   trailing_global_option "global options must precede the command" flash boot
   image.img --json)
+expect_text_parse_error(
+  force_scope
+  "option --force is valid only for flash, flash:raw, format, update, and flashall"
+  --force getvar product)
+expect_text_parse_error(
+  fs_options_scope "option --fs-options is valid only for format"
+  --fs-options=casefold flash system image.img)
+expect_text_parse_error(
+  fs_options_unknown
+  "option --fs-options supports only unique casefold, projid, and compress values"
+  --fs-options=casefold,unknown format:ext4 userdata)
+expect_text_parse_error(
+  fs_options_duplicate
+  "option --fs-options supports only unique casefold, projid, and compress values"
+  --fs-options=casefold,casefold format:ext4 userdata)
 
 execute_process(
   COMMAND "${CLI}" --serial "" flash boot image.img
@@ -149,14 +178,14 @@ if(NOT EMPTY_SERIAL_PREFIX_POSITION EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND "${CLI}" --json flash boot
+  COMMAND "${CLI}" --json flash
   RESULT_VARIABLE JSON_PARSE_RESULT
   OUTPUT_VARIABLE JSON_PARSE_OUTPUT
   ERROR_VARIABLE JSON_PARSE_ERROR
   OUTPUT_STRIP_TRAILING_WHITESPACE
   ERROR_STRIP_TRAILING_WHITESPACE)
 set(EXPECTED_JSON_PARSE
-    "{\"ok\":false,\"status\":\"invalid_argument\",\"message\":\"flash requires exactly <partition> and <file>\"}")
+    "{\"ok\":false,\"status\":\"invalid_argument\",\"message\":\"flash requires <partition> [file]\"}")
 if(NOT JSON_PARSE_RESULT EQUAL 2 OR NOT JSON_PARSE_ERROR STREQUAL "" OR
    NOT JSON_PARSE_OUTPUT STREQUAL EXPECTED_JSON_PARSE)
   message(FATAL_ERROR
@@ -285,14 +314,51 @@ expect_json_parse_error(
 expect_json_parse_error(
   update_wipe_without_package "update requires <package>" update --wipe)
 expect_json_parse_error(
-  update_unknown_option "update supports only --wipe after <package>" update
+  update_unknown_option
+  "update supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions, --disable-fastboot-info and --disable-super-optimization after <package>"
+  update
   package.zip --unknown)
 expect_json_parse_error(
   update_duplicate_wipe "update option --wipe may only be specified once"
   update package.zip --wipe --wipe)
 expect_json_parse_error(
+  flashall_operand
+  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions, --disable-fastboot-info and --disable-super-optimization"
+  flashall images)
+expect_json_parse_error(
+  flashall_unknown_option
+  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions, --disable-fastboot-info and --disable-super-optimization"
+  flashall --unknown)
+expect_json_parse_error(
+  flashall_duplicate_wipe "flashall option --wipe may only be specified once"
+  flashall --wipe --wipe)
+expect_json_parse_error(
+  update_duplicate_policy
+  "update option --skip-reboot may only be specified once"
+  update package.zip --skip-reboot --skip-reboot)
+expect_json_parse_error(
   receive_limit_update "option --max-receive-bytes is not valid for update"
   --max-receive-bytes 1 update package.zip)
+expect_json_parse_error(
+  receive_limit_flashall
+  "option --max-receive-bytes is not valid for flashall"
+  --max-receive-bytes 1 flashall)
+expect_json_parse_error(
+  slot_missing "option --slot requires a non-empty slot" --slot)
+expect_json_parse_error(
+  slot_duplicate "option --slot may only be specified once"
+  --slot a --slot b flash system image.img)
+expect_json_parse_error(
+  set_active_duplicate "option --set-active may only be specified once"
+  --set-active --set-active=b flash system image.img)
+expect_json_parse_error(
+  set_active_empty
+  "option --set-active requires a non-empty slot after '='"
+  --set-active= flash system image.img)
+expect_json_parse_error(
+  slot_wrong_command
+  "options --slot and --set-active are valid only for flash, flash:raw, update, and flashall"
+  --slot a getvar product)
 expect_json_parse_error(
   typed_trailing_global "global options must precede the command" getvar
   product --timeout-ms 1)

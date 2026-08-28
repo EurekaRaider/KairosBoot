@@ -97,6 +97,9 @@ struct PlannedUpdateTask final {
     std::string artifact{};
     PlannedSlot slot{PlannedSlot::Default};
     bool apply_vbmeta{false};
+    // The executor must prove this is not a logical partition before binding
+    // the destructive flash task. Set only by --exclude-dynamic-partitions.
+    bool exclude_if_dynamic{false};
 
     // Reboot field. System represents a bare `reboot` line.
     PlannedRebootTarget reboot_target{PlannedRebootTarget::System};

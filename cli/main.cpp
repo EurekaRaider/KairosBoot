@@ -11,6 +11,9 @@
 
 #include <kairosboot/kairosboot.hpp>
 
+#include "src/image/boot_image_builder.hpp"
+#include "src/image/file_source.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -19,12 +22,14 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <expected>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -207,9 +212,25 @@ struct GlobalOptions {
   std::string_view selector_option;
   bool json{false};
   std::optional<std::uint32_t> timeout_ms;
+  std::optional<std::uint16_t> usb_vendor_id;
+  bool verbose{};
   std::uint64_t maximum_receive_bytes{kDefaultMaximumReceiveBytes};
   bool maximum_receive_bytes_set{false};
+  bool disable_verity{};
+  bool disable_verification{};
+  std::uint64_t sparse_limit_bytes{};
+  bool sparse_limit_set{false};
+  bool force{};
+  kairosboot::FilesystemOptions filesystem_options{};
+  bool filesystem_options_set{};
+  std::optional<std::string> dtb_path;
+  bool legacy_boot_options_set{false};
+  std::optional<std::string> slot;
+  bool set_active{};
+  std::optional<std::string> active_slot;
 };
+
+kairosboot::ContextOptions context_options(const GlobalOptions &options);
 
 enum class CommandKind : std::uint8_t {
   Version,
@@ -220,17 +241,26 @@ enum class CommandKind : std::uint8_t {
   Plan,
   Run,
   Flash,
+  FlashVendorBootRamdisk,
+  FlashRaw,
+  Signature,
   Update,
+  Flashall,
+  MakeBootImage,
+  WipeSuper,
   Getvar,
   Erase,
+  Format,
   SetActive,
   Reboot,
   Continue,
   Oem,
   Raw,
+  BootFile,
   BootStaged,
   Stage,
   Upload,
+  GetStaged,
   Fetch,
   Flashing,
   Gsi,
@@ -245,7 +275,10 @@ struct Invocation {
   CommandKind kind{CommandKind::Version};
   std::string_view first;
   std::string_view second;
+  std::string_view third;
+  std::string_view fourth;
   std::string joined;
+  kairosboot::image::LegacyBootImageOptions boot_image_options;
   kairosboot::RebootTarget reboot_target{kairosboot::RebootTarget::System};
   kairosboot::FlashingCommand flashing_command{
       kairosboot::FlashingCommand::Lock};
@@ -254,7 +287,14 @@ struct Invocation {
       kairosboot::SnapshotUpdateCommand::Cancel};
   kairosboot::FetchRange fetch_range;
   std::uint64_t logical_partition_size{};
+  std::string filesystem_type;
+  std::uint64_t format_partition_size{};
   bool wipe{};
+  bool skip_reboot{};
+  bool skip_secondary{};
+  bool exclude_dynamic_partitions{};
+  bool disable_fastboot_info{};
+  bool disable_super_optimization{};
   bool plan_digest{};
 };
 
@@ -267,6 +307,78 @@ struct LocalRuntimeError {
   kb_status_t status{KB_E_INTERNAL};
   std::string message;
 };
+
+[[nodiscard]] std::optional<std::string>
+environment_value(const char *name) {
+#if defined(_WIN32)
+  char *value = nullptr;
+  std::size_t length = 0U;
+  const int error = ::_dupenv_s(&value, &length, name);
+  std::unique_ptr<char, decltype(&std::free)> owned(value, &std::free);
+  if (error != 0 || owned == nullptr) {
+    return std::nullopt;
+  }
+  std::string result(owned.get());
+#else
+  const char *value = std::getenv(name);
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  std::string result(value);
+#endif
+  if (result.empty()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+std::expected<std::string, LocalRuntimeError>
+infer_flash_file(const std::string_view partition) {
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 24>
+      images{{
+          {"boot", "boot.img"},
+          {"bootloader", "bootloader.img"},
+          {"init_boot", "init_boot.img"},
+          {"cache", "cache.img"},
+          {"dtbo", "dtbo.img"},
+          {"dts", "dt.img"},
+          {"odm", "odm.img"},
+          {"odm_dlkm", "odm_dlkm.img"},
+          {"product", "product.img"},
+          {"pvmfw", "pvmfw.img"},
+          {"radio", "radio.img"},
+          {"recovery", "recovery.img"},
+          {"super", "super.img"},
+          {"system", "system.img"},
+          {"system_dlkm", "system_dlkm.img"},
+          {"system_ext", "system_ext.img"},
+          {"userdata", "userdata.img"},
+          {"vbmeta", "vbmeta.img"},
+          {"vbmeta_system", "vbmeta_system.img"},
+          {"vbmeta_vendor", "vbmeta_vendor.img"},
+          {"vendor", "vendor.img"},
+          {"vendor_boot", "vendor_boot.img"},
+          {"vendor_dlkm", "vendor_dlkm.img"},
+          {"vendor_kernel_boot", "vendor_kernel_boot.img"},
+      }};
+
+  for (const auto &[nickname, filename] : images) {
+    if (partition == nickname) {
+      const auto product_out = environment_value("ANDROID_PRODUCT_OUT");
+      if (!product_out.has_value()) {
+        return std::unexpected(LocalRuntimeError{
+            KB_E_INVALID_ARGUMENT, "ANDROID_PRODUCT_OUT not set"});
+      }
+      const auto inferred =
+          (path_from_utf8(*product_out) / path_from_utf8(filename)).u8string();
+      return std::string{reinterpret_cast<const char *>(inferred.data()),
+                         inferred.size()};
+    }
+  }
+  return std::unexpected(LocalRuntimeError{
+      KB_E_INVALID_ARGUMENT,
+      "cannot determine image filename for '" + std::string{partition} + "'"});
+}
 
 #if defined(_WIN32)
 std::expected<std::string, LocalRuntimeError>
@@ -309,7 +421,23 @@ utf8_from_wide(const std::wstring_view value) {
 
 bool is_global_option(const std::string_view value) noexcept {
   return value == "--json" || value == "--device" || value == "--serial" ||
-         value == "--timeout-ms" || value == "--max-receive-bytes";
+         value == "-i" || value == "--vendor-id" ||
+         value == "-v" || value == "--verbose" ||
+         value == "--timeout-ms" || value == "--max-receive-bytes" ||
+         value == "--disable-verity" ||
+         value == "--disable-verification" ||
+         value == "-S" || value == "--force" ||
+         value == "--fs-options" || value.starts_with("--fs-options=") ||
+         value == "--dtb" ||
+         value == "--base" || value == "--cmdline" ||
+         value == "--page-size" || value == "--kernel-offset" ||
+         value == "--ramdisk-offset" || value == "--second-offset" ||
+         value == "--tags-offset" || value == "--header-version" ||
+         value == "--os-version" || value == "--os-patch-level" ||
+         value == "--dtb-offset" ||
+         value == "--slot" ||
+         value == "-a" || value == "--set-active" ||
+         value.starts_with("--set-active=");
 }
 
 template <typename Integer>
@@ -319,6 +447,115 @@ bool parse_unsigned_decimal(const std::string_view text, Integer &value) {
   }
   const auto [end, error] =
       std::from_chars(text.data(), text.data() + text.size(), value, 10);
+  return error == std::errc{} && end == text.data() + text.size();
+}
+
+bool parse_sparse_limit(const std::string_view text,
+                        std::uint64_t &value) noexcept {
+  if (text.empty()) {
+    return false;
+  }
+  std::string_view digits = text;
+  if (digits.front() == '+') {
+    digits.remove_prefix(1U);
+  }
+  std::uint64_t multiplier = 1U;
+  if (!digits.empty()) {
+    switch (digits.back()) {
+    case 'K':
+    case 'k':
+      multiplier = 1024ULL;
+      digits.remove_suffix(1U);
+      break;
+    case 'M':
+    case 'm':
+      multiplier = 1024ULL * 1024ULL;
+      digits.remove_suffix(1U);
+      break;
+    case 'G':
+    case 'g':
+      multiplier = 1024ULL * 1024ULL * 1024ULL;
+      digits.remove_suffix(1U);
+      break;
+    default:
+      break;
+    }
+  }
+  std::uint64_t parsed{};
+  if (!parse_unsigned_decimal(digits, parsed) ||
+      parsed > std::numeric_limits<std::uint64_t>::max() / multiplier) {
+    return false;
+  }
+  value = parsed * multiplier;
+  return true;
+}
+
+bool parse_u32_auto(const std::string_view text, std::uint32_t &value) {
+  if (text.empty()) {
+    return false;
+  }
+  int base = 10;
+  std::string_view digits = text;
+  if (digits.starts_with("0x") || digits.starts_with("0X")) {
+    base = 16;
+    digits.remove_prefix(2U);
+  }
+  if (digits.empty()) {
+    return false;
+  }
+  const auto [end, error] = std::from_chars(
+      digits.data(), digits.data() + digits.size(), value, base);
+  return error == std::errc{} && end == digits.data() + digits.size();
+}
+
+bool parse_filesystem_options(const std::string_view text,
+                              kairosboot::FilesystemOptions &options) {
+  if (text.empty()) {
+    return false;
+  }
+  std::size_t begin = 0U;
+  while (begin < text.size()) {
+    const auto comma = text.find(',', begin);
+    const auto token = text.substr(begin, comma == std::string_view::npos
+                                              ? std::string_view::npos
+                                              : comma - begin);
+    if (token == "casefold" && !options.casefold) {
+      options.casefold = true;
+    } else if (token == "projid" && !options.projid) {
+      options.projid = true;
+    } else if (token == "compress" && !options.compress) {
+      options.compress = true;
+    } else {
+      return false;
+    }
+    if (comma == std::string_view::npos) {
+      return true;
+    }
+    begin = comma + 1U;
+    if (begin == text.size()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename Integer>
+bool parse_unsigned_number(const std::string_view text, Integer &value) {
+  if (text.empty()) {
+    return false;
+  }
+  int base = 10;
+  auto first = text.data();
+  if (text.size() > 2U && text[0] == '0' &&
+      (text[1] == 'x' || text[1] == 'X')) {
+    base = 16;
+    first += 2;
+  }
+  if (first == text.data() + text.size()) {
+    return false;
+  }
+  const auto [end, error] =
+      std::from_chars(first, text.data() + text.size(), value, base);
   return error == std::errc{} && end == text.data() + text.size();
 }
 
@@ -340,6 +577,24 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool device_seen = false;
   bool serial_seen = false;
   bool timeout_seen = false;
+  bool vendor_id_seen = false;
+  bool verbose_seen = false;
+  bool dtb_seen = false;
+  bool cmdline_seen = false;
+  bool base_seen = false;
+  bool page_size_seen = false;
+  bool kernel_offset_seen = false;
+  bool ramdisk_offset_seen = false;
+  bool second_offset_seen = false;
+  bool tags_offset_seen = false;
+  bool header_version_seen = false;
+  bool os_version_seen = false;
+  bool os_patch_level_seen = false;
+  bool dtb_offset_seen = false;
+  bool slot_seen = false;
+  bool set_active_seen = false;
+  bool force_seen = false;
+  bool filesystem_options_seen = false;
   const auto error = [&result](std::string message) {
     return std::unexpected(ParseError{result.global.json, std::move(message)});
   };
@@ -351,6 +606,15 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
         return error("option --json may only be specified once");
       }
       result.global.json = true;
+      ++index;
+      continue;
+    }
+    if (argument == "-v" || argument == "--verbose") {
+      if (verbose_seen) {
+        return error("option --verbose may only be specified once");
+      }
+      result.global.verbose = true;
+      verbose_seen = true;
       ++index;
       continue;
     }
@@ -395,6 +659,26 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       index += 2;
       continue;
     }
+    if (argument == "-i" || argument == "--vendor-id") {
+      if (vendor_id_seen) {
+        return error("option " + std::string{argument} +
+                     " may only be specified once");
+      }
+      if (index + 1 >= argc) {
+        return error("option " + std::string{argument} +
+                     " requires a USB vendor id in [1, 0xffff]");
+      }
+      std::uint32_t parsed = 0;
+      if (!parse_u32_auto(argv[index + 1], parsed) || parsed == 0U ||
+          parsed > std::numeric_limits<std::uint16_t>::max()) {
+        return error("option " + std::string{argument} +
+                     " requires a USB vendor id in [1, 0xffff]");
+      }
+      result.global.usb_vendor_id = static_cast<std::uint16_t>(parsed);
+      vendor_id_seen = true;
+      index += 2;
+      continue;
+    }
     if (argument == "--max-receive-bytes") {
       if (result.global.maximum_receive_bytes_set) {
         return error("option --max-receive-bytes may only be specified once");
@@ -412,6 +696,179 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       index += 2;
       continue;
     }
+    if (argument == "--disable-verity") {
+      result.global.disable_verity = true;
+      ++index;
+      continue;
+    }
+    if (argument == "--disable-verification") {
+      result.global.disable_verification = true;
+      ++index;
+      continue;
+    }
+    if (argument == "--force") {
+      if (force_seen) {
+        return error("option --force may only be specified once");
+      }
+      result.global.force = true;
+      force_seen = true;
+      ++index;
+      continue;
+    }
+    if (argument == "--fs-options" || argument.starts_with("--fs-options=")) {
+      if (filesystem_options_seen) {
+        return error("option --fs-options may only be specified once");
+      }
+      std::string_view value;
+      if (argument.starts_with("--fs-options=")) {
+        value = argument.substr(std::string_view{"--fs-options="}.size());
+        ++index;
+      } else {
+        if (index + 1 >= argc) {
+          return error(
+              "option --fs-options requires casefold, projid, or compress");
+        }
+        value = argv[index + 1];
+        index += 2;
+      }
+      if (!parse_filesystem_options(value, result.global.filesystem_options)) {
+        return error(
+            "option --fs-options supports only unique casefold, projid, and compress values");
+      }
+      result.global.filesystem_options_set = true;
+      filesystem_options_seen = true;
+      continue;
+    }
+    if (argument == "-S") {
+      if (result.global.sparse_limit_set) {
+        return error("option -S may only be specified once");
+      }
+      if (index + 1 >= argc ||
+          !parse_sparse_limit(argv[index + 1],
+                              result.global.sparse_limit_bytes)) {
+        return error("option -S requires SIZE[K|M|G]");
+      }
+      result.global.sparse_limit_set = true;
+      index += 2;
+      continue;
+    }
+    if (argument == "--slot") {
+      if (slot_seen) {
+        return error("option --slot may only be specified once");
+      }
+      if (index + 1 >= argc || argv[index + 1][0] == '\0' ||
+          std::string_view{argv[index + 1]}.starts_with("--")) {
+        return error("option --slot requires a non-empty slot");
+      }
+      result.global.slot = std::string{argv[index + 1]};
+      slot_seen = true;
+      index += 2;
+      continue;
+    }
+    if (argument == "-a" || argument == "--set-active" ||
+        argument.starts_with("--set-active=")) {
+      if (set_active_seen) {
+        return error("option --set-active may only be specified once");
+      }
+      result.global.set_active = true;
+      set_active_seen = true;
+      if (argument.starts_with("--set-active=")) {
+        const auto value = argument.substr(
+            std::string_view{"--set-active="}.size());
+        if (value.empty()) {
+          return error("option --set-active requires a non-empty slot after '='");
+        }
+        result.global.active_slot = std::string{value};
+      }
+      ++index;
+      continue;
+    }
+    if (argument == "--dtb") {
+      if (dtb_seen) {
+        return error("option --dtb may only be specified once");
+      }
+      if (index + 1 >= argc || argv[index + 1][0] == '\0' ||
+          std::string_view{argv[index + 1]}.starts_with("--")) {
+        return error("option --dtb requires a non-empty file path");
+      }
+      result.global.dtb_path = std::string{argv[index + 1]};
+      dtb_seen = true;
+      index += 2;
+      continue;
+    }
+    bool *legacy_seen = nullptr;
+    std::uint32_t *legacy_number = nullptr;
+    std::uint64_t *boot_u64 = nullptr;
+    std::string *boot_string = nullptr;
+    if (argument == "--cmdline") {
+      legacy_seen = &cmdline_seen;
+      boot_string = &result.boot_image_options.command_line;
+    } else if (argument == "--base") {
+      legacy_seen = &base_seen;
+      legacy_number = &result.boot_image_options.base;
+    } else if (argument == "--page-size") {
+      legacy_seen = &page_size_seen;
+      legacy_number = &result.boot_image_options.page_size;
+    } else if (argument == "--kernel-offset") {
+      legacy_seen = &kernel_offset_seen;
+      legacy_number = &result.boot_image_options.kernel_offset;
+    } else if (argument == "--ramdisk-offset") {
+      legacy_seen = &ramdisk_offset_seen;
+      legacy_number = &result.boot_image_options.ramdisk_offset;
+    } else if (argument == "--second-offset") {
+      legacy_seen = &second_offset_seen;
+      legacy_number = &result.boot_image_options.second_offset;
+    } else if (argument == "--tags-offset") {
+      legacy_seen = &tags_offset_seen;
+      legacy_number = &result.boot_image_options.tags_offset;
+    } else if (argument == "--header-version") {
+      legacy_seen = &header_version_seen;
+      legacy_number = &result.boot_image_options.header_version;
+    } else if (argument == "--os-version") {
+      legacy_seen = &os_version_seen;
+      boot_string = &result.boot_image_options.os_version;
+    } else if (argument == "--os-patch-level") {
+      legacy_seen = &os_patch_level_seen;
+      boot_string = &result.boot_image_options.os_patch_level;
+    } else if (argument == "--dtb-offset") {
+      legacy_seen = &dtb_offset_seen;
+      boot_u64 = &result.boot_image_options.dtb_offset;
+    }
+    if (legacy_seen != nullptr) {
+      if (*legacy_seen) {
+        return error("option " + std::string{argument} +
+                     " may only be specified once");
+      }
+      if (index + 1 >= argc) {
+        return error("option " + std::string{argument} +
+                     " requires a value");
+      }
+      const std::string_view value{argv[index + 1]};
+      if (boot_string != nullptr) {
+        if (argument != "--cmdline" && value.empty()) {
+          return error("option " + std::string{argument} +
+                       " requires a non-empty value");
+        }
+        *boot_string = value;
+      } else if (legacy_number != nullptr) {
+        if (!parse_u32_auto(value, *legacy_number)) {
+          return error("option " + std::string{argument} +
+                       " requires an unsigned decimal or 0x hexadecimal value");
+        }
+      } else if (boot_u64 == nullptr ||
+                 !parse_unsigned_number(value, *boot_u64)) {
+        return error("option " + std::string{argument} +
+                     " requires an unsigned decimal or 0x hexadecimal value");
+      }
+      if (argument == "--header-version" &&
+          result.boot_image_options.header_version > 4U) {
+        return error("option --header-version requires an integer in [0, 4]");
+      }
+      *legacy_seen = true;
+      result.global.legacy_boot_options_set = true;
+      index += 2;
+      continue;
+    }
     break;
   }
 
@@ -419,13 +876,18 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     return error("unknown command");
   }
   const std::string_view command{argv[index]};
-  if (command.starts_with("--") && command != "--version" &&
-      command != "--help") {
+  if (command.starts_with("-") && command != "--version" &&
+      command != "--help" && command != "-h") {
     return error("unknown option " + std::string{command});
   }
   const int command_index = index++;
+  if (result.global.dtb_path.has_value() &&
+      (command == "boot" || command == "flash:raw")) {
+    result.boot_image_options.dtb_path = *result.global.dtb_path;
+    result.global.legacy_boot_options_set = true;
+  }
   for (int operand = index; operand < argc; ++operand) {
-    if (is_global_option(argv[operand])) {
+    if (command != "make-boot-image" && is_global_option(argv[operand])) {
       return error("global options must precede the command");
     }
   }
@@ -444,8 +906,49 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error("option --max-receive-bytes is not valid for " +
                    std::string{command});
     }
+    if (result.global.usb_vendor_id.has_value() && command != "doctor" &&
+        command != "devices") {
+      return error("option --vendor-id is not valid for " +
+                   std::string{command});
+    }
+    if (result.global.legacy_boot_options_set) {
+      return error("legacy boot layout options are not valid for " +
+                   std::string{command});
+    }
     return std::nullopt;
   };
+
+  if (result.global.legacy_boot_options_set && command != "boot" &&
+      command != "flash:raw") {
+    return error("legacy boot layout options are not valid for " +
+                 std::string{command});
+  }
+  if ((result.global.slot.has_value() || result.global.set_active) &&
+      command != "flash" && command != "flash:raw" && command != "update" &&
+      command != "flashall") {
+    return error("options --slot and --set-active are valid only for flash, "
+                 "flash:raw, update, and flashall");
+  }
+  if (result.global.sparse_limit_set && command != "flash" &&
+      command != "flash:raw" && command != "update" &&
+      command != "flashall") {
+    return error("option -S is not valid for " + std::string{command});
+  }
+  if (result.global.force && command != "flash" && command != "flash:raw" &&
+      command != "format" && !command.starts_with("format:") &&
+      command != "update" && command != "flashall") {
+    return error("option --force is valid only for flash, flash:raw, format, "
+                 "update, and flashall");
+  }
+  if (result.global.filesystem_options_set && command != "format" &&
+      !command.starts_with("format:")) {
+    return error("option --fs-options is valid only for format");
+  }
+  if (result.global.dtb_path.has_value() && command != "flash" &&
+      command != "boot" && command != "flash:raw") {
+    return error(
+        "option --dtb is valid only for boot, flash:raw, or flash vendor_boot:RAMDISK");
+  }
 
   if (command == "--version") {
     result.kind = CommandKind::Version;
@@ -457,7 +960,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
-  if (command == "--help" || command == "help") {
+  if (command == "--help" || command == "-h" || command == "help") {
     result.kind = CommandKind::Help;
     if (argc - command_index != 1) {
       return error(std::string{command} + " does not accept operands");
@@ -550,47 +1053,331 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     return result;
   }
   if (command == "flash") {
-    result.kind = CommandKind::Flash;
-    if (argc - command_index != 3) {
-      return error("flash requires exactly <partition> and <file>");
+    const int operand_count = argc - command_index - 1;
+    if (operand_count < 1 || operand_count > 2) {
+      return error("flash requires <partition> [file]");
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for flash");
     }
     result.first = argv[index];
-    result.second = argv[index + 1];
     if (result.first.empty()) {
       return error("flash partition must not be empty");
     }
-    if (result.second.empty()) {
-      return error("flash file must not be empty");
+    if (operand_count == 1) {
+      result.kind = CommandKind::Flash;
+      if (result.global.dtb_path.has_value()) {
+        return error("option --dtb is valid only for flash vendor_boot:RAMDISK");
+      }
+      return result;
+    }
+    const auto separator = result.first.find(':');
+    const auto partition = result.first.substr(0U, separator);
+    const bool vendor_boot_repack =
+        separator != std::string_view::npos &&
+        (partition == "vendor_boot" || partition == "vendor_boot_a" ||
+         partition == "vendor_boot_b");
+    if (vendor_boot_repack) {
+      result.kind = CommandKind::FlashVendorBootRamdisk;
+      result.second = result.first.substr(separator + 1U);
+      result.first = partition;
+      if (result.second.empty()) {
+        return error("vendor_boot flash requires a ramdisk name after ':'");
+      }
+      result.third = argv[index + 1];
+      if (result.third.empty()) {
+        return error("vendor_boot ramdisk file must not be empty");
+      }
+    } else {
+      result.kind = CommandKind::Flash;
+      if (separator != std::string_view::npos) {
+        return error("partition suffix repack is supported only for vendor_boot");
+      }
+      result.second = argv[index + 1];
+      if (result.second.empty()) {
+        return error("flash file must not be empty");
+      }
+      if (result.global.dtb_path.has_value()) {
+        return error("option --dtb is valid only for flash vendor_boot:RAMDISK");
+      }
     }
     return result;
   }
-  if (command == "update") {
-    result.kind = CommandKind::Update;
-    if (index >= argc) {
-      return error("update requires <package>");
+  if (command == "flash:raw") {
+    result.kind = CommandKind::FlashRaw;
+    const int operand_count = argc - command_index - 1;
+    if (operand_count < 2 || operand_count > 4) {
+      return error(
+          "flash:raw requires <partition> <kernel> [ramdisk [second]]");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for flash:raw");
     }
     result.first = argv[index++];
-    if (result.first == "--wipe") {
-      return error("update requires <package>");
+    result.second = argv[index++];
+    if (index < argc) {
+      result.third = argv[index++];
+    }
+    if (index < argc) {
+      result.fourth = argv[index];
     }
     if (result.first.empty()) {
-      return error("update package must not be empty");
+      return error("flash:raw partition must not be empty");
+    }
+    if (result.second.empty()) {
+      return error("flash:raw kernel must not be empty");
+    }
+    if (operand_count >= 3 && result.third.empty()) {
+      return error("flash:raw ramdisk must not be empty");
+    }
+    if (operand_count == 4 && result.fourth.empty()) {
+      return error("flash:raw second stage must not be empty");
+    }
+    return result;
+  }
+  if (command == "boot") {
+    result.kind = CommandKind::BootFile;
+    const int operand_count = argc - command_index - 1;
+    if (operand_count < 1 || operand_count > 3) {
+      return error("boot requires <kernel> [ramdisk [second]]");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for boot");
+    }
+    result.first = argv[index++];
+    if (index < argc) {
+      result.second = argv[index++];
+    }
+    if (index < argc) {
+      result.third = argv[index];
+    }
+    if (result.first.empty()) {
+      return error("boot kernel or image must not be empty");
+    }
+    if (operand_count >= 2 && result.second.empty()) {
+      return error("boot ramdisk must not be empty");
+    }
+    if (operand_count == 3 && result.third.empty()) {
+      return error("boot second stage must not be empty");
+    }
+    return result;
+  }
+  if (command == "update" || command == "flashall") {
+    const bool is_flashall = command == "flashall";
+    result.kind = is_flashall ? CommandKind::Flashall : CommandKind::Update;
+    if (!is_flashall) {
+      if (index >= argc || std::string_view{argv[index]}.starts_with("--")) {
+        return error("update requires <package>");
+      }
+      result.first = argv[index++];
+      if (result.first.empty()) {
+        return error("update package must not be empty");
+      }
     }
     while (index < argc) {
       const std::string_view option{argv[index++]};
-      if (option != "--wipe") {
-        return error("update supports only --wipe after <package>");
+      bool *flag = nullptr;
+      if (option == "--wipe") {
+        flag = &result.wipe;
+      } else if (option == "--skip-reboot") {
+        flag = &result.skip_reboot;
+      } else if (option == "--skip-secondary") {
+        flag = &result.skip_secondary;
+      } else if (option == "--exclude-dynamic-partitions") {
+        flag = &result.exclude_dynamic_partitions;
+      } else if (option == "--disable-fastboot-info") {
+        flag = &result.disable_fastboot_info;
+      } else if (option == "--disable-super-optimization") {
+        flag = &result.disable_super_optimization;
+      } else {
+        return error(std::string{command} +
+                     " supports only --wipe, --skip-reboot, --skip-secondary, "
+                     "--exclude-dynamic-partitions, --disable-fastboot-info "
+                     "and --disable-super-optimization" +
+                     (is_flashall ? "" : " after <package>"));
       }
-      if (result.wipe) {
-        return error("update option --wipe may only be specified once");
+      if (*flag) {
+        return error(std::string{command} + " option " + std::string{option} +
+                     " may only be specified once");
       }
-      result.wipe = true;
+      *flag = true;
     }
     if (result.global.maximum_receive_bytes_set) {
-      return error("option --max-receive-bytes is not valid for update");
+      return error("option --max-receive-bytes is not valid for " +
+                   std::string{command});
+    }
+    return result;
+  }
+  if (command == "make-boot-image") {
+    result.kind = CommandKind::MakeBootImage;
+    if (index + 1 >= argc) {
+      return error(
+          "make-boot-image requires <output> <kernel> [ramdisk [second]]");
+    }
+    result.first = argv[index++];
+    result.second = argv[index++];
+    if (result.first.empty() || result.second.empty()) {
+      return error("make-boot-image output and kernel must not be empty");
+    }
+    if (index < argc && !std::string_view{argv[index]}.starts_with("--")) {
+      result.third = argv[index++];
+      if (result.third.empty()) {
+        return error("make-boot-image ramdisk must not be empty");
+      }
+    }
+    if (index < argc && !std::string_view{argv[index]}.starts_with("--")) {
+      result.fourth = argv[index++];
+      if (result.fourth.empty()) {
+        return error("make-boot-image second must not be empty");
+      }
+    }
+
+    bool make_boot_cmdline_seen = false;
+    bool make_boot_base_seen = false;
+    bool make_boot_page_size_seen = false;
+    bool make_boot_kernel_offset_seen = false;
+    bool make_boot_ramdisk_offset_seen = false;
+    bool make_boot_second_offset_seen = false;
+    bool make_boot_tags_offset_seen = false;
+    bool make_boot_header_version_seen = false;
+    bool make_boot_os_version_seen = false;
+    bool make_boot_os_patch_level_seen = false;
+    bool make_boot_dtb_seen = false;
+    bool make_boot_dtb_offset_seen = false;
+    while (index < argc) {
+      const std::string_view option{argv[index++]};
+      bool *seen = nullptr;
+      std::uint32_t *number = nullptr;
+      std::uint64_t *number64 = nullptr;
+      std::string *text = nullptr;
+      if (option == "--cmdline") {
+        seen = &make_boot_cmdline_seen;
+        text = &result.boot_image_options.command_line;
+      } else if (option == "--base") {
+        seen = &make_boot_base_seen;
+        number = &result.boot_image_options.base;
+      } else if (option == "--page-size") {
+        seen = &make_boot_page_size_seen;
+        number = &result.boot_image_options.page_size;
+      } else if (option == "--kernel-offset") {
+        seen = &make_boot_kernel_offset_seen;
+        number = &result.boot_image_options.kernel_offset;
+      } else if (option == "--ramdisk-offset") {
+        seen = &make_boot_ramdisk_offset_seen;
+        number = &result.boot_image_options.ramdisk_offset;
+      } else if (option == "--second-offset") {
+        seen = &make_boot_second_offset_seen;
+        number = &result.boot_image_options.second_offset;
+      } else if (option == "--tags-offset") {
+        seen = &make_boot_tags_offset_seen;
+        number = &result.boot_image_options.tags_offset;
+      } else if (option == "--header-version") {
+        seen = &make_boot_header_version_seen;
+        number = &result.boot_image_options.header_version;
+      } else if (option == "--os-version") {
+        seen = &make_boot_os_version_seen;
+        text = &result.boot_image_options.os_version;
+      } else if (option == "--os-patch-level") {
+        seen = &make_boot_os_patch_level_seen;
+        text = &result.boot_image_options.os_patch_level;
+      } else if (option == "--dtb") {
+        seen = &make_boot_dtb_seen;
+        text = &result.boot_image_options.dtb_path;
+      } else if (option == "--dtb-offset") {
+        seen = &make_boot_dtb_offset_seen;
+        number64 = &result.boot_image_options.dtb_offset;
+      } else {
+        return error("unknown make-boot-image option " + std::string{option});
+      }
+      if (*seen) {
+        return error("make-boot-image option " + std::string{option} +
+                     " may only be specified once");
+      }
+      *seen = true;
+      if (index >= argc) {
+        return error("make-boot-image option " + std::string{option} +
+                     " requires a value");
+      }
+      const std::string_view value{argv[index++]};
+      if (text != nullptr) {
+        if (value.empty()) {
+          return error("make-boot-image option " + std::string{option} +
+                       " requires a non-empty value");
+        }
+        *text = value;
+      } else if (number != nullptr) {
+        if (!parse_u32_auto(value, *number)) {
+          return error("make-boot-image option " + std::string{option} +
+                       " requires an unsigned decimal or 0x hexadecimal value");
+        }
+      } else if (number64 == nullptr ||
+                 !parse_unsigned_number(value, *number64)) {
+        return error("make-boot-image option " + std::string{option} +
+                     " requires an unsigned decimal or 0x hexadecimal value");
+      }
+      if (option == "--header-version" &&
+          result.boot_image_options.header_version > 4U) {
+        return error(
+            "make-boot-image option --header-version requires an integer in [0, 4]");
+      }
+    }
+    if (const auto rejected = reject_non_json_globals()) {
+      return *rejected;
+    }
+    return result;
+  }
+  if (command == "wipe-super") {
+    result.kind = CommandKind::WipeSuper;
+    if (argc - command_index > 2) {
+      return error("wipe-super accepts at most one <super_empty.img>");
+    }
+    if (argc - command_index == 2) {
+      result.first = argv[index];
+      if (result.first.empty()) {
+        return error("wipe-super image must not be empty");
+      }
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for wipe-super");
+    }
+    return result;
+  }
+  if (command == "format" || command.starts_with("format:")) {
+    result.kind = CommandKind::Format;
+    if (argc - command_index != 2) {
+      return error(std::string{command} + " requires exactly <partition>");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for format");
+    }
+    result.first = argv[index];
+    if (result.first.empty()) {
+      return error("format partition must not be empty");
+    }
+    if (command.size() > std::string_view{"format"}.size()) {
+      const auto suffix = command.substr(std::string_view{"format:"}.size());
+      const auto separator = suffix.find(':');
+      const auto type = suffix.substr(0U, separator);
+      const auto size = separator == std::string_view::npos
+                            ? std::string_view{}
+                            : suffix.substr(separator + 1U);
+      if (separator != std::string_view::npos &&
+          size.find(':') != std::string_view::npos) {
+        return error("format accepts at most type and size overrides");
+      }
+      if (!type.empty() && type != "ext4" && type != "f2fs") {
+        return error("format filesystem type must be ext4 or f2fs");
+      }
+      result.filesystem_type = std::string{type};
+      if (!size.empty() &&
+          (!parse_unsigned_number(size, result.format_partition_size) ||
+           result.format_partition_size == 0U ||
+           result.format_partition_size >
+               static_cast<std::uint64_t>(
+                   std::numeric_limits<std::int64_t>::max()))) {
+        return error(
+            "format size must be a non-zero decimal or 0x-prefixed byte count in [1, 9223372036854775807]");
+      }
     }
     return result;
   }
@@ -620,11 +1407,20 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   if (command == "set-active") {
     return parse_single_operand(CommandKind::SetActive, "slot");
   }
+  if (command == "signature") {
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for signature");
+    }
+    return parse_single_operand(CommandKind::Signature, "file");
+  }
   if (command == "stage") {
     return parse_single_operand(CommandKind::Stage, "file");
   }
   if (command == "upload") {
     return parse_single_operand(CommandKind::Upload, "output");
+  }
+  if (command == "get-staged") {
+    return parse_single_operand(CommandKind::GetStaged, "output");
   }
   if (command == "flashing") {
     result.kind = CommandKind::Flashing;
@@ -835,12 +1631,26 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "run";
   case CommandKind::Flash:
     return "flash";
+  case CommandKind::FlashVendorBootRamdisk:
+    return "flash";
+  case CommandKind::FlashRaw:
+    return "flash:raw";
+  case CommandKind::Signature:
+    return "signature";
   case CommandKind::Update:
     return "update";
+  case CommandKind::Flashall:
+    return "flashall";
+  case CommandKind::MakeBootImage:
+    return "make-boot-image";
+  case CommandKind::WipeSuper:
+    return "wipe-super";
   case CommandKind::Getvar:
     return "getvar";
   case CommandKind::Erase:
     return "erase";
+  case CommandKind::Format:
+    return "format";
   case CommandKind::SetActive:
     return "set-active";
   case CommandKind::Reboot:
@@ -851,12 +1661,16 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "oem";
   case CommandKind::Raw:
     return "raw";
+  case CommandKind::BootFile:
+    return "boot";
   case CommandKind::BootStaged:
     return "boot-staged";
   case CommandKind::Stage:
     return "stage";
   case CommandKind::Upload:
     return "upload";
+  case CommandKind::GetStaged:
+    return "get-staged";
   case CommandKind::Fetch:
     return "fetch";
   case CommandKind::Flashing:
@@ -968,9 +1782,10 @@ int print_version(const bool json) {
   return 0;
 }
 
-int doctor(const bool json) {
+int doctor(const GlobalOptions &options) {
+  const bool json = options.json;
   const kairosboot::Version current = kairosboot::version();
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(options));
   if (!context) {
     if (!json) {
       return print_runtime_error(context.error(), false);
@@ -1006,8 +1821,9 @@ int doctor(const bool json) {
   return 0;
 }
 
-int print_devices(const bool json) {
-  auto context = kairosboot::Context::create();
+int print_devices(const GlobalOptions &options) {
+  const bool json = options.json;
+  auto context = kairosboot::Context::create(context_options(options));
   if (!context) {
     return print_runtime_error(context.error(), json);
   }
@@ -1052,6 +1868,14 @@ kairosboot::FlashOptions flash_options(const GlobalOptions &options) {
   if (options.timeout_ms.has_value()) {
     result.timeout = std::chrono::milliseconds{*options.timeout_ms};
   }
+  result.disable_verity = options.disable_verity;
+  result.disable_verification = options.disable_verification;
+  result.slot = options.slot;
+  result.set_active = options.set_active;
+  result.active_slot = options.active_slot;
+  result.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.force = options.force;
+  result.filesystem_options = options.filesystem_options;
   return result;
 }
 
@@ -1060,6 +1884,14 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
   if (options.timeout_ms.has_value()) {
     result.timeout = std::chrono::milliseconds{*options.timeout_ms};
   }
+  result.disable_verity = options.disable_verity;
+  result.disable_verification = options.disable_verification;
+  result.slot = options.slot;
+  result.set_active = options.set_active;
+  result.active_slot = options.active_slot;
+  result.sparse_limit_bytes = options.sparse_limit_bytes;
+  result.force = options.force;
+  result.filesystem_options = options.filesystem_options;
   return result;
 }
 
@@ -1243,9 +2075,10 @@ private:
   bool committed_{false};
 };
 
+template <typename Writer>
 std::expected<void, LocalRuntimeError>
-write_output_atomically(const std::string_view output_name,
-                        const std::span<const std::byte> data) {
+write_output_atomically_impl(const std::string_view output_name,
+                             Writer &&writer) {
   const std::filesystem::path output = path_from_utf8(output_name);
   std::filesystem::path directory = output.parent_path();
   if (directory.empty()) {
@@ -1299,18 +2132,8 @@ write_output_atomically(const std::string_view output_name,
   }
 
   TemporaryOutput cleanup{std::move(temporary)};
-  constexpr std::size_t maximum_chunk = 1024U * 1024U;
-  std::size_t offset = 0;
-  while (offset < data.size()) {
-    const std::size_t chunk = std::min(maximum_chunk, data.size() - offset);
-    stream.write(reinterpret_cast<const char *>(data.data() + offset),
-                 static_cast<std::streamsize>(chunk));
-    if (!stream) {
-      return std::unexpected(LocalRuntimeError{
-          KB_E_IO, "failed while writing temporary output for: " +
-                       std::string{output_name}});
-    }
-    offset += chunk;
+  if (auto written = writer(stream); !written) {
+    return std::unexpected(std::move(written.error()));
   }
   stream.close();
   if (!stream) {
@@ -1339,6 +2162,35 @@ write_output_atomically(const std::string_view output_name,
   return {};
 }
 
+std::expected<void, LocalRuntimeError> write_source_atomically(
+    const std::string_view output_name,
+    const kairosboot::image::IImageSource &source) {
+  return write_output_atomically_impl(
+      output_name, [&source, output_name](std::ofstream &stream)
+                       -> std::expected<void, LocalRuntimeError> {
+        std::vector<std::byte> buffer(1024U * 1024U);
+        std::uint64_t offset = 0U;
+        while (offset < source.size()) {
+          const auto requested = static_cast<std::size_t>(
+              std::min<std::uint64_t>(buffer.size(), source.size() - offset));
+          auto read = source.read_at(offset, std::span(buffer).first(requested));
+          if (!read || *read == 0U || *read > requested) {
+            return std::unexpected(LocalRuntimeError{
+                KB_E_IO, "failed while reading constructed boot image"});
+          }
+          stream.write(reinterpret_cast<const char *>(buffer.data()),
+                       static_cast<std::streamsize>(*read));
+          if (!stream) {
+            return std::unexpected(LocalRuntimeError{
+                KB_E_IO, "failed while writing temporary output for: " +
+                             std::string{output_name}});
+          }
+          offset += *read;
+        }
+        return {};
+      });
+}
+
 std::expected<kairosboot::CommandResult, kairosboot::Error>
 execute_typed_command(kairosboot::Context &context,
                       const Invocation &invocation,
@@ -1360,6 +2212,8 @@ execute_typed_command(kairosboot::Context &context,
     return context.oem(selector, invocation.joined, options);
   case CommandKind::Raw:
     return context.raw_command(selector, invocation.joined, options);
+  case CommandKind::BootFile:
+    break;
   case CommandKind::BootStaged:
     return context.boot(selector, options);
   case CommandKind::Stage: {
@@ -1370,10 +2224,15 @@ execute_typed_command(kairosboot::Context &context,
     return operation->wait_result();
   }
   case CommandKind::Upload:
-    return context.upload(selector, options);
+    return context.upload_file(selector, path_from_utf8(invocation.first),
+                               options);
+  case CommandKind::GetStaged:
+    return context.get_staged_file(selector,
+                                   path_from_utf8(invocation.first), options);
   case CommandKind::Fetch:
-    return context.fetch(selector, invocation.first, invocation.fetch_range,
-                         options);
+    return context.fetch_file(selector, invocation.first,
+                              path_from_utf8(invocation.second),
+                              invocation.fetch_range, options);
   case CommandKind::Version:
   case CommandKind::Help:
   case CommandKind::Doctor:
@@ -1382,7 +2241,14 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Plan:
   case CommandKind::Run:
   case CommandKind::Flash:
+  case CommandKind::FlashVendorBootRamdisk:
+  case CommandKind::FlashRaw:
+  case CommandKind::Signature:
   case CommandKind::Update:
+  case CommandKind::Flashall:
+  case CommandKind::MakeBootImage:
+  case CommandKind::WipeSuper:
+  case CommandKind::Format:
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
@@ -1424,17 +2290,26 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Doctor:
   case CommandKind::Devices:
   case CommandKind::Flash:
+  case CommandKind::FlashVendorBootRamdisk:
+  case CommandKind::FlashRaw:
+  case CommandKind::Signature:
   case CommandKind::Update:
+  case CommandKind::Flashall:
+  case CommandKind::MakeBootImage:
+  case CommandKind::WipeSuper:
   case CommandKind::Getvar:
   case CommandKind::Erase:
+  case CommandKind::Format:
   case CommandKind::SetActive:
   case CommandKind::Reboot:
   case CommandKind::Continue:
   case CommandKind::Oem:
   case CommandKind::Raw:
+  case CommandKind::BootFile:
   case CommandKind::BootStaged:
   case CommandKind::Stage:
   case CommandKind::Upload:
+  case CommandKind::GetStaged:
   case CommandKind::Fetch:
   case CommandKind::Validate:
   case CommandKind::Plan:
@@ -1490,7 +2365,7 @@ int print_command_success(const Invocation &invocation,
               << "\",\"bytes\":" << result.terminal_payload().size()
               << "},\"messages\":";
     print_json_result_messages(result);
-    std::cout << ",\"dataBytes\":" << result.data().size();
+    std::cout << ",\"dataBytes\":" << result.received_bytes();
     if (output.has_value()) {
       std::cout << ",\"output\":\"" << json_escape(*output) << '\"';
     }
@@ -1500,7 +2375,7 @@ int print_command_success(const Invocation &invocation,
 
   print_result_messages(result);
   if (output.has_value()) {
-    std::cout << "Wrote " << result.data().size() << " bytes to " << *output
+    std::cout << "Wrote " << result.received_bytes() << " bytes to " << *output
               << '\n';
   } else if (!result.terminal_payload().empty()) {
     std::cout << escape_binary_for_text(result.terminal_payload()) << '\n';
@@ -1510,31 +2385,328 @@ int print_command_success(const Invocation &invocation,
   return 0;
 }
 
+kairosboot::ContextOptions context_options(const GlobalOptions &options) {
+  return kairosboot::ContextOptions{
+      .usb_vendor_id = options.usb_vendor_id.value_or(0U),
+  };
+}
+
 int flash_file(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  std::string inferred_file;
+  std::string_view file = invocation.second;
+  if (file.empty()) {
+    auto inferred = infer_flash_file(invocation.first);
+    if (!inferred) {
+      return print_local_runtime_error(inferred.error(), invocation.global.json);
+    }
+    inferred_file = std::move(*inferred);
+    file = inferred_file;
+  }
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
   const auto result = context->flash_file(
       selector_view(invocation.global), invocation.first,
-      path_from_utf8(invocation.second), flash_options(invocation.global));
+      path_from_utf8(file), flash_options(invocation.global));
   if (!result) {
     return print_runtime_error(result.error(), invocation.global.json);
   }
   if (invocation.global.json) {
     std::cout << "{\"ok\":true,\"command\":\"flash\",\"partition\":\""
               << json_escape(invocation.first) << "\",\"file\":\""
-              << json_escape(invocation.second) << "\"}\n";
+              << json_escape(file) << "\"}\n";
   } else {
-    std::cout << "Flashed " << invocation.first << " from " << invocation.second
+    std::cout << "Flashed " << invocation.first << " from " << file
               << '\n';
   }
   return 0;
 }
 
+int flash_vendor_boot_ramdisk(const Invocation &invocation) {
+  if (invocation.third.empty()) {
+    return print_local_runtime_error(
+        LocalRuntimeError{
+            KB_E_INVALID_ARGUMENT,
+            "vendor_boot ramdisk file must not be empty"},
+        invocation.global.json);
+  }
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  const std::optional<std::filesystem::path> dtb =
+      invocation.global.dtb_path.has_value()
+          ? std::optional<std::filesystem::path>{
+                path_from_utf8(*invocation.global.dtb_path)}
+          : std::nullopt;
+  InterruptCancellation cancellation;
+  auto operation = context->flash_vendor_boot_ramdisk_async(
+      selector_view(invocation.global), invocation.first,
+      path_from_utf8(invocation.third), invocation.second, dtb,
+      flash_options(invocation.global));
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"flash\",\"partition\":\""
+              << json_escape(invocation.first)
+              << "\",\"vendorRamdisk\":\""
+              << json_escape(invocation.second) << "\",\"file\":\""
+              << json_escape(invocation.third) << '"';
+    if (invocation.global.dtb_path.has_value()) {
+      std::cout << ",\"dtb\":\""
+                << json_escape(*invocation.global.dtb_path) << '"';
+    }
+    std::cout << "}\n";
+  } else {
+    std::cout << "Repacked and flashed " << invocation.first << ':'
+              << invocation.second << " from " << invocation.third << '\n';
+  }
+  return 0;
+}
+
+int format_partition(const Invocation &invocation) {
+  auto context = kairosboot::Context::create(context_options(invocation.global));
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  const std::optional<std::string_view> filesystem_type =
+      invocation.filesystem_type.empty()
+          ? std::nullopt
+          : std::optional<std::string_view>{invocation.filesystem_type};
+  const auto result = context->format_partition(
+      selector_view(invocation.global), invocation.first, filesystem_type,
+      invocation.format_partition_size, flash_options(invocation.global));
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"format\",\"partition\":\""
+              << json_escape(invocation.first) << "\"";
+    if (filesystem_type.has_value()) {
+      std::cout << ",\"filesystemType\":\""
+                << json_escape(*filesystem_type) << "\"";
+    }
+    if (invocation.format_partition_size != 0U) {
+      std::cout << ",\"partitionSize\":"
+                << invocation.format_partition_size;
+    }
+    std::cout << "}\n";
+  } else {
+    std::cout << "Formatted " << invocation.first << '\n';
+  }
+  return 0;
+}
+
+int boot_file(const Invocation &invocation) {
+  auto context = kairosboot::Context::create(context_options(invocation.global));
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  InterruptCancellation cancellation;
+  auto options = flash_options(invocation.global);
+  const auto legacy = kairosboot::LegacyBootOptions{
+      .command_line = invocation.boot_image_options.command_line,
+      .base = invocation.boot_image_options.base,
+      .page_size = invocation.boot_image_options.page_size,
+      .kernel_offset = invocation.boot_image_options.kernel_offset,
+      .ramdisk_offset = invocation.boot_image_options.ramdisk_offset,
+      .second_offset = invocation.boot_image_options.second_offset,
+      .tags_offset = invocation.boot_image_options.tags_offset,
+      .header_version = invocation.boot_image_options.header_version,
+      .os_version = invocation.boot_image_options.os_version,
+      .os_patch_level = invocation.boot_image_options.os_patch_level,
+      .dtb = invocation.boot_image_options.dtb_path.empty()
+                 ? std::nullopt
+                 : std::optional<std::filesystem::path>{path_from_utf8(
+                       invocation.boot_image_options.dtb_path)},
+      .dtb_offset = invocation.boot_image_options.dtb_offset,
+  };
+  const std::optional<std::filesystem::path> ramdisk =
+      invocation.second.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{
+                path_from_utf8(invocation.second)};
+  const std::optional<std::filesystem::path> second_stage =
+      invocation.third.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{path_from_utf8(invocation.third)};
+  auto operation = context->boot_raw_async(
+      selector_view(invocation.global), path_from_utf8(invocation.first),
+      ramdisk, second_stage, legacy, options);
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"boot\",\"image\":\""
+              << json_escape(invocation.first) << "\"}\n";
+  } else {
+    std::cout << "Booted from " << invocation.first << '\n';
+  }
+  return 0;
+}
+
+std::expected<std::shared_ptr<const kairosboot::image::IImageSource>,
+              LocalRuntimeError>
+open_boot_component(const std::string_view path, const std::string_view name) {
+  auto opened = kairosboot::image::FileImageSource::open(path_from_utf8(path));
+  if (!opened) {
+    return std::unexpected(LocalRuntimeError{
+        KB_E_IO, "cannot open boot " + std::string{name} + " file " +
+                     std::string{path} + ": " + opened.error().message});
+  }
+  return std::shared_ptr<const kairosboot::image::IImageSource>{
+      std::move(*opened)};
+}
+
+int make_boot_image(const Invocation &invocation) {
+  auto kernel = open_boot_component(invocation.second, "kernel");
+  if (!kernel) {
+    return print_local_runtime_error(kernel.error(), invocation.global.json);
+  }
+  std::shared_ptr<const kairosboot::image::IImageSource> ramdisk;
+  if (!invocation.third.empty()) {
+    auto opened = open_boot_component(invocation.third, "ramdisk");
+    if (!opened) {
+      return print_local_runtime_error(opened.error(), invocation.global.json);
+    }
+    ramdisk = std::move(*opened);
+  }
+  std::shared_ptr<const kairosboot::image::IImageSource> second;
+  if (!invocation.fourth.empty()) {
+    auto opened = open_boot_component(invocation.fourth, "second");
+    if (!opened) {
+      return print_local_runtime_error(opened.error(), invocation.global.json);
+    }
+    second = std::move(*opened);
+  }
+  std::shared_ptr<const kairosboot::image::IImageSource> dtb;
+  if (!invocation.boot_image_options.dtb_path.empty()) {
+    auto opened =
+        open_boot_component(invocation.boot_image_options.dtb_path, "DTB");
+    if (!opened) {
+      return print_local_runtime_error(opened.error(), invocation.global.json);
+    }
+    dtb = std::move(*opened);
+  }
+
+  auto built = kairosboot::image::build_boot_image(
+      std::move(*kernel), std::move(ramdisk), std::move(second),
+      std::move(dtb), invocation.boot_image_options);
+  if (!built) {
+    const bool invalid =
+        built.error().kind ==
+            kairosboot::image::BootImageBuildErrorKind::InvalidArgument ||
+        built.error().kind ==
+            kairosboot::image::BootImageBuildErrorKind::SizeOverflow;
+    return print_local_runtime_error(
+        LocalRuntimeError{invalid ? KB_E_INVALID_ARGUMENT : KB_E_IO,
+                          built.error().message},
+        invocation.global.json);
+  }
+  if (auto written = write_source_atomically(invocation.first, **built);
+      !written) {
+    return print_local_runtime_error(written.error(), invocation.global.json);
+  }
+
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"make-boot-image\","
+                 "\"output\":\""
+              << json_escape(invocation.first) << "\",\"bytes\":"
+              << (*built)->size()
+              << ",\"headerVersion\":"
+              << invocation.boot_image_options.header_version
+              << ",\"vendorBoot\":false}\n";
+  } else {
+    std::cout << "Created boot image " << invocation.first << " ("
+              << (*built)->size() << " bytes)\n";
+  }
+  return 0;
+}
+
+int flash_raw(const Invocation &invocation) {
+  auto context = kairosboot::Context::create(context_options(invocation.global));
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  const std::optional<std::filesystem::path> ramdisk =
+      invocation.third.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{
+                path_from_utf8(invocation.third)};
+  const std::optional<std::filesystem::path> second_stage =
+      invocation.fourth.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{
+                path_from_utf8(invocation.fourth)};
+  const auto result = context->flash_raw(
+      selector_view(invocation.global), invocation.first,
+      path_from_utf8(invocation.second), ramdisk, second_stage,
+      kairosboot::LegacyBootOptions{
+          .command_line = invocation.boot_image_options.command_line,
+          .base = invocation.boot_image_options.base,
+          .page_size = invocation.boot_image_options.page_size,
+          .kernel_offset = invocation.boot_image_options.kernel_offset,
+          .ramdisk_offset = invocation.boot_image_options.ramdisk_offset,
+          .second_offset = invocation.boot_image_options.second_offset,
+          .tags_offset = invocation.boot_image_options.tags_offset,
+          .header_version = invocation.boot_image_options.header_version,
+          .os_version = invocation.boot_image_options.os_version,
+          .os_patch_level = invocation.boot_image_options.os_patch_level,
+          .dtb = invocation.boot_image_options.dtb_path.empty()
+                     ? std::nullopt
+                     : std::optional<std::filesystem::path>{path_from_utf8(
+                           invocation.boot_image_options.dtb_path)},
+          .dtb_offset = invocation.boot_image_options.dtb_offset,
+      },
+      flash_options(invocation.global));
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"flash:raw\",\"partition\":\""
+              << json_escape(invocation.first) << "\",\"kernel\":\""
+              << json_escape(invocation.second) << "\"}\n";
+  } else {
+    std::cout << "Flashed raw boot image to " << invocation.first << " from "
+              << invocation.second << '\n';
+  }
+  return 0;
+}
+
+int signature_file(const Invocation &invocation) {
+  auto context = kairosboot::Context::create(context_options(invocation.global));
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  InterruptCancellation cancellation;
+  auto operation = context->signature_file_async(
+      selector_view(invocation.global), path_from_utf8(invocation.first),
+      command_options(invocation.global));
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait_result(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  return print_command_success(invocation, *result, std::nullopt);
+}
+
 class UpdateProgressReporter final {
 public:
-  explicit UpdateProgressReporter(const bool json) noexcept : json_(json) {}
+  UpdateProgressReporter(const bool json,
+                         const std::string_view command) noexcept
+      : json_(json), command_(command) {}
 
   kairosboot::ProgressAction operator()(const kairosboot::Progress &progress) {
     std::scoped_lock lock(mutex_);
@@ -1544,7 +2716,7 @@ public:
         (stage != stage_ || device != device_ ||
          progress.bytes_completed != completed_ ||
          progress.bytes_total != total_)) {
-      std::cerr << "update: " << stage;
+      std::cerr << command_ << ": " << stage;
       if (progress.bytes_total != 0U) {
         std::cerr << ' ' << progress.bytes_completed << '/'
                   << progress.bytes_total << " bytes";
@@ -1563,6 +2735,7 @@ public:
 
 private:
   bool json_{};
+  std::string_view command_;
   std::mutex mutex_;
   std::string stage_;
   std::string device_;
@@ -1571,21 +2744,72 @@ private:
 };
 
 int update_package(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  std::string package;
+  if (invocation.kind == CommandKind::Update) {
+    package = invocation.first;
+  } else {
+#if defined(_WIN32)
+    constexpr wchar_t product_out_name[] = L"ANDROID_PRODUCT_OUT";
+    const DWORD required =
+        GetEnvironmentVariableW(product_out_name, nullptr, 0U);
+    if (required == 0U) {
+      return print_local_runtime_error(
+          LocalRuntimeError{
+              KB_E_INVALID_ARGUMENT,
+              "flashall requires non-empty ANDROID_PRODUCT_OUT"},
+          invocation.global.json);
+    }
+    std::wstring wide_package(static_cast<std::size_t>(required), L'\0');
+    const DWORD copied = GetEnvironmentVariableW(
+        product_out_name, wide_package.data(), required);
+    if (copied == 0U || copied >= required) {
+      return print_local_runtime_error(
+          LocalRuntimeError{KB_E_INVALID_ARGUMENT,
+                            "cannot read ANDROID_PRODUCT_OUT"},
+          invocation.global.json);
+    }
+    wide_package.resize(static_cast<std::size_t>(copied));
+    auto converted = utf8_from_wide(wide_package);
+    if (!converted) {
+      return print_local_runtime_error(converted.error(),
+                                       invocation.global.json);
+    }
+    package = std::move(*converted);
+#else
+    const char *product_out = std::getenv("ANDROID_PRODUCT_OUT");
+    if (product_out == nullptr || product_out[0] == '\0') {
+      return print_local_runtime_error(
+          LocalRuntimeError{
+              KB_E_INVALID_ARGUMENT,
+              "flashall requires non-empty ANDROID_PRODUCT_OUT"},
+          invocation.global.json);
+    }
+    package = product_out;
+#endif
+  }
+
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
 
   InterruptCancellation cancellation;
-  UpdateProgressReporter progress{invocation.global.json};
+  const std::string_view command = command_name(invocation.kind);
+  UpdateProgressReporter progress{invocation.global.json, command};
   auto options = update_options(invocation.global);
   options.wipe = invocation.wipe;
+  options.skip_reboot = invocation.skip_reboot;
+  options.skip_secondary = invocation.skip_secondary;
+  options.exclude_dynamic_partitions =
+      invocation.exclude_dynamic_partitions;
+  options.disable_fastboot_info = invocation.disable_fastboot_info;
+  options.disable_super_optimization =
+      invocation.disable_super_optimization;
   options.progress = [&progress](const kairosboot::Progress &value) {
     return progress(value);
   };
   auto operation = context->update_package_async(
-      selector_view(invocation.global), path_from_utf8(invocation.first),
-      options);
+      selector_view(invocation.global), path_from_utf8(package), options);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -1595,13 +2819,72 @@ int update_package(const Invocation &invocation) {
   }
 
   if (invocation.global.json) {
-    std::cout << "{\"ok\":true,\"command\":\"update\",\"package\":\""
-              << json_escape(invocation.first) << "\",\"wipe\":"
-              << (invocation.wipe ? "true" : "false") << "}\n";
+    std::cout << "{\"ok\":true,\"command\":\"" << command
+              << "\",\"package\":\"" << json_escape(package)
+              << "\",\"wipe\":"
+              << (invocation.wipe ? "true" : "false")
+              << ",\"skipReboot\":"
+              << (invocation.skip_reboot ? "true" : "false")
+              << ",\"skipSecondary\":"
+              << (invocation.skip_secondary ? "true" : "false")
+              << ",\"excludeDynamicPartitions\":"
+              << (invocation.exclude_dynamic_partitions ? "true" : "false")
+              << ",\"disableFastbootInfo\":"
+              << (invocation.disable_fastboot_info ? "true" : "false")
+              << ",\"disableSuperOptimization\":"
+              << (invocation.disable_super_optimization ? "true" : "false")
+              << "}\n";
   } else {
-    std::cout << "Updated from " << invocation.first;
+    std::cout << (invocation.kind == CommandKind::Flashall
+                      ? "Flashed all from "
+                      : "Updated from ")
+              << package;
     if (invocation.wipe) {
       std::cout << " (wipe requested)";
+    }
+    std::cout << '\n';
+  }
+  return 0;
+}
+
+int wipe_super(const Invocation &invocation) {
+  auto context = kairosboot::Context::create(context_options(invocation.global));
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+
+  InterruptCancellation cancellation;
+  UpdateProgressReporter progress{invocation.global.json, "wipe-super"};
+  auto options = update_options(invocation.global);
+  options.progress = [&progress](const kairosboot::Progress &value) {
+    return progress(value);
+  };
+  std::optional<std::filesystem::path> image;
+  if (!invocation.first.empty()) {
+    image = path_from_utf8(invocation.first);
+  }
+  auto operation = context->wipe_super_async(
+      selector_view(invocation.global), image, options);
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"wipe-super\",\"image\":";
+    if (invocation.first.empty()) {
+      std::cout << "null";
+    } else {
+      std::cout << '"' << json_escape(invocation.first) << '"';
+    }
+    std::cout << "}\n";
+  } else {
+    std::cout << "Wiped super";
+    if (!invocation.first.empty()) {
+      std::cout << " using " << invocation.first;
     }
     std::cout << '\n';
   }
@@ -1709,7 +2992,7 @@ int print_fleet_run_result(const Invocation &invocation,
 }
 
 int run_manifest(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -1747,7 +3030,7 @@ int run_typed_command(const Invocation &invocation) {
     stage_data = std::move(*loaded);
   }
 
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -1757,22 +3040,14 @@ int run_typed_command(const Invocation &invocation) {
   }
 
   std::optional<std::string_view> output;
-  if (invocation.kind == CommandKind::Upload) {
-    output = invocation.first;
-  } else if (invocation.kind == CommandKind::Fetch) {
-    output = invocation.second;
-  }
-  if (output.has_value()) {
-    auto written = write_output_atomically(*output, result->data());
-    if (!written) {
-      return print_local_runtime_error(written.error(), invocation.global.json);
-    }
+  if (!result->output_path().empty()) {
+    output = result->output_path();
   }
   return print_command_success(invocation, *result, output);
 }
 
 int run_management_command(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -1792,17 +3067,35 @@ int run_management_command(const Invocation &invocation) {
 constexpr std::string_view usage_text() noexcept {
   return "Usage:\n"
                "  kairosboot --version [--json]\n"
-               "  kairosboot --help [--json]\n"
+               "  kairosboot -h | --help [--json]\n"
                "  kairosboot doctor [--json]\n"
                "  kairosboot devices [--json]\n"
                "  kairosboot [--json] validate <manifest>\n"
                "  kairosboot plan <manifest> [--digest]\n"
                "  kairosboot [--json] [--timeout-ms <milliseconds>] run "
                "<manifest>\n"
-               "  kairosboot [global options] flash <partition> <file>\n"
-               "  kairosboot [global options] update <package> [--wipe]\n"
+               "  kairosboot [global options] flash <partition> [file]\n"
+               "  kairosboot [global options] [--dtb <file>] flash "
+               "vendor_boot:RAMDISK <file>\n"
+               "  kairosboot [global options] flash:raw <partition> <kernel> "
+               "[ramdisk [second]]\n"
+               "  kairosboot [global options] signature <file>\n"
+               "  kairosboot [global options] update <package> [--wipe] "
+               "[--skip-reboot] [--skip-secondary] "
+               "[--exclude-dynamic-partitions] [--disable-fastboot-info] "
+               "[--disable-super-optimization]\n"
+               "  kairosboot [global options] flashall [--wipe] "
+               "[--skip-reboot] [--skip-secondary] "
+               "[--exclude-dynamic-partitions] [--disable-fastboot-info] "
+               "[--disable-super-optimization]\n"
+               "  kairosboot [global options] boot <kernel-or-image> "
+               "[ramdisk [second]]\n"
+               "  kairosboot [--json] make-boot-image <output> <kernel> "
+               "[ramdisk [second]] [layout options]\n"
+               "  kairosboot [global options] wipe-super [super_empty.img]\n"
                "  kairosboot [global options] getvar <variable>\n"
                "  kairosboot [global options] erase <partition>\n"
+               "  kairosboot [global options] format[:type[:size]] <partition>\n"
                "  kairosboot [global options] set-active <slot>\n"
                "  kairosboot [global options] reboot "
                "[system|bootloader|recovery|fastboot]\n"
@@ -1812,6 +3105,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] boot-staged\n"
                "  kairosboot [global options] stage <file>\n"
                "  kairosboot [global options] upload <output>\n"
+               "  kairosboot [global options] get-staged <output>\n"
                "  kairosboot [global options] fetch <partition> <output> "
                "[--offset <bytes>] [--size <bytes>]\n"
                "  kairosboot [global options] flashing "
@@ -1826,8 +3120,24 @@ constexpr std::string_view usage_text() noexcept {
                "<partition> <size-bytes>\n"
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
+               "  -i <vendor-id> | --vendor-id <vendor-id>\n"
+               "  -v | --verbose\n"
+               "  --slot <a|b|other|all> -a | --set-active[=<a|b|other>]\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
+               "  --disable-verity --disable-verification\n"
+               "  -S SIZE[K|M|G] (flash, flash:raw, update and flashall)\n"
+               "  --force (flash, flash:raw, format, update, flashall)\n"
+               "  --fs-options=casefold,projid,compress (format only)\n"
+               "  Boot image construction options (boot and flash:raw only):\n"
+               "  --cmdline <text> --base <value> --page-size <value>\n"
+               "  --kernel-offset <value> --ramdisk-offset <value>\n"
+               "  --second-offset <value> --tags-offset <value>\n"
+               "  --header-version <0..4> --os-version <A[.B[.C]]>\n"
+               "  --os-patch-level <YYYY-MM-DD> --dtb <file>\n"
+               "  --dtb-offset <value> (DTB requires header version 2)\n"
+               "  --dtb <file> also replaces vendor_boot DTB for "
+               "flash vendor_boot:RAMDISK\n"
                "Exit codes: 0 success, 2 usage error, 4 runtime/cancelled\n";
 }
 
@@ -1875,17 +3185,22 @@ int run_cli(const int argc, char **argv) {
   }
   if (argc == 3 &&
       (std::string_view{argv[1]} == "--help" ||
+       std::string_view{argv[1]} == "-h" ||
        std::string_view{argv[1]} == "help") &&
       std::string_view{argv[2]} == "--json") {
     return print_help(true);
   }
   if (argc == 3 && std::string_view{argv[1]} == "doctor" &&
       std::string_view{argv[2]} == "--json") {
-    return doctor(true);
+    GlobalOptions options{};
+    options.json = true;
+    return doctor(options);
   }
   if (argc == 3 && std::string_view{argv[1]} == "devices" &&
       std::string_view{argv[2]} == "--json") {
-    return print_devices(true);
+    GlobalOptions options{};
+    options.json = true;
+    return print_devices(options);
   }
 
   const auto invocation = parse_invocation(argc, argv);
@@ -1897,15 +3212,29 @@ int run_cli(const int argc, char **argv) {
     return result;
   }
 
+  if (invocation->global.verbose && !invocation->global.json) {
+    std::cerr << "kairosboot: command=" << command_name(invocation->kind);
+    if (invocation->global.selector.has_value()) {
+      std::cerr << " selector=" << *invocation->global.selector;
+    } else {
+      std::cerr << " selector=auto";
+    }
+    if (invocation->global.usb_vendor_id.has_value()) {
+      std::cerr << " usb-vendor=0x" << std::hex
+                << *invocation->global.usb_vendor_id << std::dec;
+    }
+    std::cerr << '\n';
+  }
+
   switch (invocation->kind) {
   case CommandKind::Version:
     return print_version(invocation->global.json);
   case CommandKind::Help:
     return print_help(invocation->global.json);
   case CommandKind::Doctor:
-    return doctor(invocation->global.json);
+    return doctor(invocation->global);
   case CommandKind::Devices:
-    return print_devices(invocation->global.json);
+    return print_devices(invocation->global);
   case CommandKind::Validate:
     return validate_manifest(*invocation);
   case CommandKind::Plan:
@@ -1914,8 +3243,23 @@ int run_cli(const int argc, char **argv) {
     return run_manifest(*invocation);
   case CommandKind::Flash:
     return flash_file(*invocation);
+  case CommandKind::FlashVendorBootRamdisk:
+    return flash_vendor_boot_ramdisk(*invocation);
+  case CommandKind::FlashRaw:
+    return flash_raw(*invocation);
+  case CommandKind::Signature:
+    return signature_file(*invocation);
   case CommandKind::Update:
+  case CommandKind::Flashall:
     return update_package(*invocation);
+  case CommandKind::BootFile:
+    return boot_file(*invocation);
+  case CommandKind::MakeBootImage:
+    return make_boot_image(*invocation);
+  case CommandKind::WipeSuper:
+    return wipe_super(*invocation);
+  case CommandKind::Format:
+    return format_partition(*invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
@@ -1926,6 +3270,7 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::BootStaged:
   case CommandKind::Stage:
   case CommandKind::Upload:
+  case CommandKind::GetStaged:
   case CommandKind::Fetch:
     return run_typed_command(*invocation);
   case CommandKind::Flashing:

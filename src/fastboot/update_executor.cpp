@@ -170,7 +170,9 @@ maximum_trace_events(const std::size_t requirements, const std::size_t tasks,
     // A requirement may add one product query, its own query, and its terminal
     // satisfied/skipped/failed event. Cache hits only reduce this bound.
     constexpr std::size_t kEventsPerRequirement = 5U;
-    constexpr std::size_t kEventsPerTask = 2U;
+    // A retained dynamic-exclusion task may add a getvar query/result pair
+    // before its ordinary start/complete events. A skipped task needs fewer.
+    constexpr std::size_t kEventsPerTask = 4U;
     if (requirements >
         (std::numeric_limits<std::size_t>::max() - kFixedEvents) /
             kEventsPerRequirement) {
@@ -346,6 +348,15 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
             referenced.insert(task.artifact);
             break;
         case UpdateTaskKind::Erase:
+            if (task.exclude_if_dynamic) {
+                return std::unexpected(PendingFailure{
+                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                    .task_index = index,
+                    .location = task.location,
+                    .message =
+                        "dynamic exclusion is valid only for flash tasks",
+                });
+            }
             if (task.partition.empty()) {
                 return std::unexpected(PendingFailure{
                     .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
@@ -356,6 +367,15 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
             }
             break;
         case UpdateTaskKind::Reboot:
+            if (task.exclude_if_dynamic) {
+                return std::unexpected(PendingFailure{
+                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                    .task_index = index,
+                    .location = task.location,
+                    .message =
+                        "dynamic exclusion is valid only for flash tasks",
+                });
+            }
             switch (task.reboot_target) {
             case PlannedRebootTarget::System:
             case PlannedRebootTarget::Bootloader:
@@ -372,6 +392,15 @@ validate_prepared_mapping(const PreparedUpdatePackage& prepared,
             }
             break;
         case UpdateTaskKind::UpdateSuper:
+            if (task.exclude_if_dynamic) {
+                return std::unexpected(PendingFailure{
+                    .kind = UpdateExecutionErrorKind::InvalidPreparedPackage,
+                    .task_index = index,
+                    .location = task.location,
+                    .message =
+                        "dynamic exclusion is valid only for flash tasks",
+                });
+            }
             has_update_super_task = true;
             break;
         default:
@@ -451,16 +480,17 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
               std::map<std::string, std::string, std::less<>>& cache,
               const std::string_view name,
               const std::optional<std::size_t> requirement_index,
+              const std::optional<std::size_t> task_index,
               const std::optional<UpdateSourceLocation> location,
               const UpdateOperationContext& context) {
     if (auto stopped = interruption(context, "before getvar", requirement_index,
-                                    std::nullopt, location)) {
+                                    task_index, location)) {
         return std::unexpected(std::move(*stopped));
     }
     if (const auto found = cache.find(name); found != cache.end()) {
         if (auto failure =
                 emit_checked(state, event(UpdateExecutionEventKind::GetVarCacheHit,
-                                          requirement_index, std::nullopt, location,
+                                          requirement_index, task_index, location,
                                           std::string(name), found->second));
             failure) {
             return std::unexpected(std::move(*failure));
@@ -469,13 +499,13 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
     }
 
     if (auto failure = emit_checked(state, event(UpdateExecutionEventKind::GetVarQuery,
-                                                 requirement_index, std::nullopt,
+                                                 requirement_index, task_index,
                                                  location, std::string(name)));
         failure) {
         return std::unexpected(std::move(*failure));
     }
     if (auto stopped = interruption(context, "after GetVarQuery",
-                                    requirement_index, std::nullopt, location)) {
+                                    requirement_index, task_index, location)) {
         return std::unexpected(std::move(*stopped));
     }
 
@@ -487,6 +517,7 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
         return std::unexpected(PendingFailure{
             .kind = UpdateExecutionErrorKind::ActorException,
             .requirement_index = requirement_index,
+            .task_index = task_index,
             .location = location,
             .name = std::string(name),
             .message =
@@ -496,6 +527,7 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
         return std::unexpected(PendingFailure{
             .kind = UpdateExecutionErrorKind::ActorException,
             .requirement_index = requirement_index,
+            .task_index = task_index,
             .location = location,
             .name = std::string(name),
             .message = "update device getvar threw a non-standard exception",
@@ -515,7 +547,7 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
         });
     }
     if (auto stopped = interruption(context, "during getvar", requirement_index,
-                                    std::nullopt, location)) {
+                                    task_index, location)) {
         return std::unexpected(std::move(*stopped));
     }
 
@@ -523,7 +555,7 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
     (void)inserted;
     if (auto failure = emit_checked(
             state, event(UpdateExecutionEventKind::GetVarResult, requirement_index,
-                         std::nullopt, location, stored->first, stored->second));
+                         task_index, location, stored->first, stored->second));
         failure) {
         return std::unexpected(std::move(*failure));
     }
@@ -553,14 +585,14 @@ getvar_cached(IUpdateDevice& device, ExecutionState& state,
 [[nodiscard]] std::expected<void, PendingFailure>
 validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& device,
                       const std::set<std::string, std::less<>>& known_partitions,
-                      ExecutionState& state,
+                      ExecutionState& state, const bool force,
                       const UpdateOperationContext& context) {
     std::map<std::string, std::string, std::less<>> cache;
     std::string current_product;
     if (!prepared.plan.requirements.empty()) {
         const auto& first = prepared.plan.requirements.front();
         auto product = getvar_cached(device, state, cache, "product", std::size_t{0},
-                                     first.location, context);
+                                     std::nullopt, first.location, context);
         if (!product) {
             return std::unexpected(std::move(product.error()));
         }
@@ -596,7 +628,7 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
             }
             const auto variable = "has-slot:" + partition;
             auto value = getvar_cached(device, state, cache, variable, index,
-                                       requirement.location, context);
+                                       std::nullopt, requirement.location, context);
             if (!value) {
                 return std::unexpected(std::move(value.error()));
             }
@@ -638,7 +670,7 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
         }
 
         auto value = getvar_cached(device, state, cache, requirement.variable, index,
-                                   requirement.location, context);
+                                   std::nullopt, requirement.location, context);
         if (!value) {
             return std::unexpected(std::move(value.error()));
         }
@@ -667,6 +699,19 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
             });
         }
         if (!satisfied) {
+            if (force) {
+                ++state.report.validated_requirements;
+                if (auto failure = emit_checked(
+                        state,
+                        event(UpdateExecutionEventKind::RequirementSatisfied, index,
+                              std::nullopt, requirement.location,
+                              requirement.variable, *value,
+                              "requirement not met; proceeding due to force"));
+                    failure) {
+                    return std::unexpected(std::move(*failure));
+                }
+                continue;
+            }
             auto failure = emit_requirement_failure(
                 state, index, requirement, *value,
                 requirement.action == RequirementAction::Reject
@@ -706,16 +751,56 @@ validate_requirements(const PreparedUpdatePackage& prepared, IUpdateDevice& devi
 }
 
 using PreparedDeviceTasks = std::vector<std::unique_ptr<IPreparedDeviceTask>>;
+using TaskSkipMask = std::vector<bool>;
+
+[[nodiscard]] std::expected<TaskSkipMask, PendingFailure>
+resolve_dynamic_exclusions(const PreparedUpdatePackage& prepared,
+                           IUpdateDevice& device, ExecutionState& state,
+                           const UpdateOperationContext& context) {
+    TaskSkipMask skipped(prepared.plan.tasks.size(), false);
+    std::map<std::string, std::string, std::less<>> cache;
+    for (std::size_t index = 0; index < prepared.plan.tasks.size(); ++index) {
+        const auto& task = prepared.plan.tasks[index];
+        if (!task.exclude_if_dynamic) {
+            continue;
+        }
+        const auto variable = "is-logical:" + task.partition;
+        auto value = getvar_cached(device, state, cache, variable, std::nullopt,
+                                   index, task.location, context);
+        if (!value) {
+            return std::unexpected(std::move(value.error()));
+        }
+        if (*value == "yes") {
+            skipped[index] = true;
+        } else if (*value != "no") {
+            return std::unexpected(PendingFailure{
+                .kind = UpdateExecutionErrorKind::GetVarFailed,
+                .task_index = index,
+                .location = task.location,
+                .name = variable,
+                .message =
+                    "is-logical must return exactly 'yes' or 'no' while "
+                    "excluding dynamic partitions",
+            });
+        }
+    }
+    return skipped;
+}
 
 [[nodiscard]] std::expected<PreparedDeviceTasks, PendingFailure>
 prepare_all_tasks(const PreparedUpdatePackage& prepared, IUpdateDevice& device,
                   const ArtifactMap& artifacts,
                   const std::shared_ptr<const PreparedSuperArtifact>& super_artifact,
+                  const TaskSkipMask& skipped,
                   const UpdateOperationContext& context) {
     PreparedDeviceTasks result;
     result.reserve(prepared.plan.tasks.size());
     for (std::size_t index = 0; index < prepared.plan.tasks.size(); ++index) {
         const auto& task = prepared.plan.tasks[index];
+        if (skipped[index]) {
+            result.push_back(nullptr);
+            continue;
+        }
         if (auto stopped = interruption(context, "before task preparation",
                                         std::nullopt, index, task.location)) {
             return std::unexpected(std::move(*stopped));
@@ -832,16 +917,23 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
         }
 
         auto requirements = validate_requirements(prepared, device, known_partitions,
-                                                  state, context);
+                                                  state, options.force, context);
         if (!requirements) {
             return std::unexpected(
                 finish_error(state, std::move(requirements.error())));
+        }
+
+        auto skipped = resolve_dynamic_exclusions(prepared, device, state, context);
+        if (!skipped) {
+            return std::unexpected(
+                finish_error(state, std::move(skipped.error())));
         }
 
         // Phase one: bind and validate every exact device task. No token may
         // execute until every later task has also prepared successfully.
         auto prepared_tasks = prepare_all_tasks(prepared, device, *artifacts,
                                                 prepared.prepared_super_artifact,
+                                                *skipped,
                                                 context);
         if (!prepared_tasks) {
             return std::unexpected(
@@ -858,6 +950,20 @@ execute_prepared_update(const PreparedUpdatePackage& prepared, IUpdateDevice& de
             if (auto stopped = interruption(context, "before a task",
                                             std::nullopt, index, task.location)) {
                 return std::unexpected(finish_error(state, std::move(*stopped)));
+            }
+            if ((*skipped)[index]) {
+                ++state.report.completed_tasks;
+                if (auto failure = emit_checked(
+                        state,
+                        event(UpdateExecutionEventKind::TaskSkipped,
+                              std::nullopt, index, task.location,
+                              task_event_name(task), "logical",
+                              "dynamic partition excluded by update policy"));
+                    failure) {
+                    return std::unexpected(
+                        finish_error(state, std::move(*failure)));
+                }
+                continue;
             }
             if (auto failure = emit_checked(
                     state, event(UpdateExecutionEventKind::TaskStarted, std::nullopt,

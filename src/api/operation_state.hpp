@@ -58,6 +58,8 @@ struct CommandResultPayload final {
     std::string terminal_payload;
     std::vector<CommandMessagePayload> messages;
     std::vector<std::byte> data;
+    std::string output_path;
+    std::uint64_t received_bytes{0};
     std::string device_identifier;
 
     [[nodiscard]] bool operator==(const CommandResultPayload&) const = default;

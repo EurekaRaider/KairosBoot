@@ -41,6 +41,47 @@ def send_frame(connection: socket.socket, payload: bytes) -> None:
     connection.sendall(struct.pack(">Q", len(payload)) + payload)
 
 
+def make_vendor_boot_v4() -> bytes:
+    page = 4096
+    entry_size = 112
+    table_size = 2 * entry_size
+    image = bytearray([0x6C] * (7 * page))
+    image[0:8] = b"VNDRBOOT"
+    for offset, value in (
+        (8, 4),
+        (12, page),
+        (24, 7),
+        (2096, 2128),
+        (2100, 3),
+        (2112, table_size),
+        (2116, 2),
+        (2120, entry_size),
+        (2124, 4),
+    ):
+        struct.pack_into("<I", image, offset, value)
+    image[page : page + 7] = b"oneTWO2"
+    image[page + 7 : 2 * page] = bytes(page - 7)
+    image[2 * page : 2 * page + 3] = b"dtb"
+    image[2 * page + 3 : 3 * page] = bytes(page - 3)
+
+    table = 3 * page
+    struct.pack_into("<III", image, table, 3, 0, 1)
+    image[table + 12 : table + 44] = bytes(32)
+    image[table + 12 : table + 17] = b"alpha"
+    image[table + 108] = 0xD1
+    second = table + entry_size
+    struct.pack_into("<III", image, second, 4, 3, 3)
+    image[second + 12 : second + 44] = bytes(32)
+    image[second + 12 : second + 16] = b"beta"
+    image[second + 44] = 0xB7
+    image[second + 108] = 0xE1
+    image[table + table_size : 4 * page] = bytes(page - table_size)
+    image[4 * page : 4 * page + 4] = b"boot"
+    image[4 * page + 4 : 5 * page] = bytes(page - 4)
+    image[6 * page + 11 : 6 * page + 15] = b"TAIL"
+    return bytes(image)
+
+
 def handshake(connection: socket.socket) -> None:
     hello = receive_exact(connection, 4)
     if hello != b"FB01":
@@ -152,6 +193,8 @@ def invoke(
     device: Callable[[socket.socket], None],
     expected_exit: int = 0,
     timeout_ms: int = 5000,
+    environment: Optional[dict[str, str]] = None,
+    working_directory: Optional[pathlib.Path] = None,
 ) -> tuple[bytes, bytes]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -168,7 +211,11 @@ def invoke(
             *arguments,
         ]
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            cwd=working_directory,
         )
         device_error: Optional[BaseException] = None
         try:
@@ -204,6 +251,7 @@ def invoke_without_connection(
     arguments: Sequence[str],
     expected_exit: int,
     expected_status: str,
+    environment: Optional[dict[str, str]] = None,
 ) -> dict[str, object]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -220,6 +268,7 @@ def invoke_without_connection(
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=environment,
             timeout=10,
             check=False,
         )
@@ -600,6 +649,39 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     ):
         raise AssertionError(f"unknown command error changed: {stderr!r}")
 
+    stdout, stderr = local(["-S", "0", "flash"], 2)
+    if b"flash requires <partition> [file]" not in stderr:
+        raise AssertionError(f"zero sparse limit was not accepted: {stderr!r}")
+
+    stdout, stderr = local(["flash", "boot", "boot.img", "extra.img"], 2)
+    if b"flash requires <partition> [file]" not in stderr:
+        raise AssertionError(f"excess flash operands were not rejected: {stderr!r}")
+
+    stdout, stderr = local(["-S", "18446744073709551615G", "flash"], 2)
+    if b"option -S requires SIZE[K|M|G]" not in stderr:
+        raise AssertionError(f"sparse limit overflow was not rejected: {stderr!r}")
+
+    stdout, stderr = local(["-S", "1K", "-S", "2K", "flash"], 2)
+    if b"option -S may only be specified once" not in stderr:
+        raise AssertionError(f"duplicate sparse limit was not rejected: {stderr!r}")
+
+    stdout, stderr = local(["-h"], 0)
+    if not stdout.startswith(b"Usage:\n") or stderr != b"":
+        raise AssertionError(f"short help output changed: {stdout!r}, {stderr!r}")
+
+    stdout, stderr = local(["--verbose", "-h"], 0)
+    if not stdout.startswith(b"Usage:\n") or stderr != (
+        b"kairosboot: command=help selector=auto\n"
+    ):
+        raise AssertionError(f"verbose help output changed: {stdout!r}, {stderr!r}")
+
+    stdout, stderr = local(["-v", "-v", "-h"], 2)
+    if b"option --verbose may only be specified once" not in stderr:
+        raise AssertionError(f"duplicate verbose option changed: {stderr!r}")
+    stdout, stderr = local(["-i", "0x10000", "-h"], 2)
+    if b"requires a USB vendor id in [1, 0xffff]" not in stderr:
+        raise AssertionError(f"vendor id range error changed: {stderr!r}")
+
 
 def run(cli: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="kairosboot-cli-") as raw_directory:
@@ -614,7 +696,9 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYv\x00\xff")
 
         stdout, stderr = invoke(
-            cli, ["--json", "getvar", "binary"], binary_getvar
+            cli,
+            ["--vendor-id", "0x18d1", "--json", "getvar", "binary"],
+            binary_getvar,
         )
         document = parse_success_json(stdout, stderr)
         assert document["command"] == "getvar"
@@ -774,7 +858,15 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYerased")
 
         stdout, stderr = invoke(
-            cli, ["--json", "update", str(update_package)], update_success
+            cli,
+            [
+                "--json",
+                "update",
+                str(update_package),
+                "--skip-reboot",
+                "--disable-super-optimization",
+            ],
+            update_success,
         )
         document = parse_success_json(stdout, stderr)
         assert document == {
@@ -782,10 +874,15 @@ def run(cli: pathlib.Path) -> None:
             "command": "update",
             "package": str(update_package),
             "wipe": False,
+            "skipReboot": True,
+            "skipSecondary": False,
+            "excludeDynamicPartitions": False,
+            "disableFastbootInfo": False,
+            "disableSuperOptimization": True,
         }
 
         stdout, stderr = invoke(
-            cli, ["update", str(update_package)], update_success
+            cli, ["update", str(update_package), "--skip-reboot"], update_success
         )
         if (
             b"Updated from " not in stdout
@@ -798,6 +895,58 @@ def run(cli: pathlib.Path) -> None:
         ):
             raise AssertionError(f"text update did not report progress: {stderr!r}")
 
+        flashall_environment = os.environ.copy()
+        flashall_environment.pop("ANDROID_PRODUCT_OUT", None)
+        missing_product_out = invoke_without_connection(
+            cli,
+            ["flashall"],
+            4,
+            "invalid_argument",
+            flashall_environment,
+        )
+        assert missing_product_out["message"] == (
+            "flashall requires non-empty ANDROID_PRODUCT_OUT"
+        )
+
+        flashall_environment["ANDROID_PRODUCT_OUT"] = str(update_package)
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flashall", "--skip-reboot"],
+            update_success,
+            environment=flashall_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flashall",
+            "package": str(update_package),
+            "wipe": False,
+            "skipReboot": True,
+            "skipSecondary": False,
+            "excludeDynamicPartitions": False,
+            "disableFastbootInfo": False,
+            "disableSuperOptimization": False,
+        }
+
+        stdout, stderr = invoke(
+            cli,
+            ["flashall", "--skip-reboot"],
+            update_success,
+            environment=flashall_environment,
+        )
+        if (
+            b"Flashed all from " not in stdout
+            or str(update_package).encode() not in stdout
+        ):
+            raise AssertionError(f"unexpected text flashall output: {stdout!r}")
+        if (
+            b"flashall: preflight" not in stderr
+            or b"flashall: complete" not in stderr
+        ):
+            raise AssertionError(
+                f"text flashall did not report progress: {stderr!r}"
+            )
+
         wipe_package = make_update_package(
             directory, "wipe-package", "version 1\nif-wipe erase userdata\n"
         )
@@ -808,13 +957,79 @@ def run(cli: pathlib.Path) -> None:
 
         stdout, stderr = invoke(
             cli,
-            ["--json", "update", str(wipe_package), "--wipe"],
+            ["--json", "update", str(wipe_package), "--wipe", "--skip-reboot"],
             wipe_success,
         )
         document = parse_success_json(stdout, stderr)
         assert document["command"] == "update"
         assert document["package"] == str(wipe_package)
         assert document["wipe"] is True
+
+        flashall_environment["ANDROID_PRODUCT_OUT"] = str(wipe_package)
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flashall", "--wipe", "--skip-reboot"],
+            wipe_success,
+            environment=flashall_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flashall",
+            "package": str(wipe_package),
+            "wipe": True,
+            "skipReboot": True,
+            "skipSecondary": False,
+            "excludeDynamicPartitions": False,
+            "disableFastbootInfo": False,
+            "disableSuperOptimization": False,
+        }
+
+        super_empty_image = directory / "custom-super-empty.img"
+        super_empty_payload = b"immutable-empty-super"
+        super_empty_image.write_bytes(super_empty_payload)
+
+        def wipe_super_success(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:super-partition-name"
+            send_frame(connection, b"OKAYsuper_main")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYyes")
+            encoded_size = f"{len(super_empty_payload):08x}".encode("ascii")
+            assert receive_frame(connection) == b"download:" + encoded_size
+            send_frame(connection, b"DATA" + encoded_size)
+            assert receive_frame(connection) == super_empty_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"update-super:super_main:wipe"
+            send_frame(connection, b"OKAYwiped")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "wipe-super", str(super_empty_image)],
+            wipe_super_success,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "wipe-super",
+            "image": str(super_empty_image),
+        }
+
+        stdout, stderr = invoke(
+            cli, ["wipe-super", str(super_empty_image)], wipe_super_success
+        )
+        if b"Wiped super using " not in stdout:
+            raise AssertionError(f"unexpected wipe-super output: {stdout!r}")
+        if (
+            b"wipe-super: preflight" not in stderr
+            or b"wipe-super: complete" not in stderr
+        ):
+            raise AssertionError(
+                f"wipe-super did not report progress: {stderr!r}"
+            )
 
         failed_update_package = make_update_package(
             directory, "failed-update", "version 1\nerase metadata\n"
@@ -948,6 +1163,629 @@ def run(cli: pathlib.Path) -> None:
             "file": str(stage_file),
         }
 
+        default_product_out = directory / "default-product-out"
+        default_product_out.mkdir()
+        default_boot = default_product_out / "boot.img"
+        default_boot_payload = bytes([0xA5]) * 16
+        default_boot.write_bytes(default_boot_payload)
+        ambiguous_working_directory = directory / "ambiguous-working-directory"
+        ambiguous_working_directory.mkdir()
+        (ambiguous_working_directory / "boot.img").write_bytes(bytes([0x5A]) * 16)
+        default_environment = os.environ.copy()
+        default_environment["ANDROID_PRODUCT_OUT"] = str(default_product_out)
+
+        def flashed_default_boot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == default_boot_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "boot"],
+            flashed_default_boot,
+            environment=default_environment,
+            working_directory=ambiguous_working_directory,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash",
+            "partition": "boot",
+            "file": str(default_boot),
+        }
+
+        def flashed_default_boot_slot_a(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == default_boot_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:boot_a"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--slot", "a", "--json", "flash", "boot"],
+            flashed_default_boot_slot_a,
+            environment=default_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["file"] == str(default_boot)
+
+        default_vendor_boot = default_product_out / "vendor_boot.img"
+        default_vendor_boot.write_bytes(stage_payload)
+
+        def flashed_default_vendor_boot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == stage_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vendor_boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "vendor_boot"],
+            flashed_default_vendor_boot,
+            environment=default_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["file"] == str(default_vendor_boot)
+
+        missing_environment = os.environ.copy()
+        missing_environment.pop("ANDROID_PRODUCT_OUT", None)
+        missing_product_out = invoke_without_connection(
+            cli, ["flash", "boot"], 4, "invalid_argument", missing_environment
+        )
+        assert missing_product_out["message"] == "ANDROID_PRODUCT_OUT not set"
+        unknown_without_product_out = invoke_without_connection(
+            cli,
+            ["flash", "unknown"],
+            4,
+            "invalid_argument",
+            missing_environment,
+        )
+        assert unknown_without_product_out["message"] == (
+            "cannot determine image filename for 'unknown'"
+        )
+
+        missing_image_product_out = directory / "missing-image-product-out"
+        missing_image_product_out.mkdir()
+        missing_image_environment = os.environ.copy()
+        missing_image_environment["ANDROID_PRODUCT_OUT"] = str(
+            missing_image_product_out
+        )
+        missing_image = invoke_without_connection(
+            cli, ["flash", "boot"], 4, "io", missing_image_environment
+        )
+        assert missing_image["message"] == "image file does not exist"
+
+        for unresolved_partition in ("unknown", "boot_a", "vendor_boot:alpha"):
+            unresolved = invoke_without_connection(
+                cli,
+                ["flash", unresolved_partition],
+                4,
+                "invalid_argument",
+                default_environment,
+            )
+            assert unresolved["message"] == (
+                f"cannot determine image filename for '{unresolved_partition}'"
+            )
+
+        def rejected_logical_flash(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYyes")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "system", str(stage_file)],
+            rejected_logical_flash,
+            expected_exit=4,
+        )
+        parse_failure_json(stdout, stderr, "not_supported")
+
+        def forced_logical_flash(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == stage_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:system"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--force", "--json", "flash", "system", str(stage_file)],
+            forced_logical_flash,
+        )
+        parse_success_json(stdout, stderr)
+
+        sparse_limited_image = directory / "sparse-limited-raw.img"
+        sparse_limited_image.write_bytes(
+            bytes((index * 17 + 3) % 251 for index in range(3 * 4096))
+        )
+
+        def sparse_limited_flash(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            for _ in range(3):
+                command = receive_frame(connection)
+                assert command.startswith(b"download:")
+                encoded_size = int(command[9:], 16)
+                assert 0 < encoded_size <= 4200
+                send_frame(connection, b"DATA" + command[9:])
+                payload = receive_frame(connection)
+                assert len(payload) == encoded_size
+                assert payload[:4] == b"\x3a\xff\x26\xed"
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:system"
+                send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["-S", "4200", "--json", "flash", "system",
+             str(sparse_limited_image)],
+            sparse_limited_flash,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "flash"
+        assert document["partition"] == "system"
+
+        vendor_boot_image = make_vendor_boot_v4()
+        replacement_ramdisk = directory / "vendor-ramdisk.bin"
+        replacement_dtb = directory / "vendor-dtb.bin"
+        replacement_ramdisk.write_bytes(b"FIRST")
+        replacement_dtb.write_bytes(b"new-dtb")
+
+        def repacked_vendor_boot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-fetch-size"
+            send_frame(connection, b"OKAY0x00002000")
+            assert receive_frame(connection) == b"getvar:partition-size:vendor_boot"
+            send_frame(connection, b"OKAY0x00007000")
+            for offset, size in ((0, 0x2000), (0x2000, 0x2000),
+                                 (0x4000, 0x2000), (0x6000, 0x1000)):
+                expected = (
+                    f"fetch:vendor_boot:0x{offset:08x}:0x{size:08x}"
+                ).encode("ascii")
+                assert receive_frame(connection) == expected
+                send_frame(connection, f"DATA{size:08x}".encode("ascii"))
+                send_frame(connection, vendor_boot_image[offset : offset + size])
+                send_frame(connection, b"OKAYfetched")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00007000"
+            send_frame(connection, b"DATA00007000")
+            image = receive_frame(connection)
+            assert len(image) == len(vendor_boot_image)
+            assert image[:8] == b"VNDRBOOT"
+            assert int.from_bytes(image[24:28], "little") == 9
+            assert int.from_bytes(image[2100:2104], "little") == 7
+            assert image[4096:4105] == b"FIRSTTWO2"
+            assert image[8192:8199] == b"new-dtb"
+            table = 3 * 4096
+            assert int.from_bytes(image[table : table + 4], "little") == 5
+            assert int.from_bytes(image[table + 4 : table + 8], "little") == 0
+            assert int.from_bytes(image[table + 112 : table + 116], "little") == 4
+            assert int.from_bytes(image[table + 116 : table + 120], "little") == 5
+            assert image[table + 108] == 0xD1
+            assert image[table + 112 + 44] == 0xB7
+            assert image[table + 112 + 108] == 0xE1
+            assert image[6 * 4096 + 11 : 6 * 4096 + 15] == b"TAIL"
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vendor_boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--json",
+                "--dtb",
+                str(replacement_dtb),
+                "flash",
+                "vendor_boot:alpha",
+                str(replacement_ramdisk),
+            ],
+            repacked_vendor_boot,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash",
+            "partition": "vendor_boot",
+            "vendorRamdisk": "alpha",
+            "file": str(replacement_ramdisk),
+            "dtb": str(replacement_dtb),
+        }
+
+        vbmeta_file = directory / "vbmeta.img"
+        vbmeta_payload = bytearray([0x5A] * 256)
+        vbmeta_payload[0:4] = b"AVB0"
+        vbmeta_payload[123] = 0x40
+        vbmeta_file.write_bytes(vbmeta_payload)
+
+        def flashed_vbmeta(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:vbmeta"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vbmeta"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000100"
+            send_frame(connection, b"DATA00000100")
+            transferred = receive_frame(connection)
+            expected = bytearray(vbmeta_payload)
+            expected[123] = 0x43
+            assert transferred == expected
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vbmeta"
+            send_frame(connection, b"OKAYflashed")
+        def flashed_all_slots(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:current-slot"
+            send_frame(connection, b"OKAYa")
+            assert receive_frame(connection) == b"set_active:b"
+            send_frame(connection, b"OKAYactive")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            for slot in (b"a", b"b"):
+                assert receive_frame(connection) == b"download:00000010"
+                send_frame(connection, b"DATA00000010")
+                assert receive_frame(connection) == stage_payload
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:system_" + slot
+                send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--disable-verity",
+                "--disable-verification",
+                "--json",
+                "flash",
+                "vbmeta",
+                str(vbmeta_file),
+            ],
+            flashed_vbmeta,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "flash"
+        assert document["partition"] == "vbmeta"
+
+        corrupt_vbmeta = directory / "corrupt-vbmeta.img"
+        corrupt_vbmeta.write_bytes(bytes(256))
+        rejected = invoke_without_connection(
+            cli,
+            [
+                "--disable-verity",
+                "flash",
+                "vbmeta",
+                str(corrupt_vbmeta),
+            ],
+            4,
+            "invalid_argument",
+        )
+        assert "AVB0 magic" in str(rejected["message"])
+
+        update_vbmeta_package = make_update_package(
+            directory,
+            "update-vbmeta",
+            "version 1\nflash --apply-vbmeta vbmeta vbmeta.img\n",
+        )
+        (update_vbmeta_package / "vbmeta.img").write_bytes(vbmeta_payload)
+
+        def updated_vbmeta(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000100"
+            send_frame(connection, b"DATA00000100")
+            transferred = receive_frame(connection)
+            expected = bytearray(vbmeta_payload)
+            expected[123] = 0x43
+            assert transferred == expected
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vbmeta"
+            send_frame(connection, b"OKAYflashed")
+            assert receive_frame(connection) == b"reboot"
+            send_frame(connection, b"OKAYrebooting")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--slot",
+                "all",
+                "--set-active=other",
+                "--json",
+                "flash",
+                "system",
+                str(stage_file),
+            ],
+            flashed_all_slots,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "flash"
+
+        def ambiguous_other_slot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY3")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--slot", "other", "--json", "flash", "system", str(stage_file)],
+            ambiguous_other_slot,
+            expected_exit=4,
+        )
+        parse_failure_json(stdout, stderr, "invalid_argument")
+
+        def unsupported_slot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--slot", "a", "--json", "flash", "system", str(stage_file)],
+            unsupported_slot,
+            expected_exit=4,
+        )
+        parse_failure_json(stdout, stderr, "not_supported")
+
+        slotted_update = make_update_package(
+            directory, "slotted-update", "version 1\nflash boot boot.img\n"
+        )
+        (slotted_update / "boot.img").write_bytes(stage_payload)
+
+        def update_all_slots(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"set_active:a"
+            send_frame(connection, b"OKAYactive")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            for slot in (b"a", b"b"):
+                assert receive_frame(connection) == b"download:00000010"
+                send_frame(connection, b"DATA00000010")
+                assert receive_frame(connection) == stage_payload
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:boot_" + slot
+                send_frame(connection, b"OKAYflashed")
+            assert receive_frame(connection) == b"reboot"
+            send_frame(connection, b"OKAYrebooting")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--disable-verity",
+                "--disable-verification",
+                "--json",
+                "update",
+                str(update_vbmeta_package),
+            ],
+            updated_vbmeta,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "update"
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--slot",
+                "all",
+                "-a",
+                "--json",
+                "update",
+                str(slotted_update),
+            ],
+            update_all_slots,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "update"
+
+        raw_kernel = directory / "raw-kernel.bin"
+        raw_ramdisk = directory / "raw-ramdisk.bin"
+        raw_second = directory / "raw-second.bin"
+        raw_dtb = directory / "raw-board.dtb"
+        raw_kernel_payload = bytes(index & 0xFF for index in range(2048))
+        raw_ramdisk_payload = b"r\x00d"
+        raw_second_payload = b"second"
+        raw_dtb_payload = b"dtb"
+        raw_kernel.write_bytes(raw_kernel_payload)
+        raw_ramdisk.write_bytes(raw_ramdisk_payload)
+        raw_second.write_bytes(raw_second_payload)
+        raw_dtb.write_bytes(raw_dtb_payload)
+
+        def flashed_raw_over_tcp(connection: socket.socket) -> None:
+            # AOSP-aligned raw flash preflight: the frozen 37.0.1 trace only
+            # queries has-slot for the target partition before download.
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"download:00005000"
+            send_frame(connection, b"DATA00005000")
+            image = receive_frame(connection)
+            assert len(image) == 20480
+            assert image[:8] == b"ANDROID!"
+            assert int.from_bytes(image[8:12], "little") == 2048
+            assert int.from_bytes(image[12:16], "little") == 0x20001000
+            assert int.from_bytes(image[16:20], "little") == 3
+            assert int.from_bytes(image[20:24], "little") == 0x20002000
+            assert int.from_bytes(image[24:28], "little") == len(raw_second_payload)
+            assert int.from_bytes(image[28:32], "little") == 0x20003000
+            assert int.from_bytes(image[32:36], "little") == 0x20004000
+            assert int.from_bytes(image[36:40], "little") == 4096
+            assert int.from_bytes(image[40:44], "little") == 2
+            assert int.from_bytes(image[44:48], "little") == (
+                (15 << 25) | (1 << 18) | (25 << 4) | 2
+            )
+            assert int.from_bytes(image[1644:1648], "little") == 1660
+            assert int.from_bytes(image[1648:1652], "little") == len(raw_dtb_payload)
+            assert int.from_bytes(image[1652:1660], "little") == 0x21200000
+            assert image[64 : 64 + len(b"console=ttyS0")] == b"console=ttyS0"
+            assert image[4096:6144] == raw_kernel_payload
+            assert image[8192:8195] == raw_ramdisk_payload
+            assert image[12288 : 12288 + len(raw_second_payload)] == raw_second_payload
+            assert image[16384 : 16384 + len(raw_dtb_payload)] == raw_dtb_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--json",
+                "--cmdline",
+                "console=ttyS0",
+                "--base",
+                "0x20000000",
+                "--page-size",
+                "4096",
+                "--kernel-offset",
+                "0x1000",
+                "--ramdisk-offset",
+                "0x2000",
+                "--second-offset",
+                "0x3000",
+                "--tags-offset",
+                "0x4000",
+                "--header-version",
+                "2",
+                "--os-version",
+                "15.1",
+                "--os-patch-level",
+                "2025-02-05",
+                "--dtb",
+                str(raw_dtb),
+                "--dtb-offset",
+                "0x1200000",
+                "flash:raw",
+                "boot",
+                str(raw_kernel),
+                str(raw_ramdisk),
+                str(raw_second),
+            ],
+            flashed_raw_over_tcp,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash:raw",
+            "partition": "boot",
+            "kernel": str(raw_kernel),
+        }
+
+        signature_file = directory / "签名.bin"
+        signature_payload = bytes(range(256))
+        signature_file.write_bytes(signature_payload)
+
+        def accepted_signature(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"download:00000100"
+            send_frame(connection, b"DATA00000100")
+            assert receive_frame(connection) == signature_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"signature"
+            send_frame(connection, b"INFOverified")
+            send_frame(connection, b"OKAYaccepted")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "signature", str(signature_file)],
+            accepted_signature,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "signature"
+        assert document["terminal"] == {
+            "base64": base64.b64encode(b"accepted").decode("ascii"),
+            "bytes": 8,
+        }
+        assert document["messages"] == [
+            {
+                "kind": "INFO",
+                "base64": base64.b64encode(b"verified").decode("ascii"),
+                "bytes": 8,
+            }
+        ]
+
         stdout, stderr = invoke_udp(
             cli,
             ["--json", "flash", "system", str(stage_file)],
@@ -1033,6 +1871,27 @@ def run(cli: pathlib.Path) -> None:
         assert document["output"] == str(upload_file)
         assert "data" not in document
         assert upload_file.read_bytes() == upload_payload
+        assert_no_temporary_outputs(directory)
+
+        staged_file = directory / "已暂存-结果.bin"
+        staged_payload = b"s\x00\xfe"
+
+        def staged_data(connection: socket.socket) -> None:
+            # get-staged is the descriptive host API/CLI spelling for the
+            # AOSP Fastboot upload wire command.
+            assert receive_frame(connection) == b"upload"
+            send_frame(connection, b"DATA00000003")
+            send_frame(connection, staged_payload)
+            send_frame(connection, b"OKAYstaged")
+
+        stdout, stderr = invoke(
+            cli, ["--json", "get-staged", str(staged_file)], staged_data
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "get-staged"
+        assert document["dataBytes"] == 3
+        assert document["output"] == str(staged_file)
+        assert staged_file.read_bytes() == staged_payload
         assert_no_temporary_outputs(directory)
 
         fetch_file = directory / "分区-结果.bin"

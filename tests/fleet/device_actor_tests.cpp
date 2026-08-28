@@ -901,7 +901,7 @@ struct PreparedInputs final {
     std::vector<std::string> result;
     result.reserve(count);
     for (std::size_t index = 0U; index < count; ++index) {
-        result.push_back("SERIAL-" + std::to_string(index));
+        result.push_back(std::string{"SERIAL-"} + std::to_string(index));
     }
     return result;
 }

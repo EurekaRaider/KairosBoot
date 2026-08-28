@@ -37,6 +37,7 @@ enum class UpdatePackageOperationErrorKind : std::uint8_t {
 
 struct UpdatePackageOperationOptions final {
     bool wants_wipe{};
+    UpdatePackagePolicy policy{};
     UpdatePackagePreflightLimits preflight_limits{};
     std::vector<std::string> known_partitions{};
     UpdateExecutionObserver observer{};
