@@ -264,6 +264,12 @@ private:
         .bulk_out_max_packet_size = 512U,
         .bulk_in_endpoint = 0x81U,
         .bulk_in_max_packet_size = 512U,
+        .linux_topology = std::nullopt,
+        .linux_topology_error = std::nullopt,
+        .windows_topology = std::nullopt,
+        .windows_topology_error = std::nullopt,
+        .macos_topology = std::nullopt,
+        .macos_topology_error = std::nullopt,
     };
     result.linux_topology = kairosboot::transport::LinuxUsbTopology{
         .physical_port_path = "usb:1-" + std::to_string(index + 1U),
@@ -412,6 +418,15 @@ acquire_fleet_usb_runtime(kb_context_t&) {
     return std::unexpected(OperationErrorPayload{
         .status = KB_E_INTERNAL,
         .message = "scripted fleet test did not install device dependencies",
+        .native_code = 0,
+        .transfer_state = KB_TRANSFER_NOT_SENT,
+        .device_identifier = {},
+        .device_message = {},
+        .command_messages = {},
+        .inbound_expected = std::nullopt,
+        .inbound_transferred = 0U,
+        .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+        .session_poisoned = false,
     });
 }
 
@@ -485,6 +500,7 @@ extern "C" void kb_test_set_fleet_script(const int mode) {
             return kairosboot::api::FleetRunPrepared{
                 .report_specs = {report_spec()},
                 .executor = std::move(executor),
+                .actor_batch = {},
             };
         });
 }
