@@ -220,6 +220,86 @@
     },
     {
       "deviceState": {
+        "partitions": {
+          "system": {
+            "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+            "size": 32
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flash",
+            "system"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "max-download-size"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x00100000"
+        },
+        {
+          "command": "download:00000020",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+          "size": 32
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:system",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flash-default-file"
+    },
+    {
+      "deviceState": {
         "product": "product_a",
         "signature": {
           "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
@@ -621,6 +701,111 @@
         }
       ],
       "id": "official-tcp-snapshot-cancel"
+    },
+    {
+      "deviceState": {
+        "boot": {
+          "sha256": "478c5ce8d245b9c5bb6474ccbfa8d1ffdafc5032a4d5bfad9f03fc99d26b03f5",
+          "size": 6144
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "boot",
+            "<ARTIFACT>/kernel.bin",
+            "<ARTIFACT>/ramdisk.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "download:00001800",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "478c5ce8d245b9c5bb6474ccbfa8d1ffdafc5032a4d5bfad9f03fc99d26b03f5",
+          "size": 6144
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "boot",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "booting"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-boot-raw"
+    },
+    {
+      "deviceState": {
+        "partitions": {
+          "boot": {
+            "sha256": "478c5ce8d245b9c5bb6474ccbfa8d1ffdafc5032a4d5bfad9f03fc99d26b03f5",
+            "size": 6144
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flash:raw",
+            "boot",
+            "<ARTIFACT>/kernel.bin",
+            "<ARTIFACT>/ramdisk.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:boot"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "command": "download:00001800",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "478c5ce8d245b9c5bb6474ccbfa8d1ffdafc5032a4d5bfad9f03fc99d26b03f5",
+          "size": 6144
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:boot",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flash-raw"
     }
   ],
   "schemaVersion": 1

@@ -11,18 +11,18 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "5536874769902e6c1a5ea88af44f681d559dc4aa42f87303cc1c9e74a217f382"
+      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "5536874769902e6c1a5ea88af44f681d559dc4aa42f87303cc1c9e74a217f382"
+      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "61f77662334fbb2ecd6c184c49cea0fa11c463db779c3841be8e3b70f78693e8",
-    "sha256": "61f77662334fbb2ecd6c184c49cea0fa11c463db779c3841be8e3b70f78693e8",
-    "sourceCommit": "ea9cca6fd5d4c33947b71c231a74b6e3a22bf9cd"
+    "releaseArtifactSha256": "fbbbbfedde65af8f66c355746f8f0221612446776b0769bfc94ba5d17cfd0cac",
+    "sha256": "fbbbbfedde65af8f66c355746f8f0221612446776b0769bfc94ba5d17cfd0cac",
+    "sourceCommit": "21d4ac70a1b9e10f1357cc8251cd8f22dd9a501e"
   },
   "result": "matched",
   "scenarios": [
@@ -67,6 +67,18 @@
       "id": "official-udp-flash",
       "result": "matched",
       "transport": "udp"
+    },
+    {
+      "coverageIds": [
+        "command.flash",
+        "protocol.command",
+        "protocol.download",
+        "capability.raw-image",
+        "image.system"
+      ],
+      "id": "official-tcp-flash-default-file",
+      "result": "matched",
+      "transport": "tcp"
     },
     {
       "coverageIds": [
@@ -163,6 +175,24 @@
       "id": "official-tcp-snapshot-cancel",
       "result": "matched",
       "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.boot",
+        "capability.boot-image-construction"
+      ],
+      "id": "official-tcp-boot-raw",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flash-raw",
+        "capability.boot-image-construction"
+      ],
+      "id": "official-tcp-flash-raw",
+      "result": "matched",
+      "transport": "tcp"
     }
   ],
   "schemaVersion": 1,
@@ -173,15 +203,6 @@
       ],
       "id": "official-scripted-erase",
       "reason": "official Fastboot probes has-slot and partition-type before erase while KairosBoot sends the protocol command directly, so strict wire order differs"
-    },
-    {
-      "coverageIds": [
-        "command.boot",
-        "command.flash-raw",
-        "capability.boot-image-construction"
-      ],
-      "id": "official-scripted-boot-flash-raw",
-      "reason": "a real 37.0.1 capture produces a different legacy boot image DATA hash; the strict wire comparator therefore rejects these scenarios"
     },
     {
       "coverageIds": [
