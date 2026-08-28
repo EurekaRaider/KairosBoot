@@ -41,8 +41,16 @@ static_assert(std::is_nothrow_move_assignable_v<kairosboot::CommandResult>);
 static_assert(std::is_copy_constructible_v<kairosboot::Error>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
                              std::chrono::milliseconds>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.disable_verity),
+                             bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::FlashOptions{}.disable_verification), bool>);
 static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.timeout),
                              std::chrono::milliseconds>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.disable_verity), bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.disable_verification), bool>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);

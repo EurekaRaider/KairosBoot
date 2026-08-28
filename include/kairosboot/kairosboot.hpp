@@ -88,6 +88,8 @@ using DeviceSelector = std::optional<std::string_view>;
 struct FlashOptions {
   // Per-I/O timeout. milliseconds::max() selects the native infinite default.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
+  bool disable_verity{};
+  bool disable_verification{};
   std::function<ProgressAction(const FlashProgress &)> progress;
 };
 
@@ -109,6 +111,8 @@ struct UpdateOptions {
   bool skip_secondary{};
   bool exclude_dynamic_partitions{};
   bool disable_fastboot_info{};
+  bool disable_verity{};
+  bool disable_verification{};
   std::function<ProgressAction(const Progress &)> progress;
 };
 
@@ -331,6 +335,8 @@ prepare_update_options(const UpdateOptions &options) {
   result.native.exclude_dynamic_partitions =
       options.exclude_dynamic_partitions ? 1 : 0;
   result.native.disable_fastboot_info = options.disable_fastboot_info ? 1 : 0;
+  result.native.disable_verity = options.disable_verity ? 1 : 0;
+  result.native.disable_verification = options.disable_verification ? 1 : 0;
   if (options.progress) {
     result.callback_state =
         std::make_shared<ProgressCallbackState>(ProgressCallbackState{
@@ -352,6 +358,8 @@ prepare_flash_options(const FlashOptions &options) {
   PreparedFlashOptions result;
   kb_flash_options_init(&result.native);
   result.native.timeout_ms = *timeout;
+  result.native.disable_verity = options.disable_verity ? 1 : 0;
+  result.native.disable_verification = options.disable_verification ? 1 : 0;
   if (options.progress) {
     // This ordinary C++ allocation/copy happens before calling the C ABI and
     // may propagate std::bad_alloc or a callable-defined copy exception.

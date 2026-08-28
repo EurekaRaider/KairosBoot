@@ -107,7 +107,7 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, log_user_data) == 16, "kb_co
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->log_user_data) == 8, "kb_context_options_t.log_user_data size");
 KB_ABI_STATIC_ASSERT(KB_CONTEXT_OPTIONS_V1_SIZE == 24, "KB_CONTEXT_OPTIONS_V1_SIZE value");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 32, "kb_flash_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 40, "kb_flash_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_flash_options_t) == 8, "kb_flash_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, struct_size) == 0, "kb_flash_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->struct_size) == 4, "kb_flash_options_t.struct_size size");
@@ -119,7 +119,11 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, progress_callback) == 16, "kb_
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->progress_callback) == 8, "kb_flash_options_t.progress_callback size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, progress_user_data) == 24, "kb_flash_options_t.progress_user_data offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->progress_user_data) == 8, "kb_flash_options_t.progress_user_data size");
-KB_ABI_STATIC_ASSERT(KB_FLASH_OPTIONS_V1_SIZE == 32, "KB_FLASH_OPTIONS_V1_SIZE value");
+KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, disable_verity) == 32, "kb_flash_options_t.disable_verity offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->disable_verity) == 4, "kb_flash_options_t.disable_verity size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, disable_verification) == 36, "kb_flash_options_t.disable_verification offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->disable_verification) == 4, "kb_flash_options_t.disable_verification size");
+KB_ABI_STATIC_ASSERT(KB_FLASH_OPTIONS_AVB_FLAGS_SIZE == 40, "KB_FLASH_OPTIONS_AVB_FLAGS_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_job_options_t) == 32, "kb_job_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_job_options_t) == 8, "kb_job_options_t alignment");
@@ -172,7 +176,7 @@ KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->stage) == 8, "kb_progress_t.st
 KB_ABI_STATIC_ASSERT(offsetof(kb_progress_t, device_identifier) == 32, "kb_progress_t.device_identifier offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->device_identifier) == 8, "kb_progress_t.device_identifier size");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 48, "kb_update_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 56, "kb_update_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_update_options_t) == 8, "kb_update_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, struct_size) == 0, "kb_update_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->struct_size) == 4, "kb_update_options_t.struct_size size");
@@ -194,6 +198,11 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, exclude_dynamic_partitions) =
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->exclude_dynamic_partitions) == 4, "kb_update_options_t.exclude_dynamic_partitions size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, disable_fastboot_info) == 44, "kb_update_options_t.disable_fastboot_info offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->disable_fastboot_info) == 4, "kb_update_options_t.disable_fastboot_info size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, disable_verity) == 48, "kb_update_options_t.disable_verity offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->disable_verity) == 4, "kb_update_options_t.disable_verity size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, disable_verification) == 52, "kb_update_options_t.disable_verification offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->disable_verification) == 4, "kb_update_options_t.disable_verification size");
+KB_ABI_STATIC_ASSERT(KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE == 56, "KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_version_t) == 32, "kb_version_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_version_t) == 8, "kb_version_t alignment");

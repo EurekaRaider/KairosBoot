@@ -53,6 +53,8 @@ internal struct NativeFlashOptions
     internal uint TimeoutMilliseconds;
     internal IntPtr ProgressCallback;
     internal IntPtr ProgressUserData;
+    internal int DisableVerity;
+    internal int DisableVerification;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -82,6 +84,8 @@ internal struct NativeUpdateOptions
     internal int SkipSecondary;
     internal int ExcludeDynamicPartitions;
     internal int DisableFastbootInfo;
+    internal int DisableVerity;
+    internal int DisableVerification;
 }
 
 [StructLayout(LayoutKind.Sequential)]

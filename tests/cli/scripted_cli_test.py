@@ -1076,6 +1076,96 @@ def run(cli: pathlib.Path) -> None:
             "file": str(stage_file),
         }
 
+        vbmeta_file = directory / "vbmeta.img"
+        vbmeta_payload = bytearray([0x5A] * 256)
+        vbmeta_payload[0:4] = b"AVB0"
+        vbmeta_payload[123] = 0x40
+        vbmeta_file.write_bytes(vbmeta_payload)
+
+        def flashed_vbmeta(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:vbmeta"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vbmeta"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000100"
+            send_frame(connection, b"DATA00000100")
+            transferred = receive_frame(connection)
+            expected = bytearray(vbmeta_payload)
+            expected[123] = 0x43
+            assert transferred == expected
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vbmeta"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--disable-verity",
+                "--disable-verification",
+                "--json",
+                "flash",
+                "vbmeta",
+                str(vbmeta_file),
+            ],
+            flashed_vbmeta,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "flash"
+        assert document["partition"] == "vbmeta"
+
+        corrupt_vbmeta = directory / "corrupt-vbmeta.img"
+        corrupt_vbmeta.write_bytes(bytes(256))
+        rejected = invoke_without_connection(
+            cli,
+            [
+                "--disable-verity",
+                "flash",
+                "vbmeta",
+                str(corrupt_vbmeta),
+            ],
+            4,
+            "invalid_argument",
+        )
+        assert "AVB0 magic" in str(rejected["message"])
+
+        update_vbmeta_package = make_update_package(
+            directory,
+            "update-vbmeta",
+            "version 1\nflash --apply-vbmeta vbmeta vbmeta.img\n",
+        )
+        (update_vbmeta_package / "vbmeta.img").write_bytes(vbmeta_payload)
+
+        def updated_vbmeta(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000100"
+            send_frame(connection, b"DATA00000100")
+            transferred = receive_frame(connection)
+            expected = bytearray(vbmeta_payload)
+            expected[123] = 0x43
+            assert transferred == expected
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vbmeta"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--disable-verity",
+                "--disable-verification",
+                "--json",
+                "update",
+                str(update_vbmeta_package),
+            ],
+            updated_vbmeta,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "update"
+
         raw_kernel = directory / "raw-kernel.bin"
         raw_ramdisk = directory / "raw-ramdisk.bin"
         raw_second = directory / "raw-second.bin"

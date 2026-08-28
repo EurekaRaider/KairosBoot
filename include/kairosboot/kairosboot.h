@@ -154,6 +154,10 @@ typedef struct kb_flash_options {
   uint32_t timeout_ms;
   kb_progress_callback_t progress_callback;
   void *progress_user_data;
+  /* AOSP-compatible AVB header flags. These affect only partitions whose name
+   * ends in vbmeta, vbmeta_a, or vbmeta_b. */
+  int32_t disable_verity;
+  int32_t disable_verification;
 } kb_flash_options_t;
 
 /* Legacy Android boot header v0 layout used only when constructing an image
@@ -194,6 +198,9 @@ typedef struct kb_update_options {
   int32_t exclude_dynamic_partitions;
   /* Ignore fastboot-info.txt and build the frozen AOSP image-list plan. */
   int32_t disable_fastboot_info;
+  /* Applied to vbmeta artifacts before any device is opened. */
+  int32_t disable_verity;
+  int32_t disable_verification;
 } kb_update_options_t;
 
 typedef struct kb_command_options {
@@ -227,12 +234,18 @@ typedef struct kb_job_options {
 #define KB_FLASH_OPTIONS_V1_SIZE                                             \
   ((uint32_t)(offsetof(kb_flash_options_t, progress_user_data) +             \
               sizeof(((kb_flash_options_t *)0)->progress_user_data)))
+#define KB_FLASH_OPTIONS_AVB_FLAGS_SIZE                                      \
+  ((uint32_t)(offsetof(kb_flash_options_t, disable_verification) +           \
+              sizeof(((kb_flash_options_t *)0)->disable_verification)))
 #define KB_LEGACY_BOOT_OPTIONS_V1_SIZE                                       \
   ((uint32_t)(offsetof(kb_legacy_boot_options_t, tags_offset) +              \
               sizeof(((kb_legacy_boot_options_t *)0)->tags_offset)))
 #define KB_UPDATE_OPTIONS_V1_SIZE                                            \
   ((uint32_t)(offsetof(kb_update_options_t, progress_user_data) +            \
               sizeof(((kb_update_options_t *)0)->progress_user_data)))
+#define KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE                                     \
+  ((uint32_t)(offsetof(kb_update_options_t, disable_verification) +          \
+              sizeof(((kb_update_options_t *)0)->disable_verification)))
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))

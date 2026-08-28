@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "update_package_preflight.hpp"
 
+#include "src/image/vbmeta_flag_source.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -173,8 +175,7 @@ read_manifest(const image::ResolvedArtifact& resolved, const std::string_view na
 
 [[nodiscard]] bool is_vbmeta_partition(
     const std::string_view partition) noexcept {
-    return partition == "vbmeta" || partition == "vbmeta_system" ||
-           partition == "vbmeta_vendor";
+    return image::is_vbmeta_partition(partition);
 }
 
 [[nodiscard]] UpdateSourceLocation hardcoded_location(

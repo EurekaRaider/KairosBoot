@@ -18,6 +18,8 @@
 #include "src/image/filesystem_formatter.hpp"
 #include "src/image/flash_artifact.hpp"
 #include "src/image/sparse_flash_plan.hpp"
+#include "src/image/sha256.hpp"
+#include "src/image/vbmeta_flag_source.hpp"
 #include "src/kairosboot_internal.hpp"
 #include "src/protocol/fastboot_protocol.hpp"
 #include "src/transport/image_transfer_source.hpp"
@@ -534,9 +536,17 @@ bool valid_context_options(const kb_context_options_t *options) noexcept {
 }
 
 bool valid_flash_options(const kb_flash_options_t *options) noexcept {
-  return options == nullptr ||
-         (options->struct_size >= KB_FLASH_OPTIONS_V1_SIZE &&
-          options->api_version == KB_API_VERSION);
+  if (options == nullptr) {
+    return true;
+  }
+  if (options->struct_size < KB_FLASH_OPTIONS_V1_SIZE ||
+      options->api_version != KB_API_VERSION) {
+    return false;
+  }
+  return options->struct_size < KB_FLASH_OPTIONS_AVB_FLAGS_SIZE ||
+         ((options->disable_verity == 0 || options->disable_verity == 1) &&
+          (options->disable_verification == 0 ||
+           options->disable_verification == 1));
 }
 
 bool valid_legacy_boot_options(
@@ -585,7 +595,28 @@ bool valid_update_options(const kb_update_options_t *options) noexcept {
          valid_optional_bool(
              offsetof(kb_update_options_t, exclude_dynamic_partitions)) &&
          valid_optional_bool(
-             offsetof(kb_update_options_t, disable_fastboot_info));
+             offsetof(kb_update_options_t, disable_fastboot_info)) &&
+         valid_optional_bool(offsetof(kb_update_options_t, disable_verity)) &&
+         valid_optional_bool(
+             offsetof(kb_update_options_t, disable_verification));
+}
+
+[[nodiscard]] kairosboot::image::VbmetaFlags flash_vbmeta_flags(
+    const kb_flash_options_t &options) noexcept {
+  if (options.struct_size < KB_FLASH_OPTIONS_AVB_FLAGS_SIZE) {
+    return {};
+  }
+  return {.disable_verity = options.disable_verity != 0,
+          .disable_verification = options.disable_verification != 0};
+}
+
+[[nodiscard]] kairosboot::image::VbmetaFlags update_vbmeta_flags(
+    const kb_update_options_t &options) noexcept {
+  if (options.struct_size < KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE) {
+    return {};
+  }
+  return {.disable_verity = options.disable_verity != 0,
+          .disable_verification = options.disable_verification != 0};
 }
 
 [[nodiscard]] kb_update_options_t update_options_or_default(
@@ -619,6 +650,16 @@ bool valid_update_options(const kb_update_options_t *options) noexcept {
         offsetof(kb_update_options_t, disable_fastboot_info) +
             sizeof(options->disable_fastboot_info)) {
       result.disable_fastboot_info = options->disable_fastboot_info;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, disable_verity) +
+            sizeof(options->disable_verity)) {
+      result.disable_verity = options->disable_verity;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, disable_verification) +
+            sizeof(options->disable_verification)) {
+      result.disable_verification = options->disable_verification;
     }
   }
   return result;
@@ -661,6 +702,92 @@ using UpdateClock = std::chrono::steady_clock;
       .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
       .session_poisoned = false,
   };
+}
+
+[[nodiscard]] kairosboot::api::OperationErrorPayload vbmeta_error(
+    const kairosboot::image::VbmetaFlagError &error,
+    const std::string_view identifier) {
+  using kairosboot::image::VbmetaFlagErrorKind;
+  kb_status_t status = KB_E_IO;
+  if (error.kind == VbmetaFlagErrorKind::Malformed) {
+    status = KB_E_INVALID_ARGUMENT;
+  } else if (error.kind == VbmetaFlagErrorKind::Cancelled) {
+    status = KB_E_CANCELLED;
+  }
+  return update_error(status,
+                      error.message + " (input offset " +
+                          std::to_string(error.input_offset) + ")",
+                      identifier);
+}
+
+[[nodiscard]] kairosboot::api::OperationErrorPayload sha256_error(
+    const kairosboot::image::Sha256Error &error,
+    const std::string_view identifier) {
+  using kairosboot::image::Sha256ErrorKind;
+  const auto status = error.kind == Sha256ErrorKind::Cancelled
+                          ? KB_E_CANCELLED
+                          : KB_E_IO;
+  return update_error(status,
+                      error.message + " (input offset " +
+                          std::to_string(error.input_offset) + ")",
+                      identifier);
+}
+
+[[nodiscard]] std::expected<void, kairosboot::api::OperationErrorPayload>
+prepare_update_vbmeta_flags(
+    kairosboot::fastboot::PreparedUpdatePackage &prepared,
+    const kairosboot::image::VbmetaFlags flags,
+    const std::string_view identifier,
+    const std::stop_token cancellation) {
+  for (auto &task : prepared.plan.tasks) {
+    if (!task.apply_vbmeta) {
+      continue;
+    }
+    if (flags.any()) {
+      const auto position = std::find_if(
+          prepared.artifacts.begin(), prepared.artifacts.end(),
+          [&task](const kairosboot::fastboot::PreparedUpdateArtifact &value) {
+            return value.name == task.artifact;
+          });
+      if (position == prepared.artifacts.end() || !position->resolved ||
+          !position->resolved->source) {
+        return std::unexpected(update_error(
+            KB_E_INTERNAL,
+            "vbmeta update task does not map to a prepared artifact",
+            identifier));
+      }
+      auto mutated = kairosboot::image::apply_vbmeta_flags(
+          position->resolved->source, flags, cancellation);
+      if (!mutated) {
+        return std::unexpected(vbmeta_error(mutated.error(), identifier));
+      }
+      if (*mutated != position->resolved->source) {
+        auto digest = kairosboot::image::compute_sha256(**mutated, cancellation);
+        if (!digest) {
+          return std::unexpected(sha256_error(digest.error(), identifier));
+        }
+        auto inspected =
+            kairosboot::image::FlashArtifact::inspect(*mutated, cancellation);
+        if (!inspected) {
+          return std::unexpected(kairosboot::api::normalize_public_error(
+              inspected.error(), identifier));
+        }
+        auto resolved =
+            std::make_shared<const kairosboot::image::ResolvedArtifact>(
+                kairosboot::image::ResolvedArtifact{
+                    .source = std::move(*mutated),
+                    .sha256 = *digest,
+                    .origin = position->resolved->origin,
+                    .logical_name = position->resolved->logical_name});
+        position->resolved = std::move(resolved);
+        position->artifact =
+            std::make_shared<const kairosboot::image::FlashArtifact>(
+                std::move(*inspected));
+      }
+    }
+    task.apply_vbmeta = false;
+  }
+  return {};
 }
 
 [[nodiscard]] std::expected<UpdateClock::time_point,
@@ -1988,6 +2115,19 @@ kb_status_t start_flash_source_async(
       return cancelled_operation(selected_identifier, KB_TRANSFER_NOT_SENT);
     }
 
+    const auto flags = flash_vbmeta_flags(flash_options);
+    if (flags.any() &&
+        kairosboot::image::is_vbmeta_partition(partition_copy)) {
+      auto mutated = kairosboot::image::apply_vbmeta_flags(
+          std::move(image_source), flags,
+          task_context.cancellation_token());
+      if (!mutated) {
+        return operation_failure(
+            vbmeta_error(mutated.error(), selected_identifier));
+      }
+      image_source = std::move(*mutated);
+    }
+
     auto artifact = kairosboot::image::FlashArtifact::inspect(
         image_source, task_context.cancellation_token());
     if (!artifact) {
@@ -2163,6 +2303,12 @@ kb_status_t start_flash_source_async(
   if (!prepared) {
     return operation_failure(kairosboot::api::normalize_public_error(
         prepared.error(), identifier));
+  }
+  if (auto transformed = prepare_update_vbmeta_flags(
+          *prepared, update_vbmeta_flags(options), identifier,
+          task_context.cancellation_token());
+      !transformed) {
+    return operation_failure(std::move(transformed.error()));
   }
   return execute_prepared_public_update(
       usb_state, std::move(selector), std::move(*prepared), *deadline, options,
@@ -2621,6 +2767,11 @@ kb_status_t KB_CALL kb_flash_file_async(
       flash_options.timeout_ms = options_or_null->timeout_ms;
       flash_options.progress_callback = options_or_null->progress_callback;
       flash_options.progress_user_data = options_or_null->progress_user_data;
+      if (options_or_null->struct_size >= KB_FLASH_OPTIONS_AVB_FLAGS_SIZE) {
+        flash_options.disable_verity = options_or_null->disable_verity;
+        flash_options.disable_verification =
+            options_or_null->disable_verification;
+      }
     }
 
     std::shared_ptr<const kairosboot::image::IImageSource> image_source =

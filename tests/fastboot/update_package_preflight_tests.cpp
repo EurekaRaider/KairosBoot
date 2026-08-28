@@ -300,8 +300,7 @@ void write_hardcoded_images(const std::filesystem::path& package,
 
 [[nodiscard]] bool expected_apply_vbmeta(
     const std::string_view partition) noexcept {
-    return partition == "vbmeta" || partition == "vbmeta_system" ||
-           partition == "vbmeta_vendor";
+    return partition == "vbmeta";
 }
 
 void check_hardcoded_plan(const PreparedUpdatePackage& prepared,

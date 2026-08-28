@@ -242,6 +242,7 @@ add_library(
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
   src/image/sparse_image.cpp
+  src/image/vbmeta_flag_source.cpp
   src/protocol/file_transfer_sink.cpp
   src/protocol/fastboot_protocol.cpp
   src/transport/adaptive_tuner.cpp
@@ -631,6 +632,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_update_plan_tests)
   add_test(NAME update_plan COMMAND kairosboot_update_plan_tests)
   set_tests_properties(update_plan PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_vbmeta_flag_source_tests
+                 tests/image/vbmeta_flag_source_tests.cpp)
+  target_compile_features(kairosboot_vbmeta_flag_source_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_vbmeta_flag_source_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_vbmeta_flag_source_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_vbmeta_flag_source_tests)
+  add_test(NAME vbmeta_flag_source COMMAND kairosboot_vbmeta_flag_source_tests)
+  set_tests_properties(vbmeta_flag_source PROPERTIES TIMEOUT 10)
 
   add_executable(kairosboot_update_package_preflight_tests
                  tests/fastboot/update_package_preflight_tests.cpp)

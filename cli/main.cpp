@@ -213,6 +213,8 @@ struct GlobalOptions {
   std::optional<std::uint32_t> timeout_ms;
   std::uint64_t maximum_receive_bytes{kDefaultMaximumReceiveBytes};
   bool maximum_receive_bytes_set{false};
+  bool disable_verity{};
+  bool disable_verification{};
   bool legacy_boot_options_set{false};
 };
 
@@ -332,6 +334,8 @@ utf8_from_wide(const std::wstring_view value) {
 bool is_global_option(const std::string_view value) noexcept {
   return value == "--json" || value == "--device" || value == "--serial" ||
          value == "--timeout-ms" || value == "--max-receive-bytes" ||
+         value == "--disable-verity" ||
+         value == "--disable-verification" ||
          value == "--base" || value == "--cmdline" ||
          value == "--page-size" || value == "--kernel-offset" ||
          value == "--ramdisk-offset" || value == "--second-offset" ||
@@ -481,6 +485,16 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       result.global.maximum_receive_bytes = parsed;
       result.global.maximum_receive_bytes_set = true;
       index += 2;
+      continue;
+    }
+    if (argument == "--disable-verity") {
+      result.global.disable_verity = true;
+      ++index;
+      continue;
+    }
+    if (argument == "--disable-verification") {
+      result.global.disable_verification = true;
+      ++index;
       continue;
     }
     bool *legacy_seen = nullptr;
@@ -1415,6 +1429,8 @@ kairosboot::FlashOptions flash_options(const GlobalOptions &options) {
   if (options.timeout_ms.has_value()) {
     result.timeout = std::chrono::milliseconds{*options.timeout_ms};
   }
+  result.disable_verity = options.disable_verity;
+  result.disable_verification = options.disable_verification;
   return result;
 }
 
@@ -1423,6 +1439,8 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
   if (options.timeout_ms.has_value()) {
     result.timeout = std::chrono::milliseconds{*options.timeout_ms};
   }
+  result.disable_verity = options.disable_verity;
+  result.disable_verification = options.disable_verification;
   return result;
 }
 
@@ -2553,6 +2571,7 @@ constexpr std::string_view usage_text() noexcept {
                "  --device <selector> | --serial <id>\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
+               "  --disable-verity --disable-verification\n"
                "  Legacy boot options (boot and flash:raw only):\n"
                "  --cmdline <text> --base <value> --page-size <value>\n"
                "  --kernel-offset <value> --ramdisk-offset <value>\n"

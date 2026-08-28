@@ -1022,6 +1022,8 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1092,6 +1094,8 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1192,6 +1196,8 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1281,6 +1287,8 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1346,6 +1354,8 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1411,6 +1421,8 @@ public sealed partial class Context : IDisposable
                 options.ExcludeDynamicPartitions ? 1 : 0;
             nativeOptions.DisableFastbootInfo =
                 options.DisableFastbootInfo ? 1 : 0;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1477,6 +1489,8 @@ public sealed partial class Context : IDisposable
                 options.ExcludeDynamicPartitions ? 1 : 0;
             nativeOptions.DisableFastbootInfo =
                 options.DisableFastbootInfo ? 1 : 0;
+            nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
+            nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 

@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "27b98c09a90572f066ca8e17a3007a41a92f07cb7b2aa4e1b80d33f467f5d98a",
+  "headerContractSha256": "b6167627a7079d761081a628f0ad7152d7b94236c36bada68866a5a784916056",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -156,12 +156,22 @@
           "name": "progress_user_data",
           "offset": 24,
           "size": 8
+        },
+        {
+          "name": "disable_verity",
+          "offset": 32,
+          "size": 4
+        },
+        {
+          "name": "disable_verification",
+          "offset": 36,
+          "size": 4
         }
       ],
-      "size": 32,
+      "size": 40,
       "versionSize": {
-        "macro": "KB_FLASH_OPTIONS_V1_SIZE",
-        "value": 32
+        "macro": "KB_FLASH_OPTIONS_AVB_FLAGS_SIZE",
+        "value": 40
       }
     },
     "kb_job_options_t": {
@@ -342,9 +352,23 @@
           "name": "disable_fastboot_info",
           "offset": 44,
           "size": 4
+        },
+        {
+          "name": "disable_verity",
+          "offset": 48,
+          "size": 4
+        },
+        {
+          "name": "disable_verification",
+          "offset": 52,
+          "size": 4
         }
       ],
-      "size": 48
+      "size": 56,
+      "versionSize": {
+        "macro": "KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE",
+        "value": 56
+      }
     },
     "kb_version_t": {
       "alignment": 8,

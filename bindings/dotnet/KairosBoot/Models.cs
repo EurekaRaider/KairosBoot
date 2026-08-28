@@ -74,10 +74,18 @@ public readonly struct FlashOptions
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
     public FlashOptions(TimeSpan timeout)
+        : this(timeout, false, false)
+    {
+    }
+
+    /// <summary>Creates flash options with AOSP-compatible vbmeta flags.</summary>
+    public FlashOptions(TimeSpan timeout, bool disableVerity, bool disableVerification)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
+        DisableVerity = disableVerity;
+        DisableVerification = disableVerification;
     }
 
     /// <summary>Gets options that use the native infinite timeout default.</summary>
@@ -87,6 +95,12 @@ public readonly struct FlashOptions
     public TimeSpan Timeout => hasExplicitTimeout
         ? timeout
         : System.Threading.Timeout.InfiniteTimeSpan;
+
+    /// <summary>Gets whether vbmeta disables dm-verity.</summary>
+    public bool DisableVerity { get; }
+
+    /// <summary>Gets whether vbmeta disables verification.</summary>
+    public bool DisableVerification { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
@@ -243,7 +257,9 @@ public readonly struct UpdateOptions
         bool skipReboot = false,
         bool skipSecondary = false,
         bool excludeDynamicPartitions = false,
-        bool disableFastbootInfo = false)
+        bool disableFastbootInfo = false,
+        bool disableVerity = false,
+        bool disableVerification = false)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
@@ -253,6 +269,8 @@ public readonly struct UpdateOptions
         SkipSecondary = skipSecondary;
         ExcludeDynamicPartitions = excludeDynamicPartitions;
         DisableFastbootInfo = disableFastbootInfo;
+        DisableVerity = disableVerity;
+        DisableVerification = disableVerification;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -277,6 +295,12 @@ public readonly struct UpdateOptions
 
     /// <summary>Gets whether the frozen image-list plan replaces fastboot-info.txt.</summary>
     public bool DisableFastbootInfo { get; }
+
+    /// <summary>Gets whether update vbmeta images disable dm-verity.</summary>
+    public bool DisableVerity { get; }
+
+    /// <summary>Gets whether update vbmeta images disable verification.</summary>
+    public bool DisableVerification { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
