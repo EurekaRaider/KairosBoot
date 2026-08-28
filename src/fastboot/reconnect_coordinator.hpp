@@ -42,12 +42,24 @@ struct ReconnectUsbFingerprint final {
     [[nodiscard]] bool operator==(const ReconnectUsbFingerprint&) const = default;
 };
 
+// Opaque, implementation-owned authorization to open one passive discovery
+// result. Production discovery may attach a one-shot capability; coordinator
+// fakes and non-USB implementations may leave it empty.
+class ReconnectCandidateOpenCapability {
+public:
+    virtual ~ReconnectCandidateOpenCapability() = default;
+
+protected:
+    ReconnectCandidateOpenCapability() = default;
+};
+
 // Passive discovery result for one Fastboot USB interface. Discovery may use
 // only USB topology/descriptors and must never emit Fastboot protocol bytes.
 struct ReconnectCandidate final {
     UsbPhysicalPortPath physical_port;
     std::optional<std::string> serial;
     ReconnectUsbFingerprint usb_fingerprint;
+    std::shared_ptr<const ReconnectCandidateOpenCapability> open_capability;
 };
 
 // Identity verified only after exclusively opening the candidate. Product and
@@ -60,6 +72,15 @@ struct ReconnectDeviceIdentity final {
     FastbootUsbMode mode{FastbootUsbMode::Bootloader};
 };
 
+enum class ReconnectUsbFingerprintPolicy : std::uint8_t {
+    Exact,
+    // A fully transferred bootloader/fastbootd transition may legitimately
+    // re-enumerate with a different VID/PID/interface. Passive selection then
+    // uses the unique physical port; the changed fingerprint is accepted only
+    // after live serial/product/mode verification identifies required_mode.
+    AllowChangeWithLiveIdentity,
+};
+
 struct ReconnectTarget final {
     UsbPhysicalPortPath physical_port;
     std::optional<std::string> serial;
@@ -67,11 +88,27 @@ struct ReconnectTarget final {
     std::string product;
     FastbootUsbMode previous_mode{FastbootUsbMode::Bootloader};
     FastbootUsbMode required_mode{FastbootUsbMode::Fastbootd};
+    ReconnectUsbFingerprintPolicy usb_fingerprint_policy{
+        ReconnectUsbFingerprintPolicy::Exact};
     // The coordinator will not hand a new session to the caller when the
     // preceding protocol operation has an uncertain outbound outcome.
     protocol::TransferCertainty preceding_operation_certainty{
         protocol::TransferCertainty::FullyTransferred};
 };
+
+// Shared identity predicates used by the coordinator and higher-level actors.
+// A missing verified_mode represents passive selection. In transition mode it
+// may admit a changed descriptor only so exclusive open can perform live
+// verification; a previous-mode live identity still requires the exact old
+// fingerprint.
+[[nodiscard]] bool reconnect_usb_fingerprint_allowed(
+    const ReconnectTarget& target,
+    const ReconnectUsbFingerprint& observed,
+    std::optional<FastbootUsbMode> verified_mode = std::nullopt) noexcept;
+
+[[nodiscard]] bool reconnect_identity_matches_target(
+    const ReconnectTarget& target,
+    const ReconnectDeviceIdentity& identity) noexcept;
 
 struct ReconnectDiscoveryError final {
     std::string message;
