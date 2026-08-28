@@ -25,6 +25,7 @@
 #include "src/transport/usb_fastboot.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -1973,6 +1974,18 @@ kb_status_t KB_CALL kb_flash_file_async(
       kairosboot::fastboot::PrimitiveService service(session);
       auto cancellation = task_context.register_cancellation_hook(
           [&service] { service.request_cancel(); });
+
+      const std::array<std::string, 3> aosp_flash_preflight{
+          "is-userspace", "has-slot:" + partition_copy,
+          "is-logical:" + partition_copy};
+      for (const auto &variable : aosp_flash_preflight) {
+        auto value = service.getvar(variable);
+        if (!value && value.error().code !=
+                          kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              value.error(), selected_identifier));
+        }
+      }
 
       std::uint64_t target_max_download_size = 0;
       auto maximum = service.getvar("max-download-size");

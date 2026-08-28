@@ -205,8 +205,18 @@ private:
     return socket;
   }
 
+  static void serve_flash_preflight(tcp::socket& socket) {
+    CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+    write_frame(socket, "OKAYno");
+    CHECK(as_string(read_frame(socket)) == "getvar:has-slot:system");
+    write_frame(socket, "OKAYno");
+    CHECK(as_string(read_frame(socket)) == "getvar:is-logical:system");
+    write_frame(socket, "OKAYno");
+  }
+
   void serve_flash_success() {
     auto socket = accept();
+    serve_flash_preflight(socket);
     CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
     write_frame(socket, "OKAY0x00100000");
     CHECK(as_string(read_frame(socket)) == "download:00000010");
@@ -223,6 +233,7 @@ private:
 
   void serve_flash_failure() {
     auto socket = accept();
+    serve_flash_preflight(socket);
     CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
     write_frame(socket, "OKAY0x00100000");
     CHECK(as_string(read_frame(socket)) == "download:00000010");
@@ -241,6 +252,7 @@ private:
 
   void serve_cancelled_flash() {
     auto socket = accept();
+    serve_flash_preflight(socket);
     CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
     write_frame(socket, "OKAY0x00100000");
     std::array<std::byte, 1> trailing{};
@@ -465,6 +477,15 @@ private:
     return socket;
   }
 
+  static void serve_flash_preflight(tcp::socket& socket) {
+    CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+    write_frame(socket, "OKAYno");
+    CHECK(as_string(read_frame(socket)) == "getvar:has-slot:system");
+    write_frame(socket, "OKAYno");
+    CHECK(as_string(read_frame(socket)) == "getvar:is-logical:system");
+    write_frame(socket, "OKAYno");
+  }
+
   static std::string binary_frame(
       const std::string_view prefix,
       const std::initializer_list<unsigned char> bytes) {
@@ -477,6 +498,7 @@ private:
 
   void serve_flash_success() {
     auto socket = accept();
+    serve_flash_preflight(socket);
     CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
     write_frame(socket, "OKAY0x00100000");
     CHECK(as_string(read_frame(socket)) == "download:00000010");
@@ -702,6 +724,9 @@ private:
       respond(response);
     };
 
+    exchange(udp_bytes("getvar:is-userspace"), udp_bytes("OKAYno"));
+    exchange(udp_bytes("getvar:has-slot:system"), udp_bytes("OKAYno"));
+    exchange(udp_bytes("getvar:is-logical:system"), udp_bytes("OKAYno"));
     exchange(udp_bytes("getvar:max-download-size"),
              udp_bytes("OKAY0x00100000"));
     exchange(udp_bytes("download:00000010"), udp_bytes("DATA00000010"));
