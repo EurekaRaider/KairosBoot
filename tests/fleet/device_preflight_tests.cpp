@@ -822,6 +822,84 @@ void missing_selector_and_unreliable_topology_fail_closed() {
     CHECK(opener.calls == 0U);
 }
 
+void zero_bus_is_accepted_only_for_macos_topology() {
+    auto job = plan({TargetSpec{
+        .name = "target-a",
+        .serials = {},
+        .usb_paths = {"usb:0-2"},
+        .product = "product-a",
+    }});
+    auto serial_job = plan({TargetSpec{
+        .name = "target-a",
+        .serials = {"SERIAL-A"},
+        .usb_paths = {},
+        .product = "product-a",
+    }});
+
+    const auto macos_zero_bus = [] {
+        auto result = macos_device("SERIAL-A", "usb:0-2", 2U, 2U);
+        result.bus_number = 0U;
+        result.macos_topology->bus_number = 0U;
+        result.macos_topology->location_id = 2U << 16U;
+        return result;
+    };
+    const auto expect_unreliable = [&serial_job](UsbDeviceInfo candidate) {
+        std::vector snapshot{std::move(candidate)};
+        RecordingOpener opener;
+        SequenceProbe probe;
+        auto result = preflight_fleet_devices(
+            serial_job, snapshot, opener, probe, deadline());
+        CHECK(!result);
+        CHECK(result.error().kind ==
+              DevicePreflightErrorKind::UnreliableTopology);
+        CHECK(opener.calls == 0U);
+    };
+
+    std::vector macos_snapshot{macos_zero_bus()};
+    RecordingOpener macos_opener;
+    SequenceProbe macos_probe{{live("product-a")}};
+    auto macos_result = preflight_fleet_devices(
+        job, macos_snapshot, macos_opener, macos_probe, deadline());
+    CHECK(macos_result.has_value());
+    CHECK(macos_opener.calls == 1U);
+
+    auto linux = device("SERIAL-A", "usb:0-2", 2U, 2U);
+    linux.bus_number = 0U;
+    linux.linux_topology->bus_number = 0U;
+    expect_unreliable(std::move(linux));
+
+    auto windows = windows_device("SERIAL-A", "usb:0-2", 2U, 2U);
+    windows.bus_number = 0U;
+    windows.windows_topology->bus_number = 0U;
+    expect_unreliable(std::move(windows));
+
+    auto mixed = macos_zero_bus();
+    mixed.linux_topology = device(
+        "SERIAL-A", "usb:0-2", 2U, 2U).linux_topology;
+    mixed.linux_topology->bus_number = 0U;
+    mixed.linux_topology->physical_port_path = "usb:0-2";
+    expect_unreliable(std::move(mixed));
+
+    auto missing = macos_zero_bus();
+    missing.macos_topology.reset();
+    expect_unreliable(std::move(missing));
+
+    auto macos_error = macos_zero_bus();
+    macos_error.macos_topology_error =
+        kairosboot::transport::MacUsbTopologyError{};
+    expect_unreliable(std::move(macos_error));
+
+    auto linux_error = macos_zero_bus();
+    linux_error.linux_topology_error =
+        kairosboot::transport::LinuxUsbTopologyError{};
+    expect_unreliable(std::move(linux_error));
+
+    auto windows_error = macos_zero_bus();
+    windows_error.windows_topology_error =
+        kairosboot::transport::WindowsUsbTopologyError{};
+    expect_unreliable(std::move(windows_error));
+}
+
 void product_mismatch_withholds_the_entire_batch_and_reports_outcomes() {
     auto job = plan({TargetSpec{
         .name = "target-a",
@@ -1427,7 +1505,7 @@ void built_in_probe_interrupts_blocking_io_on_deadline_and_stop() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 19U> tests{
+    const std::array<Test, 20U> tests{
         Test{"selectors are exact, deduplicated, and ignore unrelated devices",
              &selectors_are_exact_deduplicated_and_ignore_unrelated_devices},
         Test{"unmatched invalid and duplicate devices are ignored",
@@ -1442,6 +1520,8 @@ int main() {
              &cross_target_multi_namespace_match_is_rejected},
         Test{"missing selector and unreliable topology fail closed",
              &missing_selector_and_unreliable_topology_fail_closed},
+        Test{"zero bus is accepted only for macOS topology",
+             &zero_bus_is_accepted_only_for_macos_topology},
         Test{"product mismatch withholds batch and reports outcomes",
              &product_mismatch_withholds_the_entire_batch_and_reports_outcomes},
         Test{"32-device batch completes live barrier before failure",
