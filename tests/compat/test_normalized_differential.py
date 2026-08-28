@@ -16,6 +16,7 @@ import unittest
 
 REFERENCE_TEMP = "/private/tmp/kairosboot-scripted-reference"
 ACTUAL_TEMP = "/tmp/kairosboot-scripted-actual"
+REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def replace_text(value: object, old: str, new: str) -> object:

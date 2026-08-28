@@ -19,6 +19,9 @@ sys.path.insert(0, str(TOOLING_ROOT))
 from json_schema_subset import check_schema, validate  # noqa: E402
 
 
+REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
 class OfficialFastbootDifferentialTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
