@@ -77,10 +77,10 @@
       ],
       "id": "capability.boot-image-construction",
       "kind": "image-plan",
-      "note": "The bounded shared builder emits Android boot headers v0-v4 and exposes every locked construction option through C11, C++23, .NET and CLI while rejecting header-incompatible layouts.",
+      "note": "The bounded shared builder emits Android boot headers v0-v4 and exposes the locked construction options through C11, C++23, .NET and CLI, but its legacy image bytes do not yet match the frozen Platform-Tools 37.0.1 DATA hash.",
       "officialDifferentialEvidence": [],
       "required": true,
-      "status": "implemented"
+      "status": "partial"
     },
     {
       "cSymbols": [
@@ -291,11 +291,11 @@
       ],
       "id": "command.boot",
       "kind": "command",
-      "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 from raw operands with the complete locked builder option surface across C11, C++23, .NET and CLI.",
+      "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI, but the frozen Platform-Tools 37.0.1 differential capture produces a different legacy boot-image DATA hash.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "boot",
-      "status": "implemented"
+      "status": "partial"
     },
     {
       "cSymbols": [
@@ -439,11 +439,11 @@
       ],
       "id": "command.flash",
       "kind": "command",
-      "note": "Raw and sparse file flashing are implemented through the public SDK.",
+      "note": "Raw and sparse file flashing are implemented through the public SDK, but KairosBoot deliberately requires an explicit file and does not yet reproduce the frozen Fastboot `flash <partition>` image-path inference.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flash",
-      "status": "implemented"
+      "status": "partial"
     },
     {
       "cSymbols": [
@@ -466,11 +466,11 @@
       ],
       "id": "command.flash-raw",
       "kind": "command",
-      "note": "Flash-raw constructs validated Android boot images v0-v4 from kernel, ramdisk and second-stage operands and flashes them with the complete locked builder, slot, sparse-limit and force option surface.",
+      "note": "Flash-raw constructs validated Android boot images v0-v4 from kernel, ramdisk and second-stage operands, but the frozen Platform-Tools 37.0.1 differential capture produces a different legacy boot-image DATA hash.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flash:raw",
-      "status": "implemented"
+      "status": "partial"
     },
     {
       "cSymbols": [
@@ -2615,7 +2615,12 @@
     "status": "not-run",
     "uncoveredCandidateScenarios": 0
   },
-  "requiredGaps": [],
+  "requiredGaps": [
+    "capability.boot-image-construction",
+    "command.boot",
+    "command.flash",
+    "command.flash-raw"
+  ],
   "schemaVersion": 2,
   "statusVocabulary": [
     "implemented",
@@ -2626,10 +2631,10 @@
   "summary": {
     "byKind": {
       "command": {
-        "implemented": 30,
+        "implemented": 27,
         "intentional-deviation": 4,
         "missing": 0,
-        "partial": 0
+        "partial": 3
       },
       "deviation": {
         "implemented": 0,
@@ -2644,10 +2649,10 @@
         "partial": 25
       },
       "image-plan": {
-        "implemented": 11,
+        "implemented": 10,
         "intentional-deviation": 0,
         "missing": 0,
-        "partial": 0
+        "partial": 1
       },
       "option": {
         "implemented": 29,
@@ -2669,10 +2674,10 @@
       }
     },
     "byStatus": {
-      "implemented": 79,
+      "implemented": 75,
       "intentional-deviation": 15,
       "missing": 0,
-      "partial": 25
+      "partial": 29
     },
     "totalEntries": 119
   }

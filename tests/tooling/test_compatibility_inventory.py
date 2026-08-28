@@ -32,7 +32,13 @@ class CompatibilityInventoryTests(unittest.TestCase):
         self.assertEqual(
             set(inventory["statusVocabulary"]), GENERATOR.ALLOWED_STATUSES
         )
-        self.assertEqual(inventory["requiredGaps"], [])
+        expected_required_gaps = [
+            "capability.boot-image-construction",
+            "command.boot",
+            "command.flash",
+            "command.flash-raw",
+        ]
+        self.assertEqual(inventory["requiredGaps"], expected_required_gaps)
         self.assertEqual(
             inventory["officialDifferentialCoverage"]["status"], "not-run"
         )
@@ -43,7 +49,8 @@ class CompatibilityInventoryTests(unittest.TestCase):
         self.assertEqual(
             inventory["officialDifferentialCoverage"]["matchedScenarios"], 0
         )
-        self.assertIn("requiredGaps: []\n", yaml_text)
+        for identifier in expected_required_gaps:
+            self.assertIn(f'  - "{identifier}"\n', yaml_text)
         for entry in inventory["entries"]:
             self.assertIn(entry["status"], GENERATOR.ALLOWED_STATUSES)
             self.assertNotIn("unknown", entry["status"])

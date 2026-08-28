@@ -648,8 +648,12 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
         raise AssertionError(f"unknown command error changed: {stderr!r}")
 
     stdout, stderr = local(["-S", "0", "flash"], 2)
-    if b"flash requires <partition> [file]" not in stderr:
+    if b"flash requires exactly <partition> and <file>" not in stderr:
         raise AssertionError(f"zero sparse limit was not accepted: {stderr!r}")
+
+    stdout, stderr = local(["flash", "boot"], 2)
+    if b"flash requires exactly <partition> and <file>" not in stderr:
+        raise AssertionError(f"missing flash file was not rejected: {stderr!r}")
 
     stdout, stderr = local(["-S", "18446744073709551615G", "flash"], 2)
     if b"option -S requires SIZE[K|M|G]" not in stderr:
@@ -1308,11 +1312,11 @@ def run(cli: pathlib.Path) -> None:
         missing_vendor_boot_file = invoke_without_connection(
             cli,
             ["flash", "vendor_boot:alpha"],
-            4,
+            2,
             "invalid_argument",
         )
-        assert "cannot determine image filename" in str(
-            missing_vendor_boot_file["message"]
+        assert missing_vendor_boot_file["message"] == (
+            "flash requires exactly <partition> and <file>"
         )
 
         vbmeta_file = directory / "vbmeta.img"

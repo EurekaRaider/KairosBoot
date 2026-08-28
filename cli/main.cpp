@@ -981,8 +981,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   }
   if (command == "flash") {
     const int operand_count = argc - command_index - 1;
-    if (operand_count < 1 || operand_count > 2) {
-      return error("flash requires <partition> [file]");
+    if (operand_count != 2) {
+      return error("flash requires exactly <partition> and <file>");
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for flash");
@@ -1004,19 +1004,14 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       if (result.second.empty()) {
         return error("vendor_boot flash requires a ramdisk name after ':'");
       }
-      if (operand_count == 2) {
-        result.third = argv[index + 1];
-        if (result.third.empty()) {
-          return error("vendor_boot ramdisk file must not be empty");
-        }
+      result.third = argv[index + 1];
+      if (result.third.empty()) {
+        return error("vendor_boot ramdisk file must not be empty");
       }
     } else {
       result.kind = CommandKind::Flash;
       if (separator != std::string_view::npos) {
         return error("partition suffix repack is supported only for vendor_boot");
-      }
-      if (operand_count != 2) {
-        return error("flash requires exactly <partition> and <file>");
       }
       result.second = argv[index + 1];
       if (result.second.empty()) {
@@ -2343,8 +2338,7 @@ int flash_vendor_boot_ramdisk(const Invocation &invocation) {
     return print_local_runtime_error(
         LocalRuntimeError{
             KB_E_INVALID_ARGUMENT,
-            "cannot determine image filename for vendor_boot:" +
-                std::string{invocation.second}},
+            "vendor_boot ramdisk file must not be empty"},
         invocation.global.json);
   }
   auto context = kairosboot::Context::create();
@@ -2992,7 +2986,7 @@ constexpr std::string_view usage_text() noexcept {
                "<manifest>\n"
                "  kairosboot [global options] flash <partition> <file>\n"
                "  kairosboot [global options] [--dtb <file>] flash "
-               "vendor_boot:RAMDISK [file]\n"
+               "vendor_boot:RAMDISK <file>\n"
                "  kairosboot [global options] flash:raw <partition> <kernel> "
                "[ramdisk [second]]\n"
                "  kairosboot [global options] signature <file>\n"
