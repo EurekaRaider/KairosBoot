@@ -138,6 +138,93 @@ def check_workflows() -> None:
             fail("CI package build must align the managed assembly and package version")
 
 
+def check_release_distribution_contract() -> None:
+    environment = json.loads(
+        (ROOT / ".github" / "environments" / "github-release.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_environment = {
+        "wait_timer": 0,
+        "prevent_self_review": False,
+        "reviewers": [{"type": "User", "id": 299445952}],
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+    }
+    if environment != expected_environment:
+        fail("github-release Environment fixture differs from the reviewed contract")
+
+    deployment_policies = json.loads(
+        (
+            ROOT
+            / ".github"
+            / "environments"
+            / "github-release-deployment-policies.json"
+        ).read_text(encoding="utf-8")
+    )
+    if deployment_policies != {
+        "schemaVersion": 1,
+        "policies": [{"name": "v*", "type": "tag"}],
+    }:
+        fail("github-release must allow deployments only from v* tags")
+
+    assets = json.loads(
+        (ROOT / "release" / "expected-assets.json").read_text(encoding="utf-8")
+    )
+    expected_platforms = {
+        "linux-arm64": "tar.gz",
+        "linux-x64": "tar.gz",
+        "macos-arm64": "tar.gz",
+        "macos-x64": "tar.gz",
+        "windows-arm64": "zip",
+        "windows-x64": "zip",
+    }
+    actual_platforms = {
+        platform.get("id"): platform.get("archiveExtension")
+        for platform in assets.get("platforms", [])
+        if isinstance(platform, dict)
+    }
+    if assets.get("schemaVersion") != 1 or actual_platforms != expected_platforms:
+        fail("Release assets must cover the exact six native target platforms")
+    if assets.get("nativeKinds") != ["cli", "sdk", "symbols"]:
+        fail("each native Release platform must publish CLI, SDK, and symbols")
+
+    required_assets = {
+        "KairosBoot.{version}.nupkg",
+        "KairosBoot.{version}.snupkg",
+        "KairosBoot.spdx.json",
+        "KairosBoot-v{version}-UNSIGNED.txt",
+        "KairosBoot-v{version}-source.tar.gz",
+        "SHA256SUMS",
+        "libusb-1.0.30-COPYING",
+        "libusb-1.0.30.tar.bz2",
+        "provenance.intoto.json",
+        "signing-status.json",
+    }
+    additional_assets = assets.get("additionalAssets")
+    if not isinstance(additional_assets, list) or not required_assets.issubset(
+        set(additional_assets)
+    ):
+        fail("Release asset contract is missing required managed or supply-chain assets")
+
+    managed_project = (
+        ROOT / "bindings" / "dotnet" / "KairosBoot" / "KairosBoot.csproj"
+    ).read_text(encoding="utf-8")
+    managed_contract = {
+        "target frameworks": "<TargetFrameworks>net48;net10.0</TargetFrameworks>",
+        "net48 Windows x64 RID": "<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>",
+        "net10 six RIDs": (
+            "<RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;"
+            "osx-x64;osx-arm64</RuntimeIdentifiers>"
+        ),
+    }
+    for contract, marker in managed_contract.items():
+        if marker not in managed_project:
+            fail(f"managed Release contract is missing {contract}: {marker}")
+
+
 def check_required_files() -> None:
     for name in ("LICENSE", "README.md", "SECURITY.md", "CONTRIBUTING.md"):
         if not (ROOT / name).is_file():
@@ -439,6 +526,7 @@ def main() -> None:
     check_codeowners()
     check_version()
     check_workflows()
+    check_release_distribution_contract()
     check_compatibility_baseline()
     print("repository policy checks passed")
 

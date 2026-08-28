@@ -1,0 +1,9 @@
+{
+  "policies": [
+    {
+      "name": "v*",
+      "type": "tag"
+    }
+  ],
+  "schemaVersion": 1
+}
