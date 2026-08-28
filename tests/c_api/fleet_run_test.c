@@ -38,6 +38,15 @@ typedef struct trace_buffer {
   size_t size;
 } trace_buffer_t;
 
+static FILE *open_binary_write(const char *path) {
+#if defined(_WIN32)
+  FILE *file = NULL;
+  return fopen_s(&file, path, "wb") == 0 ? file : NULL;
+#else
+  return fopen(path, "wb");
+#endif
+}
+
 static kb_progress_action_t KB_CALL trace_progress(
     const kb_progress_t *progress, void *user_data) {
   trace_buffer_t *trace = (trace_buffer_t *)user_data;
@@ -84,7 +93,7 @@ static int write_manifest(const char *path) {
       "  onDeviceFailure: continue\n"
       "  maxParallelDevices: 32\n"
       "  memoryBudget: auto\n";
-  FILE *file = fopen(path, "wb");
+  FILE *file = open_binary_write(path);
   if (file == NULL) {
     return 0;
   }
@@ -101,7 +110,7 @@ static int write_production_fixture(const char *manifest_path,
   static const char artifact[] = "KairosBootFleet!";
   static const char digest[] =
       "5b4857879890c8ea3dc9c345bfbb18703a7f7e96831b038b2e8f0d6061451c5d";
-  FILE *file = fopen(artifact_path, "wb");
+  FILE *file = open_binary_write(artifact_path);
   if (file == NULL) {
     return 0;
   }
@@ -111,7 +120,7 @@ static int write_production_fixture(const char *manifest_path,
     return 0;
   }
 
-  file = fopen(manifest_path, "wb");
+  file = open_binary_write(manifest_path);
   if (file == NULL) {
     return 0;
   }

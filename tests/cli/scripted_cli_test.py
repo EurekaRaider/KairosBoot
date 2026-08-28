@@ -514,26 +514,27 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     if f"{semantic_manifest}:3:1: ".encode("utf-8") not in stderr:
         raise AssertionError(f"failed plan lost 3:1 mark: {stderr!r}")
 
-    # run: the CLI uses the public C++23 wrapper. Without a production device
-    # factory it fails closed while still returning the canonical job report.
+    # run: the CLI uses the public C++23 wrapper and production preparation.
+    # This fixture intentionally has no artifact, so preflight fails before
+    # device enumeration while still returning the canonical job report.
     stdout, stderr = local(["--json", "run", str(fixture)], 4)
     if stderr != b"":
         raise AssertionError(f"JSON run wrote stderr: {stderr!r}")
     run_document = json.loads(stdout)
     if run_document.get("ok") is not False or run_document.get("command") != "run":
         raise AssertionError(f"unexpected run JSON envelope: {run_document!r}")
-    if run_document.get("status") != "not_supported":
-        raise AssertionError(f"run did not fail closed: {run_document!r}")
+    if run_document.get("status") != "io":
+        raise AssertionError(f"run did not enforce artifact preflight: {run_document!r}")
     run_report = run_document.get("report")
     if not isinstance(run_report, dict) or run_report.get("state") != "failed":
         raise AssertionError(f"run lost its failure report: {run_document!r}")
     report_error = run_report.get("error")
     if (
         not isinstance(report_error, dict)
-        or report_error.get("code") != 3
-        or report_error.get("status") != "not_supported"
+        or report_error.get("code") != 9
+        or report_error.get("status") != "io"
     ):
-        raise AssertionError(f"run report lost not-supported: {run_report!r}")
+        raise AssertionError(f"run report lost artifact I/O failure: {run_report!r}")
 
     stdout, stderr = local(["run", str(fixture)], 4)
     if stdout != b"" or b"kairosboot: " not in stderr or b"Fleet report: {" not in stderr:
