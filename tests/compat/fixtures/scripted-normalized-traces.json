@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "success-getvar",
+      "events": [
+        {"kind": "CLI_PARSE", "argv": ["getvar", "product"], "result": "ok", "timestampNs": 100},
+        {"kind": "GETVAR", "name": "product", "timestampNs": 110},
+        {"kind": "OKAY", "message": "product_a", "timestampNs": 120},
+        {"kind": "EXIT", "code": 0, "timestampNs": 130}
+      ],
+      "deviceState": {"product": "product_a"}
+    },
+    {
+      "id": "success-download-flash-info-text",
+      "events": [
+        {"kind": "CLI_PARSE", "argv": ["flash", "boot", "/private/tmp/kairosboot-scripted-reference/images/boot.img"], "result": "ok", "timestampNs": 200},
+        {"kind": "GETVAR", "name": "max-download-size", "timestampNs": 210},
+        {"kind": "OKAY", "message": "0x00100000", "timestampNs": 220},
+        {"kind": "COMMAND", "command": "download:00000011", "timestampNs": 230},
+        {"kind": "DATA", "direction": "host-to-device", "size": 17, "sha256": "76d9f9b28e346e32c184a9d5d402c39ee557772044ec2351c34f77aa7d610a30", "timestampNs": 240},
+        {"kind": "OKAY", "message": "downloaded", "timestampNs": 250},
+        {"kind": "COMMAND", "command": "flash:boot", "timestampNs": 260},
+        {"kind": "INFO", "message": "writing 'boot'", "timestampNs": 270},
+        {"kind": "TEXT", "message": "finished", "timestampNs": 280},
+        {"kind": "OKAY", "message": "flashed", "timestampNs": 290},
+        {"kind": "EXIT", "code": 0, "timestampNs": 300}
+      ],
+      "deviceState": {
+        "partitions": {
+          "boot": {"size": 17, "sha256": "76d9f9b28e346e32c184a9d5d402c39ee557772044ec2351c34f77aa7d610a30"}
+        }
+      }
+    },
+    {
+      "id": "device-fail",
+      "events": [
+        {"kind": "CLI_PARSE", "argv": ["erase", "userdata"], "result": "ok", "timestampNs": 400},
+        {"kind": "COMMAND", "command": "erase:userdata", "timestampNs": 410},
+        {"kind": "FAIL", "message": "partition is protected", "timestampNs": 420},
+        {"kind": "EXIT", "code": 1, "timestampNs": 430}
+      ],
+      "deviceState": {"userdata": "unchanged"}
+    },
+    {
+      "id": "success-upload-file",
+      "events": [
+        {"kind": "CLI_PARSE", "argv": ["get_staged", "/private/tmp/kairosboot-scripted-reference/output/stage.bin"], "result": "ok", "timestampNs": 500},
+        {"kind": "COMMAND", "command": "upload", "timestampNs": 510},
+        {"kind": "DATA", "direction": "device-to-host", "size": 19, "sha256": "bbe022f9444896c0c193ff23e8c0688c60bfcc858e476f45f012a94055cb8ab5", "timestampNs": 520},
+        {"kind": "OKAY", "message": "uploaded", "timestampNs": 530},
+        {"kind": "FILE", "path": "/private/tmp/kairosboot-scripted-reference/output/stage.bin", "size": 19, "sha256": "bbe022f9444896c0c193ff23e8c0688c60bfcc858e476f45f012a94055cb8ab5", "timestampNs": 540},
+        {"kind": "EXIT", "code": 0, "timestampNs": 550}
+      ],
+      "deviceState": {"staged": "unchanged"}
+    },
+    {
+      "id": "success-fetch-file",
+      "events": [
+        {"kind": "CLI_PARSE", "argv": ["fetch", "vendor", "/private/tmp/kairosboot-scripted-reference/output/vendor.img"], "result": "ok", "timestampNs": 600},
+        {"kind": "COMMAND", "command": "fetch:vendor", "timestampNs": 610},
+        {"kind": "DATA", "direction": "device-to-host", "size": 19, "sha256": "bbe022f9444896c0c193ff23e8c0688c60bfcc858e476f45f012a94055cb8ab5", "timestampNs": 620},
+        {"kind": "INFO", "message": "received vendor", "timestampNs": 630},
+        {"kind": "OKAY", "message": "fetched", "timestampNs": 640},
+        {"kind": "FILE", "path": "/private/tmp/kairosboot-scripted-reference/output/vendor.img", "size": 19, "sha256": "bbe022f9444896c0c193ff23e8c0688c60bfcc858e476f45f012a94055cb8ab5", "timestampNs": 650},
+        {"kind": "EXIT", "code": 0, "timestampNs": 660}
+      ],
+      "deviceState": {"vendor": "unchanged"}
+    },
+    {
+      "id": "cli-parse-error",
+      "events": [
+        {"kind": "CLI_PARSE", "argv": ["--slot", "invalid", "flash", "boot", "/private/tmp/kairosboot-scripted-reference/images/boot.img"], "result": "error", "message": "invalid slot", "timestampNs": 700},
+        {"kind": "EXIT", "code": 2, "timestampNs": 710}
+      ],
+      "deviceState": {"transportOpened": false}
+    }
+  ]
+}
