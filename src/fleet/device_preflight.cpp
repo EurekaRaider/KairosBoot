@@ -143,8 +143,12 @@ struct SelectedDevice final {
 
 [[nodiscard]] bool valid_transport_snapshot(
     const transport::UsbDeviceInfo& device) noexcept {
+    const bool valid_bus_number = device.bus_number != 0U ||
+        (device.macos_topology.has_value() &&
+         !device.linux_topology.has_value() &&
+         !device.windows_topology.has_value());
     return device.vendor_id != 0U && device.product_id != 0U &&
-        device.bus_number != 0U && device.device_address != 0U &&
+        valid_bus_number && device.device_address != 0U &&
         device.configuration_value != 0U && valid_ports(device.port_path) &&
         device.bulk_out_endpoint != 0U &&
         (device.bulk_out_endpoint & 0x80U) == 0U &&
