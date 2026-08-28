@@ -1,154 +1,143 @@
 #!/usr/bin/env python3
-"""Apply the release HIL hard gates to lab-produced evidence."""
+"""Apply the release HIL hard gates to lab-produced raw evidence."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import re
+import sys
 from pathlib import Path
 
 
-SHA = re.compile(r"^[0-9a-f]{40}$")
-TOP_LEVEL_KEYS = {
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from performance_evidence import (  # noqa: E402
+    GIT_SHA,
+    RUN_ID,
+    require,
+    require_exact_keys,
+    require_sha256,
+    require_string,
+    require_utc,
+    validate_benchmark,
+)
+
+
+HIL_KEYS = {
     "schemaVersion",
+    "evidenceKind",
     "commit",
-    "deviceCount",
-    "soakHours",
-    "singleDeviceDownloadCeilingUtilization",
-    "minimumJainFairness",
-    "batchMakespanSpeedup",
-    "controllers",
-    "scenarios",
+    "runId",
+    "lab",
+    "benchmark",
+    "soak",
+}
+LAB_KEYS = {"id", "operatorIdHash"}
+SOAK_KEYS = {
+    "requestedDurationSeconds",
+    "completedDurationSeconds",
+    "startedAt",
+    "finishedAt",
+    "sampleIntervalSeconds",
+    "cycles",
     "deadlocks",
     "transferLeaks",
     "handleLeaks",
     "deviceMisrouting",
     "sustainedRssGrowth",
 }
-SCENARIO_KEYS = {
-    "id",
-    "weight",
-    "fastbootCeilingUtilization",
-    "relativeDelta",
-    "statisticallySignificant",
-}
-CONTROLLER_KEYS = {"id", "ceilingUtilization"}
 
 
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise SystemExit(f"HIL gate failed: {message}")
-
-
-def finite_number(value: object) -> bool:
+def finite_nonnegative(value: object) -> bool:
     return (
         isinstance(value, (int, float))
         and not isinstance(value, bool)
         and math.isfinite(value)
+        and value >= 0
     )
 
 
-def validate(data: object, expected_commit: str) -> None:
-    require(isinstance(data, dict), "evidence must be a JSON object")
-    require(set(data) == TOP_LEVEL_KEYS, "unexpected or missing top-level fields")
-    require(SHA.fullmatch(expected_commit) is not None, "invalid expected commit")
+def validate(
+    data: object,
+    expected_commit: str,
+    minimum_soak_hours: float = 24.0,
+) -> dict[str, float]:
+    require(
+        math.isfinite(minimum_soak_hours) and minimum_soak_hours > 0,
+        "minimum soak duration must be positive",
+    )
+    document = require_exact_keys(data, HIL_KEYS, "HIL evidence")
+    require(GIT_SHA.fullmatch(expected_commit) is not None, "invalid expected commit")
+    require(document["schemaVersion"] == 1, "unsupported HIL evidence schema")
+    require(document["evidenceKind"] == "hardware", "HIL evidence is not hardware evidence")
+    require(document["commit"] == expected_commit, "HIL evidence commit does not match")
+    require(
+        isinstance(document["runId"], str)
+        and RUN_ID.fullmatch(document["runId"]) is not None,
+        "invalid HIL runId",
+    )
 
-    require(data.get("schemaVersion") == 1, "unsupported evidence schema")
-    commit = data.get("commit")
-    require(isinstance(commit, str) and SHA.fullmatch(commit) is not None, "invalid commit")
-    require(commit == expected_commit, "evidence is not for the workflow commit")
-    device_count = data.get("deviceCount")
+    lab = require_exact_keys(document["lab"], LAB_KEYS, "lab")
+    require_string(lab["id"], "lab id")
+    require_sha256(lab["operatorIdHash"], "lab operatorIdHash")
+
+    benchmark = document["benchmark"]
+    metrics = validate_benchmark(benchmark, expected_commit)
+    require(isinstance(benchmark, dict), "benchmark must be an object")
+    require(benchmark["runId"] == document["runId"], "benchmark runId differs from HIL runId")
+
+    soak = require_exact_keys(document["soak"], SOAK_KEYS, "soak")
+    minimum_seconds = minimum_soak_hours * 3600.0
+    requested = soak["requestedDurationSeconds"]
+    completed = soak["completedDurationSeconds"]
+    interval = soak["sampleIntervalSeconds"]
+    require(finite_nonnegative(requested) and requested + 1e-9 >= minimum_seconds,
+            "requested soak duration is below the required duration")
+    require(finite_nonnegative(completed) and completed + 1e-9 >= minimum_seconds,
+            "completed soak duration is below the required duration")
+    require(finite_nonnegative(interval) and interval > 0, "invalid soak sample interval")
+    started = require_utc(soak["startedAt"], "soak startedAt")
+    finished = require_utc(soak["finishedAt"], "soak finishedAt")
+    elapsed = (finished - started).total_seconds()
+    require(elapsed + 1e-9 >= minimum_seconds, "soak timestamps are shorter than required")
+    require(abs(elapsed - float(completed)) <= max(float(interval), 1.0),
+            "soak completed duration disagrees with timestamps")
     require(
-        isinstance(device_count, int) and not isinstance(device_count, bool),
-        "deviceCount must be an integer",
+        isinstance(soak["cycles"], int)
+        and not isinstance(soak["cycles"], bool)
+        and soak["cycles"] > 0,
+        "soak has no completed cycles",
     )
-    require(device_count >= 32, "fewer than 32 devices")
-    soak_hours = data.get("soakHours")
-    require(finite_number(soak_hours) and soak_hours >= 24, "soak shorter than 24 hours")
-    single_device_utilization = data.get("singleDeviceDownloadCeilingUtilization")
-    require(
-        finite_number(single_device_utilization)
-        and 0.90 <= single_device_utilization <= 1.10,
-        "single-device download is below 90% of raw bulk ceiling",
-    )
-    fairness = data.get("minimumJainFairness")
-    require(
-        finite_number(fairness) and 0.95 <= fairness <= 1.0,
-        "Jain fairness below 0.95",
-    )
-    speedup = data.get("batchMakespanSpeedup")
-    require(
-        finite_number(speedup) and speedup >= 1.10,
-        "32-device makespan speedup below 10%",
-    )
-    scenarios = data.get("scenarios")
-    require(isinstance(scenarios, list) and scenarios, "no performance scenarios")
-    headroom_weighted_logs = []
-    scenario_ids = set()
-    for scenario in scenarios:
-        require(isinstance(scenario, dict), "scenario must be an object")
-        require(set(scenario) == SCENARIO_KEYS, "unexpected or missing scenario fields")
-        identifier = scenario.get("id")
-        require(isinstance(identifier, str) and identifier, "scenario id must not be empty")
-        require(identifier not in scenario_ids, f"duplicate scenario id: {identifier}")
-        scenario_ids.add(identifier)
-        weight = scenario.get("weight")
-        ceiling = scenario.get("fastbootCeilingUtilization")
-        delta = scenario.get("relativeDelta")
-        require(finite_number(weight) and weight > 0, f"invalid weight in {identifier}")
-        require(
-            finite_number(ceiling) and 0 <= ceiling <= 1.10,
-            f"invalid Fastboot ceiling utilization in {identifier}",
-        )
-        require(finite_number(delta) and delta > -1, f"invalid relative delta in {identifier}")
-        significant_value = scenario.get("statisticallySignificant")
-        require(isinstance(significant_value, bool), f"invalid significance in {identifier}")
-        if ceiling <= 0.90:
-            headroom_weighted_logs.append((weight, math.log(1 + delta)))
-        elif significant_value:
-            require(delta >= -0.03, f"significant regression in {identifier}")
-    if headroom_weighted_logs:
-        total_weight = sum(weight for weight, _ in headroom_weighted_logs)
-        geometric_mean = math.exp(
-            sum(weight * logarithm for weight, logarithm in headroom_weighted_logs)
-            / total_weight
-        )
-        require(geometric_mean >= 1.10, "host-bound weighted geometric speedup below 10%")
-    controllers = data.get("controllers")
-    require(isinstance(controllers, list) and controllers, "no USB controller evidence")
-    controller_ids = set()
-    for controller in controllers:
-        require(isinstance(controller, dict), "controller must be an object")
-        require(set(controller) == CONTROLLER_KEYS, "unexpected or missing controller fields")
-        identifier = controller.get("id")
-        utilization = controller.get("ceilingUtilization")
-        require(isinstance(identifier, str) and identifier, "controller id must not be empty")
-        require(identifier not in controller_ids, f"duplicate controller id: {identifier}")
-        controller_ids.add(identifier)
-        require(
-            finite_number(utilization) and 0.90 <= utilization <= 1.10,
-            f"controller below 90% ceiling: {identifier}",
-        )
     for field in ("deadlocks", "transferLeaks", "handleLeaks", "deviceMisrouting"):
         require(
-            isinstance(data.get(field), int)
-            and not isinstance(data.get(field), bool)
-            and data.get(field) == 0,
-            f"{field} is non-zero",
+            isinstance(soak[field], int)
+            and not isinstance(soak[field], bool)
+            and soak[field] == 0,
+            f"soak {field} is non-zero",
         )
-    require(data.get("sustainedRssGrowth") is False, "sustained RSS growth detected")
+    require(soak["sustainedRssGrowth"] is False, "sustained RSS growth detected")
+    return metrics
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--commit", required=True)
+    parser.add_argument(
+        "--minimum-soak-hours",
+        type=float,
+        default=24.0,
+        help="qualification minimum (default: 24; short values are for harness tests only)",
+    )
     args = parser.parse_args()
     data = json.loads(args.evidence.read_text(encoding="utf-8"))
-    validate(data, args.commit)
-    print("HIL evidence satisfies the KairosBoot v1 release gates")
+    metrics = validate(data, args.commit, args.minimum_soak_hours)
+    print(
+        "HIL evidence satisfies the KairosBoot v1 release gates "
+        f"(single={metrics['singleDeviceDownloadCeilingUtilization']:.3f}, "
+        f"fleet={metrics['batchMakespanSpeedup']:.3f}x, "
+        f"fairness={metrics['minimumJainFairness']:.3f})"
+    )
 
 
 if __name__ == "__main__":
