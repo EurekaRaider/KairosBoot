@@ -111,12 +111,24 @@ void put_name(std::span<std::byte> output, const std::size_t offset,
     return accumulator.finish();
 }
 
-[[nodiscard]] std::vector<std::byte> metadata_blob() {
+struct MetadataOptions final {
+    std::uint32_t partition_attributes{1U};
+    bool preallocated{};
+    std::uint32_t group_flags{};
+    std::uint32_t block_device_flags{};
+    std::uint32_t block_device_count{1U};
+};
+
+[[nodiscard]] std::vector<std::byte> metadata_blob(
+    const MetadataOptions options = {}) {
     constexpr std::uint32_t header_size = 128U;
     constexpr std::uint32_t partition_bytes = 2U * 52U;
-    constexpr std::uint32_t group_offset = partition_bytes;
-    constexpr std::uint32_t device_offset = group_offset + 48U;
-    constexpr std::uint32_t tables_size = device_offset + 64U;
+    const std::uint32_t extent_count = options.preallocated ? 1U : 0U;
+    const std::uint32_t extent_bytes = extent_count * 24U;
+    const std::uint32_t group_offset = partition_bytes + extent_bytes;
+    const std::uint32_t device_offset = group_offset + 48U;
+    const std::uint32_t tables_size =
+        device_offset + options.block_device_count * 64U;
     std::vector<std::byte> bytes(header_size + tables_size, std::byte{0});
     put_u32(bytes, 0U, 0x414c5030U);
     put_u16(bytes, 4U, 10U);
@@ -127,33 +139,49 @@ void put_name(std::span<std::byte> output, const std::size_t offset,
     put_u32(bytes, 84U, 2U);
     put_u32(bytes, 88U, 52U);
     put_u32(bytes, 92U, partition_bytes);
-    put_u32(bytes, 96U, 0U);
+    put_u32(bytes, 96U, extent_count);
     put_u32(bytes, 100U, 24U);
     put_u32(bytes, 104U, group_offset);
     put_u32(bytes, 108U, 1U);
     put_u32(bytes, 112U, 48U);
     put_u32(bytes, 116U, device_offset);
-    put_u32(bytes, 120U, 1U);
+    put_u32(bytes, 120U, options.block_device_count);
     put_u32(bytes, 124U, 64U);
 
     auto cursor = static_cast<std::size_t>(header_size);
+    std::size_t partition_index = 0U;
     for (const auto name : {std::string_view{"system_a"},
                             std::string_view{"system_b"}}) {
         put_name(bytes, cursor, name);
-        put_u32(bytes, cursor + 36U, 1U);
+        put_u32(bytes, cursor + 36U, options.partition_attributes);
         put_u32(bytes, cursor + 40U, 0U);
-        put_u32(bytes, cursor + 44U, 0U);
+        put_u32(bytes, cursor + 44U,
+                options.preallocated && partition_index == 0U ? 1U : 0U);
         put_u32(bytes, cursor + 48U, 0U);
         cursor += 52U;
+        ++partition_index;
+    }
+    if (options.preallocated) {
+        put_u64(bytes, cursor, 8U);
+        put_u32(bytes, cursor + 8U, 0U);
+        put_u64(bytes, cursor + 12U, 64U);
+        put_u32(bytes, cursor + 20U, 0U);
+        cursor += 24U;
     }
     put_name(bytes, cursor, "dynamic");
+    put_u32(bytes, cursor + 36U, options.group_flags);
     put_u64(bytes, cursor + 40U, 512U * 1024U);
     cursor += 48U;
-    put_u64(bytes, cursor, 64U);
-    put_u32(bytes, cursor + 8U, 4096U);
-    put_u32(bytes, cursor + 12U, 0U);
-    put_u64(bytes, cursor + 16U, 1024U * 1024U);
-    put_name(bytes, cursor + 24U, "super");
+    for (std::uint32_t index = 0U; index < options.block_device_count; ++index) {
+        put_u64(bytes, cursor, 64U);
+        put_u32(bytes, cursor + 8U, 4096U);
+        put_u32(bytes, cursor + 12U, 0U);
+        put_u64(bytes, cursor + 16U, 1024U * 1024U);
+        put_name(bytes, cursor + 24U,
+                 index == 0U ? "super" : "super_extra");
+        put_u32(bytes, cursor + 60U, options.block_device_flags);
+        cursor += 64U;
+    }
 
     const auto tables = std::span(bytes).subspan(header_size);
     const auto tables_hash = hash(tables);
@@ -165,7 +193,8 @@ void put_name(std::span<std::byte> output, const std::size_t offset,
     return bytes;
 }
 
-[[nodiscard]] std::vector<std::byte> valid_super_empty() {
+[[nodiscard]] std::vector<std::byte> valid_super_empty(
+    const MetadataOptions options = {}) {
     constexpr std::size_t super_size = 1024U * 1024U;
     constexpr std::size_t metadata_size = 4096U;
     constexpr std::size_t primary_start = 12U * 1024U;
@@ -184,28 +213,7 @@ void put_name(std::span<std::byte> output, const std::size_t offset,
     std::copy(geometry.begin(), geometry.end(), output.begin() + 4096U);
     std::copy(geometry.begin(), geometry.end(), output.begin() + 8192U);
 
-    const auto metadata = metadata_blob();
-    for (const auto offset : {primary_start, primary_start + metadata_size,
-                              backup_start, backup_start + metadata_size}) {
-        std::copy(metadata.begin(), metadata.end(), output.begin() + offset);
-    }
-    return output;
-}
-
-[[nodiscard]] std::vector<std::byte> super_with_existing_extent() {
-    constexpr std::size_t metadata_size = 4096U;
-    constexpr std::size_t primary_start = 12U * 1024U;
-    constexpr std::size_t backup_start = primary_start + metadata_size * 2U;
-    auto output = valid_super_empty();
-    auto metadata = metadata_blob();
-    put_u32(metadata, 128U + 44U, 1U);
-    const auto tables_hash = hash(std::span(metadata).subspan(128U));
-    std::copy(tables_hash.begin(), tables_hash.end(), metadata.begin() + 48);
-    auto header = std::vector<std::byte>(metadata.begin(),
-                                         metadata.begin() + 128U);
-    std::fill(header.begin() + 12, header.begin() + 44, std::byte{0});
-    const auto header_hash = hash(header);
-    std::copy(header_hash.begin(), header_hash.end(), metadata.begin() + 12);
+    const auto metadata = metadata_blob(options);
     for (const auto offset : {primary_start, primary_start + metadata_size,
                               backup_start, backup_start + metadata_size}) {
         std::copy(metadata.begin(), metadata.end(), output.begin() + offset);
@@ -300,7 +308,7 @@ void valid_a_b_layout_becomes_one_sparse_super_flash() {
 void static_slotted_flash_is_retained_and_bad_slot_fails_closed() {
     auto prepared = package();
     prepared.plan.tasks.insert(
-        prepared.plan.tasks.begin() + 2,
+        prepared.plan.tasks.begin(),
         PlannedUpdateTask{.kind = UpdateTaskKind::Flash,
                           .partition = "boot_a",
                           .artifact = "boot.img"});
@@ -365,15 +373,13 @@ void size_and_geometry_mismatch_fail_before_plan_mutation() {
     CHECK(geometry.error().kind == SuperOptimizationErrorKind::InvalidMetadata);
     CHECK(bad.plan.tasks.size() == 3U);
 
-    auto extent = package(super_with_existing_extent());
+    auto extent = package(valid_super_empty(MetadataOptions{.preallocated = true}));
     auto extent_result = optimize_prepared_super(
         extent,
         SuperOptimizationDeviceInfo{.super_partition = "super",
                                     .current_slot = "a",
                                     .super_partition_size = 1024U * 1024U});
-    CHECK(!extent_result);
-    CHECK(extent_result.error().kind ==
-          SuperOptimizationErrorKind::IncompatibleLayout);
+    CHECK(extent_result && !extent_result->optimized);
     CHECK(extent.plan.tasks.size() == 3U);
 
     auto inconsistent_slot = valid_super_empty();
@@ -387,6 +393,91 @@ void size_and_geometry_mismatch_fail_before_plan_mutation() {
     CHECK(!slot_result);
     CHECK(slot_result.error().kind == SuperOptimizationErrorKind::SlotMismatch);
     CHECK(slot.plan.tasks.size() == 3U);
+}
+
+void legal_unsupported_layouts_keep_the_frozen_plan() {
+    const auto check_fallback = [](const MetadataOptions options) {
+        auto prepared = package(valid_super_empty(options));
+        auto result = optimize_prepared_super(
+            prepared,
+            SuperOptimizationDeviceInfo{.super_partition = "super",
+                                        .current_slot = "a",
+                                        .super_partition_size =
+                                            1024U * 1024U});
+        CHECK(result && !result->optimized);
+        CHECK(prepared.plan.tasks.size() == 3U);
+        CHECK(prepared.artifacts.size() == 1U);
+        CHECK(prepared.update_super_state ==
+              UpdateSuperPreparationState::Prepared);
+        CHECK(prepared.prepared_super_artifact);
+    };
+
+    check_fallback(MetadataOptions{.partition_attributes = 0U});
+    check_fallback(MetadataOptions{.partition_attributes = 1U | (1U << 1U)});
+    check_fallback(MetadataOptions{.partition_attributes = 1U | (1U << 2U)});
+    check_fallback(MetadataOptions{.partition_attributes = 1U | (1U << 3U)});
+    check_fallback(MetadataOptions{.partition_attributes = 1U | (1U << 31U)});
+    check_fallback(MetadataOptions{.preallocated = true});
+    check_fallback(MetadataOptions{.group_flags = 1U});
+    check_fallback(MetadataOptions{.block_device_flags = 1U});
+    check_fallback(MetadataOptions{.block_device_count = 2U});
+}
+
+void only_the_exact_window_is_rewritten_and_artifact_ids_are_unique() {
+    auto prepared = package();
+    prepared.plan.tasks.insert(
+        prepared.plan.tasks.begin(),
+        PlannedUpdateTask{.kind = UpdateTaskKind::Reboot,
+                          .reboot_target = PlannedRebootTarget::Fastboot});
+    prepared.plan.tasks.push_back(
+        PlannedUpdateTask{.kind = UpdateTaskKind::UpdateSuper});
+    prepared.plan.tasks.push_back(
+        PlannedUpdateTask{.kind = UpdateTaskKind::Reboot,
+                          .reboot_target = PlannedRebootTarget::Fastboot});
+    prepared.plan.tasks.push_back(
+        PlannedUpdateTask{.kind = UpdateTaskKind::Flash,
+                          .partition = "boot_a",
+                          .artifact = "kairosboot-optimized-super.img"});
+    auto collision_source = std::make_shared<const MemorySource>(
+        std::vector<std::byte>(4096U, std::byte{0x33}));
+    prepared.artifacts.push_back(PreparedUpdateArtifact{
+        .name = "kairosboot-optimized-super.img",
+        .resolved = resolved("kairosboot-optimized-super.img", collision_source),
+        .artifact = inspected(collision_source),
+    });
+
+    auto result = optimize_prepared_super(
+        prepared,
+        SuperOptimizationDeviceInfo{.super_partition = "super",
+                                    .current_slot = "a",
+                                    .super_partition_size = 1024U * 1024U});
+    CHECK(result && result->optimized);
+    CHECK(prepared.plan.tasks.size() == 5U);
+    CHECK(prepared.plan.tasks[0].kind == UpdateTaskKind::Reboot);
+    CHECK(prepared.plan.tasks[0].reboot_target ==
+          PlannedRebootTarget::Fastboot);
+    CHECK(prepared.plan.tasks[1].kind == UpdateTaskKind::Flash);
+    CHECK(prepared.plan.tasks[1].partition == "super");
+    CHECK(prepared.plan.tasks[1].artifact ==
+          "kairosboot-optimized-super-1.img");
+    CHECK(prepared.plan.tasks[2].kind == UpdateTaskKind::UpdateSuper);
+    CHECK(prepared.plan.tasks[3].kind == UpdateTaskKind::Reboot);
+    CHECK(prepared.plan.tasks[3].reboot_target ==
+          PlannedRebootTarget::Fastboot);
+    CHECK(prepared.plan.tasks[4].partition == "boot_a");
+    CHECK(prepared.plan.tasks[4].artifact ==
+          "kairosboot-optimized-super.img");
+    CHECK(prepared.update_super_state == UpdateSuperPreparationState::Prepared);
+    CHECK(prepared.prepared_super_artifact);
+    CHECK(prepared.artifacts.size() == 2U);
+    CHECK(std::ranges::any_of(
+        prepared.artifacts, [](const PreparedUpdateArtifact& artifact) {
+            return artifact.name == "kairosboot-optimized-super.img";
+        }));
+    CHECK(std::ranges::any_of(
+        prepared.artifacts, [](const PreparedUpdateArtifact& artifact) {
+            return artifact.name == "kairosboot-optimized-super-1.img";
+        }));
 }
 
 void sparse_logical_image_keeps_frozen_unoptimized_path() {
@@ -451,6 +542,8 @@ int main() {
         valid_a_b_layout_becomes_one_sparse_super_flash();
         size_and_geometry_mismatch_fail_before_plan_mutation();
         static_slotted_flash_is_retained_and_bad_slot_fails_closed();
+        legal_unsupported_layouts_keep_the_frozen_plan();
+        only_the_exact_window_is_rewritten_and_artifact_ids_are_unique();
         sparse_logical_image_keeps_frozen_unoptimized_path();
         unavailable_optional_getvars_fall_back_only_after_metadata_validation();
         std::cout << "super optimizer tests passed\n";

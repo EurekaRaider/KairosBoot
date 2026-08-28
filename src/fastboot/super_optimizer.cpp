@@ -41,9 +41,6 @@ constexpr std::uint32_t kExtentEntrySize = 24U;
 constexpr std::uint32_t kGroupEntrySize = 48U;
 constexpr std::uint32_t kBlockDeviceEntrySize = 64U;
 constexpr std::uint32_t kPartitionReadOnly = 1U << 0U;
-constexpr std::uint32_t kPartitionSlotSuffixed = 1U << 1U;
-constexpr std::uint32_t kGroupSlotSuffixed = 1U << 0U;
-constexpr std::uint32_t kBlockDeviceSlotSuffixed = 1U << 0U;
 constexpr std::string_view kOptimizedName{"kairosboot-optimized-super.img"};
 
 [[nodiscard]] SuperOptimizationError fail(
@@ -519,8 +516,10 @@ descriptor_end(const Descriptor& value, const std::uint32_t tables_size,
         const auto first_extent = u32(record, 40U);
         const auto extent_count = u32(record, 44U);
         const auto group_index = u32(record, 48U);
-        if ((attributes & kPartitionReadOnly) == 0U ||
-            (attributes & kPartitionSlotSuffixed) != 0U || first_extent != 0U ||
+        // Only the immutable read-only bit is supported by this writer. In
+        // particular, SLOT_SUFFIXED, UPDATED, DISABLED and future bits must not
+        // be copied into newly synthesized metadata.
+        if (attributes != kPartitionReadOnly || first_extent != 0U ||
             extent_count != 0U || group_index >= groups.count) {
             return std::unexpected(fail(
                 SuperOptimizationErrorKind::IncompatibleLayout,
@@ -545,11 +544,10 @@ descriptor_end(const Descriptor& value, const std::uint32_t tables_size,
         if (!name) {
             return std::unexpected(std::move(name.error()));
         }
-        if (!names.insert(*name).second ||
-            (u32(record, 36U) & kGroupSlotSuffixed) != 0U) {
+        if (!names.insert(*name).second || u32(record, 36U) != 0U) {
             return std::unexpected(fail(
                 SuperOptimizationErrorKind::IncompatibleLayout,
-                "LP groups are duplicated or slot-suffixed"));
+                "LP groups are duplicated or use unsupported flags"));
         }
         result.groups.push_back(Group{
             .name = std::move(*name),
@@ -572,7 +570,7 @@ descriptor_end(const Descriptor& value, const std::uint32_t tables_size,
         .flags = u32(record, 60U),
     };
     const auto metadata_reserved = backup_start + primary_bytes;
-    if ((result.block_device.flags & kBlockDeviceSlotSuffixed) != 0U ||
+    if (result.block_device.flags != 0U ||
         result.block_device.size != reader.size() ||
         result.block_device.first_logical_sector >
             result.block_device.size / kSectorSize ||
@@ -1036,9 +1034,7 @@ build_sparse_source(const Metadata& metadata,
     return found == prepared.artifacts.end() ? nullptr : &*found;
 }
 
-}  // namespace
-
-bool has_super_optimization_candidate(
+[[nodiscard]] std::optional<std::size_t> find_optimization_window(
     const PreparedUpdatePackage& prepared) noexcept {
     for (std::size_t index = 0U; index + 2U < prepared.plan.tasks.size(); ++index) {
         const auto& reboot = prepared.plan.tasks[index];
@@ -1046,10 +1042,43 @@ bool has_super_optimization_candidate(
             reboot.reboot_target == PlannedRebootTarget::Fastboot &&
             prepared.plan.tasks[index + 1U].kind == UpdateTaskKind::UpdateSuper &&
             prepared.plan.tasks[index + 2U].kind == UpdateTaskKind::Flash) {
-            return true;
+            return index;
         }
     }
-    return false;
+    return std::nullopt;
+}
+
+[[nodiscard]] std::string unique_optimized_name(
+    const PreparedUpdatePackage& prepared) {
+    const auto used = [&prepared](const std::string_view candidate) {
+        return std::ranges::any_of(
+                   prepared.artifacts,
+                   [candidate](const PreparedUpdateArtifact& artifact) {
+                       return artifact.name == candidate;
+                   }) ||
+               std::ranges::any_of(
+                   prepared.plan.tasks,
+                   [candidate](const PlannedUpdateTask& task) {
+                       return task.artifact == candidate;
+                   });
+    };
+    if (!used(kOptimizedName)) {
+        return std::string(kOptimizedName);
+    }
+    for (std::size_t suffix = 1U;; ++suffix) {
+        auto candidate = std::string{"kairosboot-optimized-super-"} +
+                         std::to_string(suffix) + ".img";
+        if (!used(candidate)) {
+            return candidate;
+        }
+    }
+}
+
+}  // namespace
+
+bool has_super_optimization_candidate(
+    const PreparedUpdatePackage& prepared) noexcept {
+    return find_optimization_window(prepared).has_value();
 }
 
 std::expected<SuperOptimizationReport, SuperOptimizationError>
@@ -1057,7 +1086,8 @@ optimize_prepared_super(PreparedUpdatePackage& prepared,
                         const SuperOptimizationDeviceInfo& device,
                         const std::stop_token cancellation) {
     try {
-        if (!has_super_optimization_candidate(prepared)) {
+        const auto window = find_optimization_window(prepared);
+        if (!window) {
             return SuperOptimizationReport{};
         }
         if (cancellation.stop_requested()) {
@@ -1079,6 +1109,10 @@ optimize_prepared_super(PreparedUpdatePackage& prepared,
         }
         auto metadata = parse_metadata(reader, std::move(*geometry), cancellation);
         if (!metadata) {
+            if (metadata.error().kind ==
+                SuperOptimizationErrorKind::IncompatibleLayout) {
+                return SuperOptimizationReport{};
+            }
             return std::unexpected(std::move(metadata.error()));
         }
         if (device.super_partition_size != 0U &&
@@ -1101,11 +1135,8 @@ optimize_prepared_super(PreparedUpdatePackage& prepared,
 
         std::vector<SelectedImage> selected;
         std::set<std::string, std::less<>> selected_names;
-        for (std::size_t index = 0U; index < prepared.plan.tasks.size(); ++index) {
+        for (const auto index : {*window + 2U}) {
             const auto& task = prepared.plan.tasks[index];
-            if (task.kind != UpdateTaskKind::Flash) {
-                continue;
-            }
             const auto exact_partition = find_partition(*metadata, task.partition);
             const auto slotted_prefix = task.partition + "_";
             const auto has_slotted_partition = std::ranges::any_of(
@@ -1113,9 +1144,7 @@ optimize_prepared_super(PreparedUpdatePackage& prepared,
                     return partition.name.starts_with(slotted_prefix);
                 });
             if (!exact_partition && !has_slotted_partition) {
-                // Static partitions remain ordinary flash tasks, including
-                // explicit boot_a/boot_b targets produced by global slot policy.
-                continue;
+                return SuperOptimizationReport{};
             }
             auto resolved_name = resolve_partition_name(
                 *metadata, task, device.current_slot);
@@ -1235,58 +1264,58 @@ optimize_prepared_super(PreparedUpdatePackage& prepared,
                 .source = *source,
                 .sha256 = *digest,
                 .origin = image::ArtifactSourceOrigin::DirectFile,
-                .logical_name = std::string(kOptimizedName),
+                .logical_name = unique_optimized_name(prepared),
             });
         auto artifact = std::make_shared<const image::FlashArtifact>(
             std::move(*inspected));
 
-        std::set<std::size_t> absorbed_indices;
         SuperOptimizationReport report{.optimized = true};
         for (const auto& image : selected) {
-            absorbed_indices.insert(image.task_index);
             report.absorbed_partitions.push_back(image.partition_name);
         }
+        const auto optimized_name = resolved->logical_name;
+        const auto absorbed_artifact =
+            prepared.plan.tasks[*window + 2U].artifact;
         std::vector<PlannedUpdateTask> tasks;
-        tasks.reserve(prepared.plan.tasks.size() - absorbed_indices.size());
-        for (std::size_t index = 0U; index < prepared.plan.tasks.size(); ++index) {
-            const auto& task = prepared.plan.tasks[index];
-            if (absorbed_indices.contains(index) ||
-                task.kind == UpdateTaskKind::UpdateSuper ||
-                (task.kind == UpdateTaskKind::Reboot &&
-                 task.reboot_target == PlannedRebootTarget::Fastboot)) {
-                continue;
-            }
-            tasks.push_back(task);
-        }
-        auto insertion = std::ranges::find_if(tasks, [](const PlannedUpdateTask& task) {
-            return task.kind == UpdateTaskKind::Reboot &&
-                   task.reboot_target == PlannedRebootTarget::System;
+        tasks.reserve(prepared.plan.tasks.size() - 2U);
+        tasks.insert(tasks.end(), prepared.plan.tasks.begin(),
+                     prepared.plan.tasks.begin() +
+                         static_cast<std::ptrdiff_t>(*window));
+        tasks.push_back(PlannedUpdateTask{
+            .kind = UpdateTaskKind::Flash,
+            .location = prepared.plan.tasks[*window].location,
+            .partition = device.super_partition,
+            .artifact = optimized_name,
+            .slot = PlannedSlot::Default,
         });
-        tasks.insert(insertion, PlannedUpdateTask{
-                                    .kind = UpdateTaskKind::Flash,
-                                    .location = prepared.plan.tasks.front().location,
-                                    .partition = device.super_partition,
-                                    .artifact = std::string(kOptimizedName),
-                                    .slot = PlannedSlot::Default,
-                                });
+        tasks.insert(tasks.end(),
+                     prepared.plan.tasks.begin() +
+                         static_cast<std::ptrdiff_t>(*window + 3U),
+                     prepared.plan.tasks.end());
         prepared.plan.tasks = std::move(tasks);
-        std::set<std::string, std::less<>> retained_artifacts;
-        for (const auto& task : prepared.plan.tasks) {
-            if (task.kind == UpdateTaskKind::Flash) {
-                retained_artifacts.insert(task.artifact);
-            }
-        }
         std::erase_if(prepared.artifacts,
-                      [&retained_artifacts](const PreparedUpdateArtifact& value) {
-                          return !retained_artifacts.contains(value.name);
+                      [&prepared, &absorbed_artifact](
+                          const PreparedUpdateArtifact& value) {
+                          return value.name == absorbed_artifact &&
+                                 std::ranges::none_of(
+                                     prepared.plan.tasks,
+                                     [&value](const PlannedUpdateTask& task) {
+                                         return task.artifact == value.name;
+                                     });
                       });
         prepared.artifacts.push_back(PreparedUpdateArtifact{
-            .name = std::string(kOptimizedName),
+            .name = optimized_name,
             .resolved = std::move(resolved),
             .artifact = std::move(artifact),
         });
-        prepared.update_super_state = UpdateSuperPreparationState::NotRequired;
-        prepared.prepared_super_artifact.reset();
+        const auto has_remaining_update_super = std::ranges::any_of(
+            prepared.plan.tasks, [](const PlannedUpdateTask& task) {
+                return task.kind == UpdateTaskKind::UpdateSuper;
+            });
+        if (!has_remaining_update_super) {
+            prepared.update_super_state = UpdateSuperPreparationState::NotRequired;
+            prepared.prepared_super_artifact.reset();
+        }
         return report;
     } catch (const std::bad_alloc&) {
         return std::unexpected(fail(SuperOptimizationErrorKind::NoSpace,
