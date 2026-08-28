@@ -1,0 +1,455 @@
+{
+  "abiVersion": 1,
+  "callingConvention": {
+    "nonWindows": "platform-default",
+    "windows": "cdecl"
+  },
+  "constants": {
+    "KB_API_VERSION": 1,
+    "KB_COMMAND_MESSAGE_INFO": 0,
+    "KB_COMMAND_MESSAGE_TEXT": 1,
+    "KB_E_AMBIGUOUS_DEVICE": 5,
+    "KB_E_BUSY": 6,
+    "KB_E_CANCELLED": 8,
+    "KB_E_DEVICE_FAIL": 12,
+    "KB_E_INTERNAL": 10,
+    "KB_E_INVALID_ARGUMENT": 1,
+    "KB_E_IO": 9,
+    "KB_E_NOT_SUPPORTED": 3,
+    "KB_E_NO_DEVICE": 4,
+    "KB_E_OUT_OF_MEMORY": 2,
+    "KB_E_PROTOCOL": 11,
+    "KB_E_TIMEOUT": 7,
+    "KB_FETCH_UNSPECIFIED": 18446744073709551615,
+    "KB_FLASHING_GET_UNLOCK_ABILITY": 4,
+    "KB_FLASHING_LOCK": 0,
+    "KB_FLASHING_LOCK_CRITICAL": 2,
+    "KB_FLASHING_UNLOCK": 1,
+    "KB_FLASHING_UNLOCK_CRITICAL": 3,
+    "KB_GSI_DISABLE": 1,
+    "KB_GSI_STATUS": 2,
+    "KB_GSI_WIPE": 0,
+    "KB_OK": 0,
+    "KB_OPERATION_CANCELLED": 4,
+    "KB_OPERATION_CREATED": 0,
+    "KB_OPERATION_FAILED": 3,
+    "KB_OPERATION_RUNNING": 1,
+    "KB_OPERATION_SUCCEEDED": 2,
+    "KB_PROGRESS_CANCEL": 1,
+    "KB_PROGRESS_CONTINUE": 0,
+    "KB_REBOOT_BOOTLOADER": 1,
+    "KB_REBOOT_FASTBOOT": 3,
+    "KB_REBOOT_RECOVERY": 2,
+    "KB_REBOOT_SYSTEM": 0,
+    "KB_SNAPSHOT_UPDATE_CANCEL": 0,
+    "KB_SNAPSHOT_UPDATE_MERGE": 1,
+    "KB_TRANSFER_FULLY_TRANSFERRED": 2,
+    "KB_TRANSFER_NOT_SENT": 0,
+    "KB_TRANSFER_PARTIAL_OR_UNKNOWN": 1,
+    "KB_WAIT_INFINITE": 4294967295
+  },
+  "dataModel": {
+    "pointerSize": 8,
+    "sizeTSize": 8,
+    "supportedArchitectures": [
+      "arm64",
+      "x64"
+    ]
+  },
+  "headerContractSha256": "eaae9b821fc06301c3b155ade5e37bae00f49032cc8bd77e1d527f4233803379",
+  "schemaVersion": 1,
+  "structs": {
+    "kb_command_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "timeout_ms",
+          "offset": 8,
+          "size": 4
+        },
+        {
+          "name": "progress_callback",
+          "offset": 16,
+          "size": 8
+        },
+        {
+          "name": "progress_user_data",
+          "offset": 24,
+          "size": 8
+        },
+        {
+          "name": "maximum_receive_bytes",
+          "offset": 32,
+          "size": 8
+        }
+      ],
+      "size": 40,
+      "versionSize": {
+        "macro": "KB_COMMAND_OPTIONS_V1_SIZE",
+        "value": 40
+      }
+    },
+    "kb_context_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "log_callback",
+          "offset": 8,
+          "size": 8
+        },
+        {
+          "name": "log_user_data",
+          "offset": 16,
+          "size": 8
+        }
+      ],
+      "size": 24,
+      "versionSize": {
+        "macro": "KB_CONTEXT_OPTIONS_V1_SIZE",
+        "value": 24
+      }
+    },
+    "kb_flash_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "timeout_ms",
+          "offset": 8,
+          "size": 4
+        },
+        {
+          "name": "progress_callback",
+          "offset": 16,
+          "size": 8
+        },
+        {
+          "name": "progress_user_data",
+          "offset": 24,
+          "size": 8
+        }
+      ],
+      "size": 32,
+      "versionSize": {
+        "macro": "KB_FLASH_OPTIONS_V1_SIZE",
+        "value": 32
+      }
+    },
+    "kb_job_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "timeout_ms",
+          "offset": 8,
+          "size": 4
+        },
+        {
+          "name": "progress_callback",
+          "offset": 16,
+          "size": 8
+        },
+        {
+          "name": "progress_user_data",
+          "offset": 24,
+          "size": 8
+        }
+      ],
+      "size": 32,
+      "versionSize": {
+        "macro": "KB_JOB_OPTIONS_V1_SIZE",
+        "value": 32
+      }
+    },
+    "kb_progress_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "bytes_completed",
+          "offset": 8,
+          "size": 8
+        },
+        {
+          "name": "bytes_total",
+          "offset": 16,
+          "size": 8
+        },
+        {
+          "name": "stage",
+          "offset": 24,
+          "size": 8
+        },
+        {
+          "name": "device_identifier",
+          "offset": 32,
+          "size": 8
+        }
+      ],
+      "size": 40
+    },
+    "kb_update_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "timeout_ms",
+          "offset": 8,
+          "size": 4
+        },
+        {
+          "name": "wipe",
+          "offset": 12,
+          "size": 4
+        },
+        {
+          "name": "progress_callback",
+          "offset": 16,
+          "size": 8
+        },
+        {
+          "name": "progress_user_data",
+          "offset": 24,
+          "size": 8
+        }
+      ],
+      "size": 32,
+      "versionSize": {
+        "macro": "KB_UPDATE_OPTIONS_V1_SIZE",
+        "value": 32
+      }
+    },
+    "kb_version_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "major",
+          "offset": 8,
+          "size": 4
+        },
+        {
+          "name": "minor",
+          "offset": 12,
+          "size": 4
+        },
+        {
+          "name": "patch",
+          "offset": 16,
+          "size": 4
+        },
+        {
+          "name": "string",
+          "offset": 24,
+          "size": 8
+        }
+      ],
+      "size": 32,
+      "versionSize": {
+        "macro": "KB_VERSION_V1_SIZE",
+        "value": 32
+      }
+    }
+  },
+  "symbols": [
+    "kb_boot",
+    "kb_boot_async",
+    "kb_command_options_init",
+    "kb_command_result_data",
+    "kb_command_result_device_identifier",
+    "kb_command_result_message_count",
+    "kb_command_result_message_kind",
+    "kb_command_result_message_payload",
+    "kb_command_result_release",
+    "kb_command_result_terminal_payload",
+    "kb_context_create",
+    "kb_context_options_init",
+    "kb_context_release",
+    "kb_continue_boot",
+    "kb_continue_boot_async",
+    "kb_create_logical_partition",
+    "kb_create_logical_partition_async",
+    "kb_delete_logical_partition",
+    "kb_delete_logical_partition_async",
+    "kb_device_list_count",
+    "kb_device_list_product",
+    "kb_device_list_release",
+    "kb_device_list_serial",
+    "kb_device_list_usb_path",
+    "kb_enumerate_devices",
+    "kb_erase",
+    "kb_erase_async",
+    "kb_error_command_message_count",
+    "kb_error_command_message_kind",
+    "kb_error_command_message_payload",
+    "kb_error_device_identifier",
+    "kb_error_device_message",
+    "kb_error_inbound_expected_bytes",
+    "kb_error_inbound_transfer_state",
+    "kb_error_inbound_transferred_bytes",
+    "kb_error_message",
+    "kb_error_native_code",
+    "kb_error_release",
+    "kb_error_session_poisoned",
+    "kb_error_status",
+    "kb_error_transfer_state",
+    "kb_fetch",
+    "kb_fetch_async",
+    "kb_flash_file",
+    "kb_flash_file_async",
+    "kb_flash_options_init",
+    "kb_flashing",
+    "kb_flashing_async",
+    "kb_get_version",
+    "kb_getvar",
+    "kb_getvar_async",
+    "kb_gsi",
+    "kb_gsi_async",
+    "kb_job_cancel",
+    "kb_job_error",
+    "kb_job_get_report",
+    "kb_job_options_init",
+    "kb_job_plan_canonical_json",
+    "kb_job_plan_release",
+    "kb_job_plan_sha256_hex",
+    "kb_job_release",
+    "kb_job_report_json",
+    "kb_job_report_release",
+    "kb_job_state",
+    "kb_job_wait",
+    "kb_oem",
+    "kb_oem_async",
+    "kb_operation_cancel",
+    "kb_operation_command_result",
+    "kb_operation_error",
+    "kb_operation_release",
+    "kb_operation_state",
+    "kb_operation_wait",
+    "kb_plan_job_file",
+    "kb_raw_command",
+    "kb_raw_command_async",
+    "kb_reboot",
+    "kb_reboot_async",
+    "kb_resize_logical_partition",
+    "kb_resize_logical_partition_async",
+    "kb_run_job_file",
+    "kb_run_job_file_async",
+    "kb_set_active",
+    "kb_set_active_async",
+    "kb_snapshot_update",
+    "kb_snapshot_update_async",
+    "kb_stage",
+    "kb_stage_async",
+    "kb_status_string",
+    "kb_update_options_init",
+    "kb_update_package",
+    "kb_update_package_async",
+    "kb_upload",
+    "kb_upload_async",
+    "kb_validate_job_file",
+    "kb_version_init"
+  ],
+  "typedefs": {
+    "kb_command_message_kind_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_flashing_command_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_gsi_command_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_operation_state_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_progress_action_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_reboot_target_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_snapshot_update_command_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_status_t": {
+      "alignment": 4,
+      "size": 4
+    },
+    "kb_transfer_state_t": {
+      "alignment": 4,
+      "size": 4
+    }
+  }
+}

@@ -107,6 +107,16 @@ public:
          std::stop_token cancellation) = 0;
 };
 
+// Production exclusive-open adapter. It consumes the exact passive libusb
+// snapshot through verified-open, rebuilds the complete topology identity from
+// the claimed generation, and adopts that same handle into FastbootSession.
+[[nodiscard]] std::expected<std::unique_ptr<IDevicePreflightSessionOpener>,
+                            DevicePreflightOpenError>
+make_libusb_device_preflight_session_opener(
+    std::shared_ptr<transport::LibusbRuntime> runtime,
+    std::shared_ptr<transport::BufferBudget> buffer_budget,
+    transport::TransferRingConfig data_ring) noexcept;
+
 struct DevicePreflightProbeResult final {
     std::string product;
     fastboot::FastbootUsbMode mode{fastboot::FastbootUsbMode::Bootloader};

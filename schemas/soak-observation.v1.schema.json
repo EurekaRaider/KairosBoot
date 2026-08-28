@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kairosboot.io/schemas/soak-observation.v1.schema.json",
+  "title": "KairosBoot Raw Soak Observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "observationKind", "qualificationStatus",
+    "requestedDurationSeconds", "completedDurationSeconds", "sampleIntervalSeconds",
+    "startedAt", "finishedAt", "cycles", "cycleFailures", "exitCodes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "observationKind": { "const": "raw-soak-observation" },
+    "qualificationStatus": { "const": "raw-observation-only" },
+    "requestedDurationSeconds": { "type": "number", "exclusiveMinimum": 0 },
+    "completedDurationSeconds": { "type": "number", "minimum": 0 },
+    "sampleIntervalSeconds": { "type": "number", "exclusiveMinimum": 0 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "cycles": { "type": "integer", "minimum": 1 },
+    "cycleFailures": { "type": "integer", "minimum": 0 },
+    "exitCodes": { "type": "array", "minItems": 1, "items": { "type": "integer" } }
+  }
+}

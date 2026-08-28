@@ -15,6 +15,7 @@
 #include "src/image/file_source.hpp"
 #include "src/image/flash_artifact.hpp"
 #include "src/image/sparse_flash_plan.hpp"
+#include "src/kairosboot_internal.hpp"
 #include "src/protocol/fastboot_protocol.hpp"
 #include "src/transport/image_transfer_source.hpp"
 #include "src/transport/libusb_runtime.hpp"
@@ -1628,6 +1629,19 @@ kb_status_t finish_blocking_operation(kb_operation_t *operation,
 }
 
 } // namespace
+
+namespace kairosboot::api {
+
+std::expected<std::shared_ptr<transport::LibusbRuntime>, OperationErrorPayload>
+acquire_fleet_usb_runtime(kb_context_t &context) {
+  auto runtime = acquire_context_usb_runtime(context);
+  if (!runtime) {
+    return std::unexpected(normalize_public_error(runtime.error(), {}));
+  }
+  return std::move(*runtime);
+}
+
+} // namespace kairosboot::api
 
 extern "C" {
 

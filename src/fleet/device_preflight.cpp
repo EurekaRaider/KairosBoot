@@ -2,6 +2,9 @@
 #include "src/fleet/device_preflight.hpp"
 
 #include "src/fastboot/primitive_service.hpp"
+#include "src/transport/usb_fastboot.hpp"
+
+#include <libusb.h>
 
 #include <algorithm>
 #include <atomic>
@@ -393,6 +396,88 @@ normalize_snapshot_device(const transport::UsbDeviceInfo& device,
     return result;
 }
 
+[[nodiscard]] DevicePreflightOpenError runtime_open_error(
+    const transport::LibusbRuntimeError& source) {
+    auto code = DevicePreflightOpenErrorCode::TransportFailure;
+    using transport::LibusbRuntimeErrorKind;
+    switch (source.kind) {
+        case LibusbRuntimeErrorKind::operation_cancelled:
+            code = DevicePreflightOpenErrorCode::Cancelled;
+            break;
+        case LibusbRuntimeErrorKind::operation_timed_out:
+            code = DevicePreflightOpenErrorCode::DeadlineExceeded;
+            break;
+        case LibusbRuntimeErrorKind::device_not_found:
+        case LibusbRuntimeErrorKind::identity_changed:
+            code = DevicePreflightOpenErrorCode::NotFound;
+            break;
+        case LibusbRuntimeErrorKind::interface_busy:
+            code = DevicePreflightOpenErrorCode::Busy;
+            break;
+        default:
+            if (source.native_code == LIBUSB_ERROR_ACCESS) {
+                code = DevicePreflightOpenErrorCode::PermissionDenied;
+            } else if (source.native_code == LIBUSB_ERROR_NOT_SUPPORTED) {
+                code = DevicePreflightOpenErrorCode::DriverUnavailable;
+            } else if (source.native_code == LIBUSB_ERROR_NO_MEM) {
+                code = DevicePreflightOpenErrorCode::ResourceExhausted;
+            }
+            break;
+    }
+    return {
+        .code = code,
+        .message = "unable to open the selected Fastboot USB interface",
+        .native_code = source.native_code,
+        .outbound_certainty = protocol::TransferCertainty::NotTransferred,
+    };
+}
+
+class LibusbDevicePreflightSessionOpener final
+    : public IDevicePreflightSessionOpener {
+public:
+    explicit LibusbDevicePreflightSessionOpener(
+        std::shared_ptr<transport::LibusbRuntime> runtime,
+        transport::UsbFastbootTransportOptions options) noexcept
+        : runtime_(std::move(runtime)), options_(std::move(options)) {}
+
+    [[nodiscard]] std::expected<OpenedDevicePreflightSession,
+                                DevicePreflightOpenError>
+    open(const transport::UsbDeviceInfo& device,
+         const DevicePreflightTimePoint deadline,
+         const std::stop_token cancellation) override {
+        auto verified = runtime_->open_bulk_out_verified(
+            device, deadline, cancellation);
+        if (!verified) {
+            return std::unexpected(runtime_open_error(verified.error()));
+        }
+        auto identity = normalize_snapshot_device(
+            verified->verified_identity(), 0U);
+        if (!identity) {
+            return std::unexpected(DevicePreflightOpenError{
+                .code = DevicePreflightOpenErrorCode::TransportFailure,
+                .message = identity.error().message,
+                .native_code = identity.error().native_code,
+                .outbound_certainty =
+                    protocol::TransferCertainty::NotTransferred,
+            });
+        }
+        auto transport = transport::UsbFastbootTransport::adopt_verified(
+            std::move(*verified), options_);
+        if (!transport) {
+            return std::unexpected(runtime_open_error(transport.error()));
+        }
+        return OpenedDevicePreflightSession{
+            .verified_usb_identity = std::move(*identity),
+            .session = std::make_unique<protocol::FastbootSession>(
+                std::move(*transport)),
+        };
+    }
+
+private:
+    std::shared_ptr<transport::LibusbRuntime> runtime_;
+    transport::UsbFastbootTransportOptions options_;
+};
+
 [[nodiscard]] DevicePreflightError probe_error(
     DevicePreflightProbeError source,
     const std::size_t target_index,
@@ -490,6 +575,48 @@ private:
 }
 
 }  // namespace
+
+std::expected<std::unique_ptr<IDevicePreflightSessionOpener>,
+              DevicePreflightOpenError>
+make_libusb_device_preflight_session_opener(
+    std::shared_ptr<transport::LibusbRuntime> runtime,
+    std::shared_ptr<transport::BufferBudget> buffer_budget,
+    const transport::TransferRingConfig data_ring) noexcept {
+    if (runtime == nullptr || !runtime->running() || buffer_budget == nullptr ||
+        data_ring.chunk_size == 0U || data_ring.depth == 0U) {
+        return std::unexpected(DevicePreflightOpenError{
+            .code = DevicePreflightOpenErrorCode::TransportFailure,
+            .message = "fleet preflight requires a running libusb runtime",
+            .native_code = 0,
+            .outbound_certainty =
+                protocol::TransferCertainty::NotTransferred,
+        });
+    }
+    try {
+        transport::UsbFastbootTransportOptions options;
+        options.buffer_budget = std::move(buffer_budget);
+        options.data_ring = data_ring;
+        return std::unique_ptr<IDevicePreflightSessionOpener>(
+            new LibusbDevicePreflightSessionOpener(
+                std::move(runtime), std::move(options)));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(DevicePreflightOpenError{
+            .code = DevicePreflightOpenErrorCode::ResourceExhausted,
+            .message = "unable to allocate the libusb fleet preflight opener",
+            .native_code = LIBUSB_ERROR_NO_MEM,
+            .outbound_certainty =
+                protocol::TransferCertainty::NotTransferred,
+        });
+    } catch (...) {
+        return std::unexpected(DevicePreflightOpenError{
+            .code = DevicePreflightOpenErrorCode::UnexpectedFailure,
+            .message = "unable to create the libusb fleet preflight opener",
+            .native_code = LIBUSB_ERROR_OTHER,
+            .outbound_certainty =
+                protocol::TransferCertainty::NotTransferred,
+        });
+    }
+}
 
 std::expected<DevicePreflightProbeResult, DevicePreflightProbeError>
 FastbootDevicePreflightProbe::probe(

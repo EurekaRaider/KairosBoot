@@ -1,41 +1,177 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kairosboot.io/schemas/benchmark-result.v1.schema.json",
-  "title": "KairosBoot Benchmark Result v1",
+  "title": "KairosBoot Raw Hardware Benchmark Result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "environment", "rawBulkCeilingBytesPerSecond", "scenarios"],
+  "required": [
+    "schemaVersion", "evidenceKind", "commit", "runId", "recordedAt",
+    "harness", "build", "host", "devices", "rawBulkCeiling",
+    "singleDeviceDownload", "scenarios", "fleet"
+  ],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "environment": {
+    "evidenceKind": { "const": "hardware" },
+    "commit": { "$ref": "#/$defs/gitSha" },
+    "runId": { "$ref": "#/$defs/runId" },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "harness": {
       "type": "object",
-      "required": ["hostOs", "hostArch", "usbController", "device", "fastbootVersion", "kairosbootVersion"],
+      "additionalProperties": false,
+      "required": ["name", "version", "sourceSha256"],
       "properties": {
-        "hostOs": { "type": "string" },
-        "hostArch": { "type": "string" },
-        "usbController": { "type": "string" },
-        "device": { "type": "string" },
-        "fastbootVersion": { "type": "string" },
-        "kairosbootVersion": { "type": "string" }
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "$ref": "#/$defs/sha256" }
       }
     },
-    "rawBulkCeilingBytesPerSecond": { "type": "number", "exclusiveMinimum": 0 },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration", "kairosbootVersion", "kairosbootBinarySha256",
+        "aospFastbootVersion", "aospFastbootBinarySha256", "libusbVersion"
+      ],
+      "properties": {
+        "configuration": { "const": "Release" },
+        "kairosbootVersion": { "type": "string", "minLength": 1 },
+        "kairosbootBinarySha256": { "$ref": "#/$defs/sha256" },
+        "aospFastbootVersion": { "type": "string", "minLength": 1 },
+        "aospFastbootBinarySha256": { "$ref": "#/$defs/sha256" },
+        "libusbVersion": { "const": "1.0.30" }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "machineIdHash"],
+      "properties": {
+        "os": { "enum": ["windows", "linux", "macos"] },
+        "arch": { "enum": ["x64", "arm64"] },
+        "machineIdHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "minItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["idHash", "product", "usbPath", "controllerId"],
+        "properties": {
+          "idHash": { "$ref": "#/$defs/sha256" },
+          "product": { "type": "string", "minLength": 1 },
+          "usbPath": { "type": "string", "minLength": 1 },
+          "controllerId": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "rawBulkCeiling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceIdHash", "samplesBytesPerSecond"],
+      "properties": {
+        "deviceIdHash": { "$ref": "#/$defs/sha256" },
+        "samplesBytesPerSecond": { "$ref": "#/$defs/samples" }
+      }
+    },
+    "singleDeviceDownload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deviceIdHash", "kairosbootSamplesBytesPerSecond",
+        "aospFastbootSamplesBytesPerSecond"
+      ],
+      "properties": {
+        "deviceIdHash": { "$ref": "#/$defs/sha256" },
+        "kairosbootSamplesBytesPerSecond": { "$ref": "#/$defs/samples" },
+        "aospFastbootSamplesBytesPerSecond": { "$ref": "#/$defs/samples" }
+      }
+    },
     "scenarios": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "sampleCount", "kairosbootMedianBytesPerSecond", "fastbootMedianBytesPerSecond", "ceilingUtilization", "relativeDelta"],
+        "additionalProperties": false,
+        "required": [
+          "id", "weight", "kairosbootSamplesBytesPerSecond",
+          "aospFastbootSamplesBytesPerSecond"
+        ],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "sampleCount": { "type": "integer", "minimum": 5 },
-          "kairosbootMedianBytesPerSecond": { "type": "number", "minimum": 0 },
-          "fastbootMedianBytesPerSecond": { "type": "number", "minimum": 0 },
-          "ceilingUtilization": { "type": "number", "minimum": 0, "maximum": 1.1 },
-          "relativeDelta": { "type": "number" },
-          "pValue": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+          "weight": { "type": "integer", "minimum": 1 },
+          "kairosbootSamplesBytesPerSecond": { "$ref": "#/$defs/samples" },
+          "aospFastbootSamplesBytesPerSecond": { "$ref": "#/$defs/samples" }
         }
       }
+    },
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aospProcessMakespanSamplesMilliseconds",
+        "kairosbootMakespanSamplesMilliseconds", "controllers", "fairnessWindows"
+      ],
+      "properties": {
+        "aospProcessMakespanSamplesMilliseconds": { "$ref": "#/$defs/samples" },
+        "kairosbootMakespanSamplesMilliseconds": { "$ref": "#/$defs/samples" },
+        "controllers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id", "rawBulkCeilingSamplesBytesPerSecond",
+              "kairosbootAggregateSamplesBytesPerSecond"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "rawBulkCeilingSamplesBytesPerSecond": { "$ref": "#/$defs/samples" },
+              "kairosbootAggregateSamplesBytesPerSecond": { "$ref": "#/$defs/samples" }
+            }
+          }
+        },
+        "fairnessWindows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["durationMilliseconds", "devices"],
+            "properties": {
+              "durationMilliseconds": { "const": 5000 },
+              "devices": {
+                "type": "array",
+                "minItems": 32,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["idHash", "bytesPerSecond"],
+                  "properties": {
+                    "idHash": { "$ref": "#/$defs/sha256" },
+                    "bytesPerSecond": { "type": "number", "exclusiveMinimum": 0 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "runId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 5,
+      "items": { "type": "number", "exclusiveMinimum": 0 }
     }
   }
 }
