@@ -130,6 +130,8 @@ static_assert(requires(kairosboot::Context &context,
   context.oem(selector, "device-info", options);
   context.raw_command_async(selector, "getvar:all", options);
   context.raw_command(selector, "getvar:all", options);
+  context.signature_file_async(selector, package, options);
+  context.signature_file(selector, package, options);
   context.boot_async(selector, options);
   context.boot(selector, options);
   context.stage_async(selector, bytes, options);
@@ -486,5 +488,12 @@ int main() {
       "system", std::optional<std::string_view>{"xfs"});
   CHECK(!invalid_format.has_value());
   CHECK(invalid_format.error().status() == KB_E_INVALID_ARGUMENT);
+
+  auto signature = context->signature_file(
+      kairosboot::DeviceSelector{"ABC"},
+      std::filesystem::path{"kairosboot-signature-missing.bin"});
+  CHECK(!signature.has_value());
+  CHECK(signature.error().status() == KB_E_IO);
+  CHECK(signature.error().device_identifier() == "ABC");
   return 0;
 }

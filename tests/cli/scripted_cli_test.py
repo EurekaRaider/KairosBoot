@@ -1113,6 +1113,38 @@ def run(cli: pathlib.Path) -> None:
             "kernel": str(raw_kernel),
         }
 
+        signature_file = directory / "签名.bin"
+        signature_payload = bytes(range(256))
+        signature_file.write_bytes(signature_payload)
+
+        def accepted_signature(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"download:00000100"
+            send_frame(connection, b"DATA00000100")
+            assert receive_frame(connection) == signature_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"signature"
+            send_frame(connection, b"INFOverified")
+            send_frame(connection, b"OKAYaccepted")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "signature", str(signature_file)],
+            accepted_signature,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "signature"
+        assert document["terminal"] == {
+            "base64": base64.b64encode(b"accepted").decode("ascii"),
+            "bytes": 8,
+        }
+        assert document["messages"] == [
+            {
+                "kind": "INFO",
+                "base64": base64.b64encode(b"verified").decode("ascii"),
+                "bytes": 8,
+            }
+        ]
+
         stdout, stderr = invoke_udp(
             cli,
             ["--json", "flash", "system", str(stage_file)],

@@ -405,6 +405,23 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::download_source(
         session_.download_source(std::move(source), observer));
 }
 
+std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::signature_source(
+    std::shared_ptr<protocol::ITransferSource> source,
+    const protocol::TransferProgressObserver& observer) {
+    if (source == nullptr || source->size() != 256U) {
+        return std::unexpected(invalid_argument(
+            PrimitiveOperation::Signature,
+            "Fastboot signature must be exactly 256 bytes"));
+    }
+    auto downloaded = finish_download(
+        session_.download_source(std::move(source), observer),
+        PrimitiveOperation::Signature);
+    if (!downloaded) {
+        return std::unexpected(std::move(downloaded.error()));
+    }
+    return command(PrimitiveOperation::Signature, "signature");
+}
+
 std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::stage(
     const std::span<const std::byte> bytes) {
     if (auto size = validate_download_size(bytes.size()); !size) {

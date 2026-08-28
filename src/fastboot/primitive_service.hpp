@@ -23,6 +23,7 @@ namespace kairosboot::fastboot {
 enum class PrimitiveOperation : std::uint8_t {
     GetVar,
     Download,
+    Signature,
     Stage,
     Boot,
     Upload,
@@ -152,6 +153,9 @@ public:
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> download(
         std::span<const std::byte> bytes);
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> download_source(
+        std::shared_ptr<protocol::ITransferSource> source,
+        const protocol::TransferProgressObserver& observer = {});
+    [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> signature_source(
         std::shared_ptr<protocol::ITransferSource> source,
         const protocol::TransferProgressObserver& observer = {});
     [[nodiscard]] std::expected<PrimitiveReply, PrimitiveError> stage(

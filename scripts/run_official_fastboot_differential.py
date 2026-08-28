@@ -274,6 +274,17 @@ class WireRecorder:
             if command == self.scenario.terminal_command:
                 self.finished = True
             return b"OKAYflashed"
+        if command == "signature":
+            if self.downloaded is None:
+                raise CaptureGateError("signature command arrived before a download")
+            self.device_state["signature"] = {
+                "size": len(self.downloaded),
+                "sha256": hashlib.sha256(self.downloaded).hexdigest(),
+            }
+            self.events.append({"kind": "OKAY", "message": "accepted"})
+            if command == self.scenario.terminal_command:
+                self.finished = True
+            return b"OKAYaccepted"
         if command.startswith("erase:"):
             partition = command[len("erase:") :]
             self.device_state["erased"] = [partition]
@@ -471,6 +482,8 @@ def _run_capture(arguments: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     image_path = output_dir / "differential-system.img"
     image_path.write_bytes(bytes(range(32)))
+    signature_path = output_dir / "differential-signature.bin"
+    signature_path.write_bytes(bytes(range(256)))
 
     scenarios = [
         Scenario("official-tcp-getvar", "tcp", ("getvar", "product"), "getvar:product"),
@@ -489,16 +502,43 @@ def _run_capture(arguments: argparse.Namespace) -> int:
             "flash:system",
             image_path,
         ),
+        Scenario(
+            "official-tcp-signature",
+            "tcp",
+            ("signature", str(signature_path)),
+            "signature",
+            signature_path,
+        ),
+        Scenario(
+            "official-udp-signature",
+            "udp",
+            ("signature", str(signature_path)),
+            "signature",
+            signature_path,
+        ),
     ]
     aosp_capture = {"schemaVersion": 1, "scenarios": []}
     kairosboot_capture = {"schemaVersion": 1, "scenarios": []}
     for scenario in scenarios:
-        aosp_capture["scenarios"].append(
-            capture_scenario(_aosp_command(verified.path, scenario), scenario, "official Fastboot")
-        )
-        kairosboot_capture["scenarios"].append(
-            capture_scenario(_kairosboot_command(kairosboot, scenario), scenario, "KairosBoot")
-        )
+        try:
+            aosp_capture["scenarios"].append(
+                capture_scenario(
+                    _aosp_command(verified.path, scenario),
+                    scenario,
+                    "official Fastboot",
+                )
+            )
+            kairosboot_capture["scenarios"].append(
+                capture_scenario(
+                    _kairosboot_command(kairosboot, scenario),
+                    scenario,
+                    "KairosBoot",
+                )
+            )
+        except CaptureGateError as error:
+            raise CaptureGateError(
+                f"scenario {scenario.identifier} failed: {error}"
+            ) from error
 
     aosp_path = output_dir / "aosp-fastboot-normalized-trace.json"
     kairosboot_path = output_dir / "kairosboot-normalized-trace.json"

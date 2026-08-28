@@ -2135,6 +2135,57 @@ public:
     return boot_file(DeviceSelector{selector}, file, options);
   }
 
+  [[nodiscard]] std::expected<Operation, Error> signature_file_async(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto path_u8 = file.u8string();
+    const std::string path_storage{path_u8.begin(), path_u8.end()};
+    return start_typed_operation(
+        options,
+        [&](const kb_command_options_t *native, kb_operation_t **operation,
+            kb_error_t **error) {
+          return ::kb_signature_file_async(
+              handle_, selector_value, path_storage.c_str(), native,
+              operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> signature_file_async(
+      const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file_async(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> signature_file_async(
+      const std::string_view selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file_async(DeviceSelector{selector}, file, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> signature_file(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    auto operation = signature_file_async(selector, file, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> signature_file(
+      const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> signature_file(
+      const std::string_view selector, const std::filesystem::path &file,
+      const CommandOptions &options = {}) const {
+    return signature_file(DeviceSelector{selector}, file, options);
+  }
+
 private:
   template <typename Start>
   [[nodiscard]] std::expected<Operation, Error>

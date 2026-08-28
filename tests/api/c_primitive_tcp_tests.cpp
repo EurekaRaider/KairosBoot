@@ -261,6 +261,31 @@ private:
     CHECK(closed);
   }
 
+  void serve_signature(const bool accepted) {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "download:00000100");
+    write_frame(socket, "DATA00000100");
+    const auto payload = read_frame(socket);
+    CHECK(payload.size() == 256U);
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+      CHECK(payload[index] == std::byte{static_cast<unsigned char>(index)});
+    }
+    write_frame(socket, "OKAYdownloaded");
+    CHECK(as_string(read_frame(socket)) == "signature");
+    write_frame(socket, "INFOsignature policy");
+    write_frame(socket, accepted ? "OKAYaccepted" : "FAILsignature rejected");
+  }
+
+  void serve_cancelled_signature() {
+    auto socket = accept();
+    CHECK(as_string(read_frame(socket)) == "download:00000100");
+    write_frame(socket, "DATA00000100");
+    std::array<std::byte, 1> trailing{};
+    boost::system::error_code closed;
+    static_cast<void>(socket.read_some(boost::asio::buffer(trailing), closed));
+    CHECK(closed);
+  }
+
   void run() noexcept {
     try {
       {
@@ -346,6 +371,10 @@ private:
         write_frame(socket, "INFOpolicy");
         write_frame(socket, std::string("FAILdenied\0x", 12));
       }
+      serve_signature(true);
+      serve_signature(true);
+      serve_signature(false);
+      serve_cancelled_signature();
       serve_flash_success();
       serve_flash_success();
       serve_flash_failure();
@@ -1113,6 +1142,76 @@ void run_contract() {
   TemporaryUpdatePackage update_package(
       "version 1\nflash system system.img\n", update_image);
   const auto image_path = (update_package.path() / "system.img").string();
+
+  std::array<std::byte, 256> signature_bytes{};
+  for (std::size_t index = 0; index < signature_bytes.size(); ++index) {
+    signature_bytes[index] =
+        std::byte{static_cast<unsigned char>(index)};
+  }
+  TemporaryUpdatePackage signature_package("version 1\n", signature_bytes);
+  const auto signature_path =
+      (signature_package.path() / "system.img").string();
+
+  kb_operation_t* signature_operation = nullptr;
+  CHECK(kb_signature_file_async(
+            context, selector.c_str(), image_path.c_str(), nullptr,
+            &signature_operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(signature_operation == nullptr);
+  CHECK(error != nullptr);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+  error = nullptr;
+
+  kb_command_options_init(&options);
+  watermarks.clear();
+  options.progress_callback = record_progress;
+  options.progress_user_data = &watermarks;
+  result = nullptr;
+  CHECK(kb_signature_file(context, selector.c_str(), signature_path.c_str(),
+                          &options, &result, &error) == KB_OK);
+  CHECK(result != nullptr);
+  CHECK(error == nullptr);
+  terminal = kb_command_result_terminal_payload(result, &size);
+  CHECK(std::string(reinterpret_cast<const char*>(terminal), size) ==
+        "accepted");
+  CHECK(kb_command_result_message_count(result) == 1U);
+  CHECK(watermarks == std::vector<std::uint64_t>({0U, 256U}));
+  kb_command_result_release(result);
+  result = nullptr;
+
+  signature_operation = nullptr;
+  CHECK(kb_signature_file_async(
+            context, selector.c_str(), signature_path.c_str(), &options,
+            &signature_operation, &error) == KB_OK);
+  CHECK(signature_operation != nullptr);
+  CHECK(kb_operation_wait(signature_operation, KB_WAIT_INFINITE) == KB_OK);
+  CHECK(kb_operation_command_result(signature_operation, &result, &error) ==
+        KB_OK);
+  kb_operation_release(signature_operation);
+  kb_command_result_release(result);
+  result = nullptr;
+
+  CHECK(kb_signature_file(context, selector.c_str(), signature_path.c_str(),
+                          &options, &result, &error) == KB_E_DEVICE_FAIL);
+  CHECK(result == nullptr);
+  CHECK(error != nullptr);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_FULLY_TRANSFERRED);
+  CHECK(kb_error_session_poisoned(error) == 0);
+  CHECK(kb_error_command_message_count(error) == 1U);
+  kb_error_release(error);
+  error = nullptr;
+
+  kb_command_options_init(&options);
+  options.progress_callback = cancel_flash_at_download;
+  signature_operation = nullptr;
+  CHECK(kb_signature_file_async(
+            context, selector.c_str(), signature_path.c_str(), &options,
+            &signature_operation, &error) == KB_OK);
+  CHECK(kb_operation_wait(signature_operation, KB_WAIT_INFINITE) ==
+        KB_E_CANCELLED);
+  CHECK(kb_error_transfer_state(kb_operation_error(signature_operation)) ==
+        KB_TRANSFER_NOT_SENT);
+  kb_operation_release(signature_operation);
 
   kb_flash_options_t flash_options;
   kb_flash_options_init(&flash_options);

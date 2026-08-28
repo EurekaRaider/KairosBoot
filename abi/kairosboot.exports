@@ -94,6 +94,8 @@ kb_run_job_file
 kb_run_job_file_async
 kb_set_active
 kb_set_active_async
+kb_signature_file
+kb_signature_file_async
 kb_snapshot_update
 kb_snapshot_update_async
 kb_stage

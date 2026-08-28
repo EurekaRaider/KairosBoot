@@ -115,19 +115,21 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 108)
+        if (uniqueEntryPoints.Count != 110)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 108 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 110 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 108, "unique entry points");
+        Check(uniqueEntryPoints.Count == 110, "unique entry points");
         Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
         Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
         Check(entryPoints.Contains("kb_boot_file_async"), "async boot-file import");
         Check(entryPoints.Contains("kb_boot_file"), "blocking boot-file import");
+        Check(entryPoints.Contains("kb_signature_file_async"), "async signature import");
+        Check(entryPoints.Contains("kb_signature_file"), "blocking signature import");
         Check(entryPoints.Contains("kb_update_options_init"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
@@ -203,7 +205,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 108, "net48 DllImport count");
+        Check(methods.Count == 110, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -212,7 +214,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 94, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 98, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -230,7 +232,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 108, "net10 LibraryImport count");
+        Check(groups.Count == 110, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -241,7 +243,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 52, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 54, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -532,6 +534,7 @@ internal static class Program
             "OemAsync",
             "RawCommandAsync",
             "BootAsync",
+            "SignatureFileAsync",
             "StageAsync",
             "UploadAsync",
             "FetchAsync",
@@ -1460,6 +1463,10 @@ internal static class Program
             source.Cancel();
             await ExpectAsync<OperationCanceledException>(
                 () => context.GetVarAsync("product", cancellationToken: source.Token))
+                .ConfigureAwait(false);
+            await ExpectAsync<OperationCanceledException>(
+                () => context.SignatureFileAsync(
+                    "signature.bin", cancellationToken: source.Token))
                 .ConfigureAwait(false);
         }
     }

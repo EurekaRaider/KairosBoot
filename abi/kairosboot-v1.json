@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "1b65ba7c8bb1f24f67fd002e2bd13fd919fc3c7e42fc7c6c5d595406ea363f05",
+  "headerContractSha256": "ce3978972180a1232841bb33585adba3d3c526531ae6f735f9718fb8a81f9c47",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -413,6 +413,8 @@
     "kb_run_job_file_async",
     "kb_set_active",
     "kb_set_active_async",
+    "kb_signature_file",
+    "kb_signature_file_async",
     "kb_snapshot_update",
     "kb_snapshot_update_async",
     "kb_stage",

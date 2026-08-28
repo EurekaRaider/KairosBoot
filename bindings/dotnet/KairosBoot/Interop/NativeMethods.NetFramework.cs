@@ -116,6 +116,24 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_signature_file_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int SignatureFileAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_signature_file", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int SignatureFile(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_update_package_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int UpdatePackageAsync(
         ContextSafeHandle context,

@@ -346,6 +346,14 @@ int main(void) {
 
   operation = NULL;
   error = NULL;
+  CHECK(kb_signature_file_async(context, NULL, "", NULL, &operation,
+                                &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
   CHECK(kb_boot_file_async(context, "tcp:127.0.0.1", "", NULL, &operation,
                            &error) == KB_E_INVALID_ARGUMENT);
   CHECK(operation == NULL);
@@ -375,6 +383,17 @@ int main(void) {
                      NULL, &error) == KB_E_IO);
   CHECK(error != NULL);
   CHECK(strcmp(kb_error_device_identifier(error), "ABC") == 0);
+  CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_signature_file_async(
+            context, "tcp:127.0.0.1", "kairosboot-signature-missing.bin",
+            NULL, &operation, &error) == KB_E_IO);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "tcp:127.0.0.1") == 0);
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   kb_error_release(error);
 

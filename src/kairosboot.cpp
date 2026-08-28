@@ -2832,6 +2832,117 @@ kb_status_t KB_CALL kb_boot_file(
   return finish_blocking_operation(operation, error);
 }
 
+kb_status_t KB_CALL kb_signature_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
+                device_selector_or_null);
+  }
+  if (file_path == nullptr || file_path[0] == '\0') {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "signature file path must not be empty",
+                device_selector_or_null);
+  }
+  if (!valid_command_options(options_or_null)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "command options have an incompatible size, API version, or receive bound",
+                device_selector_or_null);
+  }
+
+  try {
+    const std::string_view file_path_view{file_path};
+    if (!valid_utf8(file_path_view)) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "signature file path must be valid UTF-8",
+                  device_selector_or_null);
+    }
+    auto file_source =
+        kairosboot::image::FileImageSource::open(utf8_path(file_path_view));
+    if (!file_source) {
+      return fail(error, kairosboot::api::normalize_public_error(
+                             file_source.error(),
+                             device_selector_or_null == nullptr
+                                 ? std::string_view{}
+                                 : std::string_view{device_selector_or_null}));
+    }
+    if ((*file_source)->size() != 256U) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "signature file must be exactly 256 bytes",
+                  device_selector_or_null);
+    }
+    std::shared_ptr<const kairosboot::image::IImageSource> image_source =
+        std::move(*file_source);
+    auto transfer_source =
+        kairosboot::transport::ImageTransferSource::create(
+            std::move(image_source));
+    if (!transfer_source) {
+      return fail(error, kairosboot::api::normalize_public_error(
+                             transfer_source.error(),
+                             device_selector_or_null == nullptr
+                                 ? std::string_view{}
+                                 : std::string_view{device_selector_or_null}));
+    }
+
+    std::shared_ptr<kairosboot::protocol::ITransferSource> source =
+        std::move(*transfer_source);
+    return start_primitive_async(
+        context, device_selector_or_null, options_or_null,
+        [source = std::move(source)](
+            kairosboot::fastboot::PrimitiveService &service,
+            kairosboot::api::OperationState::TaskContext &task_context,
+            const kb_command_options_t &options,
+            const std::string &identifier)
+            -> std::expected<PrimitiveExecution,
+                             kairosboot::fastboot::PrimitiveError> {
+          const kairosboot::protocol::TransferProgressObserver observer =
+              [&task_context, &options, &identifier](
+                  const std::uint64_t completed, const std::uint64_t total) {
+                return task_context.cancel_requested() ||
+                               !report_command_progress(
+                                   options, completed, total, "download",
+                                   identifier)
+                           ? kairosboot::protocol::TransferProgressAction::cancel
+                           : kairosboot::protocol::TransferProgressAction::
+                                 continue_transfer;
+              };
+          auto reply = service.signature_source(source, observer);
+          if (!reply) {
+            return std::unexpected(std::move(reply.error()));
+          }
+          return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
+        },
+        operation, error);
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the signature operation",
+                device_selector_or_null);
+  } catch (const std::filesystem::filesystem_error &exception) {
+    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+                exception.code().value());
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the signature operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_signature_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_signature_file_async, result, error, context,
+      device_selector_or_null, file_path, options_or_null);
+}
+
 kb_status_t KB_CALL kb_update_package_async(
     kb_context_t *context, const char *device_selector_or_null,
     const char *package_path, const kb_update_options_t *options_or_null,

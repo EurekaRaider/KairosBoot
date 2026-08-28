@@ -139,6 +139,26 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_signature_file_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int SignatureFileAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string filePath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_signature_file", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int SignatureFile(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string filePath,
+        ref NativeCommandOptions options,
+        out IntPtr result,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_update_package_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int UpdatePackageAsync(

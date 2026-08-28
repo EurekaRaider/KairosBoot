@@ -225,6 +225,7 @@ enum class CommandKind : std::uint8_t {
   Run,
   Flash,
   FlashRaw,
+  Signature,
   Update,
   Flashall,
   MakeBootImage,
@@ -862,6 +863,12 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   if (command == "set-active") {
     return parse_single_operand(CommandKind::SetActive, "slot");
   }
+  if (command == "signature") {
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for signature");
+    }
+    return parse_single_operand(CommandKind::Signature, "file");
+  }
   if (command == "stage") {
     return parse_single_operand(CommandKind::Stage, "file");
   }
@@ -1082,6 +1089,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "flash";
   case CommandKind::FlashRaw:
     return "flash:raw";
+  case CommandKind::Signature:
+    return "signature";
   case CommandKind::Update:
     return "update";
   case CommandKind::Flashall:
@@ -1669,6 +1678,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Run:
   case CommandKind::Flash:
   case CommandKind::FlashRaw:
+  case CommandKind::Signature:
   case CommandKind::Update:
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
@@ -1716,6 +1726,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Devices:
   case CommandKind::Flash:
   case CommandKind::FlashRaw:
+  case CommandKind::Signature:
   case CommandKind::Update:
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
@@ -1987,6 +1998,25 @@ int flash_raw(const Invocation &invocation) {
               << invocation.second << '\n';
   }
   return 0;
+}
+
+int signature_file(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  InterruptCancellation cancellation;
+  auto operation = context->signature_file_async(
+      selector_view(invocation.global), path_from_utf8(invocation.first),
+      command_options(invocation.global));
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait_result(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  return print_command_success(invocation, *result, std::nullopt);
 }
 
 class UpdateProgressReporter final {
@@ -2346,6 +2376,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] flash <partition> <file>\n"
                "  kairosboot [global options] flash:raw <partition> <kernel> "
                "[ramdisk [second]]\n"
+               "  kairosboot [global options] signature <file>\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] flashall [--wipe]\n"
                "  kairosboot [global options] boot <image>\n"
@@ -2469,6 +2500,8 @@ int run_cli(const int argc, char **argv) {
     return flash_file(*invocation);
   case CommandKind::FlashRaw:
     return flash_raw(*invocation);
+  case CommandKind::Signature:
+    return signature_file(*invocation);
   case CommandKind::Update:
   case CommandKind::Flashall:
     return update_package(*invocation);

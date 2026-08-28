@@ -252,6 +252,33 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>
+    /// Streams an existing 256-byte signature blob and sends the AOSP Fastboot
+    /// <c>signature</c> command on the same device session.
+    /// </summary>
+    public Task<CommandResult> SignatureFileAsync(
+        string filePath,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(filePath, nameof(filePath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.SignatureFileAsync(
+                    handle,
+                    deviceSelector,
+                    filePath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
     /// <summary>Starts a complete update-package operation with safe defaults.</summary>
     public Task UpdatePackageAsync(
         string packagePath,

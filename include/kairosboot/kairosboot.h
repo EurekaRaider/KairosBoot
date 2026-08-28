@@ -280,6 +280,19 @@ KB_API kb_status_t KB_CALL kb_boot_file(
     const char *file_path, const kb_flash_options_t *options_or_null,
     kb_error_t **error);
 
+/* Requires the AOSP-defined 256-byte signature file, streams it through
+ * Fastboot download, then sends the exact `signature` wire command on the same
+ * selected session. This transports an already-created signature blob; it
+ * does not create or mutate AVB data. */
+KB_API kb_status_t KB_CALL kb_signature_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_signature_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+
 /* Performs complete package preflight before USB enumeration or any transport
  * open. device_selector_or_null uses the typed selector grammar documented
  * below. The selected target is bound exactly once for this operation.

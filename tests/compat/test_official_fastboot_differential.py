@@ -134,6 +134,23 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             ],
         )
 
+    def test_signature_requires_download_and_records_exact_blob(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-signature",
+            "tcp",
+            ("signature", "/tmp/signature.bin"),
+            "signature",
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        self.assertEqual(recorder.handle(b"download:00000004"), b"DATA00000004")
+        self.assertEqual(recorder.handle(b"sig\x00"), b"OKAYdownloaded")
+        self.assertEqual(recorder.handle(b"signature"), b"OKAYaccepted")
+        capture = recorder.capture(0)
+        self.assertEqual(
+            capture["deviceState"]["signature"],
+            {"size": 4, "sha256": hashlib.sha256(b"sig\x00").hexdigest()},
+        )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
