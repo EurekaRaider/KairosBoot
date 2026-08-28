@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "20493789dcd38896822b6eea9d93a302a3637ed7acee5857b635defb18bd9563",
+  "headerContractSha256": "1b65ba7c8bb1f24f67fd002e2bd13fd919fc3c7e42fc7c6c5d595406ea363f05",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -373,6 +373,8 @@
     "kb_flash_raw_async",
     "kb_flashing",
     "kb_flashing_async",
+    "kb_format_partition",
+    "kb_format_partition_async",
     "kb_get_staged_file",
     "kb_get_staged_file_async",
     "kb_get_version",

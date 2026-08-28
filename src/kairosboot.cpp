@@ -14,6 +14,7 @@
 #include "src/fastboot/variable_parser.hpp"
 #include "src/image/artifact_source.hpp"
 #include "src/image/file_source.hpp"
+#include "src/image/filesystem_formatter.hpp"
 #include "src/image/flash_artifact.hpp"
 #include "src/image/sparse_flash_plan.hpp"
 #include "src/kairosboot_internal.hpp"
@@ -512,6 +513,32 @@ kairosboot::api::OperationOutcome operation_failure(
     return kairosboot::api::OperationOutcome::cancelled(std::move(payload));
   }
   return kairosboot::api::OperationOutcome::failed(std::move(payload));
+}
+
+kairosboot::api::OperationErrorPayload format_host_failure(
+    const kairosboot::image::FilesystemFormatError &error,
+    const std::string &device) {
+  kb_status_t status = KB_E_IO;
+  if (error.kind ==
+      kairosboot::image::FilesystemFormatErrorKind::InvalidArgument) {
+    status = KB_E_INVALID_ARGUMENT;
+  } else if (error.kind ==
+             kairosboot::image::FilesystemFormatErrorKind::Unsupported) {
+    status = KB_E_NOT_SUPPORTED;
+  }
+  return {
+      .status = status,
+      .message = error.message,
+      .native_code = error.native_code,
+      .transfer_state = KB_TRANSFER_NOT_SENT,
+      .device_identifier = device,
+      .device_message = {},
+      .command_messages = {},
+      .inbound_expected = std::nullopt,
+      .inbound_transferred = 0,
+      .inbound_transfer_state = KB_TRANSFER_NOT_SENT,
+      .session_poisoned = false,
+  };
 }
 
 bool report_progress(const kb_flash_options_t &options,
@@ -3067,6 +3094,329 @@ kb_status_t KB_CALL kb_erase(
   return run_blocking_command(
       kb_erase_async, result, error, context, device_selector_or_null,
       partition, options_or_null);
+}
+
+kb_status_t KB_CALL kb_format_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *filesystem_type_override_or_null,
+    const uint64_t partition_size_override_or_zero,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
+                device_selector_or_null);
+  }
+  if (partition == nullptr ||
+      !valid_fastboot_parameter(
+          partition, std::string_view{"getvar:partition-type:"}.size())) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "format partition must be printable ASCII and fit the Fastboot command limit",
+                device_selector_or_null);
+  }
+  if (!valid_flash_options(options_or_null)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "format options have an incompatible size or API version",
+                device_selector_or_null);
+  }
+  std::optional<std::string> type_override;
+  if (filesystem_type_override_or_null != nullptr) {
+    const std::string_view type{filesystem_type_override_or_null};
+    if (type != "ext4" && type != "f2fs") {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "format filesystem type must be ext4 or f2fs",
+                  device_selector_or_null);
+    }
+    type_override = std::string{type};
+  }
+  if (partition_size_override_or_zero >
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "format partition size must fit a signed 64-bit byte count",
+                device_selector_or_null);
+  }
+
+  try {
+    const std::optional<std::string_view> requested_selector =
+        device_selector_or_null == nullptr
+            ? std::nullopt
+            : std::optional<std::string_view>{device_selector_or_null};
+    auto prepared_target = prepare_flash_target(*context, requested_selector);
+    if (!prepared_target) {
+      return fail(error, prepared_target.error());
+    }
+
+    kb_flash_options_t format_options;
+    kb_flash_options_init(&format_options);
+    if (options_or_null != nullptr) {
+      format_options.timeout_ms = options_or_null->timeout_ms;
+      format_options.progress_callback = options_or_null->progress_callback;
+      format_options.progress_user_data = options_or_null->progress_user_data;
+    }
+    auto selected_identifier = prepared_target->selector.identifier;
+    std::string partition_copy{partition};
+
+    auto task = [target = std::move(*prepared_target),
+                 selected_identifier = std::move(selected_identifier),
+                 partition_copy = std::move(partition_copy),
+                 type_override = std::move(type_override),
+                 partition_size_override_or_zero,
+                 format_options](
+                    kairosboot::api::OperationState::TaskContext
+                        &task_context) mutable
+        -> kairosboot::api::OperationOutcome {
+      if (task_context.cancel_requested()) {
+        return cancelled_operation(selected_identifier,
+                                   KB_TRANSFER_NOT_SENT);
+      }
+      kb_command_options_t transport_options;
+      kb_command_options_init(&transport_options);
+      transport_options.timeout_ms = format_options.timeout_ms;
+      auto opened = open_target(target, transport_options,
+                                task_context.cancellation_token());
+      if (!opened) {
+        return operation_failure(std::move(opened.error()));
+      }
+      std::unique_ptr<kairosboot::protocol::ITransportSession>
+          protocol_transport = std::move(*opened);
+      kairosboot::protocol::SessionOptions session_options;
+      session_options.io_timeout =
+          std::chrono::milliseconds{format_options.timeout_ms};
+      kairosboot::protocol::FastbootSession session(
+          std::move(protocol_transport), session_options);
+      kairosboot::fastboot::PrimitiveService service(session);
+      auto cancellation = task_context.register_cancellation_hook(
+          [&service] { service.request_cancel(); });
+
+      std::string resolved_partition = partition_copy;
+      auto has_slot = service.getvar("has-slot:" + partition_copy);
+      if (!has_slot) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            has_slot.error(), selected_identifier));
+      }
+      if (has_slot->terminal.payload == "yes") {
+        auto current_slot = service.getvar("current-slot");
+        if (!current_slot) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              current_slot.error(), selected_identifier));
+        }
+        auto slot = current_slot->terminal.payload;
+        if (!slot.empty() && slot.front() == '_') {
+          slot.erase(slot.begin());
+        }
+        if (slot.empty()) {
+          return operation_failure({
+              .status = KB_E_PROTOCOL,
+              .message = "device returned an empty current-slot for a slotted partition",
+              .native_code = 0,
+              .transfer_state = KB_TRANSFER_NOT_SENT,
+              .device_identifier = selected_identifier,
+          });
+        }
+        resolved_partition += "_" + slot;
+      }
+
+      std::string filesystem_type;
+      if (type_override.has_value()) {
+        filesystem_type = *type_override;
+      } else {
+        auto reported_type =
+            service.getvar("partition-type:" + resolved_partition);
+        if (!reported_type) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              reported_type.error(), selected_identifier));
+        }
+        filesystem_type = std::move(reported_type->terminal.payload);
+      }
+
+      uint64_t partition_size = partition_size_override_or_zero;
+      if (partition_size == 0U) {
+        auto reported_size =
+            service.getvar("partition-size:" + resolved_partition);
+        if (!reported_size) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              reported_size.error(), selected_identifier));
+        }
+        const auto parsed_size =
+            kairosboot::fastboot::parse_unsigned_variable(
+                reported_size->terminal.payload);
+        if (!parsed_size.has_value() || *parsed_size == 0U ||
+            *parsed_size >
+                static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+          return operation_failure({
+              .status = KB_E_PROTOCOL,
+              .message = "device returned an invalid partition-size value",
+              .native_code = 0,
+              .transfer_state = KB_TRANSFER_NOT_SENT,
+              .device_identifier = selected_identifier,
+          });
+        }
+        partition_size = *parsed_size;
+      }
+
+      const auto optional_block_size =
+          [&service, &selected_identifier](const std::string_view variable)
+          -> std::expected<uint32_t,
+                           kairosboot::api::OperationErrorPayload> {
+        auto value = service.getvar(variable);
+        if (!value) {
+          if (value.error().code ==
+              kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+            return uint32_t{0};
+          }
+          return std::unexpected(kairosboot::api::normalize_public_error(
+              value.error(), selected_identifier));
+        }
+        const auto parsed = kairosboot::fastboot::parse_unsigned_variable(
+            value->terminal.payload);
+        if (!parsed.has_value() || *parsed > std::numeric_limits<uint32_t>::max() ||
+            (*parsed != 0U && (*parsed & (*parsed - 1U)) != 0U)) {
+          return uint32_t{0};
+        }
+        return static_cast<uint32_t>(*parsed);
+      };
+      auto erase_block_size = optional_block_size("erase-block-size");
+      if (!erase_block_size) {
+        return operation_failure(std::move(erase_block_size.error()));
+      }
+      auto logical_block_size = optional_block_size("logical-block-size");
+      if (!logical_block_size) {
+        return operation_failure(std::move(logical_block_size.error()));
+      }
+
+      if (!report_progress(format_options, 0, partition_size, "format",
+                           selected_identifier)) {
+        return cancelled_operation(selected_identifier,
+                                   KB_TRANSFER_NOT_SENT);
+      }
+      auto generated = kairosboot::image::generate_empty_filesystem_image(
+          filesystem_type, partition_size, *erase_block_size,
+          *logical_block_size);
+      if (!generated) {
+        return operation_failure(
+            format_host_failure(generated.error(), selected_identifier));
+      }
+      auto file_source = kairosboot::image::FileImageSource::open(
+          generated->path());
+      if (!file_source) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            file_source.error(), selected_identifier));
+      }
+      std::shared_ptr<const kairosboot::image::IImageSource> image_source =
+          std::move(*file_source);
+      auto artifact = kairosboot::image::FlashArtifact::inspect(
+          image_source, task_context.cancellation_token());
+      if (!artifact) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            artifact.error(), selected_identifier));
+      }
+
+      uint64_t target_max_download_size = 0U;
+      auto maximum = service.getvar("max-download-size");
+      if (maximum) {
+        target_max_download_size =
+            kairosboot::fastboot::parse_unsigned_variable(
+                maximum->terminal.payload)
+                .value_or(0U);
+      } else if (maximum.error().code !=
+                 kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            maximum.error(), selected_identifier));
+      }
+      auto plan = kairosboot::image::SparseFlashPlan::create(
+          *artifact, target_max_download_size,
+          kairosboot::image::kDefaultResparseLimitBytes,
+          task_context.cancellation_token());
+      if (!plan) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            plan.error(), selected_identifier));
+      }
+      const auto total_transfer_size = plan->transfer_size();
+      uint64_t completed_before_part = 0U;
+      for (const auto &part : plan->parts()) {
+        auto source = kairosboot::transport::ImageTransferSource::create(
+            part.source);
+        if (!source) {
+          return operation_failure(kairosboot::api::normalize_public_error(
+              source.error(), selected_identifier));
+        }
+        const kairosboot::protocol::TransferProgressObserver observer =
+            [&task_context, &format_options, &selected_identifier,
+             completed_before_part,
+             total_transfer_size](const uint64_t completed, const uint64_t) {
+              if (task_context.cancel_requested() ||
+                  !report_progress(
+                      format_options, completed_before_part + completed,
+                      total_transfer_size, "download", selected_identifier)) {
+                return kairosboot::protocol::TransferProgressAction::cancel;
+              }
+              return kairosboot::protocol::TransferProgressAction::
+                  continue_transfer;
+            };
+        auto flashed = service.download_and_flash_source(
+            resolved_partition, *source, observer);
+        if (!flashed) {
+          auto payload = kairosboot::api::normalize_public_error(
+              flashed.error(), selected_identifier);
+          kairosboot::api::accumulate_flash_transfer_state(
+              payload, flashed.error().operation, completed_before_part,
+              (*source)->size(), total_transfer_size);
+          return operation_failure(std::move(payload));
+        }
+        completed_before_part += (*source)->size();
+      }
+      if (task_context.cancel_requested() ||
+          !report_progress(format_options, total_transfer_size,
+                           total_transfer_size, "complete",
+                           selected_identifier)) {
+        return cancelled_operation(
+            selected_identifier, KB_TRANSFER_FULLY_TRANSFERRED,
+            "operation cancelled after the format completed");
+      }
+      return kairosboot::api::OperationOutcome::succeeded();
+    };
+
+    auto result = std::make_unique<kb_operation>(std::move(task));
+    if (!result->state->start()) {
+      return fail(error, KB_E_INTERNAL,
+                  "unable to start the format operation",
+                  device_selector_or_null);
+    }
+    *operation = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the format operation",
+                device_selector_or_null);
+  } catch (const std::filesystem::filesystem_error &exception) {
+    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+                exception.code().value());
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the format operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_format_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *filesystem_type_override_or_null,
+    const uint64_t partition_size_override_or_zero,
+    const kb_flash_options_t *options_or_null, kb_error_t **error) {
+  kb_operation_t *operation = nullptr;
+  const kb_status_t start = kb_format_partition_async(
+      context, device_selector_or_null, partition,
+      filesystem_type_override_or_null, partition_size_override_or_zero,
+      options_or_null, &operation, error);
+  if (start != KB_OK) {
+    return start;
+  }
+  return finish_blocking_operation(operation, error);
 }
 
 kb_status_t KB_CALL kb_set_active_async(

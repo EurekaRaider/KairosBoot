@@ -411,6 +411,12 @@ int main(void) {
         KB_E_INVALID_ARGUMENT);
   kb_error_release(error);
   error = NULL;
+  CHECK(kb_format_partition_async(context, NULL, "system", "xfs", 0U, NULL,
+                                  &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
   CHECK(kb_set_active_async(context, NULL, "", NULL, &operation, &error) ==
         KB_E_INVALID_ARGUMENT);
   kb_error_release(error);

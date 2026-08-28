@@ -231,6 +231,7 @@ enum class CommandKind : std::uint8_t {
   WipeSuper,
   Getvar,
   Erase,
+  Format,
   SetActive,
   Reboot,
   Continue,
@@ -267,6 +268,8 @@ struct Invocation {
       kairosboot::SnapshotUpdateCommand::Cancel};
   kairosboot::FetchRange fetch_range;
   std::uint64_t logical_partition_size{};
+  std::string filesystem_type;
+  std::uint64_t format_partition_size{};
   bool wipe{};
   bool plan_digest{};
 };
@@ -351,6 +354,26 @@ bool parse_u32_auto(const std::string_view text, std::uint32_t &value) {
   const auto [end, error] = std::from_chars(
       digits.data(), digits.data() + digits.size(), value, base);
   return error == std::errc{} && end == digits.data() + digits.size();
+}
+
+template <typename Integer>
+bool parse_unsigned_number(const std::string_view text, Integer &value) {
+  if (text.empty()) {
+    return false;
+  }
+  int base = 10;
+  auto first = text.data();
+  if (text.size() > 2U && text[0] == '0' &&
+      (text[1] == 'x' || text[1] == 'X')) {
+    base = 16;
+    first += 2;
+  }
+  if (first == text.data() + text.size()) {
+    return false;
+  }
+  const auto [end, error] =
+      std::from_chars(first, text.data() + text.size(), value, base);
+  return error == std::errc{} && end == text.data() + text.size();
 }
 
 std::string join_operands(char **argv, const int first, const int argc) {
@@ -774,6 +797,45 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "format" || command.starts_with("format:")) {
+    result.kind = CommandKind::Format;
+    if (argc - command_index != 2) {
+      return error(std::string{command} + " requires exactly <partition>");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for format");
+    }
+    result.first = argv[index];
+    if (result.first.empty()) {
+      return error("format partition must not be empty");
+    }
+    if (command.size() > std::string_view{"format"}.size()) {
+      const auto suffix = command.substr(std::string_view{"format:"}.size());
+      const auto separator = suffix.find(':');
+      const auto type = suffix.substr(0U, separator);
+      const auto size = separator == std::string_view::npos
+                            ? std::string_view{}
+                            : suffix.substr(separator + 1U);
+      if (separator != std::string_view::npos &&
+          size.find(':') != std::string_view::npos) {
+        return error("format accepts at most type and size overrides");
+      }
+      if (!type.empty() && type != "ext4" && type != "f2fs") {
+        return error("format filesystem type must be ext4 or f2fs");
+      }
+      result.filesystem_type = std::string{type};
+      if (!size.empty() &&
+          (!parse_unsigned_number(size, result.format_partition_size) ||
+           result.format_partition_size == 0U ||
+           result.format_partition_size >
+               static_cast<std::uint64_t>(
+                   std::numeric_limits<std::int64_t>::max()))) {
+        return error(
+            "format size must be a non-zero decimal or 0x-prefixed byte count in [1, 9223372036854775807]");
+      }
+    }
+    return result;
+  }
 
   const auto parse_single_operand = [&](const CommandKind kind,
                                         const std::string_view description)
@@ -1032,6 +1094,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "getvar";
   case CommandKind::Erase:
     return "erase";
+  case CommandKind::Format:
+    return "format";
   case CommandKind::SetActive:
     return "set-active";
   case CommandKind::Reboot:
@@ -1609,6 +1673,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
   case CommandKind::WipeSuper:
+  case CommandKind::Format:
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
@@ -1657,6 +1722,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::WipeSuper:
   case CommandKind::Getvar:
   case CommandKind::Erase:
+  case CommandKind::Format:
   case CommandKind::SetActive:
   case CommandKind::Reboot:
   case CommandKind::Continue:
@@ -1760,6 +1826,39 @@ int flash_file(const Invocation &invocation) {
   } else {
     std::cout << "Flashed " << invocation.first << " from " << invocation.second
               << '\n';
+  }
+  return 0;
+}
+
+int format_partition(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  const std::optional<std::string_view> filesystem_type =
+      invocation.filesystem_type.empty()
+          ? std::nullopt
+          : std::optional<std::string_view>{invocation.filesystem_type};
+  const auto result = context->format_partition(
+      selector_view(invocation.global), invocation.first, filesystem_type,
+      invocation.format_partition_size, flash_options(invocation.global));
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"format\",\"partition\":\""
+              << json_escape(invocation.first) << "\"";
+    if (filesystem_type.has_value()) {
+      std::cout << ",\"filesystemType\":\""
+                << json_escape(*filesystem_type) << "\"";
+    }
+    if (invocation.format_partition_size != 0U) {
+      std::cout << ",\"partitionSize\":"
+                << invocation.format_partition_size;
+    }
+    std::cout << "}\n";
+  } else {
+    std::cout << "Formatted " << invocation.first << '\n';
   }
   return 0;
 }
@@ -2255,6 +2354,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] wipe-super [super_empty.img]\n"
                "  kairosboot [global options] getvar <variable>\n"
                "  kairosboot [global options] erase <partition>\n"
+               "  kairosboot [global options] format[:type[:size]] <partition>\n"
                "  kairosboot [global options] set-active <slot>\n"
                "  kairosboot [global options] reboot "
                "[system|bootloader|recovery|fastboot]\n"
@@ -2378,6 +2478,8 @@ int run_cli(const int argc, char **argv) {
     return make_boot_image(*invocation);
   case CommandKind::WipeSuper:
     return wipe_super(*invocation);
+  case CommandKind::Format:
+    return format_partition(*invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:

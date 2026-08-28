@@ -217,6 +217,18 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_format_partition_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FormatPartitionAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partition,
+        string? filesystemType,
+        ulong partitionSize,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_set_active_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SetActiveAsync(

@@ -482,5 +482,9 @@ int main() {
   CHECK(!flash.has_value());
   CHECK(flash.error().status() == KB_E_IO);
   CHECK(flash.error().device_identifier() == "ABC");
+  auto invalid_format = context->format_partition_async(
+      "system", std::optional<std::string_view>{"xfs"});
+  CHECK(!invalid_format.has_value());
+  CHECK(invalid_format.error().status() == KB_E_INVALID_ARGUMENT);
   return 0;
 }

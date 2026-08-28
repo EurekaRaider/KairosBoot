@@ -154,6 +154,30 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>
+    /// Generates an empty ext4 or f2fs Android sparse image and flashes it to
+    /// a partition. Null filesystem type and zero size use device-reported
+    /// partition metadata.
+    /// </summary>
+    public Task FormatPartitionAsync(
+        string partition,
+        string? filesystemType = null,
+        ulong partitionSize = 0,
+        FlashOptions options = default,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FormatPartitionCoreAsync(
+            partition,
+            filesystemType,
+            partitionSize,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
     /// <summary>Builds and flashes a default Android boot image.</summary>
     public Task FlashRawAsync(
         string partition,
@@ -973,6 +997,73 @@ public sealed partial class Context : IDisposable
                 handle,
                 deviceSelector,
                 filePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task FormatPartitionCoreAsync(
+        string partition,
+        string? filesystemType,
+        ulong partitionSize,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        if (filesystemType != null &&
+            !string.Equals(filesystemType, "ext4", StringComparison.Ordinal) &&
+            !string.Equals(filesystemType, "f2fs", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Filesystem type must be ext4 or f2fs.",
+                nameof(filesystemType));
+        }
+        ValidateSelector(deviceSelector);
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.FormatPartitionAsync(
+                handle,
+                deviceSelector,
+                partition,
+                filesystemType,
+                partitionSize,
                 ref nativeOptions,
                 out var rawOperation,
                 out var rawError);

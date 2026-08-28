@@ -115,15 +115,15 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 107)
+        if (uniqueEntryPoints.Count != 108)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 107 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 108 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 107, "unique entry points");
+        Check(uniqueEntryPoints.Count == 108, "unique entry points");
         Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
         Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
         Check(entryPoints.Contains("kb_boot_file_async"), "async boot-file import");
@@ -133,6 +133,7 @@ internal static class Program
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
         Check(entryPoints.Contains("kb_wipe_super_async"), "async wipe-super import");
         Check(entryPoints.Contains("kb_wipe_super"), "blocking wipe-super import");
+        Check(entryPoints.Contains("kb_format_partition_async"), "async format import");
         Check(entryPoints.Contains("kb_command_options_init"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
         Check(entryPoints.Contains("kb_upload_file_async"), "upload-file import");
@@ -202,7 +203,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 107, "net48 DllImport count");
+        Check(methods.Count == 108, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -211,7 +212,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 91, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 94, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -229,7 +230,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 107, "net10 LibraryImport count");
+        Check(groups.Count == 108, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -240,7 +241,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 51, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 52, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -501,6 +502,19 @@ internal static class Program
             wipeSuperMethods.All(method => method.GetParameters().Any(parameter =>
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed wipe-super cancellation");
+
+        var formatMethod = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == "FormatPartitionAsync");
+        Check(formatMethod.ReturnType == typeof(Task), "managed format returns Task");
+        Check(
+            formatMethod.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>)),
+            "managed format progress type");
+        Check(
+            formatMethod.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken)),
+            "managed format cancellation");
 
         var expected = new[]
         {

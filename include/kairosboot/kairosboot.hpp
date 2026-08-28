@@ -1038,6 +1038,65 @@ public:
     return erase(std::nullopt, partition, options);
   }
 
+  [[nodiscard]] std::expected<Operation, Error> format_partition_async(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    const std::optional<std::string> type_storage =
+        filesystem_type.has_value()
+            ? std::optional<std::string>{std::string{*filesystem_type}}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_format_partition_async(
+        handle_, selector_value, partition_storage.c_str(),
+        type_storage.has_value() ? type_storage->c_str() : nullptr,
+        partition_size, &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> format_partition_async(
+      const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    return format_partition_async(std::nullopt, partition, filesystem_type,
+                                  partition_size, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> format_partition(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    auto operation = format_partition_async(
+        selector, partition, filesystem_type, partition_size, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> format_partition(
+      const std::string_view partition,
+      const std::optional<std::string_view> filesystem_type = std::nullopt,
+      const std::uint64_t partition_size = 0,
+      const FlashOptions &options = {}) const {
+    return format_partition(std::nullopt, partition, filesystem_type,
+                            partition_size, options);
+  }
+
   [[nodiscard]] std::expected<Operation, Error> set_active_async(
       const DeviceSelector selector, const std::string_view slot,
       const CommandOptions &options = {}) const {

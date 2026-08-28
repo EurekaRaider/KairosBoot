@@ -186,6 +186,17 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_format_partition_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FormatPartitionAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? filesystemType,
+        ulong partitionSize,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_set_active_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int SetActiveAsync(
         ContextSafeHandle context,

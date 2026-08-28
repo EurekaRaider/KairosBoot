@@ -54,6 +54,8 @@ kb_flash_raw
 kb_flash_raw_async
 kb_flashing
 kb_flashing_async
+kb_format_partition
+kb_format_partition_async
 kb_get_staged_file
 kb_get_staged_file_async
 kb_get_version

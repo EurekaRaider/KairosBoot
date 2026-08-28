@@ -337,6 +337,23 @@ KB_API kb_status_t KB_CALL kb_erase(
     kb_context_t *context, const char *device_selector_or_null,
     const char *partition, const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
+/* Creates an empty ext4 or f2fs Android sparse image using the matching AOSP
+ * host tool, then downloads and flashes it in the same device session. A NULL
+ * filesystem_type_override queries partition-type:<partition>; a zero
+ * partition_size_override queries partition-size:<partition>. The generator
+ * is resolved beside the process executable or on PATH. KAIROSBOOT_MKE2FS and
+ * KAIROSBOOT_MAKE_F2FS may name explicit tool paths. */
+KB_API kb_status_t KB_CALL kb_format_partition_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *filesystem_type_override_or_null,
+    uint64_t partition_size_override_or_zero,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_format_partition(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *filesystem_type_override_or_null,
+    uint64_t partition_size_override_or_zero,
+    const kb_flash_options_t *options_or_null, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_set_active_async(
     kb_context_t *context, const char *device_selector_or_null,
     const char *slot, const kb_command_options_t *options_or_null,
