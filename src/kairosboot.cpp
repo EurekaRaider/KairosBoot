@@ -3001,6 +3001,7 @@ kb_status_t start_flash_source_async(
     const std::string_view partition,
     std::shared_ptr<const kairosboot::image::IImageSource> image_source,
     const kb_flash_options_t flash_options, SlotPolicy slot_policy,
+    const bool aosp_raw_profile,
     kb_operation_t **operation,
     kb_error_t **error) {
   const auto selector_text =
@@ -3016,6 +3017,7 @@ kb_status_t start_flash_source_async(
                image_source = std::move(image_source),
                partition_copy = std::move(partition_copy), flash_options,
                slot_policy = std::move(slot_policy),
+               aosp_raw_profile,
                selected_identifier = std::move(selected_identifier)](
                   kairosboot::api::OperationState::TaskContext
                       &task_context) mutable
@@ -3071,13 +3073,20 @@ kb_status_t start_flash_source_async(
         [&service] { service.request_cancel(); });
 
     std::optional<std::string> is_userspace;
+    std::optional<std::string> has_slot;
     std::optional<std::string> is_logical;
-    const std::array<std::pair<std::string, std::optional<std::string> *>, 3>
-        aosp_flash_preflight{{
-            {"is-userspace", &is_userspace},
-            {"has-slot:" + partition_copy, nullptr},
-            {"is-logical:" + partition_copy, &is_logical},
-        }};
+    const std::vector<std::pair<std::string, std::optional<std::string> *>>
+        aosp_flash_preflight = aosp_raw_profile
+            ? std::vector<std::pair<
+                  std::string, std::optional<std::string> *>>{{
+                  {"has-slot:" + partition_copy, &has_slot},
+              }}
+            : std::vector<std::pair<
+                  std::string, std::optional<std::string> *>>{{
+                  {"is-userspace", &is_userspace},
+                  {"has-slot:" + partition_copy, &has_slot},
+                  {"is-logical:" + partition_copy, &is_logical},
+              }};
     for (const auto &[variable, captured] : aosp_flash_preflight) {
       auto value = service.getvar(variable);
       if (!value && value.error().code !=
@@ -3089,7 +3098,7 @@ kb_status_t start_flash_source_async(
         *captured = value->terminal.payload;
       }
     }
-    if (is_logical == "yes" && is_userspace != "yes" &&
+    if (!aosp_raw_profile && is_logical == "yes" && is_userspace != "yes" &&
         flash_options.force == 0) {
       return operation_failure(update_error(
           KB_E_NOT_SUPPORTED,
@@ -3104,7 +3113,24 @@ kb_status_t start_flash_source_async(
         .cancellation = task_context.cancellation_token(),
         .deadline = std::nullopt,
     };
-    if (slot_policy.slot) {
+    if (aosp_raw_profile && !slot_policy.slot && has_slot == "yes") {
+      auto current_slot = service.getvar("current-slot");
+      if (!current_slot) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            current_slot.error(), selected_identifier));
+      }
+      auto slot = current_slot->terminal.payload;
+      if (!slot.empty() && slot.front() == '_') {
+        slot.erase(slot.begin());
+      }
+      if (slot.empty()) {
+        return operation_failure(update_error(
+            KB_E_PROTOCOL,
+            "device returned an empty current-slot for a slotted partition",
+            selected_identifier));
+      }
+      partitions.front() += "_" + slot;
+    } else if (slot_policy.slot) {
       auto resolved = plan_partition_slots(
           slot_planner, partition_copy, *slot_policy.slot, slot_context);
       if (!resolved) {
@@ -3144,16 +3170,18 @@ kb_status_t start_flash_source_async(
     }
 
     std::uint64_t target_max_download_size = 0;
-    auto maximum = service.getvar("max-download-size");
-    if (maximum) {
-      target_max_download_size =
-          kairosboot::fastboot::parse_unsigned_variable(
-              maximum->terminal.payload)
-              .value_or(0);
-    } else if (maximum.error().code !=
-               kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
-      return operation_failure(kairosboot::api::normalize_public_error(
-          maximum.error(), selected_identifier));
+    if (!aosp_raw_profile) {
+      auto maximum = service.getvar("max-download-size");
+      if (maximum) {
+        target_max_download_size =
+            kairosboot::fastboot::parse_unsigned_variable(
+                maximum->terminal.payload)
+                .value_or(0);
+      } else if (maximum.error().code !=
+                 kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            maximum.error(), selected_identifier));
+      }
     }
 
     const auto effective_max_download_size =
@@ -4152,7 +4180,7 @@ kb_status_t KB_CALL kb_flash_file_async(
         std::move(*file_source);
     return start_flash_source_async(
         *context, requested_serial, partition_view, std::move(image_source),
-        flash_options, std::move(*slot_policy), operation, error);
+        flash_options, std::move(*slot_policy), false, operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the flash operation", serial_or_null);
@@ -4443,7 +4471,7 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
     }
     return start_flash_source_async(
         *context, requested_selector, partition_view, std::move(*image_source),
-        flash_options, std::move(*slot_policy), operation, error);
+        flash_options, std::move(*slot_policy), true, operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the flash:raw operation",

@@ -136,7 +136,7 @@ private:
     return true;
 }
 
-void canonical_v0_layout_addresses_hash_and_padding() {
+void canonical_v0_layout_addresses_identity_and_padding() {
     const auto kernel = std::make_shared<MemorySource>("KERNEL");
     const auto ramdisk = std::make_shared<MemorySource>("RAM");
     const auto second = std::make_shared<MemorySource>("S");
@@ -162,6 +162,9 @@ void canonical_v0_layout_addresses_hash_and_padding() {
     CHECK(read_u32(bytes, 36U) == 2048U);
     CHECK(read_u32(bytes, 40U) == 0U);
     CHECK(matches(bytes, 64U, "console=ttyS0"));
+    CHECK(std::all_of(bytes.begin() + 576, bytes.begin() + 608,
+                      [](const std::byte value) { return value == std::byte{0}; }));
+    CHECK(read_u64(bytes, 1652U) == 0x01100000ULL);
     CHECK(matches(bytes, 2048U, "KERNEL"));
     CHECK(matches(bytes, 4096U, "RAM"));
     CHECK(bytes[6144] == std::byte{'S'});
@@ -171,7 +174,7 @@ void canonical_v0_layout_addresses_hash_and_padding() {
     const auto digest = compute_sha256(**built);
     CHECK(digest.has_value());
     CHECK(sha256_hex(*digest) ==
-          "38d9454587604cecfda25439bca1e1a93fc13a9cc77490c68c1ca1bb6b7f8d55");
+          "b60eeb470a80eb6c1967546a86c645b6ce169a5792c7b4fcd465c7c7102f0989");
 }
 
 void command_line_split_and_custom_layout_are_exact() {
@@ -348,8 +351,12 @@ void source_contract_and_cancellation_are_reported() {
     {
         const auto result = build_legacy_boot_image(
             std::make_shared<DeclaredSource>(1U));
-        CHECK(!result.has_value());
-        CHECK(result.error().kind == BootImageBuildErrorKind::Truncated);
+        CHECK(result.has_value());
+        std::array<std::byte, 1> payload{};
+        const auto read = (*result)->read_at(2048U, payload);
+        CHECK(!read.has_value());
+        CHECK(read.error().message ==
+              "boot image payload violated its declared size");
     }
     {
         std::stop_source cancellation;
@@ -370,7 +377,7 @@ void source_contract_and_cancellation_are_reported() {
 int main() {
     using TestCase = std::pair<std::string_view, void (*)()>;
     const std::array<TestCase, 7> tests{{
-        {"canonical v0", canonical_v0_layout_addresses_hash_and_padding},
+        {"canonical v0", canonical_v0_layout_addresses_identity_and_padding},
         {"cmdline and custom layout", command_line_split_and_custom_layout_are_exact},
         {"cross-piece reads", reads_cross_piece_boundaries_without_copying_payloads},
         {"v2 DTB and release fields", v2_dtb_and_release_fields_change_header_and_layout},

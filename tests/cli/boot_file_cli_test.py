@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import pathlib
@@ -117,11 +116,7 @@ def legacy_boot_image(
         0,
     )
     header[64 : 64 + len(command_line)] = command_line
-    digest = hashlib.sha1()
-    for payload in (kernel, ramdisk, second):
-        digest.update(payload)
-        digest.update(struct.pack("<I", len(payload)))
-    header[576:596] = digest.digest()
+    struct.pack_into("<Q", header, 1652, 0x01100000)
 
     def padded(payload: bytes) -> bytes:
         return payload + bytes((-len(payload)) % page_size)

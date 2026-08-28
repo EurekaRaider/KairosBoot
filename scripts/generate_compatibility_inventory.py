@@ -147,13 +147,28 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["snapshot-update", "cancel"], "getvars": [],
         "commands": ["snapshot-update:cancel"], "data": [],
     },
+    "official-tcp-boot-raw": {
+        "transport": "tcp",
+        "coverageIds": ["command.boot", "capability.boot-image-construction"],
+        "argv": ["boot", "<ARTIFACT>/kernel.bin", "<ARTIFACT>/ramdisk.bin"],
+        "getvars": [],
+        "commands": ["download:00001800", "boot"],
+        "data": [["host-to-device", 6144]],
+    },
+    "official-tcp-flash-raw": {
+        "transport": "tcp",
+        "coverageIds": ["command.flash-raw",
+                        "capability.boot-image-construction"],
+        "argv": ["flash:raw", "boot", "<ARTIFACT>/kernel.bin",
+                 "<ARTIFACT>/ramdisk.bin"],
+        "getvars": ["has-slot:boot"],
+        "commands": ["download:00001800", "flash:boot"],
+        "data": [["host-to-device", 6144]],
+    },
 }
 
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
     "official-scripted-erase": ["command.erase"],
-    "official-scripted-boot-flash-raw": [
-        "command.boot", "command.flash-raw", "capability.boot-image-construction",
-    ],
     "official-scripted-slot-policy": [
         "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
     ],

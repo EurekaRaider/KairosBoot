@@ -570,6 +570,10 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     image_path.write_bytes(bytes(range(32)))
     signature_path = output_dir / "differential-signature.bin"
     signature_path.write_bytes(bytes(range(256)))
+    kernel_path = output_dir / "differential-kernel.bin"
+    kernel_path.write_bytes(bytes(index & 0xFF for index in range(2000)))
+    ramdisk_path = output_dir / "differential-ramdisk.bin"
+    ramdisk_path.write_bytes(b"differential-ramdisk")
     return [
         Scenario(
             "official-tcp-getvar", "tcp", ("getvar", "product"),
@@ -661,6 +665,28 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             ("snapshot-update", "cancel"), "snapshot-update:cancel",
             coverage_ids=("command.snapshot-cancel",),
         ),
+        Scenario(
+            "official-tcp-boot-raw", "tcp",
+            ("boot", "<ARTIFACT>/kernel.bin", "<ARTIFACT>/ramdisk.bin"),
+            "boot", coverage_ids=("command.boot",
+                                   "capability.boot-image-construction"),
+            aosp_arguments=("boot", str(kernel_path), str(ramdisk_path)),
+            kairosboot_arguments=("boot", str(kernel_path), str(ramdisk_path)),
+        ),
+        Scenario(
+            "official-tcp-flash-raw", "tcp",
+            ("flash:raw", "boot", "<ARTIFACT>/kernel.bin",
+             "<ARTIFACT>/ramdisk.bin"),
+            "flash:boot", coverage_ids=("command.flash-raw",
+                                         "capability.boot-image-construction"),
+            aosp_arguments=("flash:raw", "boot", str(kernel_path),
+                            str(ramdisk_path)),
+            kairosboot_arguments=("flash:raw", "boot", str(kernel_path),
+                                  str(ramdisk_path)),
+            variable_values=(("has-slot:boot", "no"),
+                             ("is-logical:boot", "no"),
+                             ("partition-type:boot", "raw")),
+        ),
     ]
 
 
@@ -671,15 +697,6 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
         "reason": (
             "official Fastboot probes has-slot and partition-type before erase while "
             "KairosBoot sends the protocol command directly, so strict wire order differs"
-        ),
-    },
-    {
-        "id": "official-scripted-boot-flash-raw",
-        "coverageIds": ["command.boot", "command.flash-raw",
-                        "capability.boot-image-construction"],
-        "reason": (
-            "a real 37.0.1 capture produces a different legacy boot image DATA hash; "
-            "the strict wire comparator therefore rejects these scenarios"
         ),
     },
     {

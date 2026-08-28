@@ -45,11 +45,7 @@ def expected_image(
     struct.pack_into("<10I", header, 8, *fields)
     header[64 : 64 + min(511, len(cmdline))] = cmdline[:511]
     header[608 : 608 + max(0, len(cmdline) - 511)] = cmdline[511:]
-    identity = hashlib.sha1()
-    for payload in (kernel, ramdisk, second):
-        identity.update(payload)
-        identity.update(struct.pack("<I", len(payload)))
-    header[576:596] = identity.digest()
+    struct.pack_into("<Q", header, 1652, 0x01100000)
     return bytes(header) + pad(kernel, page_size) + pad(ramdisk, page_size) + pad(
         second, page_size
     )
@@ -133,7 +129,7 @@ def main() -> int:
         if actual != expected:
             raise AssertionError("constructed image does not match canonical v0 bytes")
         digest = hashlib.sha256(actual).hexdigest()
-        if digest != "e488846716808c718000706c075fa0fe8e69e30d0c612a0336885db4cd79d43d":
+        if digest != "14cf666e232e204d51de0060ff41141c582527fe798807d6166c9e6c4a0140cb":
             raise AssertionError(f"unexpected boot image SHA-256: {digest}")
         if document != {
             "ok": True,

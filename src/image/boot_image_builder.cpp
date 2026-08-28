@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -18,8 +17,6 @@
 
 namespace kairosboot::image {
 namespace {
-
-inline constexpr std::size_t kReadBufferSize = 64U * 1024U;
 
 [[nodiscard]] BootImageBuildError error(
     const BootImageBuildErrorKind kind,
@@ -161,153 +158,6 @@ encode_patch_level(const std::string_view value) {
     // Android boot headers encode year and month; the day is validated but is
     // intentionally not representable in the wire field.
     return ((year - 2000U) << 4U) | month;
-}
-
-class Sha1 final {
-public:
-    void update(const std::span<const std::byte> bytes) noexcept {
-        std::size_t consumed = 0U;
-        while (consumed < bytes.size()) {
-            const auto amount =
-                std::min(bytes.size() - consumed, block_.size() - buffered_);
-            std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(consumed),
-                        amount,
-                        block_.begin() + static_cast<std::ptrdiff_t>(buffered_));
-            consumed += amount;
-            buffered_ += amount;
-            total_bytes_ += amount;
-            if (buffered_ == block_.size()) {
-                transform(block_);
-                buffered_ = 0U;
-            }
-        }
-    }
-
-    [[nodiscard]] std::array<std::byte, 20> finish() noexcept {
-        const auto bit_count = total_bytes_ * 8U;
-        const std::array marker{std::byte{0x80}};
-        update(marker);
-        const std::array<std::byte, 64> zeros{};
-        const auto zero_count = buffered_ <= 56U ? 56U - buffered_
-                                                 : 120U - buffered_;
-        update(std::span(zeros).first(zero_count));
-        std::array<std::byte, 8> length{};
-        for (std::size_t index = 0U; index < length.size(); ++index) {
-            length[length.size() - 1U - index] =
-                static_cast<std::byte>((bit_count >> (index * 8U)) & 0xffU);
-        }
-        update(length);
-
-        std::array<std::byte, 20> digest{};
-        for (std::size_t word = 0U; word < state_.size(); ++word) {
-            for (std::size_t byte = 0U; byte < 4U; ++byte) {
-                digest[word * 4U + byte] = static_cast<std::byte>(
-                    (state_[word] >> ((3U - byte) * 8U)) & 0xffU);
-            }
-        }
-        return digest;
-    }
-
-private:
-    void transform(const std::span<const std::byte, 64> block) noexcept {
-        std::array<std::uint32_t, 80> words{};
-        for (std::size_t index = 0U; index < 16U; ++index) {
-            for (std::size_t byte = 0U; byte < 4U; ++byte) {
-                words[index] =
-                    (words[index] << 8U) |
-                    std::to_integer<std::uint8_t>(block[index * 4U + byte]);
-            }
-        }
-        for (std::size_t index = 16U; index < words.size(); ++index) {
-            words[index] = std::rotl(
-                words[index - 3U] ^ words[index - 8U] ^
-                    words[index - 14U] ^ words[index - 16U],
-                1);
-        }
-
-        auto a = state_[0];
-        auto b = state_[1];
-        auto c = state_[2];
-        auto d = state_[3];
-        auto e = state_[4];
-        for (std::size_t index = 0U; index < words.size(); ++index) {
-            std::uint32_t function = 0U;
-            std::uint32_t constant = 0U;
-            if (index < 20U) {
-                function = (b & c) | ((~b) & d);
-                constant = 0x5a827999U;
-            } else if (index < 40U) {
-                function = b ^ c ^ d;
-                constant = 0x6ed9eba1U;
-            } else if (index < 60U) {
-                function = (b & c) | (b & d) | (c & d);
-                constant = 0x8f1bbcdcU;
-            } else {
-                function = b ^ c ^ d;
-                constant = 0xca62c1d6U;
-            }
-            const auto temporary =
-                std::rotl(a, 5) + function + e + constant + words[index];
-            e = d;
-            d = c;
-            c = std::rotl(b, 30);
-            b = a;
-            a = temporary;
-        }
-        state_[0] += a;
-        state_[1] += b;
-        state_[2] += c;
-        state_[3] += d;
-        state_[4] += e;
-    }
-
-    std::array<std::uint32_t, 5> state_{
-        0x67452301U,
-        0xefcdab89U,
-        0x98badcfeU,
-        0x10325476U,
-        0xc3d2e1f0U,
-    };
-    std::array<std::byte, 64> block_{};
-    std::uint64_t total_bytes_{};
-    std::size_t buffered_{};
-};
-
-[[nodiscard]] std::expected<void, BootImageBuildError> hash_payload(
-    Sha1& hash,
-    const std::shared_ptr<const IImageSource>& source,
-    const std::string_view name,
-    const std::stop_token cancellation) {
-    const auto size = source == nullptr ? 0U : source->size();
-    std::array<std::byte, kReadBufferSize> buffer{};
-    std::uint64_t completed = 0U;
-    while (completed < size) {
-        if (cancellation.stop_requested()) {
-            return std::unexpected(error(
-                BootImageBuildErrorKind::Cancelled,
-                "boot image construction was cancelled"));
-        }
-        const auto requested = static_cast<std::size_t>(
-            std::min<std::uint64_t>(buffer.size(), size - completed));
-        auto read = source->read_at(completed, std::span(buffer).first(requested));
-        if (!read) {
-            return std::unexpected(error(
-                BootImageBuildErrorKind::Source,
-                std::string{name} + " read failed: " + read.error().message));
-        }
-        if (*read == 0U || *read > requested) {
-            return std::unexpected(error(
-                *read == 0U ? BootImageBuildErrorKind::Truncated
-                            : BootImageBuildErrorKind::Source,
-                std::string{name} + " violated its declared size"));
-        }
-        hash.update(std::span(buffer).first(*read));
-        completed += *read;
-    }
-    std::array<std::byte, 4> encoded_size{};
-    write_u32(encoded_size, 0U, static_cast<std::uint32_t>(size));
-    hash.update(encoded_size);
-    return {};
 }
 
 }  // namespace
@@ -477,11 +327,6 @@ build_boot_image(
                     BootImageBuildErrorKind::InvalidArgument,
                     "a DTB payload is supported only by boot header v2"));
             }
-            if (options.dtb_offset != defaults.dtb_offset) {
-                return std::unexpected(error(
-                    BootImageBuildErrorKind::InvalidArgument,
-                    "DTB offset is supported only by boot header v2"));
-            }
         }
         if (dtb != nullptr && dtb->size() == 0U) {
             return std::unexpected(error(
@@ -586,6 +431,10 @@ build_boot_image(
             write_u32(*header, 36U, page_size);
             write_u32(*header, 40U, options.header_version);
             write_u32(*header, 44U, os_version);
+            // Platform-Tools initializes the full v2 header template even for
+            // v0/v1 images. Its unused dtb_addr field therefore retains the
+            // raw default/option value; only v2 adds base to it below.
+            write_u64(*header, 1652U, options.dtb_offset);
             const auto first_length =
                 std::min<std::size_t>(511U, options.command_line.size());
             for (std::size_t index = 0U; index < first_length; ++index) {
@@ -608,32 +457,6 @@ build_boot_image(
                                                          : dtb->size()));
                 write_u64(*header, 1652U, options.base + options.dtb_offset);
             }
-
-            Sha1 hash;
-            if (auto result =
-                    hash_payload(hash, kernel, "kernel", cancellation);
-                !result) {
-                return std::unexpected(std::move(result.error()));
-            }
-            if (auto result =
-                    hash_payload(hash, ramdisk, "ramdisk", cancellation);
-                !result) {
-                return std::unexpected(std::move(result.error()));
-            }
-            if (auto result =
-                    hash_payload(hash, second, "second", cancellation);
-                !result) {
-                return std::unexpected(std::move(result.error()));
-            }
-            if (options.header_version == 2U) {
-                if (auto result =
-                        hash_payload(hash, dtb, "dtb", cancellation);
-                    !result) {
-                    return std::unexpected(std::move(result.error()));
-                }
-            }
-            const auto digest = hash.finish();
-            std::copy(digest.begin(), digest.end(), header->begin() + 576);
         }
 
         auto impl = std::make_unique<LegacyBootImageSource::Impl>();

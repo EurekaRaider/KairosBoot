@@ -472,14 +472,8 @@ private:
       CHECK((handshake == std::array<char, 4>{'F', 'B', '0', '1'}));
       boost::asio::write(socket, boost::asio::buffer(handshake));
 
-      CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
-      write_frame(socket, "OKAYno");
       CHECK(as_string(read_frame(socket)) == "getvar:has-slot:boot");
       write_frame(socket, "OKAYno");
-      CHECK(as_string(read_frame(socket)) == "getvar:is-logical:boot");
-      write_frame(socket, "OKAYno");
-      CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
-      write_frame(socket, "OKAY0x00100000");
       CHECK(as_string(read_frame(socket)) == "download:00002000");
       write_frame(socket, "DATA00002000");
       const auto image = read_frame(socket);
