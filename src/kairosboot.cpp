@@ -4982,14 +4982,15 @@ kb_status_t KB_CALL kb_wipe_super_async(
   try {
     std::string image_path;
     if (super_empty_image_or_null == nullptr) {
-      const char *product_out = std::getenv("ANDROID_PRODUCT_OUT");
-      if (product_out == nullptr || product_out[0] == '\0') {
+      const auto product_out =
+          kairosboot::image::detail::environment_value("ANDROID_PRODUCT_OUT");
+      if (!product_out.has_value()) {
         return fail(error, KB_E_INVALID_ARGUMENT,
                     "ANDROID_PRODUCT_OUT is not set; pass an explicit "
                     "super_empty image",
                     device_selector_or_null);
       }
-      image_path = product_out;
+      image_path = *product_out;
       if (!image_path.ends_with('/') && !image_path.ends_with('\\')) {
         image_path.push_back(std::filesystem::path::preferred_separator);
       }

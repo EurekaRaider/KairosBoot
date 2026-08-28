@@ -8,6 +8,7 @@
 #include <expected>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -180,11 +181,35 @@ executable_directory() {
 #endif
 }
 
+[[nodiscard]] inline std::optional<std::string>
+environment_value(const char *name) {
+#if defined(_WIN32)
+  char *value = nullptr;
+  std::size_t length = 0U;
+  const int error = ::_dupenv_s(&value, &length, name);
+  std::unique_ptr<char, decltype(&std::free)> owned(value, &std::free);
+  if (error != 0 || owned == nullptr) {
+    return std::nullopt;
+  }
+  std::string result(owned.get());
+#else
+  const char *value = std::getenv(name);
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  std::string result(value);
+#endif
+  if (result.empty()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
 [[nodiscard]] inline std::filesystem::path
 resolve_tool(const char *environment_name, const std::string_view basename) {
-  if (const char *configured = std::getenv(environment_name);
-      configured != nullptr && configured[0] != '\0') {
-    return std::filesystem::path(configured);
+  if (const auto configured = environment_value(environment_name);
+      configured.has_value()) {
+    return std::filesystem::path(*configured);
   }
   if (const auto directory = executable_directory(); directory.has_value()) {
     auto candidate = *directory / std::string(basename);
@@ -201,9 +226,9 @@ resolve_tool(const char *environment_name, const std::string_view basename) {
 
 [[nodiscard]] inline std::optional<std::filesystem::path>
 mke2fs_config(const std::filesystem::path &tool) {
-  if (const char *configured = std::getenv("KAIROSBOOT_MKE2FS_CONFIG");
-      configured != nullptr && configured[0] != '\0') {
-    return std::filesystem::path(configured);
+  if (const auto configured = environment_value("KAIROSBOOT_MKE2FS_CONFIG");
+      configured.has_value()) {
+    return std::filesystem::path(*configured);
   }
   if (!tool.has_parent_path()) {
     return std::nullopt;

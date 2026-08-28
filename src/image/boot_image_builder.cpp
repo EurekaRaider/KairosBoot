@@ -297,7 +297,7 @@ build_boot_image(
         }
         const std::uint32_t os_version = *encoded_version | *encoded_patch;
 
-        constexpr LegacyBootImageOptions defaults{};
+        const LegacyBootImageOptions defaults{};
         if (v3_or_later) {
             if (second != nullptr) {
                 return std::unexpected(error(

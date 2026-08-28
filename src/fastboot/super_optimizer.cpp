@@ -428,12 +428,14 @@ descriptor_end(const Descriptor& value, const std::uint32_t tables_size,
             SuperOptimizationErrorKind::IncompatibleLayout,
             "LP metadata header version or size is unsupported"));
     }
-    auto checked_header = std::vector<std::byte>(first->begin(),
-                                                 first->begin() + header_size);
+    std::array<std::byte, kHeaderV12Size> checked_header{};
+    std::copy_n(first->begin(), header_size, checked_header.begin());
     const auto stored_header = std::span(*first).subspan(12U, 32U);
     std::fill(checked_header.begin() + 12, checked_header.begin() + 44,
               std::byte{0});
-    if (!std::ranges::equal(stored_header, digest_bytes(checked_header))) {
+    if (!std::ranges::equal(
+            stored_header,
+            digest_bytes(std::span(checked_header).first(header_size)))) {
         return std::unexpected(fail(
             SuperOptimizationErrorKind::InvalidMetadata,
             "LP metadata header checksum mismatch"));
@@ -819,11 +821,12 @@ void write_name(std::span<std::byte> output, const std::size_t offset,
 
     const auto table_digest = digest_bytes(bytes.subspan(metadata.header_size));
     std::copy(table_digest.begin(), table_digest.end(), bytes.begin() + 48);
-    auto header_for_hash = std::vector<std::byte>(
-        bytes.begin(), bytes.begin() + metadata.header_size);
+    std::array<std::byte, kHeaderV12Size> header_for_hash{};
+    std::copy_n(bytes.begin(), metadata.header_size, header_for_hash.begin());
     std::fill(header_for_hash.begin() + 12, header_for_hash.begin() + 44,
               std::byte{0});
-    const auto header_digest = digest_bytes(header_for_hash);
+    const auto header_digest = digest_bytes(
+        std::span(header_for_hash).first(metadata.header_size));
     std::copy(header_digest.begin(), header_digest.end(), bytes.begin() + 12);
     return output;
 }
