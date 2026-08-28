@@ -77,11 +77,11 @@
     },
     {
       "ids": ["command.flash"],
-      "status": "partial",
+      "status": "implemented",
       "cSymbols": ["kb_flash_file", "kb_flash_file_async"],
       "cliCommands": ["flash"],
-      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/sparse/sparse_image_tests.cpp", "tests/cli/scripted_cli_test.py"],
-      "note": "Raw and sparse file flashing are implemented through the public SDK, but KairosBoot deliberately requires an explicit file and does not yet reproduce the frozen Fastboot `flash <partition>` image-path inference."
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/sparse/sparse_image_tests.cpp", "tests/cli/scripted_cli_test.py", "scripts/run_official_fastboot_differential.py"],
+      "note": "Raw and sparse flashing is implemented, and the CLI reproduces the frozen Platform-Tools 37.0.1 `flash <partition>` fixed-nickname lookup under ANDROID_PRODUCT_OUT. The public C, C++, and .NET file-flash APIs intentionally continue to require an explicit file path; the optional operand is a CLI contract, not a C ABI optional-file parameter."
     },
     {
       "ids": ["command.update"],

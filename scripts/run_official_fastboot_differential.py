@@ -53,6 +53,7 @@ class Scenario:
     aosp_arguments: Optional[tuple[str, ...]] = None
     kairosboot_arguments: Optional[tuple[str, ...]] = None
     variable_values: tuple[tuple[str, str], ...] = ()
+    environment: tuple[tuple[str, str], ...] = ()
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -437,7 +438,14 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
         listener.settimeout(10)
         endpoint = f"tcp:127.0.0.1:{listener.getsockname()[1]}"
         expanded = [part.replace("{endpoint}", endpoint) for part in command]
-        process = subprocess.Popen(expanded, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        environment = os.environ.copy()
+        environment.update(scenario.environment)
+        process = subprocess.Popen(
+            expanded,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
         try:
             connection, _ = listener.accept()
             with connection:
@@ -474,7 +482,14 @@ def _capture_udp(command: Sequence[str], scenario: Scenario, label: str) -> dict
         server.settimeout(10)
         endpoint = f"udp:127.0.0.1:{server.getsockname()[1]}"
         expanded = [part.replace("{endpoint}", endpoint) for part in command]
-        process = subprocess.Popen(expanded, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        environment = os.environ.copy()
+        environment.update(scenario.environment)
+        process = subprocess.Popen(
+            expanded,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
         try:
             query, peer = server.recvfrom(8192)
             if query != _udp_packet(1, 0):
@@ -574,6 +589,8 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     kernel_path.write_bytes(bytes(index & 0xFF for index in range(2000)))
     ramdisk_path = output_dir / "differential-ramdisk.bin"
     ramdisk_path.write_bytes(b"differential-ramdisk")
+    default_system_path = output_dir / "system.img"
+    default_system_path.write_bytes(bytes(range(32)))
     return [
         Scenario(
             "official-tcp-getvar", "tcp", ("getvar", "product"),
@@ -598,6 +615,13 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
              "capability.raw-image", "image.system"),
             aosp_arguments=("flash", "system", str(image_path)),
             kairosboot_arguments=("flash", "system", str(image_path)),
+        ),
+        Scenario(
+            "official-tcp-flash-default-file", "tcp",
+            ("flash", "system"), "flash:system", default_system_path,
+            ("command.flash", "protocol.command", "protocol.download",
+             "capability.raw-image", "image.system"),
+            environment=(("ANDROID_PRODUCT_OUT", str(output_dir)),),
         ),
         Scenario(
             "official-tcp-signature", "tcp",

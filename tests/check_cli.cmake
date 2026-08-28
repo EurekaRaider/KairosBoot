@@ -115,9 +115,10 @@ function(expect_text_parse_error NAME EXPECTED_MESSAGE)
 endfunction()
 
 expect_text_parse_error(
-  flash_arity "flash requires exactly <partition> and <file>" flash)
+  flash_arity "flash requires <partition> [file]" flash)
 expect_text_parse_error(
-  flash_missing_file "flash requires exactly <partition> and <file>" flash boot)
+  flash_excess_operands "flash requires <partition> [file]" flash boot boot.img
+  extra.img)
 expect_text_parse_error(
   flash_raw_arity
   "flash:raw requires <partition> <kernel> [ramdisk [second]]" flash:raw boot)
@@ -184,7 +185,7 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE
   ERROR_STRIP_TRAILING_WHITESPACE)
 set(EXPECTED_JSON_PARSE
-    "{\"ok\":false,\"status\":\"invalid_argument\",\"message\":\"flash requires exactly <partition> and <file>\"}")
+    "{\"ok\":false,\"status\":\"invalid_argument\",\"message\":\"flash requires <partition> [file]\"}")
 if(NOT JSON_PARSE_RESULT EQUAL 2 OR NOT JSON_PARSE_ERROR STREQUAL "" OR
    NOT JSON_PARSE_OUTPUT STREQUAL EXPECTED_JSON_PARSE)
   message(FATAL_ERROR

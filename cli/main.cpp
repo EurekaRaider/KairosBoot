@@ -307,6 +307,51 @@ struct LocalRuntimeError {
   std::string message;
 };
 
+std::expected<std::string, LocalRuntimeError>
+infer_flash_file(const std::string_view partition) {
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 24>
+      images{{
+          {"boot", "boot.img"},
+          {"bootloader", "bootloader.img"},
+          {"init_boot", "init_boot.img"},
+          {"cache", "cache.img"},
+          {"dtbo", "dtbo.img"},
+          {"dts", "dt.img"},
+          {"odm", "odm.img"},
+          {"odm_dlkm", "odm_dlkm.img"},
+          {"product", "product.img"},
+          {"pvmfw", "pvmfw.img"},
+          {"radio", "radio.img"},
+          {"recovery", "recovery.img"},
+          {"super", "super.img"},
+          {"system", "system.img"},
+          {"system_dlkm", "system_dlkm.img"},
+          {"system_ext", "system_ext.img"},
+          {"userdata", "userdata.img"},
+          {"vbmeta", "vbmeta.img"},
+          {"vbmeta_system", "vbmeta_system.img"},
+          {"vbmeta_vendor", "vbmeta_vendor.img"},
+          {"vendor", "vendor.img"},
+          {"vendor_boot", "vendor_boot.img"},
+          {"vendor_dlkm", "vendor_dlkm.img"},
+          {"vendor_kernel_boot", "vendor_kernel_boot.img"},
+      }};
+
+  for (const auto &[nickname, filename] : images) {
+    if (partition == nickname) {
+      const char *const product_out = std::getenv("ANDROID_PRODUCT_OUT");
+      if (product_out == nullptr || product_out[0] == '\0') {
+        return std::unexpected(LocalRuntimeError{
+            KB_E_INVALID_ARGUMENT, "ANDROID_PRODUCT_OUT not set"});
+      }
+      return std::string{product_out} + "/" + std::string{filename};
+    }
+  }
+  return std::unexpected(LocalRuntimeError{
+      KB_E_INVALID_ARGUMENT,
+      "cannot determine image filename for '" + std::string{partition} + "'"});
+}
+
 #if defined(_WIN32)
 std::expected<std::string, LocalRuntimeError>
 utf8_from_wide(const std::wstring_view value) {
@@ -981,8 +1026,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   }
   if (command == "flash") {
     const int operand_count = argc - command_index - 1;
-    if (operand_count != 2) {
-      return error("flash requires exactly <partition> and <file>");
+    if (operand_count < 1 || operand_count > 2) {
+      return error("flash requires <partition> [file]");
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for flash");
@@ -990,6 +1035,13 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     result.first = argv[index];
     if (result.first.empty()) {
       return error("flash partition must not be empty");
+    }
+    if (operand_count == 1) {
+      result.kind = CommandKind::Flash;
+      if (result.global.dtb_path.has_value()) {
+        return error("option --dtb is valid only for flash vendor_boot:RAMDISK");
+      }
+      return result;
     }
     const auto separator = result.first.find(':');
     const auto partition = result.first.substr(0U, separator);
@@ -2312,22 +2364,32 @@ kairosboot::ContextOptions context_options(const GlobalOptions &options) {
 }
 
 int flash_file(const Invocation &invocation) {
+  std::string inferred_file;
+  std::string_view file = invocation.second;
+  if (file.empty()) {
+    auto inferred = infer_flash_file(invocation.first);
+    if (!inferred) {
+      return print_local_runtime_error(inferred.error(), invocation.global.json);
+    }
+    inferred_file = std::move(*inferred);
+    file = inferred_file;
+  }
   auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
   const auto result = context->flash_file(
       selector_view(invocation.global), invocation.first,
-      path_from_utf8(invocation.second), flash_options(invocation.global));
+      path_from_utf8(file), flash_options(invocation.global));
   if (!result) {
     return print_runtime_error(result.error(), invocation.global.json);
   }
   if (invocation.global.json) {
     std::cout << "{\"ok\":true,\"command\":\"flash\",\"partition\":\""
               << json_escape(invocation.first) << "\",\"file\":\""
-              << json_escape(invocation.second) << "\"}\n";
+              << json_escape(file) << "\"}\n";
   } else {
-    std::cout << "Flashed " << invocation.first << " from " << invocation.second
+    std::cout << "Flashed " << invocation.first << " from " << file
               << '\n';
   }
   return 0;
@@ -2984,7 +3046,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot plan <manifest> [--digest]\n"
                "  kairosboot [--json] [--timeout-ms <milliseconds>] run "
                "<manifest>\n"
-               "  kairosboot [global options] flash <partition> <file>\n"
+               "  kairosboot [global options] flash <partition> [file]\n"
                "  kairosboot [global options] [--dtb <file>] flash "
                "vendor_boot:RAMDISK <file>\n"
                "  kairosboot [global options] flash:raw <partition> <kernel> "

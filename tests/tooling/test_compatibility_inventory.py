@@ -35,7 +35,6 @@ class CompatibilityInventoryTests(unittest.TestCase):
         expected_required_gaps = [
             "capability.boot-image-construction",
             "command.boot",
-            "command.flash",
             "command.flash-raw",
         ]
         self.assertEqual(inventory["requiredGaps"], expected_required_gaps)

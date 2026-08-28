@@ -194,6 +194,7 @@ def invoke(
     expected_exit: int = 0,
     timeout_ms: int = 5000,
     environment: Optional[dict[str, str]] = None,
+    working_directory: Optional[pathlib.Path] = None,
 ) -> tuple[bytes, bytes]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -214,6 +215,7 @@ def invoke(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
+            cwd=working_directory,
         )
         device_error: Optional[BaseException] = None
         try:
@@ -648,12 +650,12 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
         raise AssertionError(f"unknown command error changed: {stderr!r}")
 
     stdout, stderr = local(["-S", "0", "flash"], 2)
-    if b"flash requires exactly <partition> and <file>" not in stderr:
+    if b"flash requires <partition> [file]" not in stderr:
         raise AssertionError(f"zero sparse limit was not accepted: {stderr!r}")
 
-    stdout, stderr = local(["flash", "boot"], 2)
-    if b"flash requires exactly <partition> and <file>" not in stderr:
-        raise AssertionError(f"missing flash file was not rejected: {stderr!r}")
+    stdout, stderr = local(["flash", "boot", "boot.img", "extra.img"], 2)
+    if b"flash requires <partition> [file]" not in stderr:
+        raise AssertionError(f"excess flash operands were not rejected: {stderr!r}")
 
     stdout, stderr = local(["-S", "18446744073709551615G", "flash"], 2)
     if b"option -S requires SIZE[K|M|G]" not in stderr:
@@ -1161,6 +1163,145 @@ def run(cli: pathlib.Path) -> None:
             "file": str(stage_file),
         }
 
+        default_product_out = directory / "default-product-out"
+        default_product_out.mkdir()
+        default_boot = default_product_out / "boot.img"
+        default_boot_payload = bytes([0xA5]) * 16
+        default_boot.write_bytes(default_boot_payload)
+        ambiguous_working_directory = directory / "ambiguous-working-directory"
+        ambiguous_working_directory.mkdir()
+        (ambiguous_working_directory / "boot.img").write_bytes(bytes([0x5A]) * 16)
+        default_environment = os.environ.copy()
+        default_environment["ANDROID_PRODUCT_OUT"] = str(default_product_out)
+
+        def flashed_default_boot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == default_boot_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "boot"],
+            flashed_default_boot,
+            environment=default_environment,
+            working_directory=ambiguous_working_directory,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash",
+            "partition": "boot",
+            "file": str(default_boot),
+        }
+
+        def flashed_default_boot_slot_a(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == default_boot_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:boot_a"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--slot", "a", "--json", "flash", "boot"],
+            flashed_default_boot_slot_a,
+            environment=default_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["file"] == str(default_boot)
+
+        default_vendor_boot = default_product_out / "vendor_boot.img"
+        default_vendor_boot.write_bytes(stage_payload)
+
+        def flashed_default_vendor_boot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vendor_boot"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00000010"
+            send_frame(connection, b"DATA00000010")
+            assert receive_frame(connection) == stage_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:vendor_boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "flash", "vendor_boot"],
+            flashed_default_vendor_boot,
+            environment=default_environment,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["file"] == str(default_vendor_boot)
+
+        missing_environment = os.environ.copy()
+        missing_environment.pop("ANDROID_PRODUCT_OUT", None)
+        missing_product_out = invoke_without_connection(
+            cli, ["flash", "boot"], 4, "invalid_argument", missing_environment
+        )
+        assert missing_product_out["message"] == "ANDROID_PRODUCT_OUT not set"
+        unknown_without_product_out = invoke_without_connection(
+            cli,
+            ["flash", "unknown"],
+            4,
+            "invalid_argument",
+            missing_environment,
+        )
+        assert unknown_without_product_out["message"] == (
+            "cannot determine image filename for 'unknown'"
+        )
+
+        missing_image_product_out = directory / "missing-image-product-out"
+        missing_image_product_out.mkdir()
+        missing_image_environment = os.environ.copy()
+        missing_image_environment["ANDROID_PRODUCT_OUT"] = str(
+            missing_image_product_out
+        )
+        missing_image = invoke_without_connection(
+            cli, ["flash", "boot"], 4, "io", missing_image_environment
+        )
+        assert missing_image["message"] == "image file does not exist"
+
+        for unresolved_partition in ("unknown", "boot_a", "vendor_boot:alpha"):
+            unresolved = invoke_without_connection(
+                cli,
+                ["flash", unresolved_partition],
+                4,
+                "invalid_argument",
+                default_environment,
+            )
+            assert unresolved["message"] == (
+                f"cannot determine image filename for '{unresolved_partition}'"
+            )
+
         def rejected_logical_flash(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"getvar:is-userspace"
             send_frame(connection, b"OKAYno")
@@ -1308,16 +1449,6 @@ def run(cli: pathlib.Path) -> None:
             "file": str(replacement_ramdisk),
             "dtb": str(replacement_dtb),
         }
-
-        missing_vendor_boot_file = invoke_without_connection(
-            cli,
-            ["flash", "vendor_boot:alpha"],
-            2,
-            "invalid_argument",
-        )
-        assert missing_vendor_boot_file["message"] == (
-            "flash requires exactly <partition> and <file>"
-        )
 
         vbmeta_file = directory / "vbmeta.img"
         vbmeta_payload = bytearray([0x5A] * 256)
