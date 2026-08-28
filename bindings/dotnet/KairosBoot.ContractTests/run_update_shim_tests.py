@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 from pathlib import Path
 import platform
@@ -90,6 +91,16 @@ def compile_shim(output_directory: Path) -> Path:
     return output
 
 
+def require_shim_export(library: Path, name: str) -> None:
+    try:
+        native = ctypes.CDLL(str(library))
+        getattr(native, name)
+    except (OSError, AttributeError) as error:
+        raise RuntimeError(
+            f"scripted native shim is missing required export {name}: {library}"
+        ) from error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -119,6 +130,7 @@ def main() -> int:
         )
         managed = target_path(framework)
         native = compile_shim(managed.parent)
+        require_shim_export(native, "kb_context_options_init")
         env = os.environ.copy()
         env["KAIROSBOOT_UPDATE_SHIM"] = "1"
         if framework == "net48":

@@ -115,7 +115,7 @@ function(expect_text_parse_error NAME EXPECTED_MESSAGE)
 endfunction()
 
 expect_text_parse_error(
-  flash_arity "flash requires exactly <partition> and <file>" flash boot)
+  flash_arity "flash requires <partition> [file]" flash)
 expect_text_parse_error(
   flash_raw_arity
   "flash:raw requires <partition> <kernel> [ramdisk [second]]" flash:raw boot)
@@ -175,14 +175,14 @@ if(NOT EMPTY_SERIAL_PREFIX_POSITION EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND "${CLI}" --json flash boot
+  COMMAND "${CLI}" --json flash
   RESULT_VARIABLE JSON_PARSE_RESULT
   OUTPUT_VARIABLE JSON_PARSE_OUTPUT
   ERROR_VARIABLE JSON_PARSE_ERROR
   OUTPUT_STRIP_TRAILING_WHITESPACE
   ERROR_STRIP_TRAILING_WHITESPACE)
 set(EXPECTED_JSON_PARSE
-    "{\"ok\":false,\"status\":\"invalid_argument\",\"message\":\"flash requires exactly <partition> and <file>\"}")
+    "{\"ok\":false,\"status\":\"invalid_argument\",\"message\":\"flash requires <partition> [file]\"}")
 if(NOT JSON_PARSE_RESULT EQUAL 2 OR NOT JSON_PARSE_ERROR STREQUAL "" OR
    NOT JSON_PARSE_OUTPUT STREQUAL EXPECTED_JSON_PARSE)
   message(FATAL_ERROR
