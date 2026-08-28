@@ -187,6 +187,26 @@ std::expected<FileReceiveResult, FileReceiveError> FileReceiveService::upload(
         primitives_.upload_to_sink(*sink, maximum_bytes, observer));
 }
 
+std::expected<FileReceiveResult, FileReceiveError>
+FileReceiveService::get_staged(
+    const std::filesystem::path& destination,
+    const std::uint64_t maximum_bytes,
+    const protocol::TransferProgressObserver& observer) {
+    if (maximum_bytes == 0 || maximum_bytes > kMaximumFileReceiveBytes) {
+        return std::unexpected(invalid_maximum(
+            PrimitiveOperation::Upload, maximum_bytes));
+    }
+    auto sink = create_sink(PrimitiveOperation::Upload, destination);
+    if (!sink) {
+        return std::unexpected(std::move(sink.error()));
+    }
+    return finish(
+        PrimitiveOperation::Upload,
+        *sink,
+        maximum_bytes,
+        primitives_.get_staged_to_sink(*sink, maximum_bytes, observer));
+}
+
 std::expected<FileReceiveResult, FileReceiveError> FileReceiveService::fetch(
     const std::string_view partition,
     const FetchRange range,

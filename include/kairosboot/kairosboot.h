@@ -179,7 +179,7 @@ typedef struct kb_command_options {
   uint32_t timeout_ms;
   kb_progress_callback_t progress_callback;
   void *progress_user_data;
-  /* Hard in-memory bound for upload/fetch. The default is 64 MiB. */
+  /* Hard receive bound for upload/get-staged/fetch. The default is 64 MiB. */
   uint64_t maximum_receive_bytes;
 } kb_command_options_t;
 
@@ -435,6 +435,40 @@ KB_API kb_status_t KB_CALL kb_fetch(
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 
+/* Bounded, constant-memory device-to-host file operations. The destination is
+ * replaced atomically only after the exact DATA payload and terminal OKAY have
+ * been received and synchronized. On every failure or cancellation, an
+ * existing destination is preserved. output_path is UTF-8. upload-file and
+ * get-staged-file intentionally use the same AOSP "upload" wire command. */
+KB_API kb_status_t KB_CALL kb_upload_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_upload_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_get_staged_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_get_staged_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_fetch_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, uint64_t offset_or_unspecified,
+    uint64_t size_or_unspecified, const char *output_path,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_fetch_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, uint64_t offset_or_unspecified,
+    uint64_t size_or_unspecified, const char *output_path,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
+
 /* Context-free Fleet manifest entry points. Neither function needs a
  * kb_context_t: parsing and validation never initialize libusb, enumerate
  * devices, or open artifact paths; only the manifest file itself is read.
@@ -506,6 +540,13 @@ KB_API const uint8_t *KB_CALL kb_command_result_message_payload(
     const kb_command_result_t *result, size_t index, size_t *size);
 KB_API const uint8_t *KB_CALL kb_command_result_data(
     const kb_command_result_t *result, size_t *size);
+/* Borrowed NUL-terminated UTF-8 destination used by a successful file receive,
+ * or an empty string for commands that did not publish a file. */
+KB_API const char *KB_CALL kb_command_result_output_path(
+    const kb_command_result_t *result);
+/* Exact DATA byte count received into memory or atomically published to file. */
+KB_API uint64_t KB_CALL kb_command_result_received_bytes(
+    const kb_command_result_t *result);
 KB_API const char *KB_CALL kb_command_result_device_identifier(
     const kb_command_result_t *result);
 KB_API void KB_CALL kb_command_result_release(kb_command_result_t *result);

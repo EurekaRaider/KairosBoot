@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "eaae9b821fc06301c3b155ade5e37bae00f49032cc8bd77e1d527f4233803379",
+  "headerContractSha256": "394d56458381738588e06a65f708232c1856ec6e0f6fce70280e289c45d520a4",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -325,6 +325,8 @@
     "kb_command_result_message_count",
     "kb_command_result_message_kind",
     "kb_command_result_message_payload",
+    "kb_command_result_output_path",
+    "kb_command_result_received_bytes",
     "kb_command_result_release",
     "kb_command_result_terminal_payload",
     "kb_context_create",
@@ -360,11 +362,15 @@
     "kb_error_transfer_state",
     "kb_fetch",
     "kb_fetch_async",
+    "kb_fetch_file",
+    "kb_fetch_file_async",
     "kb_flash_file",
     "kb_flash_file_async",
     "kb_flash_options_init",
     "kb_flashing",
     "kb_flashing_async",
+    "kb_get_staged_file",
+    "kb_get_staged_file_async",
     "kb_get_version",
     "kb_getvar",
     "kb_getvar_async",
@@ -411,6 +417,8 @@
     "kb_update_package_async",
     "kb_upload",
     "kb_upload_async",
+    "kb_upload_file",
+    "kb_upload_file_async",
     "kb_validate_job_file",
     "kb_version_init"
   ],

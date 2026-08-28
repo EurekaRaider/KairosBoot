@@ -572,6 +572,15 @@ public:
     return detail_byte_view(data, size);
   }
 
+  [[nodiscard]] std::string_view output_path() const noexcept {
+    const char *path = kb_command_result_output_path(handle_);
+    return path == nullptr ? std::string_view{} : std::string_view{path};
+  }
+
+  [[nodiscard]] std::uint64_t received_bytes() const noexcept {
+    return kb_command_result_received_bytes(handle_);
+  }
+
   [[nodiscard]] std::string_view device_identifier() const noexcept {
     const char *identifier = kb_command_result_device_identifier(handle_);
     return identifier == nullptr ? std::string_view{}
@@ -1583,6 +1592,128 @@ public:
       const std::string_view partition, const FetchRange range = {},
       const CommandOptions &options = {}) const {
     return fetch(std::nullopt, partition, range, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> upload_file_async(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto output_u8 = output.u8string();
+    const std::string output_storage{output_u8.begin(), output_u8.end()};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_upload_file_async(handle_, selector_value,
+                                        output_storage.c_str(), native,
+                                        operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> upload_file_async(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return upload_file_async(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> upload_file(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    auto operation = upload_file_async(selector, output, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> upload_file(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return upload_file(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> get_staged_file_async(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto output_u8 = output.u8string();
+    const std::string output_storage{output_u8.begin(), output_u8.end()};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_get_staged_file_async(
+              handle_, selector_value, output_storage.c_str(), native,
+              operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> get_staged_file_async(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return get_staged_file_async(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> get_staged_file(
+      const DeviceSelector selector, const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    auto operation = get_staged_file_async(selector, output, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> get_staged_file(
+      const std::filesystem::path &output,
+      const CommandOptions &options = {}) const {
+    return get_staged_file(std::nullopt, output, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> fetch_file_async(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::filesystem::path &output, const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string partition_storage{partition};
+    const auto output_u8 = output.u8string();
+    const std::string output_storage{output_u8.begin(), output_u8.end()};
+    return start_typed_operation(
+        options, [&](const kb_command_options_t *native,
+                     kb_operation_t **operation, kb_error_t **error) {
+          return ::kb_fetch_file_async(
+              handle_, selector_value, partition_storage.c_str(),
+              detail::native_fetch_value(range.offset),
+              detail::native_fetch_value(range.size), output_storage.c_str(),
+              native, operation, error);
+        });
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> fetch_file_async(
+      const std::string_view partition, const std::filesystem::path &output,
+      const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    return fetch_file_async(std::nullopt, partition, output, range, options);
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> fetch_file(
+      const DeviceSelector selector, const std::string_view partition,
+      const std::filesystem::path &output, const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    auto operation = fetch_file_async(selector, partition, output, range,
+                                      options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait_result();
+  }
+
+  [[nodiscard]] std::expected<CommandResult, Error> fetch_file(
+      const std::string_view partition, const std::filesystem::path &output,
+      const FetchRange range = {},
+      const CommandOptions &options = {}) const {
+    return fetch_file(std::nullopt, partition, output, range, options);
   }
 
   [[nodiscard]] std::expected<Job, Error> run_job_file_async(

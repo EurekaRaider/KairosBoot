@@ -6,6 +6,7 @@
 #include "src/api/command_result_handle.hpp"
 #include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
+#include "src/fastboot/file_receive_service.hpp"
 #include "src/fastboot/primitive_update_device.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/update_executor.hpp"
@@ -776,6 +777,13 @@ struct PrimitiveExecution final {
   std::vector<std::byte> data;
 };
 
+using FileReceiveExecutor = std::function<std::expected<
+    kairosboot::fastboot::FileReceiveResult,
+    kairosboot::fastboot::FileReceiveError>(
+    kairosboot::fastboot::FileReceiveService &,
+    const std::filesystem::path &, std::uint64_t,
+    const kairosboot::protocol::TransferProgressObserver &)>;
+
 [[nodiscard]] std::expected<PrimitiveExecution,
                             kairosboot::fastboot::PrimitiveError>
 primitive_execution(
@@ -1244,6 +1252,20 @@ make_command_result(
   result->terminal_payload = std::move(execution.reply.terminal.payload);
   result->messages = command_messages(execution.reply.informational);
   result->data = std::move(execution.data);
+  result->received_bytes = result->data.size();
+  result->device_identifier = identifier;
+  return result;
+}
+
+[[nodiscard]] std::shared_ptr<const kairosboot::api::CommandResultPayload>
+make_file_command_result(
+    kairosboot::fastboot::FileReceiveResult execution,
+    std::string output_path, const std::string &identifier) {
+  auto result = std::make_shared<kairosboot::api::CommandResultPayload>();
+  result->terminal_payload = std::move(execution.reply.terminal.payload);
+  result->messages = command_messages(execution.reply.informational);
+  result->output_path = std::move(output_path);
+  result->received_bytes = execution.bytes_published;
   result->device_identifier = identifier;
   return result;
 }
@@ -1347,6 +1369,108 @@ kb_status_t start_primitive_async(
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the Fastboot command operation",
+                selector_text);
+  }
+}
+
+kb_status_t start_file_receive_async(
+    kb_context_t *context, const char *selector_text, const char *output_path,
+    const kb_command_options_t *options, const char *progress_stage,
+    FileReceiveExecutor executor, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null");
+  }
+  if (output_path == nullptr || output_path[0] == '\0' ||
+      !valid_utf8(output_path)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "receive output path must be non-empty UTF-8", selector_text);
+  }
+  if (!valid_command_options(options)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "command options have an incompatible size, API version, or receive bound",
+                selector_text);
+  }
+
+  try {
+    auto target = prepare_target(*context, selector_text);
+    if (!target) {
+      return fail(error, target.error());
+    }
+    auto copied_options = command_options_or_default(options);
+    auto identifier = target->selector.identifier;
+    std::string output_path_copy{output_path};
+    auto destination = utf8_path(output_path_copy);
+    std::string stage{progress_stage};
+    auto task = [target = std::move(*target), copied_options,
+                 executor = std::move(executor),
+                 identifier = std::move(identifier),
+                 output_path_copy = std::move(output_path_copy),
+                 destination = std::move(destination), stage = std::move(stage)](
+                    kairosboot::api::OperationState::TaskContext &task_context)
+        mutable -> kairosboot::api::OperationOutcome {
+      if (task_context.cancel_requested()) {
+        return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT);
+      }
+      auto transport = open_target(
+          target, copied_options, task_context.cancellation_token());
+      if (!transport) {
+        return operation_failure(std::move(transport.error()));
+      }
+      kairosboot::protocol::SessionOptions session_options;
+      session_options.io_timeout =
+          std::chrono::milliseconds{copied_options.timeout_ms};
+      kairosboot::protocol::FastbootSession session(
+          std::move(*transport), session_options);
+      kairosboot::fastboot::PrimitiveService primitives(session);
+      kairosboot::fastboot::FileReceiveService files(primitives);
+      auto cancellation = task_context.register_cancellation_hook(
+          [&files] { files.request_cancel(); });
+      const kairosboot::protocol::TransferProgressObserver observer =
+          [&task_context, &copied_options, &identifier, &stage](
+              const std::uint64_t completed, const std::uint64_t total) {
+            return task_context.cancel_requested() ||
+                           !report_command_progress(copied_options, completed,
+                                                    total, stage.c_str(),
+                                                    identifier)
+                       ? kairosboot::protocol::TransferProgressAction::cancel
+                       : kairosboot::protocol::TransferProgressAction::
+                             continue_transfer;
+          };
+      auto executed = executor(files, destination,
+                               copied_options.maximum_receive_bytes, observer);
+      if (!executed) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            executed.error(), identifier));
+      }
+      return kairosboot::api::OperationOutcome::succeeded(
+          make_file_command_result(std::move(*executed),
+                                   std::move(output_path_copy), identifier));
+    };
+    auto result = std::make_unique<kb_operation>(std::move(task));
+    if (!result->state->start()) {
+      return fail(error, KB_E_INTERNAL,
+                  "unable to start the Fastboot file receive operation",
+                  selector_text);
+    }
+    *operation = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the Fastboot file receive operation",
+                selector_text);
+  } catch (const std::filesystem::filesystem_error &exception) {
+    return fail(error, KB_E_INVALID_ARGUMENT, exception.what(), selector_text,
+                exception.code().value());
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the Fastboot file receive operation",
                 selector_text);
   }
 }
@@ -2968,6 +3092,129 @@ kb_status_t KB_CALL kb_fetch(
       partition, offset_or_unspecified, size_or_unspecified, options_or_null);
 }
 
+kb_status_t KB_CALL kb_upload_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error) {
+  return start_file_receive_async(
+      context, device_selector_or_null, output_path, options_or_null, "upload",
+      [](kairosboot::fastboot::FileReceiveService &files,
+         const std::filesystem::path &destination,
+         const std::uint64_t maximum_bytes,
+         const kairosboot::protocol::TransferProgressObserver &observer) {
+        return files.upload(destination, maximum_bytes, observer);
+      },
+      operation, error);
+}
+
+kb_status_t KB_CALL kb_upload_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_upload_file_async, result, error, context, device_selector_or_null,
+      output_path, options_or_null);
+}
+
+kb_status_t KB_CALL kb_get_staged_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error) {
+  return start_file_receive_async(
+      context, device_selector_or_null, output_path, options_or_null,
+      "get-staged",
+      [](kairosboot::fastboot::FileReceiveService &files,
+         const std::filesystem::path &destination,
+         const std::uint64_t maximum_bytes,
+         const kairosboot::protocol::TransferProgressObserver &observer) {
+        return files.get_staged(destination, maximum_bytes, observer);
+      },
+      operation, error);
+}
+
+kb_status_t KB_CALL kb_get_staged_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_get_staged_file_async, result, error, context,
+      device_selector_or_null, output_path, options_or_null);
+}
+
+kb_status_t KB_CALL kb_fetch_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const uint64_t offset_or_unspecified,
+    const uint64_t size_or_unspecified, const char *output_path,
+    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  constexpr auto maximum_range =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+  if (partition == nullptr || !valid_fetch_partition(partition)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "fetch partition must use letters, digits, '_', '-', or '.'",
+                device_selector_or_null);
+  }
+  if (size_or_unspecified != KB_FETCH_UNSPECIFIED &&
+      offset_or_unspecified == KB_FETCH_UNSPECIFIED) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "fetch size requires an explicit offset",
+                device_selector_or_null);
+  }
+  if ((offset_or_unspecified != KB_FETCH_UNSPECIFIED &&
+       offset_or_unspecified > maximum_range) ||
+      (size_or_unspecified != KB_FETCH_UNSPECIFIED &&
+       size_or_unspecified > maximum_range)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "fetch offset and size must fit signed 64-bit values",
+                device_selector_or_null);
+  }
+  size_t command_size = std::string_view{"fetch:"}.size() +
+                        std::string_view{partition}.size();
+  if (offset_or_unspecified != KB_FETCH_UNSPECIFIED) {
+    command_size += fetch_range_component_size(offset_or_unspecified);
+  }
+  if (size_or_unspecified != KB_FETCH_UNSPECIFIED) {
+    command_size += fetch_range_component_size(size_or_unspecified);
+  }
+  if (command_size > kairosboot::protocol::kDefaultMaxCommandBytes) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "fetch command exceeds the Fastboot command limit",
+                device_selector_or_null);
+  }
+  kairosboot::fastboot::FetchRange range;
+  if (offset_or_unspecified != KB_FETCH_UNSPECIFIED) {
+    range.offset = offset_or_unspecified;
+  }
+  if (size_or_unspecified != KB_FETCH_UNSPECIFIED) {
+    range.size = size_or_unspecified;
+  }
+  std::string partition_copy{partition};
+  return start_file_receive_async(
+      context, device_selector_or_null, output_path, options_or_null, "fetch",
+      [partition_copy = std::move(partition_copy), range](
+          kairosboot::fastboot::FileReceiveService &files,
+          const std::filesystem::path &destination,
+          const std::uint64_t maximum_bytes,
+          const kairosboot::protocol::TransferProgressObserver &observer) {
+        return files.fetch(partition_copy, range, destination, maximum_bytes,
+                           observer);
+      },
+      operation, error);
+}
+
+kb_status_t KB_CALL kb_fetch_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const uint64_t offset_or_unspecified,
+    const uint64_t size_or_unspecified, const char *output_path,
+    const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error) {
+  return run_blocking_command(
+      kb_fetch_file_async, result, error, context, device_selector_or_null,
+      partition, offset_or_unspecified, size_or_unspecified, output_path,
+      options_or_null);
+}
+
 kb_status_t KB_CALL kb_operation_wait(kb_operation_t *operation,
                                       uint32_t timeout_ms) {
   if (operation == nullptr || operation->state == nullptr) {
@@ -3107,6 +3354,18 @@ const uint8_t *KB_CALL kb_command_result_data(
              ? nullptr
              : reinterpret_cast<const uint8_t *>(
                    payload->data.data());
+}
+
+const char *KB_CALL kb_command_result_output_path(
+    const kb_command_result_t *result) {
+  const auto *payload = command_result_payload(result);
+  return payload == nullptr ? "" : payload->output_path.c_str();
+}
+
+uint64_t KB_CALL kb_command_result_received_bytes(
+    const kb_command_result_t *result) {
+  const auto *payload = command_result_payload(result);
+  return payload == nullptr ? 0U : payload->received_bytes;
 }
 
 const char *KB_CALL kb_command_result_device_identifier(

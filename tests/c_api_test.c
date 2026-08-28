@@ -315,6 +315,8 @@ int main(void) {
   CHECK(kb_command_result_terminal_payload(NULL, NULL) == NULL);
   CHECK(kb_command_result_message_payload(NULL, 0U, NULL) == NULL);
   CHECK(kb_command_result_data(NULL, NULL) == NULL);
+  CHECK(strcmp(kb_command_result_output_path(NULL), "") == 0);
+  CHECK(kb_command_result_received_bytes(NULL) == 0U);
   CHECK(strcmp(kb_command_result_device_identifier(NULL), "") == 0);
   kb_command_result_release(NULL);
 
@@ -415,6 +417,33 @@ int main(void) {
   CHECK(kb_fetch_async(context, NULL, "system", KB_FETCH_UNSPECIFIED, 4U,
                        NULL, &operation, &error) == KB_E_INVALID_ARGUMENT);
   kb_error_release(error);
+  error = NULL;
+  CHECK(kb_upload_file_async(context, NULL, "", NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_get_staged_file_async(context, NULL, NULL, NULL, &operation,
+                                 &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  CHECK(kb_fetch_file_async(context, NULL, "system", KB_FETCH_UNSPECIFIED, 4U,
+                            "output.img", NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  kb_error_release(error);
+  error = NULL;
+  {
+    kb_command_result_t *file_result = NULL;
+    CHECK(kb_upload_file(context, "tcp:127.0.0.1:1",
+                         "kairosboot-unreachable-upload.bin", NULL,
+                         &file_result, &error) == KB_E_IO);
+    CHECK(file_result == NULL);
+    CHECK(error != NULL);
+    CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+    kb_error_release(error);
+  }
   kb_operation_release(NULL);
   kb_device_list_release(NULL);
   kb_context_release(context);

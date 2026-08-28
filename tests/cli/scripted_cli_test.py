@@ -1035,6 +1035,27 @@ def run(cli: pathlib.Path) -> None:
         assert upload_file.read_bytes() == upload_payload
         assert_no_temporary_outputs(directory)
 
+        staged_file = directory / "已暂存-结果.bin"
+        staged_payload = b"s\x00\xfe"
+
+        def staged_data(connection: socket.socket) -> None:
+            # get-staged is the descriptive host API/CLI spelling for the
+            # AOSP Fastboot upload wire command.
+            assert receive_frame(connection) == b"upload"
+            send_frame(connection, b"DATA00000003")
+            send_frame(connection, staged_payload)
+            send_frame(connection, b"OKAYstaged")
+
+        stdout, stderr = invoke(
+            cli, ["--json", "get-staged", str(staged_file)], staged_data
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "get-staged"
+        assert document["dataBytes"] == 3
+        assert document["output"] == str(staged_file)
+        assert staged_file.read_bytes() == staged_payload
+        assert_no_temporary_outputs(directory)
+
         fetch_file = directory / "分区-结果.bin"
         fetch_payload = b"f\x00\xff"
 

@@ -7,6 +7,8 @@ EXPORTS
     kb_command_result_message_count
     kb_command_result_message_kind
     kb_command_result_message_payload
+    kb_command_result_output_path
+    kb_command_result_received_bytes
     kb_command_result_release
     kb_command_result_terminal_payload
     kb_context_create
@@ -42,11 +44,15 @@ EXPORTS
     kb_error_transfer_state
     kb_fetch
     kb_fetch_async
+    kb_fetch_file
+    kb_fetch_file_async
     kb_flash_file
     kb_flash_file_async
     kb_flash_options_init
     kb_flashing
     kb_flashing_async
+    kb_get_staged_file
+    kb_get_staged_file_async
     kb_get_version
     kb_getvar
     kb_getvar_async
@@ -93,5 +99,7 @@ EXPORTS
     kb_update_package_async
     kb_upload
     kb_upload_async
+    kb_upload_file
+    kb_upload_file_async
     kb_validate_job_file
     kb_version_init

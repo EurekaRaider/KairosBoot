@@ -215,6 +215,8 @@ void successful_command_result_is_shared_and_immutable() {
                 CommandMessagePayload{CommandMessageKind::Text, "ready"},
             },
             .data = {},
+            .output_path = {},
+            .received_bytes = 0,
             .device_identifier = {},
         });
     std::weak_ptr<const CommandResultPayload> weak = expected;

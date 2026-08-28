@@ -27,7 +27,6 @@
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -231,6 +230,7 @@ enum class CommandKind : std::uint8_t {
   BootStaged,
   Stage,
   Upload,
+  GetStaged,
   Fetch,
   Flashing,
   Gsi,
@@ -626,6 +626,9 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   if (command == "upload") {
     return parse_single_operand(CommandKind::Upload, "output");
   }
+  if (command == "get-staged") {
+    return parse_single_operand(CommandKind::GetStaged, "output");
+  }
   if (command == "flashing") {
     result.kind = CommandKind::Flashing;
     if (argc - command_index != 2) {
@@ -857,6 +860,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "stage";
   case CommandKind::Upload:
     return "upload";
+  case CommandKind::GetStaged:
+    return "get-staged";
   case CommandKind::Fetch:
     return "fetch";
   case CommandKind::Flashing:
@@ -1219,126 +1224,6 @@ read_stage_file(const std::string_view file_name) {
   return data;
 }
 
-class TemporaryOutput final {
-public:
-  explicit TemporaryOutput(std::filesystem::path path)
-      : path_(std::move(path)) {}
-  ~TemporaryOutput() {
-    if (!committed_) {
-      std::error_code ignored;
-      std::filesystem::remove(path_, ignored);
-    }
-  }
-
-  TemporaryOutput(const TemporaryOutput &) = delete;
-  TemporaryOutput &operator=(const TemporaryOutput &) = delete;
-
-  [[nodiscard]] const std::filesystem::path &path() const noexcept {
-    return path_;
-  }
-  void commit() noexcept { committed_ = true; }
-
-private:
-  std::filesystem::path path_;
-  bool committed_{false};
-};
-
-std::expected<void, LocalRuntimeError>
-write_output_atomically(const std::string_view output_name,
-                        const std::span<const std::byte> data) {
-  const std::filesystem::path output = path_from_utf8(output_name);
-  std::filesystem::path directory = output.parent_path();
-  if (directory.empty()) {
-    directory = std::filesystem::path{"."};
-  }
-
-  static std::atomic<std::uint64_t> sequence{0};
-  std::filesystem::path temporary;
-  std::ofstream stream;
-  for (std::uint32_t attempt = 0; attempt < 32U; ++attempt) {
-    const std::uint64_t clock = static_cast<std::uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    const std::uint64_t random =
-        (static_cast<std::uint64_t>(std::random_device{}()) << 32U) ^
-        static_cast<std::uint64_t>(std::random_device{}());
-    const std::uint64_t token =
-        clock ^ random ^ sequence.fetch_add(1U, std::memory_order_relaxed) ^
-        attempt;
-    std::array<char, 17> encoded{};
-    const auto [end, error] =
-        std::to_chars(encoded.data(), encoded.data() + 16, token, 16);
-    if (error != std::errc{}) {
-      return std::unexpected(LocalRuntimeError{
-          KB_E_INTERNAL, "failed to create a temporary output name"});
-    }
-    const std::string name =
-        ".kairosboot-" + std::string{encoded.data(), end} + ".tmp";
-    temporary = directory / path_from_utf8(name);
-    stream.open(temporary,
-                std::ios::binary | std::ios::out | std::ios::noreplace);
-    if (stream) {
-      break;
-    }
-
-    // `noreplace` makes creation atomic: an existing file or symlink is never
-    // opened or truncated. Retry only an actual name collision; other failures
-    // (missing directory, permissions, and unsupported paths) are actionable.
-    stream.clear();
-    std::error_code exists_error;
-    if (!std::filesystem::exists(temporary, exists_error) || exists_error) {
-      return std::unexpected(LocalRuntimeError{
-          KB_E_IO, "cannot create temporary output beside: " +
-                       std::string{output_name}});
-    }
-    temporary.clear();
-  }
-  if (temporary.empty()) {
-    return std::unexpected(LocalRuntimeError{
-        KB_E_IO, "cannot allocate a temporary output beside: " +
-                     std::string{output_name}});
-  }
-
-  TemporaryOutput cleanup{std::move(temporary)};
-  constexpr std::size_t maximum_chunk = 1024U * 1024U;
-  std::size_t offset = 0;
-  while (offset < data.size()) {
-    const std::size_t chunk = std::min(maximum_chunk, data.size() - offset);
-    stream.write(reinterpret_cast<const char *>(data.data() + offset),
-                 static_cast<std::streamsize>(chunk));
-    if (!stream) {
-      return std::unexpected(LocalRuntimeError{
-          KB_E_IO, "failed while writing temporary output for: " +
-                       std::string{output_name}});
-    }
-    offset += chunk;
-  }
-  stream.close();
-  if (!stream) {
-    return std::unexpected(LocalRuntimeError{
-        KB_E_IO, "failed while closing temporary output for: " +
-                     std::string{output_name}});
-  }
-
-  std::error_code rename_error;
-#if defined(_WIN32)
-  if (MoveFileExW(cleanup.path().c_str(), output.c_str(),
-                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
-    rename_error = std::error_code{static_cast<int>(GetLastError()),
-                                   std::system_category()};
-  }
-#else
-  std::filesystem::rename(cleanup.path(), output, rename_error);
-#endif
-  if (rename_error) {
-    return std::unexpected(LocalRuntimeError{
-        KB_E_IO, "cannot atomically publish output " +
-                     std::string{output_name} + " (native error " +
-                     std::to_string(rename_error.value()) + ")"});
-  }
-  cleanup.commit();
-  return {};
-}
-
 std::expected<kairosboot::CommandResult, kairosboot::Error>
 execute_typed_command(kairosboot::Context &context,
                       const Invocation &invocation,
@@ -1370,10 +1255,15 @@ execute_typed_command(kairosboot::Context &context,
     return operation->wait_result();
   }
   case CommandKind::Upload:
-    return context.upload(selector, options);
+    return context.upload_file(selector, path_from_utf8(invocation.first),
+                               options);
+  case CommandKind::GetStaged:
+    return context.get_staged_file(selector,
+                                   path_from_utf8(invocation.first), options);
   case CommandKind::Fetch:
-    return context.fetch(selector, invocation.first, invocation.fetch_range,
-                         options);
+    return context.fetch_file(selector, invocation.first,
+                              path_from_utf8(invocation.second),
+                              invocation.fetch_range, options);
   case CommandKind::Version:
   case CommandKind::Help:
   case CommandKind::Doctor:
@@ -1435,6 +1325,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::BootStaged:
   case CommandKind::Stage:
   case CommandKind::Upload:
+  case CommandKind::GetStaged:
   case CommandKind::Fetch:
   case CommandKind::Validate:
   case CommandKind::Plan:
@@ -1490,7 +1381,7 @@ int print_command_success(const Invocation &invocation,
               << "\",\"bytes\":" << result.terminal_payload().size()
               << "},\"messages\":";
     print_json_result_messages(result);
-    std::cout << ",\"dataBytes\":" << result.data().size();
+    std::cout << ",\"dataBytes\":" << result.received_bytes();
     if (output.has_value()) {
       std::cout << ",\"output\":\"" << json_escape(*output) << '\"';
     }
@@ -1500,7 +1391,7 @@ int print_command_success(const Invocation &invocation,
 
   print_result_messages(result);
   if (output.has_value()) {
-    std::cout << "Wrote " << result.data().size() << " bytes to " << *output
+    std::cout << "Wrote " << result.received_bytes() << " bytes to " << *output
               << '\n';
   } else if (!result.terminal_payload().empty()) {
     std::cout << escape_binary_for_text(result.terminal_payload()) << '\n';
@@ -1757,16 +1648,8 @@ int run_typed_command(const Invocation &invocation) {
   }
 
   std::optional<std::string_view> output;
-  if (invocation.kind == CommandKind::Upload) {
-    output = invocation.first;
-  } else if (invocation.kind == CommandKind::Fetch) {
-    output = invocation.second;
-  }
-  if (output.has_value()) {
-    auto written = write_output_atomically(*output, result->data());
-    if (!written) {
-      return print_local_runtime_error(written.error(), invocation.global.json);
-    }
+  if (!result->output_path().empty()) {
+    output = result->output_path();
   }
   return print_command_success(invocation, *result, output);
 }
@@ -1812,6 +1695,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] boot-staged\n"
                "  kairosboot [global options] stage <file>\n"
                "  kairosboot [global options] upload <output>\n"
+               "  kairosboot [global options] get-staged <output>\n"
                "  kairosboot [global options] fetch <partition> <output> "
                "[--offset <bytes>] [--size <bytes>]\n"
                "  kairosboot [global options] flashing "
@@ -1926,6 +1810,7 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::BootStaged:
   case CommandKind::Stage:
   case CommandKind::Upload:
+  case CommandKind::GetStaged:
   case CommandKind::Fetch:
     return run_typed_command(*invocation);
   case CommandKind::Flashing:
