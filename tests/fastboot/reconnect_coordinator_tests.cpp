@@ -89,6 +89,7 @@ public:
         .physical_port = std::move(physical_port),
         .serial = std::move(serial),
         .usb_fingerprint = usb_fingerprint,
+        .open_capability = nullptr,
     };
 }
 

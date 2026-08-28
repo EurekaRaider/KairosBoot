@@ -205,7 +205,8 @@ public:
             };
         table.get_session_data =
             [self](libusb_device* device) {
-                return self->session + self->device_index(device);
+                return self->session +
+                       static_cast<unsigned long>(self->device_index(device));
             };
         table.get_port_numbers =
             [self](libusb_device* device, std::uint8_t* output,
@@ -1039,6 +1040,12 @@ inline constexpr ManifestSourceLocation kLocation{1U, 1U};
         .bulk_out_max_packet_size = 512U,
         .bulk_in_endpoint = 0x81U,
         .bulk_in_max_packet_size = 512U,
+        .linux_topology = std::nullopt,
+        .linux_topology_error = std::nullopt,
+        .windows_topology = std::nullopt,
+        .windows_topology_error = std::nullopt,
+        .macos_topology = std::nullopt,
+        .macos_topology_error = std::nullopt,
     };
     device.linux_topology = LinuxUsbTopology{
         .physical_port_path = "usb:1-3.4",

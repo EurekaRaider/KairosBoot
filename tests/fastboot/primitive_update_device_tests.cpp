@@ -245,6 +245,7 @@ private:
         .physical_port = std::move(physical_port),
         .serial = std::move(serial),
         .usb_fingerprint = actor_fingerprint(),
+        .open_capability = nullptr,
     };
 }
 

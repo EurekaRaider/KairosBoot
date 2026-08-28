@@ -219,6 +219,7 @@ add_library(
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
   src/fastboot/file_receive_service.cpp
+  src/fastboot/libusb_reconnect_adapters.cpp
   src/fastboot/primitive_update_device.cpp
   src/fastboot/primitive_service.cpp
   src/fastboot/reconnect_coordinator.cpp
@@ -569,6 +570,19 @@ if(BUILD_TESTING)
   add_test(NAME reconnect_coordinator
            COMMAND kairosboot_reconnect_coordinator_tests)
   set_tests_properties(reconnect_coordinator PROPERTIES TIMEOUT 30)
+
+  add_executable(kairosboot_libusb_reconnect_adapters_tests
+                 tests/fastboot/libusb_reconnect_adapters_tests.cpp)
+  target_compile_features(kairosboot_libusb_reconnect_adapters_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_libusb_reconnect_adapters_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_libusb_reconnect_adapters_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_libusb_reconnect_adapters_tests)
+  add_test(NAME libusb_reconnect_adapters
+           COMMAND kairosboot_libusb_reconnect_adapters_tests)
+  set_tests_properties(libusb_reconnect_adapters PROPERTIES TIMEOUT 60)
 
   add_executable(kairosboot_file_receive_service_tests
                  tests/fastboot/file_receive_service_tests.cpp

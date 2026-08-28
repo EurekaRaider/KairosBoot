@@ -601,6 +601,7 @@ LibusbReconnectAdapter::discover(
                     ? std::nullopt
                     : std::optional<std::string>{device.serial_utf8},
                 .usb_fingerprint = reconnect_fingerprint(device),
+                .open_capability = nullptr,
             };
             if (!valid_ports(candidate.physical_port.ports) ||
                 !valid_optional_text(candidate.serial) ||
@@ -703,6 +704,7 @@ LibusbReconnectAdapter::open(
                 ? std::nullopt
                 : std::optional<std::string>{verified_usb.serial_utf8},
             .usb_fingerprint = reconnect_fingerprint(verified_usb),
+            .open_capability = nullptr,
         };
         if (!same_candidate(candidate, opened_candidate)) {
             return std::unexpected(ReconnectOpenError{
