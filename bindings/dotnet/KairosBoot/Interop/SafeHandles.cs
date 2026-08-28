@@ -97,3 +97,31 @@ internal sealed class JobPlanSafeHandle : KairosBootSafeHandle
         return true;
     }
 }
+
+internal sealed class JobSafeHandle : KairosBootSafeHandle
+{
+    internal JobSafeHandle(IntPtr existingHandle)
+        : base(existingHandle)
+    {
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.JobRelease(handle);
+        return true;
+    }
+}
+
+internal sealed class JobReportSafeHandle : KairosBootSafeHandle
+{
+    internal JobReportSafeHandle(IntPtr existingHandle)
+        : base(existingHandle)
+    {
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.JobReportRelease(handle);
+        return true;
+    }
+}

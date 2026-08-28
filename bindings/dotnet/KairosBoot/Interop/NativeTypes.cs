@@ -19,6 +19,8 @@ internal static partial class NativeMethods
         checked((uint)Marshal.SizeOf<NativeUpdateOptions>());
     internal static readonly uint CommandOptionsStructSize =
         checked((uint)Marshal.SizeOf<NativeCommandOptions>());
+    internal static readonly uint JobOptionsStructSize =
+        checked((uint)Marshal.SizeOf<NativeJobOptions>());
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -71,6 +73,16 @@ internal struct NativeCommandOptions
     internal IntPtr ProgressCallback;
     internal IntPtr ProgressUserData;
     internal ulong MaximumReceiveBytes;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeJobOptions
+{
+    internal uint StructSize;
+    internal uint ApiVersion;
+    internal uint TimeoutMilliseconds;
+    internal IntPtr ProgressCallback;
+    internal IntPtr ProgressUserData;
 }
 
 [StructLayout(LayoutKind.Sequential)]
