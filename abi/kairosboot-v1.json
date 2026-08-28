@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "ce3978972180a1232841bb33585adba3d3c526531ae6f735f9718fb8a81f9c47",
+  "headerContractSha256": "073a8b1289f797bed2144c87947305ee6df41d4c3cfd164373e5848c3fb14d5c",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -199,6 +199,61 @@
         "value": 32
       }
     },
+    "kb_legacy_boot_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "command_line",
+          "offset": 8,
+          "size": 8
+        },
+        {
+          "name": "base",
+          "offset": 16,
+          "size": 4
+        },
+        {
+          "name": "page_size",
+          "offset": 20,
+          "size": 4
+        },
+        {
+          "name": "kernel_offset",
+          "offset": 24,
+          "size": 4
+        },
+        {
+          "name": "ramdisk_offset",
+          "offset": 28,
+          "size": 4
+        },
+        {
+          "name": "second_offset",
+          "offset": 32,
+          "size": 4
+        },
+        {
+          "name": "tags_offset",
+          "offset": 36,
+          "size": 4
+        }
+      ],
+      "size": 40,
+      "versionSize": {
+        "macro": "KB_LEGACY_BOOT_OPTIONS_V1_SIZE",
+        "value": 40
+      }
+    },
     "kb_progress_t": {
       "alignment": 8,
       "fields": [
@@ -321,6 +376,8 @@
     "kb_boot_async",
     "kb_boot_file",
     "kb_boot_file_async",
+    "kb_boot_raw",
+    "kb_boot_raw_async",
     "kb_command_options_init",
     "kb_command_result_data",
     "kb_command_result_device_identifier",
@@ -371,6 +428,8 @@
     "kb_flash_options_init",
     "kb_flash_raw",
     "kb_flash_raw_async",
+    "kb_flash_raw_with_boot_options",
+    "kb_flash_raw_with_boot_options_async",
     "kb_flashing",
     "kb_flashing_async",
     "kb_format_partition",
@@ -394,6 +453,7 @@
     "kb_job_report_release",
     "kb_job_state",
     "kb_job_wait",
+    "kb_legacy_boot_options_init",
     "kb_oem",
     "kb_oem_async",
     "kb_operation_cancel",

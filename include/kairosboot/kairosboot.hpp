@@ -91,6 +91,16 @@ struct FlashOptions {
   std::function<ProgressAction(const FlashProgress &)> progress;
 };
 
+struct LegacyBootOptions {
+  std::string command_line;
+  std::uint32_t base{0x10000000U};
+  std::uint32_t page_size{2048U};
+  std::uint32_t kernel_offset{0x00008000U};
+  std::uint32_t ramdisk_offset{0x01000000U};
+  std::uint32_t second_offset{0x00f00000U};
+  std::uint32_t tags_offset{0x00000100U};
+};
+
 struct UpdateOptions {
   // Whole-operation timeout. milliseconds::max() selects no deadline.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
@@ -272,6 +282,11 @@ struct PreparedFlashOptions final {
   std::shared_ptr<ProgressCallbackState> callback_state;
 };
 
+struct PreparedLegacyBootOptions final {
+  kb_legacy_boot_options_t native{};
+  std::string command_line;
+};
+
 struct PreparedUpdateOptions final {
   kb_update_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
@@ -338,6 +353,24 @@ prepare_flash_options(const FlashOptions &options) {
     result.native.progress_callback = &progress_trampoline;
     result.native.progress_user_data = result.callback_state.get();
   }
+  return result;
+}
+
+[[nodiscard]] inline std::expected<PreparedLegacyBootOptions, Error>
+prepare_legacy_boot_options(const LegacyBootOptions &options) {
+  if (options.command_line.find('\0') != std::string::npos) {
+    return std::unexpected(detail_make_error(
+        KB_E_INVALID_ARGUMENT, "legacy boot command line must be NUL-free"));
+  }
+  PreparedLegacyBootOptions result;
+  kb_legacy_boot_options_init(&result.native);
+  result.command_line = options.command_line;
+  result.native.base = options.base;
+  result.native.page_size = options.page_size;
+  result.native.kernel_offset = options.kernel_offset;
+  result.native.ramdisk_offset = options.ramdisk_offset;
+  result.native.second_offset = options.second_offset;
+  result.native.tags_offset = options.tags_offset;
   return result;
 }
 
@@ -2073,6 +2106,124 @@ public:
       const FlashOptions &options = {}) const {
     auto operation = flash_raw_async(selector, partition, kernel, ramdisk,
                                      second_stage, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> flash_raw_async(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk,
+      const std::optional<std::filesystem::path> &second_stage,
+      const LegacyBootOptions &legacy_options,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    auto legacy = detail::prepare_legacy_boot_options(legacy_options);
+    if (!legacy) {
+      return std::unexpected(std::move(legacy.error()));
+    }
+    legacy->native.command_line = legacy->command_line.c_str();
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    const std::string selector_string =
+        selector.has_value() ? std::string{*selector} : std::string{};
+    const std::string partition_string{partition};
+    const std::string kernel_string = to_utf8(kernel);
+    const std::optional<std::string> ramdisk_string =
+        ramdisk.has_value()
+            ? std::optional<std::string>{to_utf8(*ramdisk)}
+            : std::nullopt;
+    const std::optional<std::string> second_string =
+        second_stage.has_value()
+            ? std::optional<std::string>{to_utf8(*second_stage)}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_flash_raw_with_boot_options_async(
+        handle_, selector.has_value() ? selector_string.c_str() : nullptr,
+        partition_string.c_str(), kernel_string.c_str(),
+        ramdisk_string.has_value() ? ramdisk_string->c_str() : nullptr,
+        second_string.has_value() ? second_string->c_str() : nullptr,
+        &legacy->native, &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_raw(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk,
+      const std::optional<std::filesystem::path> &second_stage,
+      const LegacyBootOptions &legacy_options,
+      const FlashOptions &options = {}) const {
+    auto operation = flash_raw_async(selector, partition, kernel, ramdisk,
+                                     second_stage, legacy_options, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_raw_async(
+      DeviceSelector selector, const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const LegacyBootOptions &legacy_options = {},
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    auto legacy = detail::prepare_legacy_boot_options(legacy_options);
+    if (!legacy) {
+      return std::unexpected(std::move(legacy.error()));
+    }
+    legacy->native.command_line = legacy->command_line.c_str();
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const std::string kernel_string = to_utf8(kernel);
+    const std::optional<std::string> ramdisk_string =
+        ramdisk.has_value()
+            ? std::optional<std::string>{to_utf8(*ramdisk)}
+            : std::nullopt;
+    const std::optional<std::string> second_string =
+        second_stage.has_value()
+            ? std::optional<std::string>{to_utf8(*second_stage)}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_boot_raw_async(
+        handle_, selector_value, kernel_string.c_str(),
+        ramdisk_string.has_value() ? ramdisk_string->c_str() : nullptr,
+        second_string.has_value() ? second_string->c_str() : nullptr,
+        &legacy->native, &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_raw(
+      DeviceSelector selector, const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const LegacyBootOptions &legacy_options = {},
+      const FlashOptions &options = {}) const {
+    auto operation = boot_raw_async(selector, kernel, ramdisk, second_stage,
+                                    legacy_options, options);
     if (!operation) {
       return std::unexpected(std::move(operation.error()));
     }

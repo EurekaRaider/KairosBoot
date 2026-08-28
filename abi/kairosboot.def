@@ -3,6 +3,8 @@ EXPORTS
     kb_boot_async
     kb_boot_file
     kb_boot_file_async
+    kb_boot_raw
+    kb_boot_raw_async
     kb_command_options_init
     kb_command_result_data
     kb_command_result_device_identifier
@@ -53,6 +55,8 @@ EXPORTS
     kb_flash_options_init
     kb_flash_raw
     kb_flash_raw_async
+    kb_flash_raw_with_boot_options
+    kb_flash_raw_with_boot_options_async
     kb_flashing
     kb_flashing_async
     kb_format_partition
@@ -76,6 +80,7 @@ EXPORTS
     kb_job_report_release
     kb_job_state
     kb_job_wait
+    kb_legacy_boot_options_init
     kb_oem
     kb_oem_async
     kb_operation_cancel

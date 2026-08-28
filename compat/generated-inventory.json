@@ -60,7 +60,7 @@
       ],
       "id": "capability.boot-image-construction",
       "kind": "image-plan",
-      "note": "A bounded legacy Android boot v0 builder is implemented; modern boot/vendor_boot headers and the complete AOSP option surface remain missing.",
+      "note": "A bounded legacy Android boot v0 builder implements the locked base, command-line, page-size and address-offset surface; modern boot/vendor_boot headers and AVB mutation remain missing.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "partial"
@@ -209,12 +209,12 @@
       ],
       "evidence": [
         "tests/api/c_primitive_tcp_tests.cpp",
-        "tests/cli/scripted_cli_test.py",
+        "tests/cli/boot_file_cli_test.py",
         "tests/image/boot_image_builder_tests.cpp"
       ],
       "id": "command.boot",
       "kind": "command",
-      "note": "Prebuilt images use a same-session download-to-boot flow and legacy v0 image construction exists, but the complete AOSP boot operand and modern header option surface is not implemented.",
+      "note": "Prebuilt images remain unchanged and raw kernel/ramdisk/second operands use the configured legacy v0 builder; modern boot headers, vendor_boot construction, and AVB mutation remain missing.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "boot",
@@ -383,7 +383,7 @@
       ],
       "id": "command.flash-raw",
       "kind": "command",
-      "note": "Legacy Android boot v0 construction and same-session flash are implemented; the complete AOSP mkbootimg option surface remains incomplete.",
+      "note": "Legacy Android boot v0 construction supports the locked base, command-line, page-size and address-offset surface; modern headers, vendor_boot construction, and AVB mutation remain missing.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flash:raw",
@@ -1547,28 +1547,52 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "option.base",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--base",
-      "status": "missing"
+      "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "option.cmdline",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--cmdline",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -1737,16 +1761,28 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "option.kernel-offset",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--kernel-offset",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -1773,28 +1809,52 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "option.page-size",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--page-size",
-      "status": "missing"
+      "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "option.ramdisk-offset",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--ramdisk-offset",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -1874,16 +1934,28 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_boot_raw",
+        "kb_boot_raw_async",
+        "kb_flash_raw_with_boot_options",
+        "kb_flash_raw_with_boot_options_async"
+      ],
+      "cliCommands": [
+        "boot",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/cli/boot_file_cli_test.py",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "option.tags-offset",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--tags-offset",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -2092,8 +2164,6 @@
     "image.boot",
     "image.system",
     "option.a",
-    "option.base",
-    "option.cmdline",
     "option.disable-fastboot-info",
     "option.disable-super-optimization",
     "option.disable-verification",
@@ -2105,17 +2175,13 @@
     "option.fs-options",
     "option.header-version",
     "option.help-short",
-    "option.kernel-offset",
     "option.os-patch-level",
     "option.os-version",
-    "option.page-size",
-    "option.ramdisk-offset",
     "option.set-active",
     "option.skip-reboot",
     "option.skip-secondary",
     "option.slot",
     "option.sparse-limit",
-    "option.tags-offset",
     "option.vendor-id",
     "option.verbose"
   ],
@@ -2153,9 +2219,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 2,
+        "implemented": 8,
         "intentional-deviation": 4,
-        "missing": 27,
+        "missing": 21,
         "partial": 0
       },
       "protocol": {
@@ -2172,9 +2238,9 @@
       }
     },
     "byStatus": {
-      "implemented": 35,
+      "implemented": 41,
       "intentional-deviation": 15,
-      "missing": 33,
+      "missing": 27,
       "partial": 36
     },
     "totalEntries": 119

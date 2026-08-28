@@ -156,6 +156,21 @@ typedef struct kb_flash_options {
   void *progress_user_data;
 } kb_flash_options_t;
 
+/* Legacy Android boot header v0 layout used only when constructing an image
+ * from KERNEL and optional RAMDISK/SECOND component files. command_line is
+ * copied before the call returns and may be NULL for an empty command line. */
+typedef struct kb_legacy_boot_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  const char *command_line;
+  uint32_t base;
+  uint32_t page_size;
+  uint32_t kernel_offset;
+  uint32_t ramdisk_offset;
+  uint32_t second_offset;
+  uint32_t tags_offset;
+} kb_legacy_boot_options_t;
+
 typedef struct kb_update_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -203,6 +218,9 @@ typedef struct kb_job_options {
 #define KB_FLASH_OPTIONS_V1_SIZE                                             \
   ((uint32_t)(offsetof(kb_flash_options_t, progress_user_data) +             \
               sizeof(((kb_flash_options_t *)0)->progress_user_data)))
+#define KB_LEGACY_BOOT_OPTIONS_V1_SIZE                                       \
+  ((uint32_t)(offsetof(kb_legacy_boot_options_t, tags_offset) +              \
+              sizeof(((kb_legacy_boot_options_t *)0)->tags_offset)))
 #define KB_UPDATE_OPTIONS_V1_SIZE                                            \
   ((uint32_t)(offsetof(kb_update_options_t, progress_user_data) +            \
               sizeof(((kb_update_options_t *)0)->progress_user_data)))
@@ -215,6 +233,8 @@ typedef struct kb_job_options {
 
 KB_API void KB_CALL kb_context_options_init(kb_context_options_t *options);
 KB_API void KB_CALL kb_flash_options_init(kb_flash_options_t *options);
+KB_API void KB_CALL kb_legacy_boot_options_init(
+    kb_legacy_boot_options_t *options);
 KB_API void KB_CALL kb_update_options_init(kb_update_options_t *options);
 KB_API void KB_CALL kb_command_options_init(kb_command_options_t *options);
 KB_API void KB_CALL kb_job_options_init(kb_job_options_t *options);
@@ -265,6 +285,40 @@ KB_API kb_status_t KB_CALL kb_flash_raw(
     kb_context_t *context, const char *device_selector_or_null,
     const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
+    const kb_flash_options_t *options_or_null, kb_error_t **error);
+
+/* Configured counterpart of kb_flash_raw. A prebuilt Android boot image is
+ * still flashed unchanged; legacy_options_or_null is used only when KERNEL is
+ * a raw kernel component. */
+KB_API kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *kernel_path,
+    const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
+    const kb_legacy_boot_options_t *legacy_options_or_null,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flash_raw_with_boot_options(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *kernel_path,
+    const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
+    const kb_legacy_boot_options_t *legacy_options_or_null,
+    const kb_flash_options_t *options_or_null, kb_error_t **error);
+
+/* Constructs a legacy Android boot v0 image from component files and boots it
+ * on the selected session. If KERNEL is a prebuilt Android boot image it is
+ * sent unchanged and RAMDISK/SECOND must both be NULL. */
+KB_API kb_status_t KB_CALL kb_boot_raw_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *kernel_path, const char *ramdisk_path_or_null,
+    const char *second_stage_path_or_null,
+    const kb_legacy_boot_options_t *legacy_options_or_null,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_boot_raw(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *kernel_path, const char *ramdisk_path_or_null,
+    const char *second_stage_path_or_null,
+    const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
 
 /* Streams one immutable file through Fastboot download and then issues boot on

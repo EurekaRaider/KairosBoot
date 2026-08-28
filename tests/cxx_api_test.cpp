@@ -64,6 +64,7 @@ static_assert(requires(kairosboot::Context &context,
                        kairosboot::DeviceSelector selector,
                        kairosboot::CommandOptions options,
                        kairosboot::FlashOptions flash_options,
+                       kairosboot::LegacyBootOptions legacy_boot_options,
                        kairosboot::UpdateOptions update_options,
                        std::filesystem::path package,
                        std::filesystem::path kernel,
@@ -80,6 +81,15 @@ static_assert(requires(kairosboot::Context &context,
   { context.flash_raw_async(selector, "boot", kernel) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.flash_raw(selector, "boot", kernel) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_raw_async(selector, "boot", kernel, std::nullopt,
+                            std::nullopt, legacy_boot_options, flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.boot_raw_async(selector, kernel, std::nullopt, std::nullopt,
+                           legacy_boot_options, flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.boot_raw(selector, kernel, std::nullopt, std::nullopt,
+                     legacy_boot_options, flash_options) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
   { context.boot_file_async(selector, package, flash_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
@@ -209,6 +219,21 @@ int main() {
     const auto sentinel = kairosboot::detail::prepare_flash_options(finite);
     CHECK(!sentinel.has_value());
     CHECK(sentinel.error().status() == KB_E_INVALID_ARGUMENT);
+  }
+
+  {
+    kairosboot::LegacyBootOptions options;
+    options.command_line = "console=ttyS0";
+    options.page_size = 4096U;
+    auto prepared = kairosboot::detail::prepare_legacy_boot_options(options);
+    CHECK(prepared.has_value());
+    CHECK(prepared->command_line == "console=ttyS0");
+    CHECK(prepared->native.page_size == 4096U);
+
+    options.command_line = std::string{"bad\0cmdline", 11U};
+    prepared = kairosboot::detail::prepare_legacy_boot_options(options);
+    CHECK(!prepared.has_value());
+    CHECK(prepared.error().status() == KB_E_INVALID_ARGUMENT);
   }
 
   {

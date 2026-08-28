@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -41,6 +42,7 @@ def invoke(
     image: pathlib.Path,
     device: Callable[[socket.socket, subprocess.Popen[bytes]], None],
     expected_exit: int,
+    command: list[str] | None = None,
 ) -> dict[str, object]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -49,17 +51,17 @@ def invoke(
         listener.settimeout(10)
         port = listener.getsockname()[1]
         creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        arguments = [
+            str(cli),
+            "--device",
+            f"tcp:127.0.0.1:{port}",
+            "--timeout-ms",
+            "5000",
+            "--json",
+        ]
+        arguments.extend(command if command is not None else ["boot", str(image)])
         process = subprocess.Popen(
-            [
-                str(cli),
-                "--device",
-                f"tcp:127.0.0.1:{port}",
-                "--timeout-ms",
-                "5000",
-                "--json",
-                "boot",
-                str(image),
-            ],
+            arguments,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=creation_flags,
@@ -93,12 +95,46 @@ def expect_download(connection: socket.socket, image: bytes) -> None:
     send_frame(connection, b"OKAYdownloaded")
 
 
+def legacy_boot_image(
+    kernel: bytes, ramdisk: bytes, second: bytes, command_line: bytes
+) -> bytes:
+    page_size = 4096
+    header = bytearray(page_size)
+    header[:8] = b"ANDROID!"
+    struct.pack_into(
+        "<10I",
+        header,
+        8,
+        len(kernel),
+        0x20001000,
+        len(ramdisk),
+        0x20002000,
+        len(second),
+        0x20003000,
+        0x20004000,
+        page_size,
+        0,
+        0,
+    )
+    header[64 : 64 + len(command_line)] = command_line
+    digest = hashlib.sha1()
+    for payload in (kernel, ramdisk, second):
+        digest.update(payload)
+        digest.update(struct.pack("<I", len(payload)))
+    header[576:596] = digest.digest()
+
+    def padded(payload: bytes) -> bytes:
+        return payload + bytes((-len(payload)) % page_size)
+
+    return bytes(header) + padded(kernel) + padded(ramdisk) + padded(second)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", required=True, type=pathlib.Path)
     arguments = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="kairosboot-boot-file-") as temporary:
-        image = bytes(range(1, 65))
+        image = b"ANDROID!" + bytes(2040)
         image_path = pathlib.Path(temporary) / "boot.img"
         image_path.write_bytes(image)
 
@@ -115,6 +151,57 @@ def main() -> int:
             "image": str(image_path),
         }:
             raise AssertionError(f"unexpected success JSON: {succeeded!r}")
+
+        kernel = bytes(index & 0xFF for index in range(2000))
+        ramdisk = b"ramdisk"
+        second = b"second"
+        command_line = b"console=ttyS0"
+        kernel_path = pathlib.Path(temporary) / "kernel"
+        ramdisk_path = pathlib.Path(temporary) / "ramdisk"
+        second_path = pathlib.Path(temporary) / "second"
+        kernel_path.write_bytes(kernel)
+        ramdisk_path.write_bytes(ramdisk)
+        second_path.write_bytes(second)
+        raw_image = legacy_boot_image(kernel, ramdisk, second, command_line)
+
+        def raw_success(connection: socket.socket, _: subprocess.Popen[bytes]) -> None:
+            expect_download(connection, raw_image)
+            if receive_frame(connection) != b"boot":
+                raise AssertionError("boot command did not follow constructed image")
+            send_frame(connection, b"OKAYbooting")
+
+        raw_result = invoke(
+            arguments.cli,
+            kernel_path,
+            raw_success,
+            0,
+            [
+                "--cmdline",
+                command_line.decode("ascii"),
+                "--base",
+                "0x20000000",
+                "--page-size",
+                "4096",
+                "--kernel-offset",
+                "0x1000",
+                "--ramdisk-offset",
+                "0x2000",
+                "--second-offset",
+                "0x3000",
+                "--tags-offset",
+                "0x4000",
+                "boot",
+                str(kernel_path),
+                str(ramdisk_path),
+                str(second_path),
+            ],
+        )
+        if raw_result != {
+            "ok": True,
+            "command": "boot",
+            "image": str(kernel_path),
+        }:
+            raise AssertionError(f"unexpected raw boot JSON: {raw_result!r}")
 
         def rejected(connection: socket.socket, _: subprocess.Popen[bytes]) -> None:
             expect_download(connection, image)

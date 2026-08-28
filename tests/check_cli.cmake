@@ -120,6 +120,14 @@ expect_text_parse_error(
   flash_raw_arity
   "flash:raw requires <partition> <kernel> [ramdisk [second]]" flash:raw boot)
 expect_text_parse_error(
+  boot_arity "boot requires <kernel> [ramdisk [second]]" boot)
+expect_text_parse_error(
+  boot_excess_operands "boot requires <kernel> [ramdisk [second]]" boot kernel
+  ramdisk second extra)
+expect_text_parse_error(
+  legacy_option_scope "legacy boot layout options are not valid for flash"
+  --base 0x10000000 flash boot image.img)
+expect_text_parse_error(
   update_arity "update requires <package>" update)
 expect_text_parse_error(
   update_wipe_without_package "update requires <package>" update --wipe)

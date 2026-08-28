@@ -68,6 +68,18 @@ int main(void) {
   CHECK(flash_options.api_version == KB_API_VERSION);
   CHECK(flash_options.timeout_ms == KB_WAIT_INFINITE);
 
+  kb_legacy_boot_options_t legacy_boot_options;
+  kb_legacy_boot_options_init(&legacy_boot_options);
+  CHECK(legacy_boot_options.struct_size == sizeof(legacy_boot_options));
+  CHECK(legacy_boot_options.api_version == KB_API_VERSION);
+  CHECK(legacy_boot_options.command_line == NULL);
+  CHECK(legacy_boot_options.base == UINT32_C(0x10000000));
+  CHECK(legacy_boot_options.page_size == 2048U);
+  CHECK(legacy_boot_options.kernel_offset == UINT32_C(0x00008000));
+  CHECK(legacy_boot_options.ramdisk_offset == UINT32_C(0x01000000));
+  CHECK(legacy_boot_options.second_offset == UINT32_C(0x00f00000));
+  CHECK(legacy_boot_options.tags_offset == UINT32_C(0x00000100));
+
   kb_update_options_t update_options;
   kb_update_options_init(&update_options);
   CHECK(update_options.struct_size == sizeof(update_options));
@@ -306,6 +318,15 @@ int main(void) {
   error = NULL;
   CHECK(kb_flash_file_async(context, NULL, "", "system.img", NULL,
                             &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_boot_raw_async(context, NULL, "kernel", NULL, "second",
+                          &legacy_boot_options, NULL, &operation, &error) ==
+        KB_E_INVALID_ARGUMENT);
   CHECK(operation == NULL);
   CHECK(error != NULL);
   kb_error_release(error);

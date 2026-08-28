@@ -176,8 +176,8 @@
       "status": "partial",
       "cSymbols": ["kb_boot", "kb_boot_async", "kb_boot_file", "kb_boot_file_async"],
       "cliCommands": ["boot", "boot-staged"],
-      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
-      "note": "Prebuilt images use a same-session download-to-boot flow and legacy v0 image construction exists, but the complete AOSP boot operand and modern header option surface is not implemented."
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/boot_file_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
+      "note": "Prebuilt images remain unchanged and raw kernel/ramdisk/second operands use the configured legacy v0 builder; modern boot headers, vendor_boot construction, and AVB mutation remain missing."
     },
     {
       "ids": ["command.flash-raw"],
@@ -185,7 +185,7 @@
       "cSymbols": ["kb_flash_raw", "kb_flash_raw_async"],
       "cliCommands": ["flash:raw"],
       "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
-      "note": "Legacy Android boot v0 construction and same-session flash are implemented; the complete AOSP mkbootimg option surface remains incomplete."
+      "note": "Legacy Android boot v0 construction supports the locked base, command-line, page-size and address-offset surface; modern headers, vendor_boot construction, and AVB mutation remain missing."
     },
     {
       "ids": ["command.flashall"],
@@ -230,7 +230,15 @@
       "note": "KairosBoot always streams through bounded buffers and does not expose an unbuffered mode switch."
     },
     {
-      "ids": ["option.a", "option.help-short", "option.sparse-limit", "option.vendor-id", "option.base", "option.cmdline", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.exclude-dynamic-partitions", "option.disable-fastboot-info", "option.force", "option.fs-options", "option.header-version", "option.kernel-offset", "option.os-patch-level", "option.os-version", "option.page-size", "option.ramdisk-offset", "option.set-active", "option.skip-reboot", "option.skip-secondary", "option.slot", "option.tags-offset", "option.dtb", "option.dtb-offset", "option.verbose"],
+      "ids": ["option.base", "option.cmdline", "option.kernel-offset", "option.page-size", "option.ramdisk-offset", "option.tags-offset"],
+      "status": "implemented",
+      "cSymbols": ["kb_boot_raw", "kb_boot_raw_async", "kb_flash_raw_with_boot_options", "kb_flash_raw_with_boot_options_async"],
+      "cliCommands": ["boot", "flash:raw"],
+      "evidence": ["tests/cli/boot_file_cli_test.py", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
+      "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    },
+    {
+      "ids": ["option.a", "option.help-short", "option.sparse-limit", "option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.exclude-dynamic-partitions", "option.disable-fastboot-info", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.set-active", "option.skip-reboot", "option.skip-secondary", "option.slot", "option.dtb", "option.dtb-offset", "option.verbose"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."
@@ -273,7 +281,7 @@
       "status": "partial",
       "cliCommands": ["make-boot-image", "flash:raw"],
       "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/cli/boot_image_cli_test.py"],
-      "note": "A bounded legacy Android boot v0 builder is implemented; modern boot/vendor_boot headers and the complete AOSP option surface remain missing."
+      "note": "A bounded legacy Android boot v0 builder implements the locked base, command-line, page-size and address-offset surface; modern boot/vendor_boot headers and AVB mutation remain missing."
     },
     {
       "ids": ["capability.vendor-boot-construction", "capability.vbmeta-avb-mutation", "capability.super-image-optimization"],

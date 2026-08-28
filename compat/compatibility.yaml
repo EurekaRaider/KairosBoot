@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 35
+    implemented: 41
     intentional-deviation: 15
-    missing: 33
+    missing: 27
     partial: 36
 officialDifferentialCoverage:
   status: "not-run"
@@ -45,7 +45,7 @@ entries:
     kind: "image-plan"
     required: true
     status: "partial"
-    note: "A bounded legacy Android boot v0 builder is implemented; modern boot/vendor_boot headers and the complete AOSP option surface remain missing."
+    note: "A bounded legacy Android boot v0 builder implements the locked base, command-line, page-size and address-offset surface; modern boot/vendor_boot headers and AVB mutation remain missing."
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/cli/boot_image_cli_test.py"
@@ -114,10 +114,10 @@ entries:
     kind: "command"
     required: true
     status: "partial"
-    note: "Prebuilt images use a same-session download-to-boot flow and legacy v0 image construction exists, but the complete AOSP boot operand and modern header option surface is not implemented."
+    note: "Prebuilt images remain unchanged and raw kernel/ramdisk/second operands use the configured legacy v0 builder; modern boot headers, vendor_boot construction, and AVB mutation remain missing."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/scripted_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
   - id: "command.continue"
     kind: "command"
@@ -180,7 +180,7 @@ entries:
     kind: "command"
     required: true
     status: "partial"
-    note: "Legacy Android boot v0 construction and same-session flash are implemented; the complete AOSP mkbootimg option surface remains incomplete."
+    note: "Legacy Android boot v0 construction supports the locked base, command-line, page-size and address-offset surface; modern headers, vendor_boot construction, and AVB mutation remain missing."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
@@ -661,15 +661,21 @@ entries:
   - id: "option.base"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    evidence:
+      - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "option.cmdline"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    evidence:
+      - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "option.device-path"
     kind: "option"
     required: true
@@ -754,9 +760,12 @@ entries:
   - id: "option.kernel-offset"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    evidence:
+      - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "option.os-patch-level"
     kind: "option"
     required: true
@@ -772,15 +781,21 @@ entries:
   - id: "option.page-size"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    evidence:
+      - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "option.ramdisk-offset"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    evidence:
+      - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "option.serial"
     kind: "option"
     required: true
@@ -822,9 +837,12 @@ entries:
   - id: "option.tags-offset"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    evidence:
+      - "tests/cli/boot_file_cli_test.py"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "option.unbuffered"
     kind: "option"
     required: true
@@ -935,8 +953,6 @@ requiredGaps:
   - "image.boot"
   - "image.system"
   - "option.a"
-  - "option.base"
-  - "option.cmdline"
   - "option.disable-fastboot-info"
   - "option.disable-super-optimization"
   - "option.disable-verification"
@@ -948,17 +964,13 @@ requiredGaps:
   - "option.fs-options"
   - "option.header-version"
   - "option.help-short"
-  - "option.kernel-offset"
   - "option.os-patch-level"
   - "option.os-version"
-  - "option.page-size"
-  - "option.ramdisk-offset"
   - "option.set-active"
   - "option.skip-reboot"
   - "option.skip-secondary"
   - "option.slot"
   - "option.sparse-limit"
-  - "option.tags-offset"
   - "option.vendor-id"
   - "option.verbose"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"

@@ -213,6 +213,7 @@ struct GlobalOptions {
   std::optional<std::uint32_t> timeout_ms;
   std::uint64_t maximum_receive_bytes{kDefaultMaximumReceiveBytes};
   bool maximum_receive_bytes_set{false};
+  bool legacy_boot_options_set{false};
 };
 
 enum class CommandKind : std::uint8_t {
@@ -326,7 +327,11 @@ utf8_from_wide(const std::wstring_view value) {
 
 bool is_global_option(const std::string_view value) noexcept {
   return value == "--json" || value == "--device" || value == "--serial" ||
-         value == "--timeout-ms" || value == "--max-receive-bytes";
+         value == "--timeout-ms" || value == "--max-receive-bytes" ||
+         value == "--base" || value == "--cmdline" ||
+         value == "--page-size" || value == "--kernel-offset" ||
+         value == "--ramdisk-offset" || value == "--second-offset" ||
+         value == "--tags-offset";
 }
 
 template <typename Integer>
@@ -395,6 +400,13 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool device_seen = false;
   bool serial_seen = false;
   bool timeout_seen = false;
+  bool cmdline_seen = false;
+  bool base_seen = false;
+  bool page_size_seen = false;
+  bool kernel_offset_seen = false;
+  bool ramdisk_offset_seen = false;
+  bool second_offset_seen = false;
+  bool tags_offset_seen = false;
   const auto error = [&result](std::string message) {
     return std::unexpected(ParseError{result.global.json, std::move(message)});
   };
@@ -467,6 +479,50 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       index += 2;
       continue;
     }
+    bool *legacy_seen = nullptr;
+    std::uint32_t *legacy_number = nullptr;
+    if (argument == "--cmdline") {
+      legacy_seen = &cmdline_seen;
+    } else if (argument == "--base") {
+      legacy_seen = &base_seen;
+      legacy_number = &result.boot_image_options.base;
+    } else if (argument == "--page-size") {
+      legacy_seen = &page_size_seen;
+      legacy_number = &result.boot_image_options.page_size;
+    } else if (argument == "--kernel-offset") {
+      legacy_seen = &kernel_offset_seen;
+      legacy_number = &result.boot_image_options.kernel_offset;
+    } else if (argument == "--ramdisk-offset") {
+      legacy_seen = &ramdisk_offset_seen;
+      legacy_number = &result.boot_image_options.ramdisk_offset;
+    } else if (argument == "--second-offset") {
+      legacy_seen = &second_offset_seen;
+      legacy_number = &result.boot_image_options.second_offset;
+    } else if (argument == "--tags-offset") {
+      legacy_seen = &tags_offset_seen;
+      legacy_number = &result.boot_image_options.tags_offset;
+    }
+    if (legacy_seen != nullptr) {
+      if (*legacy_seen) {
+        return error("option " + std::string{argument} +
+                     " may only be specified once");
+      }
+      if (index + 1 >= argc) {
+        return error("option " + std::string{argument} +
+                     " requires a value");
+      }
+      const std::string_view value{argv[index + 1]};
+      if (legacy_number == nullptr) {
+        result.boot_image_options.command_line = value;
+      } else if (!parse_u32_auto(value, *legacy_number)) {
+        return error("option " + std::string{argument} +
+                     " requires a uint32 decimal or 0x hexadecimal value");
+      }
+      *legacy_seen = true;
+      result.global.legacy_boot_options_set = true;
+      index += 2;
+      continue;
+    }
     break;
   }
 
@@ -480,7 +536,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   }
   const int command_index = index++;
   for (int operand = index; operand < argc; ++operand) {
-    if (is_global_option(argv[operand])) {
+    if (command != "make-boot-image" && is_global_option(argv[operand])) {
       return error("global options must precede the command");
     }
   }
@@ -499,8 +555,18 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       return error("option --max-receive-bytes is not valid for " +
                    std::string{command});
     }
+    if (result.global.legacy_boot_options_set) {
+      return error("legacy boot layout options are not valid for " +
+                   std::string{command});
+    }
     return std::nullopt;
   };
+
+  if (result.global.legacy_boot_options_set && command != "boot" &&
+      command != "flash:raw") {
+    return error("legacy boot layout options are not valid for " +
+                 std::string{command});
+  }
 
   if (command == "--version") {
     result.kind = CommandKind::Version;
@@ -656,15 +722,28 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   }
   if (command == "boot") {
     result.kind = CommandKind::BootFile;
-    if (argc - command_index != 2) {
-      return error("boot requires exactly <image>");
+    const int operand_count = argc - command_index - 1;
+    if (operand_count < 1 || operand_count > 3) {
+      return error("boot requires <kernel> [ramdisk [second]]");
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for boot");
     }
-    result.first = argv[index];
+    result.first = argv[index++];
+    if (index < argc) {
+      result.second = argv[index++];
+    }
+    if (index < argc) {
+      result.third = argv[index];
+    }
     if (result.first.empty()) {
-      return error("boot image must not be empty");
+      return error("boot kernel or image must not be empty");
+    }
+    if (operand_count >= 2 && result.second.empty()) {
+      return error("boot ramdisk must not be empty");
+    }
+    if (operand_count == 3 && result.third.empty()) {
+      return error("boot second stage must not be empty");
     }
     return result;
   }
@@ -1881,9 +1960,27 @@ int boot_file(const Invocation &invocation) {
   }
   InterruptCancellation cancellation;
   auto options = flash_options(invocation.global);
-  auto operation = context->boot_file_async(
+  const auto legacy = kairosboot::LegacyBootOptions{
+      .command_line = invocation.boot_image_options.command_line,
+      .base = invocation.boot_image_options.base,
+      .page_size = invocation.boot_image_options.page_size,
+      .kernel_offset = invocation.boot_image_options.kernel_offset,
+      .ramdisk_offset = invocation.boot_image_options.ramdisk_offset,
+      .second_offset = invocation.boot_image_options.second_offset,
+      .tags_offset = invocation.boot_image_options.tags_offset,
+  };
+  const std::optional<std::filesystem::path> ramdisk =
+      invocation.second.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{
+                path_from_utf8(invocation.second)};
+  const std::optional<std::filesystem::path> second_stage =
+      invocation.third.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{path_from_utf8(invocation.third)};
+  auto operation = context->boot_raw_async(
       selector_view(invocation.global), path_from_utf8(invocation.first),
-      options);
+      ramdisk, second_stage, legacy, options);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -1985,6 +2082,15 @@ int flash_raw(const Invocation &invocation) {
   const auto result = context->flash_raw(
       selector_view(invocation.global), invocation.first,
       path_from_utf8(invocation.second), ramdisk, second_stage,
+      kairosboot::LegacyBootOptions{
+          .command_line = invocation.boot_image_options.command_line,
+          .base = invocation.boot_image_options.base,
+          .page_size = invocation.boot_image_options.page_size,
+          .kernel_offset = invocation.boot_image_options.kernel_offset,
+          .ramdisk_offset = invocation.boot_image_options.ramdisk_offset,
+          .second_offset = invocation.boot_image_options.second_offset,
+          .tags_offset = invocation.boot_image_options.tags_offset,
+      },
       flash_options(invocation.global));
   if (!result) {
     return print_runtime_error(result.error(), invocation.global.json);
@@ -2379,7 +2485,8 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] signature <file>\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] flashall [--wipe]\n"
-               "  kairosboot [global options] boot <image>\n"
+               "  kairosboot [global options] boot <kernel-or-image> "
+               "[ramdisk [second]]\n"
                "  kairosboot [--json] make-boot-image <output> <kernel> "
                "[ramdisk [second]] [layout options]\n"
                "  kairosboot [global options] wipe-super [super_empty.img]\n"
@@ -2412,6 +2519,10 @@ constexpr std::string_view usage_text() noexcept {
                "  --device <selector> | --serial <id>\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
+               "  Legacy boot options (boot and flash:raw only):\n"
+               "  --cmdline <text> --base <value> --page-size <value>\n"
+               "  --kernel-offset <value> --ramdisk-offset <value>\n"
+               "  --second-offset <value> --tags-offset <value>\n"
                "Exit codes: 0 success, 2 usage error, 4 runtime/cancelled\n";
 }
 

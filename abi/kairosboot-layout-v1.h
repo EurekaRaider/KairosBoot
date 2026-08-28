@@ -135,6 +135,28 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_job_options_t, progress_user_data) == 24, "kb_j
 KB_ABI_STATIC_ASSERT(sizeof(((kb_job_options_t *)0)->progress_user_data) == 8, "kb_job_options_t.progress_user_data size");
 KB_ABI_STATIC_ASSERT(KB_JOB_OPTIONS_V1_SIZE == 32, "KB_JOB_OPTIONS_V1_SIZE value");
 
+KB_ABI_STATIC_ASSERT(sizeof(kb_legacy_boot_options_t) == 40, "kb_legacy_boot_options_t size");
+KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_legacy_boot_options_t) == 8, "kb_legacy_boot_options_t alignment");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, struct_size) == 0, "kb_legacy_boot_options_t.struct_size offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->struct_size) == 4, "kb_legacy_boot_options_t.struct_size size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, api_version) == 4, "kb_legacy_boot_options_t.api_version offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->api_version) == 4, "kb_legacy_boot_options_t.api_version size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, command_line) == 8, "kb_legacy_boot_options_t.command_line offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->command_line) == 8, "kb_legacy_boot_options_t.command_line size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, base) == 16, "kb_legacy_boot_options_t.base offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->base) == 4, "kb_legacy_boot_options_t.base size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, page_size) == 20, "kb_legacy_boot_options_t.page_size offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->page_size) == 4, "kb_legacy_boot_options_t.page_size size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, kernel_offset) == 24, "kb_legacy_boot_options_t.kernel_offset offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->kernel_offset) == 4, "kb_legacy_boot_options_t.kernel_offset size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, ramdisk_offset) == 28, "kb_legacy_boot_options_t.ramdisk_offset offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->ramdisk_offset) == 4, "kb_legacy_boot_options_t.ramdisk_offset size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, second_offset) == 32, "kb_legacy_boot_options_t.second_offset offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->second_offset) == 4, "kb_legacy_boot_options_t.second_offset size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_legacy_boot_options_t, tags_offset) == 36, "kb_legacy_boot_options_t.tags_offset offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_legacy_boot_options_t *)0)->tags_offset) == 4, "kb_legacy_boot_options_t.tags_offset size");
+KB_ABI_STATIC_ASSERT(KB_LEGACY_BOOT_OPTIONS_V1_SIZE == 40, "KB_LEGACY_BOOT_OPTIONS_V1_SIZE value");
+
 KB_ABI_STATIC_ASSERT(sizeof(kb_progress_t) == 40, "kb_progress_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_progress_t) == 8, "kb_progress_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_progress_t, struct_size) == 0, "kb_progress_t.struct_size offset");
