@@ -2019,6 +2019,7 @@ public:
       const FlashOptions &options = {}) const {
     return boot_file(DeviceSelector{selector}, file, options);
   }
+
 private:
   template <typename Start>
   [[nodiscard]] std::expected<Operation, Error>

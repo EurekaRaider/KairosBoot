@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "394d56458381738588e06a65f708232c1856ec6e0f6fce70280e289c45d520a4",
+  "headerContractSha256": "d2059381763e0f3b2caea37e1200628dd242f734aebebc26bf997b8a12495930",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -369,6 +369,8 @@
     "kb_flash_file",
     "kb_flash_file_async",
     "kb_flash_options_init",
+    "kb_flash_raw",
+    "kb_flash_raw_async",
     "kb_flashing",
     "kb_flashing_async",
     "kb_get_staged_file",

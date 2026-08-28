@@ -51,6 +51,8 @@ EXPORTS
     kb_flash_file
     kb_flash_file_async
     kb_flash_options_init
+    kb_flash_raw
+    kb_flash_raw_async
     kb_flashing
     kb_flashing_async
     kb_get_staged_file

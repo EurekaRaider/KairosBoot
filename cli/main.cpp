@@ -31,6 +31,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -1503,30 +1504,6 @@ write_output_atomically_impl(const std::string_view output_name,
   }
   cleanup.commit();
   return {};
-}
-
-std::expected<void, LocalRuntimeError>
-write_output_atomically(const std::string_view output_name,
-                        const std::span<const std::byte> data) {
-  return write_output_atomically_impl(
-      output_name, [data, output_name](std::ofstream &stream)
-                       -> std::expected<void, LocalRuntimeError> {
-        constexpr std::size_t maximum_chunk = 1024U * 1024U;
-        std::size_t offset = 0U;
-        while (offset < data.size()) {
-          const std::size_t chunk =
-              std::min(maximum_chunk, data.size() - offset);
-          stream.write(reinterpret_cast<const char *>(data.data() + offset),
-                       static_cast<std::streamsize>(chunk));
-          if (!stream) {
-            return std::unexpected(LocalRuntimeError{
-                KB_E_IO, "failed while writing temporary output for: " +
-                             std::string{output_name}});
-          }
-          offset += chunk;
-        }
-        return {};
-      });
 }
 
 std::expected<void, LocalRuntimeError> write_source_atomically(
