@@ -195,6 +195,25 @@ make_hardcoded_update_plan(
     const std::stop_token cancellation) {
     DeterministicUpdatePlan plan{.requirements = std::move(requirements)};
 
+    // AOSP HandlePartitionExists promotes the matching host image-table
+    // nickname from optional to required before the fallback task list is
+    // collected. Preserve that package-level effect during transport-free
+    // preflight so a successful device requirement can never leave a required
+    // partition silently unflashed. Like the frozen implementation, only the
+    // first option and a non-empty nickname participate in the lookup.
+    const auto required_by_partition_exists =
+        [&plan](const HardcodedImage& specification) noexcept {
+            return !specification.nickname.empty() &&
+                   std::ranges::any_of(
+                       plan.requirements,
+                       [&specification](const PlannedRequirement& requirement) {
+                           return requirement.variable == "partition-exists" &&
+                                  !requirement.options.empty() &&
+                                  requirement.options.front() ==
+                                      specification.nickname;
+                       });
+        };
+
     const auto add_phase = [&](const HardcodedImageType phase)
         -> std::expected<void, UpdatePackagePreflightError> {
         for (std::size_t index = 0; index < kHardcodedImages.size(); ++index) {
@@ -212,6 +231,7 @@ make_hardcoded_update_plan(
             auto resolved = snapshot.resolve(specification.image_name);
             if (!resolved) {
                 if (specification.optional_if_missing &&
+                    !required_by_partition_exists(specification) &&
                     resolved.error().kind ==
                         image::ArtifactSourceErrorKind::NotFound) {
                     continue;
