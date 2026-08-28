@@ -2106,15 +2106,20 @@
     },
     {
       "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cliCommands": [
+        "-v",
+        "--verbose"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
       "id": "option.verbose",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--verbose",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -2292,8 +2297,7 @@
     "option.fs-options",
     "option.header-version",
     "option.os-patch-level",
-    "option.os-version",
-    "option.verbose"
+    "option.os-version"
   ],
   "schemaVersion": 2,
   "statusVocabulary": [
@@ -2329,9 +2333,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 18,
+        "implemented": 19,
         "intentional-deviation": 4,
-        "missing": 11,
+        "missing": 10,
         "partial": 0
       },
       "protocol": {
@@ -2348,9 +2352,9 @@
       }
     },
     "byStatus": {
-      "implemented": 51,
+      "implemented": 52,
       "intentional-deviation": 15,
-      "missing": 17,
+      "missing": 16,
       "partial": 36
     },
     "totalEntries": 119

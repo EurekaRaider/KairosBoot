@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 51
+    implemented: 52
     intentional-deviation: 15
-    missing: 17
+    missing: 16
     partial: 36
 officialDifferentialCoverage:
   status: "not-run"
@@ -897,9 +897,10 @@ entries:
   - id: "option.verbose"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
+    evidence:
+      - "tests/cli/scripted_cli_test.py"
   - id: "option.version"
     kind: "option"
     required: true
@@ -999,5 +1000,4 @@ requiredGaps:
   - "option.header-version"
   - "option.os-patch-level"
   - "option.os-version"
-  - "option.verbose"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"

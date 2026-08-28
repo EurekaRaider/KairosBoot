@@ -269,7 +269,14 @@
       "note": "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected."
     },
     {
-      "ids": ["option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset", "option.verbose"],
+      "ids": ["option.verbose"],
+      "status": "implemented",
+      "cliCommands": ["-v", "--verbose"],
+      "evidence": ["tests/cli/scripted_cli_test.py"],
+      "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
+    },
+    {
+      "ids": ["option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."

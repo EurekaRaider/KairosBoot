@@ -212,6 +212,7 @@ struct GlobalOptions {
   bool json{false};
   std::optional<std::uint32_t> timeout_ms;
   std::optional<std::uint16_t> usb_vendor_id;
+  bool verbose{};
   std::uint64_t maximum_receive_bytes{kDefaultMaximumReceiveBytes};
   bool maximum_receive_bytes_set{false};
   bool disable_verity{};
@@ -342,6 +343,7 @@ utf8_from_wide(const std::wstring_view value) {
 bool is_global_option(const std::string_view value) noexcept {
   return value == "--json" || value == "--device" || value == "--serial" ||
          value == "-i" || value == "--vendor-id" ||
+         value == "-v" || value == "--verbose" ||
          value == "--timeout-ms" || value == "--max-receive-bytes" ||
          value == "--disable-verity" ||
          value == "--disable-verification" ||
@@ -461,6 +463,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool serial_seen = false;
   bool timeout_seen = false;
   bool vendor_id_seen = false;
+  bool verbose_seen = false;
   bool cmdline_seen = false;
   bool base_seen = false;
   bool page_size_seen = false;
@@ -481,6 +484,15 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
         return error("option --json may only be specified once");
       }
       result.global.json = true;
+      ++index;
+      continue;
+    }
+    if (argument == "-v" || argument == "--verbose") {
+      if (verbose_seen) {
+        return error("option --verbose may only be specified once");
+      }
+      result.global.verbose = true;
+      verbose_seen = true;
       ++index;
       continue;
     }
@@ -2721,6 +2733,7 @@ constexpr std::string_view usage_text() noexcept {
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
                "  -i <vendor-id> | --vendor-id <vendor-id>\n"
+               "  -v | --verbose\n"
                "  --slot <a|b|other|all> -a | --set-active[=<a|b|other>]\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
@@ -2798,6 +2811,20 @@ int run_cli(const int argc, char **argv) {
       print_usage(std::cerr);
     }
     return result;
+  }
+
+  if (invocation->global.verbose && !invocation->global.json) {
+    std::cerr << "kairosboot: command=" << command_name(invocation->kind);
+    if (invocation->global.selector.has_value()) {
+      std::cerr << " selector=" << *invocation->global.selector;
+    } else {
+      std::cerr << " selector=auto";
+    }
+    if (invocation->global.usb_vendor_id.has_value()) {
+      std::cerr << " usb-vendor=0x" << std::hex
+                << *invocation->global.usb_vendor_id << std::dec;
+    }
+    std::cerr << '\n';
   }
 
   switch (invocation->kind) {

@@ -621,6 +621,16 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     stdout, stderr = local(["-h"], 0)
     if not stdout.startswith(b"Usage:\n") or stderr != b"":
         raise AssertionError(f"short help output changed: {stdout!r}, {stderr!r}")
+
+    stdout, stderr = local(["--verbose", "-h"], 0)
+    if not stdout.startswith(b"Usage:\n") or stderr != (
+        b"kairosboot: command=help selector=auto\n"
+    ):
+        raise AssertionError(f"verbose help output changed: {stdout!r}, {stderr!r}")
+
+    stdout, stderr = local(["-v", "-v", "-h"], 2)
+    if b"option --verbose may only be specified once" not in stderr:
+        raise AssertionError(f"duplicate verbose option changed: {stderr!r}")
     stdout, stderr = local(["-i", "0x10000", "-h"], 2)
     if b"requires a USB vendor id in [1, 0xffff]" not in stderr:
         raise AssertionError(f"vendor id range error changed: {stderr!r}")
