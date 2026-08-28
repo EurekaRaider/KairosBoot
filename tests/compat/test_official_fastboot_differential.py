@@ -206,7 +206,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         check_schema(schema)
         validate(metadata, schema)
         self.assertEqual(metadata["result"], "matched")
-        self.assertEqual(len(metadata["scenarios"]), 16)
+        self.assertEqual(len(metadata["scenarios"]), 19)
         self.assertEqual(
             metadata["aospFastboot"]["sha256"],
             json.loads((self.root / "compat/aosp.lock.json").read_text())[
@@ -233,6 +233,14 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             [scenario["id"] for scenario in captures[0]["scenarios"]],
             [scenario["id"] for scenario in metadata["scenarios"]],
         )
+        scenario_ids = {scenario["id"] for scenario in metadata["scenarios"]}
+        self.assertTrue(
+            {
+                "official-tcp-flash-default-file",
+                "official-tcp-boot-raw",
+                "official-tcp-flash-raw",
+            }.issubset(scenario_ids)
+        )
         cli_arguments = [
             argument
             for scenario in captures[0]["scenarios"]
@@ -242,7 +250,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         uncovered = {item["id"] for item in metadata["uncoveredScenarios"]}
         self.assertTrue(
             {
-                "official-scripted-boot-flash-raw",
                 "official-scripted-slot-policy",
                 "official-scripted-avb-flags",
                 "official-scripted-sparse-limit",
@@ -251,6 +258,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-scripted-update-flashall",
             }.issubset(uncovered)
         )
+        self.assertNotIn("official-scripted-boot-flash-raw", uncovered)
 
 
 if __name__ == "__main__":

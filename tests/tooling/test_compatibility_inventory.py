@@ -35,14 +35,14 @@ class CompatibilityInventoryTests(unittest.TestCase):
         expected_required_gaps: list[str] = []
         self.assertEqual(inventory["requiredGaps"], expected_required_gaps)
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["status"], "not-run"
+            inventory["officialDifferentialCoverage"]["status"], "partial"
         )
         self.assertEqual(
             inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
-            0,
+            22,
         )
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["matchedScenarios"], 0
+            inventory["officialDifferentialCoverage"]["matchedScenarios"], 19
         )
         for identifier in expected_required_gaps:
             self.assertIn(f'  - "{identifier}"\n', yaml_text)
