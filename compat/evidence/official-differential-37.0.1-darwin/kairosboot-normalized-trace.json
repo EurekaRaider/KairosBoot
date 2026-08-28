@@ -1,0 +1,627 @@
+{
+  "scenarios": [
+    {
+      "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "getvar",
+            "product"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "product"
+        },
+        {
+          "kind": "OKAY",
+          "message": "product_a"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-getvar"
+    },
+    {
+      "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "getvar",
+            "product"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "product"
+        },
+        {
+          "kind": "OKAY",
+          "message": "product_a"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-udp-getvar"
+    },
+    {
+      "deviceState": {
+        "partitions": {
+          "system": {
+            "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+            "size": 32
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flash",
+            "system",
+            "<ARTIFACT>/system.img"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "max-download-size"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x00100000"
+        },
+        {
+          "command": "download:00000020",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+          "size": 32
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:system",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flash"
+    },
+    {
+      "deviceState": {
+        "partitions": {
+          "system": {
+            "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+            "size": 32
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flash",
+            "system",
+            "<ARTIFACT>/system.img"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "max-download-size"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x00100000"
+        },
+        {
+          "command": "download:00000020",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+          "size": 32
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:system",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-udp-flash"
+    },
+    {
+      "deviceState": {
+        "product": "product_a",
+        "signature": {
+          "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+          "size": 256
+        }
+      },
+      "events": [
+        {
+          "argv": [
+            "signature",
+            "<ARTIFACT>/signature.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "download:00000100",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+          "size": 256
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "signature",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-signature"
+    },
+    {
+      "deviceState": {
+        "product": "product_a",
+        "signature": {
+          "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+          "size": 256
+        }
+      },
+      "events": [
+        {
+          "argv": [
+            "signature",
+            "<ARTIFACT>/signature.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "download:00000100",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+          "size": 256
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "signature",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-udp-signature"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "reboot"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "reboot"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "reboot",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-reboot"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "reboot-bootloader"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "reboot",
+            "bootloader"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "reboot-bootloader",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-reboot-bootloader"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "continue"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "continue"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "continue",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-continue"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "oem differential"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "oem",
+            "differential"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "oem differential",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-oem"
+    },
+    {
+      "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "stage",
+            "<ARTIFACT>/stage.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "download:00000020",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+          "size": 32
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-stage"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "flashing get_unlock_ability"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flashing",
+            "get-unlock-ability"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "flashing get_unlock_ability",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flashing-get-unlock-ability"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "create-logical-partition:differential:4096"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "create-logical-partition",
+            "differential",
+            "4096"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "create-logical-partition:differential:4096",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-create-logical-partition"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "delete-logical-partition:differential"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "delete-logical-partition",
+            "differential"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "delete-logical-partition:differential",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-delete-logical-partition"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "gsi:wipe"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "gsi",
+            "wipe"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "gsi:wipe",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-gsi-wipe"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "snapshot-update:cancel"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "snapshot-update",
+            "cancel"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "snapshot-update:cancel",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-snapshot-cancel"
+    }
+  ],
+  "schemaVersion": 1
+}

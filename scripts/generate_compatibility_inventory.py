@@ -28,6 +28,7 @@ ALLOWED_STATUSES = {
 SOURCE_PATH = Path("compat/aosp-platform-tools-37.0.1-source-inventory.json")
 EVIDENCE_PATH = Path("compat/kairosboot-capability-evidence.json")
 LOCK_PATH = Path("compat/aosp.lock.json")
+OFFICIAL_EVIDENCE_PATH = Path("compat/official-differential-evidence.json")
 JSON_OUTPUT = Path("compat/generated-inventory.json")
 YAML_OUTPUT = Path("compat/compatibility.yaml")
 C_HEADER = Path("include/kairosboot/kairosboot.h")
@@ -87,6 +88,180 @@ def _validate_evidence_paths(root: Path, entry: dict[str, Any]) -> None:
         _require((root / path).is_file(), f"{entry['id']}: evidence file does not exist: {value}")
 
 
+def _repository_file(root: Path, value: Any, label: str) -> Path:
+    _require(isinstance(value, str) and value, f"{label} must be a non-empty path")
+    path = Path(value)
+    _require(not path.is_absolute() and ".." not in path.parts,
+             f"{label} must be repository-relative: {value}")
+    resolved = root / path
+    _require(resolved.is_file(), f"{label} does not exist: {value}")
+    return resolved
+
+
+def _official_differential_coverage(
+    root: Path,
+    lock: dict[str, Any],
+    upstream: dict[str, dict[str, Any]],
+) -> tuple[dict[str, list[str]], int, int]:
+    index = _read_json(root / OFFICIAL_EVIDENCE_PATH)
+    _require(
+        set(index) == {"captures", "documentType", "platformToolsVersion", "schemaVersion"},
+        "official differential evidence index has unknown or missing fields",
+    )
+    _require(
+        index["documentType"] == "kairosboot.official-fastboot-differential-index"
+        and index["schemaVersion"] == 1,
+        "unsupported official differential evidence index",
+    )
+    aosp = lock["aosp"]
+    _require(index["platformToolsVersion"] == aosp["platformToolsVersion"],
+             "official differential evidence uses a different Platform-Tools version")
+    captures = index["captures"]
+    _require(isinstance(captures, list), "official differential captures must be a list")
+
+    mapped: dict[str, list[str]] = {}
+    seen_metadata: set[str] = set()
+    seen_scenarios: set[tuple[str, str]] = set()
+    scenario_count = 0
+    uncovered_count = 0
+    for raw_metadata_path in captures:
+        metadata_file = _repository_file(
+            root, raw_metadata_path, "official differential metadata"
+        )
+        metadata_path = Path(raw_metadata_path).as_posix()
+        _require(metadata_path not in seen_metadata,
+                 f"duplicate official differential metadata: {metadata_path}")
+        seen_metadata.add(metadata_path)
+        metadata = _read_json(metadata_file)
+        _require(
+            set(metadata) == {
+                "aospFastboot", "baseline", "captureFiles", "documentType",
+                "kairosboot", "result", "scenarios", "schemaVersion",
+                "uncoveredScenarios",
+            },
+            f"{metadata_path}: unknown or missing evidence fields",
+        )
+        _require(
+            metadata["documentType"] ==
+            "kairosboot.official-fastboot-differential-evidence"
+            and metadata["schemaVersion"] == 1
+            and metadata["result"] == "matched",
+            f"{metadata_path}: evidence is not a matched v1 capture",
+        )
+        baseline = metadata["baseline"]
+        _require(
+            isinstance(baseline, dict)
+            and baseline.get("platformToolsVersion") == aosp["platformToolsVersion"]
+            and baseline.get("sourceCommit") == aosp["sourceCommit"],
+            f"{metadata_path}: baseline does not match the AOSP lock",
+        )
+        official = metadata["aospFastboot"]
+        _require(isinstance(official, dict), f"{metadata_path}: aospFastboot must be an object")
+        platform_key = official.get("platform")
+        archives = aosp["officialArchives"]
+        _require(platform_key in archives,
+                 f"{metadata_path}: unknown official Fastboot platform")
+        _require(official.get("sha256") == archives[platform_key]["fastbootSha256"],
+                 f"{metadata_path}: official Fastboot hash differs from the lock")
+        version_output = official.get("versionOutput")
+        _require(
+            isinstance(version_output, str)
+            and aosp["platformToolsVersion"] in version_output,
+            f"{metadata_path}: official Fastboot version output is stale",
+        )
+        kairosboot = metadata["kairosboot"]
+        _require(
+            isinstance(kairosboot, dict)
+            and re.fullmatch(r"[0-9a-f]{64}", str(kairosboot.get("sha256", "")))
+            is not None,
+            f"{metadata_path}: KairosBoot binary hash is invalid",
+        )
+
+        capture_documents: list[dict[str, Any]] = []
+        capture_files = metadata["captureFiles"]
+        _require(isinstance(capture_files, dict) and set(capture_files) == {"aosp", "kairosboot"},
+                 f"{metadata_path}: captureFiles must name AOSP and KairosBoot")
+        for label in ("aosp", "kairosboot"):
+            descriptor = capture_files[label]
+            _require(isinstance(descriptor, dict) and set(descriptor) == {"path", "sha256"},
+                     f"{metadata_path}: invalid {label} capture descriptor")
+            capture_path = Path(descriptor["path"])
+            _require(not capture_path.is_absolute() and ".." not in capture_path.parts,
+                     f"{metadata_path}: {label} capture path escapes its evidence directory")
+            capture_file = metadata_file.parent / capture_path
+            _require(capture_file.is_file(),
+                     f"{metadata_path}: missing {label} capture {capture_path}")
+            _require(descriptor["sha256"] == _sha256(capture_file),
+                     f"{metadata_path}: {label} capture hash mismatch")
+            capture_documents.append(_read_json(capture_file))
+        _require(capture_documents[0] == capture_documents[1],
+                 f"{metadata_path}: persisted normalized captures do not match")
+        captured_scenarios = capture_documents[0].get("scenarios")
+        _require(isinstance(captured_scenarios, list) and captured_scenarios,
+                 f"{metadata_path}: capture has no scenarios")
+
+        scenarios = metadata["scenarios"]
+        _require(isinstance(scenarios, list) and scenarios,
+                 f"{metadata_path}: evidence has no scenario mappings")
+        captured_ids = [item.get("id") for item in captured_scenarios
+                        if isinstance(item, dict)]
+        metadata_ids: list[str] = []
+        for scenario in scenarios:
+            _require(isinstance(scenario, dict),
+                     f"{metadata_path}: scenario mapping must be an object")
+            identifier = scenario.get("id")
+            coverage_ids = scenario.get("coverageIds")
+            _require(
+                isinstance(identifier, str)
+                and scenario.get("result") == "matched"
+                and scenario.get("transport") in {"tcp", "udp"},
+                f"{metadata_path}: invalid matched scenario mapping",
+            )
+            key = (metadata_path, identifier)
+            _require(key not in seen_scenarios,
+                     f"{metadata_path}: duplicate scenario mapping {identifier}")
+            seen_scenarios.add(key)
+            _require(
+                isinstance(coverage_ids, list)
+                and coverage_ids
+                and len(coverage_ids) == len(set(coverage_ids)),
+                f"{metadata_path}#{identifier}: coverageIds must be unique and non-empty",
+            )
+            for coverage_id in coverage_ids:
+                _require(coverage_id in upstream,
+                         f"{metadata_path}#{identifier}: unknown coverage id {coverage_id}")
+                mapped.setdefault(coverage_id, []).append(
+                    f"{metadata_path}#{identifier}"
+                )
+            metadata_ids.append(identifier)
+        _require(metadata_ids == captured_ids,
+                 f"{metadata_path}: metadata scenarios differ from persisted captures")
+        scenario_count += len(scenarios)
+
+        uncovered = metadata["uncoveredScenarios"]
+        _require(isinstance(uncovered, list),
+                 f"{metadata_path}: uncoveredScenarios must be a list")
+        uncovered_ids: set[str] = set()
+        for candidate in uncovered:
+            _require(isinstance(candidate, dict),
+                     f"{metadata_path}: uncovered scenario must be an object")
+            candidate_id = candidate.get("id")
+            candidate_coverage = candidate.get("coverageIds")
+            _require(isinstance(candidate_id, str) and candidate_id not in uncovered_ids,
+                     f"{metadata_path}: invalid or duplicate uncovered scenario id")
+            uncovered_ids.add(candidate_id)
+            _require(isinstance(candidate.get("reason"), str) and candidate["reason"],
+                     f"{metadata_path}#{candidate_id}: uncovered reason is required")
+            _require(isinstance(candidate_coverage, list) and candidate_coverage,
+                     f"{metadata_path}#{candidate_id}: uncovered coverageIds are required")
+            for coverage_id in candidate_coverage:
+                _require(coverage_id in upstream,
+                         f"{metadata_path}#{candidate_id}: unknown coverage id {coverage_id}")
+        uncovered_count += len(uncovered)
+
+    return mapped, scenario_count, uncovered_count
+
+
 def generate(root: Path) -> tuple[dict[str, Any], str]:
     root = root.resolve()
     lock = _read_json(root / LOCK_PATH)
@@ -94,8 +269,8 @@ def generate(root: Path) -> tuple[dict[str, Any], str]:
     evidence = _read_json(root / EVIDENCE_PATH)
 
     _require(lock.get("baselineStatus") == "locked", "AOSP baseline is not locked")
-    _require(lock.get("claimCompatibility") is False,
-             "claimCompatibility must remain false until official differentials pass")
+    _require(isinstance(lock.get("claimCompatibility"), bool),
+             "claimCompatibility in the AOSP lock must be boolean")
     aosp = lock.get("aosp")
     _require(isinstance(aosp, dict), "AOSP lock is missing its aosp object")
     version = aosp.get("platformToolsVersion")
@@ -217,7 +392,14 @@ def generate(root: Path) -> tuple[dict[str, Any], str]:
         deviation_entries.append(item)
         seen_ids.add(identifier)
 
+    official_mapping, differential_scenarios, uncovered_scenarios = (
+        _official_differential_coverage(root, lock, upstream)
+    )
     entries = sorted([*expanded.values(), *deviation_entries], key=lambda value: value["id"])
+    for entry in entries:
+        entry["officialDifferentialEvidence"] = list(
+            official_mapping.get(entry["id"], [])
+        )
     counts = Counter(entry["status"] for entry in entries)
     by_kind: dict[str, dict[str, int]] = {}
     for entry in entries:
@@ -231,6 +413,24 @@ def generate(root: Path) -> tuple[dict[str, Any], str]:
         for entry in required_entries
         if entry["status"] in {"partial", "missing"}
     ]
+    required_with_evidence = sum(
+        bool(entry["officialDifferentialEvidence"])
+        for entry in required_entries
+    )
+    coverage_status = (
+        "not-run"
+        if required_with_evidence == 0
+        else "complete"
+        if required_with_evidence == len(required_entries)
+        else "partial"
+    )
+    claim_ready = not gaps and required_with_evidence == len(required_entries)
+    _require(
+        not lock["claimCompatibility"] or claim_ready,
+        "claimCompatibility cannot be true before all required entries are complete "
+        "and have official differential evidence",
+    )
+    claim_compatibility = bool(lock["claimCompatibility"] and claim_ready)
     inventory = {
         "baseline": {
             "aospCommit": commit,
@@ -238,7 +438,7 @@ def generate(root: Path) -> tuple[dict[str, Any], str]:
             "sourceInventoryPath": SOURCE_PATH.as_posix(),
             "sourceInventorySha256": _sha256(root / SOURCE_PATH),
         },
-        "claimCompatibility": False,
+        "claimCompatibility": claim_compatibility,
         "completionRule": (
             "claimCompatibility may become true only after every required entry is "
             "implemented or an approved intentional deviation, every required entry has "
@@ -251,12 +451,15 @@ def generate(root: Path) -> tuple[dict[str, Any], str]:
             "capabilityEvidence": EVIDENCE_PATH.as_posix(),
             "cHeader": C_HEADER.as_posix(),
             "cliRegistry": CLI_SOURCE.as_posix(),
+            "officialDifferentialEvidence": OFFICIAL_EVIDENCE_PATH.as_posix(),
         },
         "inventoryStatus": "generated-known-gaps",
         "officialDifferentialCoverage": {
             "requiredEntries": len(required_entries),
-            "requiredEntriesWithEvidence": 0,
-            "status": "not-run",
+            "requiredEntriesWithEvidence": required_with_evidence,
+            "matchedScenarios": differential_scenarios,
+            "uncoveredCandidateScenarios": uncovered_scenarios,
+            "status": coverage_status,
         },
         "requiredGaps": gaps,
         "schemaVersion": 2,
@@ -281,7 +484,7 @@ def _render_yaml(inventory: dict[str, Any]) -> str:
         "# Generated by scripts/generate_compatibility_inventory.py; do not edit.",
         f"schemaVersion: {inventory['schemaVersion']}",
         f"baselineStatus: locked",
-        f"claimCompatibility: false",
+        f"claimCompatibility: {'true' if inventory['claimCompatibility'] else 'false'}",
         "baseline:",
         f"  platformToolsVersion: {_yaml_string(baseline['platformToolsVersion'])}",
         f"  aospCommit: {_yaml_string(baseline['aospCommit'])}",
@@ -299,7 +502,11 @@ def _render_yaml(inventory: dict[str, Any]) -> str:
         "officialDifferentialCoverage:",
         f"  status: {_yaml_string(inventory['officialDifferentialCoverage']['status'])}",
         f"  requiredEntries: {inventory['officialDifferentialCoverage']['requiredEntries']}",
-        "  requiredEntriesWithEvidence: 0",
+        "  requiredEntriesWithEvidence: "
+        f"{inventory['officialDifferentialCoverage']['requiredEntriesWithEvidence']}",
+        f"  matchedScenarios: {inventory['officialDifferentialCoverage']['matchedScenarios']}",
+        "  uncoveredCandidateScenarios: "
+        f"{inventory['officialDifferentialCoverage']['uncoveredCandidateScenarios']}",
         "entries:",
     ])
     for entry in inventory["entries"]:
@@ -317,6 +524,14 @@ def _render_yaml(inventory: dict[str, Any]) -> str:
             lines.extend(f"      - {_yaml_string(path)}" for path in entry["evidence"])
         else:
             lines.append("    evidence: []")
+        if entry["officialDifferentialEvidence"]:
+            lines.append("    officialDifferentialEvidence:")
+            lines.extend(
+                f"      - {_yaml_string(value)}"
+                for value in entry["officialDifferentialEvidence"]
+            )
+        else:
+            lines.append("    officialDifferentialEvidence: []")
     lines.extend([
         "requiredGaps:",
         *[f"  - {_yaml_string(identifier)}" for identifier in inventory["requiredGaps"]],
@@ -360,7 +575,9 @@ def main() -> int:
         print(
             "compatibility inventory: "
             + ", ".join(f"{status}={summary[status]}" for status in sorted(summary))
-            + f", required-gaps={len(inventory['requiredGaps'])}, claim=false"
+            + f", required-gaps={len(inventory['requiredGaps'])}, "
+            + f"official-evidence={inventory['officialDifferentialCoverage']['requiredEntriesWithEvidence']}, "
+            + f"claim={'true' if inventory['claimCompatibility'] else 'false'}"
         )
         return 0
     except InventoryError as error:

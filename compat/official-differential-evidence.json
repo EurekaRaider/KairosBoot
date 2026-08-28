@@ -1,0 +1,8 @@
+{
+  "captures": [
+    "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json"
+  ],
+  "documentType": "kairosboot.official-fastboot-differential-index",
+  "platformToolsVersion": "37.0.1",
+  "schemaVersion": 1
+}

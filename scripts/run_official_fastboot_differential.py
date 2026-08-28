@@ -49,6 +49,10 @@ class Scenario:
     arguments: tuple[str, ...]
     terminal_command: str
     image_path: Optional[pathlib.Path] = None
+    coverage_ids: tuple[str, ...] = ()
+    aosp_arguments: Optional[tuple[str, ...]] = None
+    kairosboot_arguments: Optional[tuple[str, ...]] = None
+    variable_values: tuple[tuple[str, str], ...] = ()
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -206,6 +210,10 @@ class WireRecorder:
         self.finished = False
         self.device_state: dict[str, Any] = {"product": "product_a"}
 
+    def _finish_command(self, command: str) -> None:
+        if command == self.scenario.terminal_command:
+            self.finished = True
+
     def handle(self, payload: bytes) -> bytes:
         if self.finished:
             raise CaptureGateError("Fastboot client sent bytes after terminal response")
@@ -226,6 +234,8 @@ class WireRecorder:
                 }
             )
             self.events.append({"kind": "OKAY", "message": "downloaded"})
+            if self.scenario.terminal_command == "download":
+                self.finished = True
             return b"OKAYdownloaded"
 
         try:
@@ -247,10 +257,10 @@ class WireRecorder:
                 "is-userspace": "no",
                 "unlocked": "yes",
             }
+            values.update(dict(self.scenario.variable_values))
             message = values.get(name, "")
             self.events.append({"kind": "OKAY", "message": message})
-            if command == self.scenario.terminal_command:
-                self.finished = True
+            self._finish_command(command)
             return b"OKAY" + message.encode("ascii")
 
         self.events.append({"kind": "COMMAND", "command": command})
@@ -264,15 +274,13 @@ class WireRecorder:
             if self.downloaded is None:
                 raise CaptureGateError("flash command arrived before a download")
             partition = command[len("flash:") :]
-            self.device_state["partitions"] = {
-                partition: {
-                    "size": len(self.downloaded),
-                    "sha256": hashlib.sha256(self.downloaded).hexdigest(),
-                }
+            partitions = self.device_state.setdefault("partitions", {})
+            partitions[partition] = {
+                "size": len(self.downloaded),
+                "sha256": hashlib.sha256(self.downloaded).hexdigest(),
             }
             self.events.append({"kind": "OKAY", "message": "flashed"})
-            if command == self.scenario.terminal_command:
-                self.finished = True
+            self._finish_command(command)
             return b"OKAYflashed"
         if command == "signature":
             if self.downloaded is None:
@@ -282,16 +290,65 @@ class WireRecorder:
                 "sha256": hashlib.sha256(self.downloaded).hexdigest(),
             }
             self.events.append({"kind": "OKAY", "message": "accepted"})
-            if command == self.scenario.terminal_command:
-                self.finished = True
+            self._finish_command(command)
             return b"OKAYaccepted"
         if command.startswith("erase:"):
             partition = command[len("erase:") :]
             self.device_state["erased"] = [partition]
             self.events.append({"kind": "OKAY", "message": "erased"})
-            if command == self.scenario.terminal_command:
-                self.finished = True
+            self._finish_command(command)
             return b"OKAYerased"
+        if command == "boot":
+            if self.downloaded is None:
+                raise CaptureGateError("boot command arrived before a download")
+            self.device_state["boot"] = {
+                "size": len(self.downloaded),
+                "sha256": hashlib.sha256(self.downloaded).hexdigest(),
+            }
+            self.events.append({"kind": "OKAY", "message": "booting"})
+            self._finish_command(command)
+            return b"OKAYbooting"
+        if command.startswith("set_active:"):
+            slot = command[len("set_active:") :]
+            self.device_state["activeSlot"] = slot
+            self.events.append({"kind": "OKAY", "message": "active"})
+            self._finish_command(command)
+            return b"OKAYactive"
+        if command.startswith("update-super:"):
+            if self.downloaded is None:
+                raise CaptureGateError("update-super command arrived before a download")
+            self.device_state["superUpdate"] = {
+                "command": command,
+                "size": len(self.downloaded),
+                "sha256": hashlib.sha256(self.downloaded).hexdigest(),
+            }
+            self.events.append({"kind": "OKAY", "message": "updated"})
+            self._finish_command(command)
+            return b"OKAYupdated"
+        if command == "stage":
+            if self.downloaded is None:
+                raise CaptureGateError("stage command arrived before a download")
+            self.device_state["staged"] = {
+                "size": len(self.downloaded),
+                "sha256": hashlib.sha256(self.downloaded).hexdigest(),
+            }
+            self.events.append({"kind": "OKAY", "message": "staged"})
+            self._finish_command(command)
+            return b"OKAYstaged"
+        simple_commands = {
+            "reboot", "reboot-bootloader", "reboot-recovery", "reboot-fastboot",
+            "continue", "oem differential", "flashing get_unlock_ability",
+            "create-logical-partition:differential:4096",
+            "delete-logical-partition:differential",
+            "resize-logical-partition:differential:8192",
+            "gsi:wipe", "snapshot-update:cancel",
+        }
+        if command in simple_commands:
+            commands = self.device_state.setdefault("commands", [])
+            commands.append(command)
+            self.events.append({"kind": "OKAY", "message": "accepted"})
+            self._finish_command(command)
+            return b"OKAYaccepted"
 
         self.events.append({"kind": "FAIL", "message": "unsupported scripted command"})
         self.finished = True
@@ -349,6 +406,13 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
                 while not recorder.finished:
                     response = recorder.handle(_receive_frame(connection))
                     _send_frame(connection, response)
+        except CaptureGateError as error:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise CaptureGateError(
+                f"{error}; events={recorder.events!r}; "
+                f"stdout={stdout!r}, stderr={stderr!r}"
+            ) from error
         except BaseException:
             process.kill()
             process.communicate()
@@ -424,17 +488,19 @@ def capture_scenario(
 
 
 def _aosp_command(binary: pathlib.Path, scenario: Scenario) -> list[str]:
-    return [str(binary), "-s", "{endpoint}", *scenario.arguments]
+    arguments = scenario.aosp_arguments or scenario.arguments
+    return [str(binary), "-s", "{endpoint}", *arguments]
 
 
 def _kairosboot_command(binary: pathlib.Path, scenario: Scenario) -> list[str]:
+    arguments = scenario.kairosboot_arguments or scenario.arguments
     return [
         str(binary),
         "--device",
         "{endpoint}",
         "--timeout-ms",
         "5000",
-        *scenario.arguments,
+        *arguments,
     ]
 
 
@@ -456,6 +522,187 @@ def _load_comparator(repository_root: pathlib.Path) -> Any:
     return module
 
 
+def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
+    image_path = output_dir / "differential-system.img"
+    image_path.write_bytes(bytes(range(32)))
+    signature_path = output_dir / "differential-signature.bin"
+    signature_path.write_bytes(bytes(range(256)))
+    return [
+        Scenario(
+            "official-tcp-getvar", "tcp", ("getvar", "product"),
+            "getvar:product", coverage_ids=("command.getvar", "transport.tcp"),
+        ),
+        Scenario(
+            "official-udp-getvar", "udp", ("getvar", "product"),
+            "getvar:product", coverage_ids=("command.getvar", "transport.udp"),
+        ),
+        Scenario(
+            "official-tcp-flash", "tcp",
+            ("flash", "system", "<ARTIFACT>/system.img"), "flash:system", image_path,
+            ("command.flash", "protocol.command", "protocol.download",
+             "capability.raw-image", "image.system"),
+            aosp_arguments=("flash", "system", str(image_path)),
+            kairosboot_arguments=("flash", "system", str(image_path)),
+        ),
+        Scenario(
+            "official-udp-flash", "udp",
+            ("flash", "system", "<ARTIFACT>/system.img"), "flash:system", image_path,
+            ("command.flash", "protocol.command", "protocol.download",
+             "capability.raw-image", "image.system"),
+            aosp_arguments=("flash", "system", str(image_path)),
+            kairosboot_arguments=("flash", "system", str(image_path)),
+        ),
+        Scenario(
+            "official-tcp-signature", "tcp",
+            ("signature", "<ARTIFACT>/signature.bin"), "signature", signature_path,
+            ("command.signature",),
+            aosp_arguments=("signature", str(signature_path)),
+            kairosboot_arguments=("signature", str(signature_path)),
+        ),
+        Scenario(
+            "official-udp-signature", "udp",
+            ("signature", "<ARTIFACT>/signature.bin"), "signature", signature_path,
+            ("command.signature",),
+            aosp_arguments=("signature", str(signature_path)),
+            kairosboot_arguments=("signature", str(signature_path)),
+        ),
+        Scenario(
+            "official-tcp-reboot", "tcp", ("reboot",), "reboot",
+            coverage_ids=("command.reboot",),
+        ),
+        Scenario(
+            "official-tcp-reboot-bootloader", "tcp",
+            ("reboot", "bootloader"), "reboot-bootloader",
+            coverage_ids=("command.reboot-bootloader",),
+        ),
+        Scenario(
+            "official-tcp-continue", "tcp", ("continue",), "continue",
+            coverage_ids=("command.continue",),
+        ),
+        Scenario(
+            "official-tcp-oem", "tcp", ("oem", "differential"),
+            "oem differential", coverage_ids=("command.oem",),
+        ),
+        Scenario(
+            "official-tcp-stage", "tcp", ("stage", "<ARTIFACT>/stage.bin"),
+            "download", image_path, ("command.stage",),
+            aosp_arguments=("stage", str(image_path)),
+            kairosboot_arguments=("stage", str(image_path)),
+        ),
+        Scenario(
+            "official-tcp-flashing-get-unlock-ability", "tcp",
+            ("flashing", "get-unlock-ability"),
+            "flashing get_unlock_ability",
+            coverage_ids=("command.flashing-get-unlock-ability",),
+            aosp_arguments=("flashing", "get_unlock_ability"),
+            kairosboot_arguments=("flashing", "get-unlock-ability"),
+        ),
+        Scenario(
+            "official-tcp-create-logical-partition", "tcp",
+            ("create-logical-partition", "differential", "4096"),
+            "create-logical-partition:differential:4096",
+            coverage_ids=("command.create-logical-partition",),
+        ),
+        Scenario(
+            "official-tcp-delete-logical-partition", "tcp",
+            ("delete-logical-partition", "differential"),
+            "delete-logical-partition:differential",
+            coverage_ids=("command.delete-logical-partition",),
+        ),
+        Scenario(
+            "official-tcp-gsi-wipe", "tcp", ("gsi", "wipe"), "gsi:wipe",
+            coverage_ids=("command.gsi-wipe",),
+        ),
+        Scenario(
+            "official-tcp-snapshot-cancel", "tcp",
+            ("snapshot-update", "cancel"), "snapshot-update:cancel",
+            coverage_ids=("command.snapshot-cancel",),
+        ),
+    ]
+
+
+UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "official-scripted-erase",
+        "coverageIds": ["command.erase"],
+        "reason": (
+            "official Fastboot probes has-slot and partition-type before erase while "
+            "KairosBoot sends the protocol command directly, so strict wire order differs"
+        ),
+    },
+    {
+        "id": "official-scripted-boot-flash-raw",
+        "coverageIds": ["command.boot", "command.flash-raw",
+                        "capability.boot-image-construction"],
+        "reason": (
+            "a real 37.0.1 capture produces a different legacy boot image DATA hash; "
+            "the strict wire comparator therefore rejects these scenarios"
+        ),
+    },
+    {
+        "id": "official-scripted-slot-policy",
+        "coverageIds": ["command.set-active", "option.slot", "option.set-active",
+                        "capability.a-b-slots"],
+        "reason": (
+            "official Fastboot probes slot-count before the operation while KairosBoot "
+            "uses a different getvar sequence, so the strict wire event order differs"
+        ),
+    },
+    {
+        "id": "official-scripted-avb-flags",
+        "coverageIds": ["option.disable-verity", "option.disable-verification",
+                        "capability.vbmeta-avb-mutation"],
+        "reason": (
+            "the mutated DATA hash matches in a real capture, but official Fastboot "
+            "performs additional is-logical and partition-size probes; strict wire "
+            "event parity therefore does not pass"
+        ),
+    },
+    {
+        "id": "official-scripted-sparse-limit",
+        "coverageIds": ["option.sparse-limit", "capability.android-sparse"],
+        "reason": (
+            "official Fastboot performs additional partition probes before sparse "
+            "download, so the strict normalized wire event sequence differs"
+        ),
+    },
+    {
+        "id": "official-scripted-format",
+        "coverageIds": ["command.format", "option.fs-options"],
+        "reason": (
+            "format delegates filesystem construction to platform mkfs tools; "
+            "their filesystem bytes are not deterministic across hosted platforms"
+        ),
+    },
+    {
+        "id": "official-scripted-wipe-super",
+        "coverageIds": ["command.wipe-super", "capability.dynamic-partitions"],
+        "reason": (
+            "wipe-super requires a valid device-specific liblp metadata image and "
+            "fastbootd state that the transport-only scripted device cannot infer"
+        ),
+    },
+    {
+        "id": "official-scripted-update-flashall",
+        "coverageIds": ["command.update", "command.flashall", "capability.update-zip"],
+        "reason": (
+            "update and flashall may reboot between bootloader and fastbootd and reopen "
+            "the device; the single-session TCP/UDP scripted transport cannot model "
+            "that lifecycle without turning the device plan into a fixture oracle"
+        ),
+    },
+    {
+        "id": "official-scripted-resize-logical-partition",
+        "coverageIds": ["command.resize-logical-partition"],
+        "reason": (
+            "official Fastboot fetches and parses device-specific super metadata before "
+            "resizing; a transport-only scripted device cannot synthesize that metadata "
+            "without becoming a fixture oracle"
+        ),
+    },
+)
+
+
 def _run_capture(arguments: argparse.Namespace) -> int:
     if arguments.fastboot is None or arguments.kairosboot is None:
         missing = []
@@ -472,6 +719,12 @@ def _run_capture(arguments: argparse.Namespace) -> int:
     repository_root = arguments.repository_root.resolve()
     lock_path = arguments.lock or repository_root / "compat" / "aosp.lock.json"
     verified = verify_official_fastboot(arguments.fastboot, lock_path)
+    lock = _load_json(lock_path)
+    try:
+        platform_tools_version = lock["aosp"]["platformToolsVersion"]
+        source_commit = lock["aosp"]["sourceCommit"]
+    except (KeyError, TypeError) as error:
+        raise CaptureGateError("official Fastboot lock is missing baseline metadata") from error
     kairosboot = _require_executable(arguments.kairosboot, "KairosBoot")
 
     output_dir = arguments.output_dir
@@ -480,43 +733,19 @@ def _run_capture(arguments: argparse.Namespace) -> int:
         temporary = tempfile.TemporaryDirectory(prefix="kairosboot-aosp-capture-")
         output_dir = pathlib.Path(temporary.name)
     output_dir.mkdir(parents=True, exist_ok=True)
-    image_path = output_dir / "differential-system.img"
-    image_path.write_bytes(bytes(range(32)))
-    signature_path = output_dir / "differential-signature.bin"
-    signature_path.write_bytes(bytes(range(256)))
-
-    scenarios = [
-        Scenario("official-tcp-getvar", "tcp", ("getvar", "product"), "getvar:product"),
-        Scenario("official-udp-getvar", "udp", ("getvar", "product"), "getvar:product"),
-        Scenario(
-            "official-tcp-flash",
-            "tcp",
-            ("flash", "system", str(image_path)),
-            "flash:system",
-            image_path,
-        ),
-        Scenario(
-            "official-udp-flash",
-            "udp",
-            ("flash", "system", str(image_path)),
-            "flash:system",
-            image_path,
-        ),
-        Scenario(
-            "official-tcp-signature",
-            "tcp",
-            ("signature", str(signature_path)),
-            "signature",
-            signature_path,
-        ),
-        Scenario(
-            "official-udp-signature",
-            "udp",
-            ("signature", str(signature_path)),
-            "signature",
-            signature_path,
-        ),
-    ]
+    artifact_temporary = tempfile.TemporaryDirectory(
+        prefix="kairosboot-aosp-artifacts-"
+    )
+    scenarios = _scenario_catalog(pathlib.Path(artifact_temporary.name))
+    selected_scenarios = getattr(arguments, "scenario", [])
+    if selected_scenarios:
+        requested = set(selected_scenarios)
+        known = {scenario.identifier for scenario in scenarios}
+        unknown = sorted(requested - known)
+        if unknown:
+            raise CaptureGateError("unknown scenario ids: " + ", ".join(unknown))
+        scenarios = [scenario for scenario in scenarios
+                     if scenario.identifier in requested]
     aosp_capture = {"schemaVersion": 1, "scenarios": []}
     kairosboot_capture = {"schemaVersion": 1, "scenarios": []}
     for scenario in scenarios:
@@ -545,19 +774,6 @@ def _run_capture(arguments: argparse.Namespace) -> int:
     metadata_path = output_dir / "official-capture-metadata.json"
     _write_json(aosp_path, aosp_capture)
     _write_json(kairosboot_path, kairosboot_capture)
-    _write_json(
-        metadata_path,
-        {
-            "aospFastboot": {
-                "path": str(verified.path),
-                "platform": verified.platform_key,
-                "sha256": verified.sha256,
-                "versionOutput": verified.version_output,
-            },
-            "kairosboot": {"path": str(kairosboot)},
-            "scenarioIds": [scenario.identifier for scenario in scenarios],
-        },
-    )
 
     comparator = _load_comparator(repository_root)
     schema = repository_root / "tests" / "compat" / "normalized-fastboot-trace.schema.json"
@@ -570,12 +786,51 @@ def _run_capture(arguments: argparse.Namespace) -> int:
             f"AOSP={difference.expected!r}, KairosBoot={difference.actual!r}; "
             f"captures: {aosp_path}, {kairosboot_path}"
         )
+    _write_json(
+        metadata_path,
+        {
+            "documentType": "kairosboot.official-fastboot-differential-evidence",
+            "schemaVersion": 1,
+            "result": "matched",
+            "baseline": {
+                "platformToolsVersion": platform_tools_version,
+                "sourceCommit": source_commit,
+            },
+            "aospFastboot": {
+                "platform": verified.platform_key,
+                "sha256": verified.sha256,
+                "versionOutput": verified.version_output.splitlines()[0],
+            },
+            "kairosboot": {"sha256": _sha256_file(kairosboot)},
+            "captureFiles": {
+                "aosp": {
+                    "path": aosp_path.name,
+                    "sha256": _sha256_file(aosp_path),
+                },
+                "kairosboot": {
+                    "path": kairosboot_path.name,
+                    "sha256": _sha256_file(kairosboot_path),
+                },
+            },
+            "scenarios": [
+                {
+                    "id": scenario.identifier,
+                    "transport": scenario.transport,
+                    "coverageIds": list(scenario.coverage_ids),
+                    "result": "matched",
+                }
+                for scenario in scenarios
+            ],
+            "uncoveredScenarios": list(UNCOVERED_SCENARIOS),
+        },
+    )
     print(
         "PASS: official Platform-Tools differential capture matched KairosBoot "
         f"for {len(scenarios)} TCP/UDP scenarios; evidence: {output_dir}"
     )
     if temporary is not None:
         temporary.cleanup()
+    artifact_temporary.cleanup()
     return 0
 
 
@@ -588,6 +843,10 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--fastboot", type=pathlib.Path)
     parser.add_argument("--kairosboot", type=pathlib.Path)
     parser.add_argument("--output-dir", type=pathlib.Path)
+    parser.add_argument(
+        "--scenario", action="append", default=[],
+        help="run only the named scenario (repeatable)",
+    )
     parser.add_argument(
         "--require",
         action="store_true",

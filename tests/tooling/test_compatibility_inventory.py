@@ -32,7 +32,14 @@ class CompatibilityInventoryTests(unittest.TestCase):
         )
         self.assertTrue(inventory["requiredGaps"])
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["status"], "not-run"
+            inventory["officialDifferentialCoverage"]["status"], "partial"
+        )
+        self.assertGreater(
+            inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
+            0,
+        )
+        self.assertEqual(
+            inventory["officialDifferentialCoverage"]["matchedScenarios"], 16
         )
         for entry in inventory["entries"]:
             self.assertIn(entry["status"], GENERATOR.ALLOWED_STATUSES)
@@ -73,12 +80,26 @@ class CompatibilityInventoryTests(unittest.TestCase):
             GENERATOR.SOURCE_PATH,
             GENERATOR.EVIDENCE_PATH,
             GENERATOR.LOCK_PATH,
+            GENERATOR.OFFICIAL_EVIDENCE_PATH,
             GENERATOR.C_HEADER,
             GENERATOR.CLI_SOURCE,
         ):
             destination = directory / path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPOSITORY_ROOT / path, destination)
+        official_index = json.loads(
+            (directory / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+        )
+        for metadata_value in official_index["captures"]:
+            metadata_path = Path(metadata_value)
+            destination = directory / metadata_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPOSITORY_ROOT / metadata_path, destination)
+            metadata = json.loads(destination.read_text())
+            for descriptor in metadata["captureFiles"].values():
+                source = REPOSITORY_ROOT / metadata_path.parent / descriptor["path"]
+                target = directory / metadata_path.parent / descriptor["path"]
+                shutil.copy2(source, target)
         evidence = json.loads((directory / GENERATOR.EVIDENCE_PATH).read_text())
         for group in [*evidence["assessments"], *evidence["additionalDeviations"]]:
             for raw_path in group.get("evidence", []):
@@ -167,6 +188,26 @@ class CompatibilityInventoryTests(unittest.TestCase):
             json_path.write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(GENERATOR.InventoryError, "stale"):
                 GENERATOR._check_file(json_path, GENERATOR._canonical_json(inventory))
+
+    def test_rejects_differential_trace_mismatch_even_with_updated_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            descriptor = metadata["captureFiles"]["kairosboot"]
+            capture_path = metadata_path.parent / descriptor["path"]
+            capture = json.loads(capture_path.read_text())
+            capture["scenarios"][0]["deviceState"]["product"] = "tampered"
+            capture_path.write_text(json.dumps(capture), encoding="utf-8")
+            descriptor["sha256"] = GENERATOR._sha256(capture_path)
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GENERATOR.InventoryError, "normalized captures do not match"
+            ):
+                GENERATOR.generate(root)
 
 
 if __name__ == "__main__":

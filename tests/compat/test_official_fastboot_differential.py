@@ -14,6 +14,11 @@ import tempfile
 import unittest
 
 
+TOOLING_ROOT = pathlib.Path(__file__).resolve().parents[1] / "tooling"
+sys.path.insert(0, str(TOOLING_ROOT))
+from json_schema_subset import check_schema, validate  # noqa: E402
+
+
 class OfficialFastbootDifferentialTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -149,6 +154,66 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         self.assertEqual(
             capture["deviceState"]["signature"],
             {"size": 4, "sha256": hashlib.sha256(b"sig\x00").hexdigest()},
+        )
+
+    def test_committed_capture_is_schema_valid_real_matched_evidence(self) -> None:
+        schema = json.loads(
+            (
+                self.root
+                / "tests/compat/official-fastboot-differential-evidence.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        evidence_root = (
+            self.root
+            / "compat/evidence/official-differential-37.0.1-darwin"
+        )
+        metadata = json.loads(
+            (evidence_root / "official-capture-metadata.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        check_schema(schema)
+        validate(metadata, schema)
+        self.assertEqual(metadata["result"], "matched")
+        self.assertEqual(len(metadata["scenarios"]), 16)
+        self.assertEqual(
+            metadata["aospFastboot"]["sha256"],
+            json.loads((self.root / "compat/aosp.lock.json").read_text())[
+                "aosp"
+            ]["officialArchives"]["darwin"]["fastbootSha256"],
+        )
+
+        captures = []
+        for label in ("aosp", "kairosboot"):
+            descriptor = metadata["captureFiles"][label]
+            capture_path = evidence_root / descriptor["path"]
+            self.assertEqual(
+                hashlib.sha256(capture_path.read_bytes()).hexdigest(),
+                descriptor["sha256"],
+            )
+            captures.append(json.loads(capture_path.read_text(encoding="utf-8")))
+        self.assertEqual(captures[0], captures[1])
+        self.assertEqual(
+            [scenario["id"] for scenario in captures[0]["scenarios"]],
+            [scenario["id"] for scenario in metadata["scenarios"]],
+        )
+        cli_arguments = [
+            argument
+            for scenario in captures[0]["scenarios"]
+            for argument in scenario["events"][0]["argv"]
+        ]
+        self.assertNotIn("/private/tmp/", "\n".join(cli_arguments))
+        uncovered = {item["id"] for item in metadata["uncoveredScenarios"]}
+        self.assertTrue(
+            {
+                "official-scripted-boot-flash-raw",
+                "official-scripted-slot-policy",
+                "official-scripted-avb-flags",
+                "official-scripted-sparse-limit",
+                "official-scripted-format",
+                "official-scripted-wipe-super",
+                "official-scripted-update-flashall",
+            }.issubset(uncovered)
         )
 
 
