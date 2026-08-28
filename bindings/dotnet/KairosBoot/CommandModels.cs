@@ -173,11 +173,15 @@ public sealed class CommandResult
         byte[] terminalPayload,
         IReadOnlyList<CommandMessage> messages,
         byte[] data,
+        string outputPath,
+        ulong receivedBytes,
         string deviceIdentifier)
     {
         TerminalPayload = terminalPayload;
         Messages = messages;
         Data = data;
+        OutputPath = outputPath;
+        ReceivedBytes = receivedBytes;
         DeviceIdentifier = deviceIdentifier;
     }
 
@@ -189,6 +193,12 @@ public sealed class CommandResult
 
     /// <summary>Gets the owned upload/fetch data, or an empty array.</summary>
     public byte[] Data { get; }
+
+    /// <summary>Gets the UTF-8 destination published by a file receive, or an empty string.</summary>
+    public string OutputPath { get; }
+
+    /// <summary>Gets the exact number of DATA bytes received into memory or a file.</summary>
+    public ulong ReceivedBytes { get; }
 
     /// <summary>Gets the resolved device identifier.</summary>
     public string DeviceIdentifier { get; }
@@ -226,6 +236,8 @@ public sealed class CommandResult
             terminal,
             new ReadOnlyCollection<CommandMessage>(messages),
             NativeBuffer.Copy(dataPointer, dataSize, "command data"),
+            Utf8String.FromNative(source.OutputPath()),
+            source.ReceivedBytes(),
             Utf8String.FromNative(source.DeviceIdentifier()));
     }
 }

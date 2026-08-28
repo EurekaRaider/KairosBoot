@@ -29,6 +29,10 @@ internal interface ICommandResultSource
 
     IntPtr Data(out UIntPtr size);
 
+    IntPtr OutputPath();
+
+    ulong ReceivedBytes();
+
     IntPtr DeviceIdentifier();
 }
 
@@ -64,6 +68,16 @@ internal sealed class NativeCommandResultSource : ICommandResultSource
     public IntPtr Data(out UIntPtr size)
     {
         return NativeMethods.CommandResultData(result, out size);
+    }
+
+    public IntPtr OutputPath()
+    {
+        return NativeMethods.CommandResultOutputPath(result);
+    }
+
+    public ulong ReceivedBytes()
+    {
+        return NativeMethods.CommandResultReceivedBytes(result);
     }
 
     public IntPtr DeviceIdentifier()

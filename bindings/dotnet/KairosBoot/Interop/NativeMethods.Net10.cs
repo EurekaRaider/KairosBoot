@@ -458,6 +458,39 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_upload_file_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int UploadFileAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string outputPath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_get_staged_file_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int GetStagedFileAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string outputPath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_fetch_file_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int FetchFileAsync(
+        ContextSafeHandle context,
+        string? selector,
+        string partition,
+        ulong offset,
+        ulong size,
+        string outputPath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_validate_job_file", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ValidateJobFile(string filePath, out IntPtr error);
@@ -586,6 +619,14 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_command_result_data")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial IntPtr CommandResultData(CommandResultSafeHandle result, out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_output_path")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr CommandResultOutputPath(CommandResultSafeHandle result);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_command_result_received_bytes")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial ulong CommandResultReceivedBytes(CommandResultSafeHandle result);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_command_result_device_identifier")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]

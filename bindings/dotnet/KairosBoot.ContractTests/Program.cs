@@ -114,20 +114,25 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 96)
+        if (uniqueEntryPoints.Count != 101)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 96 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 101 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 96, "unique entry points");
+        Check(uniqueEntryPoints.Count == 101, "unique entry points");
         Check(entryPoints.Contains("kb_update_options_init"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
         Check(entryPoints.Contains("kb_command_options_init"), "command options import");
         Check(entryPoints.Contains("kb_operation_command_result"), "result extraction import");
+        Check(entryPoints.Contains("kb_upload_file_async"), "upload-file import");
+        Check(entryPoints.Contains("kb_get_staged_file_async"), "get-staged-file import");
+        Check(entryPoints.Contains("kb_fetch_file_async"), "fetch-file import");
+        Check(entryPoints.Contains("kb_command_result_output_path"), "result output path import");
+        Check(entryPoints.Contains("kb_command_result_received_bytes"), "result received bytes import");
         Check(entryPoints.Contains("kb_error_session_poisoned"), "extended error import");
         Check(entryPoints.Contains("kb_validate_job_file"), "fleet validate import");
         Check(entryPoints.Contains("kb_plan_job_file"), "fleet plan import");
@@ -190,7 +195,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 96, "net48 DllImport count");
+        Check(methods.Count == 101, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -199,7 +204,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 66, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 73, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -217,7 +222,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 96, "net10 LibraryImport count");
+        Check(groups.Count == 101, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -228,7 +233,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 42, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 45, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -396,6 +401,8 @@ internal static class Program
         Check(result.Messages[1].Kind == CommandMessageKind.Text, "TEXT order");
         Check(result.Messages[1].Payload.SequenceEqual(new byte[] { 0xff, 0x54 }), "TEXT binary payload");
         Check(result.Data.SequenceEqual(new byte[] { 1, 0, 0xff, 2 }), "data lifetime");
+        Check(result.OutputPath == "结果.bin", "result UTF-8 output path");
+        Check(result.ReceivedBytes == 4, "result received byte count");
         Check(result.DeviceIdentifier == "设备-一", "result UTF-8 device identifier");
         Expect<InvalidOperationException>(
             () => CommandMessageKindMapping.FromNative(2, "contract test"));
@@ -452,6 +459,9 @@ internal static class Program
             "StageAsync",
             "UploadAsync",
             "FetchAsync",
+            "UploadFileAsync",
+            "GetStagedFileAsync",
+            "FetchFileAsync",
         };
 
         foreach (var name in expected)
@@ -1563,12 +1573,15 @@ internal static class Program
         private readonly byte[] info = { 0x49, 0 };
         private readonly byte[] text = { 0xff, 0x54 };
         private readonly byte[] data = { 1, 0, 0xff, 2 };
+        private readonly byte[] outputPath =
+            System.Text.Encoding.UTF8.GetBytes("结果.bin\0");
         private readonly byte[] device =
             System.Text.Encoding.UTF8.GetBytes("设备-一\0");
         private readonly GCHandle terminalHandle;
         private readonly GCHandle infoHandle;
         private readonly GCHandle textHandle;
         private readonly GCHandle dataHandle;
+        private readonly GCHandle outputPathHandle;
         private readonly GCHandle deviceHandle;
 
         internal FakeCommandResultSource()
@@ -1577,6 +1590,7 @@ internal static class Program
             infoHandle = GCHandle.Alloc(info, GCHandleType.Pinned);
             textHandle = GCHandle.Alloc(text, GCHandleType.Pinned);
             dataHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
+            outputPathHandle = GCHandle.Alloc(outputPath, GCHandleType.Pinned);
             deviceHandle = GCHandle.Alloc(device, GCHandleType.Pinned);
         }
 
@@ -1613,6 +1627,10 @@ internal static class Program
             return dataHandle.AddrOfPinnedObject();
         }
 
+        public IntPtr OutputPath() => outputPathHandle.AddrOfPinnedObject();
+
+        public ulong ReceivedBytes() => (ulong)data.LongLength;
+
         public IntPtr DeviceIdentifier() => deviceHandle.AddrOfPinnedObject();
 
         internal void Overwrite()
@@ -1621,6 +1639,7 @@ internal static class Program
             Overwrite(info);
             Overwrite(text);
             Overwrite(data);
+            Overwrite(outputPath);
             Overwrite(device);
         }
 
@@ -1630,6 +1649,7 @@ internal static class Program
             infoHandle.Free();
             textHandle.Free();
             dataHandle.Free();
+            outputPathHandle.Free();
             deviceHandle.Free();
         }
 

@@ -618,6 +618,85 @@ public sealed partial class Context : IDisposable
                     out error));
     }
 
+    /// <summary>Receives the Fastboot upload command directly into an atomic output file.</summary>
+    public Task<CommandResult> UploadFileAsync(
+        string outputPath,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(outputPath, nameof(outputPath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.UploadFileAsync(
+                    handle,
+                    deviceSelector,
+                    outputPath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Receives staged Fastboot data directly into an atomic output file.</summary>
+    public Task<CommandResult> GetStagedFileAsync(
+        string outputPath,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(outputPath, nameof(outputPath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.GetStagedFileAsync(
+                    handle,
+                    deviceSelector,
+                    outputPath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
+    /// <summary>Fetches a bounded partition range directly into an atomic output file.</summary>
+    public Task<CommandResult> FetchFileAsync(
+        string partition,
+        string outputPath,
+        ulong? offset = null,
+        ulong? size = null,
+        string? deviceSelector = null,
+        CommandOptions options = default,
+        IProgress<CommandProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(outputPath, nameof(outputPath));
+        ValidateSelector(deviceSelector);
+        return RunCommandAsync(
+            options,
+            progress,
+            cancellationToken,
+            (ref NativeCommandOptions nativeOptions, out IntPtr operation, out IntPtr error) =>
+                NativeMethods.FetchFileAsync(
+                    handle,
+                    deviceSelector,
+                    partition,
+                    offset ?? NativeMethods.FetchUnspecified,
+                    size ?? NativeMethods.FetchUnspecified,
+                    outputPath,
+                    ref nativeOptions,
+                    out operation,
+                    out error));
+    }
+
     /// <summary>Releases the native context.</summary>
     public void Dispose()
     {

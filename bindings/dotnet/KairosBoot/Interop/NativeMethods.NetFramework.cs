@@ -403,6 +403,36 @@ internal static partial class NativeMethods
         out IntPtr result,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_upload_file_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int UploadFileAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string outputPath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_get_staged_file_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int GetStagedFileAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string outputPath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_fetch_file_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FetchFileAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        ulong offset,
+        ulong size,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string outputPath,
+        ref NativeCommandOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_validate_job_file", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int ValidateJobFile(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
@@ -510,6 +540,12 @@ internal static partial class NativeMethods
 
     [DllImport(LibraryName, EntryPoint = "kb_command_result_data", CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr CommandResultData(CommandResultSafeHandle result, out UIntPtr size);
+
+    [DllImport(LibraryName, EntryPoint = "kb_command_result_output_path", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr CommandResultOutputPath(CommandResultSafeHandle result);
+
+    [DllImport(LibraryName, EntryPoint = "kb_command_result_received_bytes", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern ulong CommandResultReceivedBytes(CommandResultSafeHandle result);
 
     [DllImport(LibraryName, EntryPoint = "kb_command_result_device_identifier", CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr CommandResultDeviceIdentifier(CommandResultSafeHandle result);
