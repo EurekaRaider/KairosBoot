@@ -437,8 +437,10 @@ class LibusbDevicePreflightSessionOpener final
 public:
     explicit LibusbDevicePreflightSessionOpener(
         std::shared_ptr<transport::LibusbRuntime> runtime,
-        transport::UsbFastbootTransportOptions options) noexcept
-        : runtime_(std::move(runtime)), options_(std::move(options)) {}
+        transport::UsbFastbootTransportOptions options,
+        protocol::SessionOptions session_options) noexcept
+        : runtime_(std::move(runtime)), options_(std::move(options)),
+          session_options_(session_options) {}
 
     [[nodiscard]] std::expected<OpenedDevicePreflightSession,
                                 DevicePreflightOpenError>
@@ -469,13 +471,14 @@ public:
         return OpenedDevicePreflightSession{
             .verified_usb_identity = std::move(*identity),
             .session = std::make_unique<protocol::FastbootSession>(
-                std::move(*transport)),
+                std::move(*transport), session_options_),
         };
     }
 
 private:
     std::shared_ptr<transport::LibusbRuntime> runtime_;
     transport::UsbFastbootTransportOptions options_;
+    protocol::SessionOptions session_options_;
 };
 
 [[nodiscard]] DevicePreflightError probe_error(
@@ -581,7 +584,8 @@ std::expected<std::unique_ptr<IDevicePreflightSessionOpener>,
 make_libusb_device_preflight_session_opener(
     std::shared_ptr<transport::LibusbRuntime> runtime,
     std::shared_ptr<transport::BufferBudget> buffer_budget,
-    const transport::TransferRingConfig data_ring) noexcept {
+    const transport::TransferRingConfig data_ring,
+    const protocol::SessionOptions session_options) noexcept {
     if (runtime == nullptr || !runtime->running() || buffer_budget == nullptr ||
         data_ring.chunk_size == 0U || data_ring.depth == 0U) {
         return std::unexpected(DevicePreflightOpenError{
@@ -598,7 +602,7 @@ make_libusb_device_preflight_session_opener(
         options.data_ring = data_ring;
         return std::unique_ptr<IDevicePreflightSessionOpener>(
             new LibusbDevicePreflightSessionOpener(
-                std::move(runtime), std::move(options)));
+                std::move(runtime), std::move(options), session_options));
     } catch (const std::bad_alloc&) {
         return std::unexpected(DevicePreflightOpenError{
             .code = DevicePreflightOpenErrorCode::ResourceExhausted,

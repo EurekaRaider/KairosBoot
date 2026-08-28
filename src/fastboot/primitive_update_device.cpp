@@ -2,6 +2,7 @@
 #include "primitive_update_device.hpp"
 
 #include "src/fastboot/variable_parser.hpp"
+#include "src/fleet/device_preflight.hpp"
 #include "src/transport/image_transfer_source.hpp"
 #include "src/transport/transfer_ring.hpp"
 
@@ -451,6 +452,59 @@ bind_initial_reconnect_session(
             UpdateDeviceErrorKind::Failed,
             "unable to allocate the factory-bound initial service"));
     }
+}
+
+std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
+bind_initial_libusb_update_session(
+    fleet::OpenedDevicePreflightSession opened,
+    const fleet::DevicePreflightProbeResult& probe) {
+    if (!probe.product_query_completed || !probe.mode_query_completed ||
+        probe.mode != FastbootUsbMode::Bootloader ||
+        opened.session == nullptr ||
+        opened.session->state() != protocol::SessionState::Ready) {
+        return std::unexpected(local_error(
+            UpdateDeviceErrorKind::Failed,
+            "initial USB update session requires completed live product/mode "
+            "probes in bootloader mode"));
+    }
+    const auto& usb = opened.verified_usb_identity;
+    ReconnectTarget target{
+        .physical_port = UsbPhysicalPortPath{
+            .bus_number = usb.bus_number,
+            .ports = usb.hub_port_chain,
+        },
+        .serial = usb.serial,
+        .usb_fingerprint = ReconnectUsbFingerprint{
+            .vendor_id = usb.usb_fingerprint.vendor_id,
+            .product_id = usb.usb_fingerprint.product_id,
+            .interface_number = usb.usb_fingerprint.interface_number,
+            .interface_class = usb.usb_fingerprint.interface_class,
+            .interface_subclass = usb.usb_fingerprint.interface_subclass,
+            .interface_protocol = usb.usb_fingerprint.interface_protocol,
+        },
+        .product = probe.product,
+        .previous_mode = FastbootUsbMode::Bootloader,
+        .required_mode = FastbootUsbMode::Fastbootd,
+        .usb_fingerprint_policy =
+            ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity,
+        .preceding_operation_certainty =
+            protocol::TransferCertainty::FullyTransferred,
+    };
+    auto identity = ReconnectDeviceIdentity{
+        .physical_port = target.physical_port,
+        .serial = target.serial,
+        .usb_fingerprint = target.usb_fingerprint,
+        .product = target.product,
+        .mode = FastbootUsbMode::Bootloader,
+    };
+    return bind_initial_reconnect_session(
+        OpenedReconnectSession{
+            .verified_identity = std::move(identity),
+            .session = std::move(opened.session),
+            .outbound_certainty =
+                protocol::TransferCertainty::FullyTransferred,
+        },
+        std::move(target));
 }
 
 struct FastbootdSessionAccess final {

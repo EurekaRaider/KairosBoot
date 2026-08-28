@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/libusb_reconnect_adapters.hpp"
+#include "src/fastboot/primitive_update_device.hpp"
 
 #include "src/fleet/job_plan.hpp"
 
@@ -45,6 +46,7 @@ using kairosboot::fastboot::ReconnectTarget;
 using kairosboot::fastboot::ReconnectUsbFingerprintPolicy;
 using kairosboot::fastboot::SteadyReconnectWaiter;
 using kairosboot::fastboot::make_prepared_reconnect_binding;
+using kairosboot::fastboot::bind_initial_libusb_update_session;
 using kairosboot::fleet::DevicePreflightOpenError;
 using kairosboot::fleet::DevicePreflightProbeError;
 using kairosboot::fleet::DevicePreflightProbeResult;
@@ -1140,6 +1142,29 @@ public:
     }
 };
 
+void test_public_update_binding_accepts_only_verified_bootloader_start() {
+    const auto device = preflight_device();
+    PreflightOpener opener;
+    PreflightProbe probe;
+    auto opened = opener.open(device, std::chrono::steady_clock::now() + 2s, {});
+    CHECK(opened.has_value());
+    auto probed = probe.probe(*opened->session,
+                              std::chrono::steady_clock::now() + 2s, {});
+    CHECK(probed.has_value());
+    auto binding = bind_initial_libusb_update_session(
+        std::move(*opened), *probed);
+    CHECK(binding.has_value());
+
+    auto rejected_open =
+        opener.open(device, std::chrono::steady_clock::now() + 2s, {});
+    CHECK(rejected_open.has_value());
+    auto fastbootd = *probed;
+    fastbootd.mode = FastbootUsbMode::Fastbootd;
+    auto rejected = bind_initial_libusb_update_session(
+        std::move(*rejected_open), fastbootd);
+    CHECK(!rejected.has_value());
+}
+
 void test_prepared_binding_is_unforgeable_and_fail_closed() {
     const auto plan = one_device_plan();
     const std::array snapshot{preflight_device()};
@@ -1216,6 +1241,7 @@ int main() {
         test_mode_transition_accepts_changed_descriptor_only_with_policy();
         test_live_product_mode_serial_and_interruption_fail_closed();
         test_final_interruption_handoff_never_publishes_sticky_cancel();
+        test_public_update_binding_accepts_only_verified_bootloader_start();
         test_prepared_binding_is_unforgeable_and_fail_closed();
     } catch (const std::exception& error) {
         std::cerr << "libusb reconnect adapter test failed: " << error.what()

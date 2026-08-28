@@ -7,6 +7,7 @@
 #include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
 #include "src/fastboot/file_receive_service.hpp"
+#include "src/fastboot/libusb_reconnect_adapters.hpp"
 #include "src/fastboot/primitive_update_device.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/slot_planner.hpp"
@@ -14,6 +15,7 @@
 #include "src/fastboot/update_executor.hpp"
 #include "src/fastboot/update_package_preflight.hpp"
 #include "src/fastboot/variable_parser.hpp"
+#include "src/fleet/device_preflight.hpp"
 #include "src/image/artifact_source.hpp"
 #include "src/image/boot_image_builder.hpp"
 #include "src/image/file_source.hpp"
@@ -27,6 +29,7 @@
 #include "src/protocol/fastboot_protocol.hpp"
 #include "src/protocol/file_transfer_sink.hpp"
 #include "src/transport/image_transfer_source.hpp"
+#include "src/transport/buffer_budget.hpp"
 #include "src/transport/libusb_runtime.hpp"
 #include "src/transport/sequential_streaming_transport.hpp"
 #include "src/transport/tcp_fastboot.hpp"
@@ -2583,6 +2586,251 @@ try_optimize_public_super(
   return {};
 }
 
+[[nodiscard]] kb_transfer_state_t public_update_transfer_state(
+    const kairosboot::protocol::TransferCertainty certainty) noexcept {
+  switch (certainty) {
+  case kairosboot::protocol::TransferCertainty::NotTransferred:
+    return KB_TRANSFER_NOT_SENT;
+  case kairosboot::protocol::TransferCertainty::PartialOrUnknown:
+    return KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+  case kairosboot::protocol::TransferCertainty::FullyTransferred:
+    return KB_TRANSFER_FULLY_TRANSFERRED;
+  }
+  return KB_TRANSFER_PARTIAL_OR_UNKNOWN;
+}
+
+[[nodiscard]] kairosboot::api::OperationErrorPayload
+public_update_open_error(
+    const kairosboot::fleet::DevicePreflightOpenError &error,
+    const std::string_view identifier) {
+  using kairosboot::fleet::DevicePreflightOpenErrorCode;
+  kb_status_t status = KB_E_IO;
+  switch (error.code) {
+  case DevicePreflightOpenErrorCode::Cancelled:
+    status = KB_E_CANCELLED;
+    break;
+  case DevicePreflightOpenErrorCode::DeadlineExceeded:
+    status = KB_E_TIMEOUT;
+    break;
+  case DevicePreflightOpenErrorCode::NotFound:
+    status = KB_E_NO_DEVICE;
+    break;
+  case DevicePreflightOpenErrorCode::Busy:
+    status = KB_E_BUSY;
+    break;
+  case DevicePreflightOpenErrorCode::DriverUnavailable:
+    status = KB_E_NOT_SUPPORTED;
+    break;
+  case DevicePreflightOpenErrorCode::ResourceExhausted:
+    status = KB_E_OUT_OF_MEMORY;
+    break;
+  case DevicePreflightOpenErrorCode::PermissionDenied:
+  case DevicePreflightOpenErrorCode::TransportFailure:
+  case DevicePreflightOpenErrorCode::UnexpectedFailure:
+    break;
+  }
+  auto result = update_error(status, error.message, identifier,
+                             public_update_transfer_state(
+                                 error.outbound_certainty));
+  result.native_code = error.native_code;
+  return result;
+}
+
+[[nodiscard]] kairosboot::api::OperationErrorPayload
+public_update_probe_error(
+    const kairosboot::fleet::DevicePreflightProbeError &error,
+    const std::string_view identifier) {
+  using kairosboot::fleet::DevicePreflightProbeErrorCode;
+  kb_status_t status = KB_E_PROTOCOL;
+  switch (error.code) {
+  case DevicePreflightProbeErrorCode::Cancelled:
+    status = KB_E_CANCELLED;
+    break;
+  case DevicePreflightProbeErrorCode::DeadlineExceeded:
+    status = KB_E_TIMEOUT;
+    break;
+  case DevicePreflightProbeErrorCode::ResourceExhausted:
+    status = KB_E_OUT_OF_MEMORY;
+    break;
+  case DevicePreflightProbeErrorCode::ProtocolFailure:
+  case DevicePreflightProbeErrorCode::DeviceRejected:
+  case DevicePreflightProbeErrorCode::InvalidResponse:
+  case DevicePreflightProbeErrorCode::UnexpectedFailure:
+    break;
+  }
+  auto result = update_error(status, error.message, identifier,
+                             public_update_transfer_state(
+                                 error.outbound_certainty));
+  result.native_code = error.native_code;
+  return result;
+}
+
+[[nodiscard]] kairosboot::api::OperationErrorPayload
+public_update_device_error(
+    const kairosboot::fastboot::UpdateDeviceError &error,
+    const std::string_view identifier) {
+  using kairosboot::fastboot::UpdateDeviceErrorKind;
+  kb_status_t status = KB_E_PROTOCOL;
+  switch (error.kind) {
+  case UpdateDeviceErrorKind::Cancelled:
+    status = KB_E_CANCELLED;
+    break;
+  case UpdateDeviceErrorKind::TimedOut:
+    status = KB_E_TIMEOUT;
+    break;
+  case UpdateDeviceErrorKind::Unsupported:
+    status = KB_E_NOT_SUPPORTED;
+    break;
+  case UpdateDeviceErrorKind::Failed:
+    break;
+  }
+  auto result = update_error(status, error.message, identifier,
+                             public_update_transfer_state(
+                                 error.outbound_certainty));
+  result.native_code = error.native_code;
+  result.device_message = error.device_message;
+  result.session_poisoned = error.session_poisoned;
+  return result;
+}
+
+struct PreparedPublicUpdateDevice final {
+  std::unique_ptr<kairosboot::protocol::FastbootSession> direct_session;
+  std::unique_ptr<kairosboot::fastboot::PrimitiveService> direct_service;
+  std::unique_ptr<kairosboot::fastboot::LibusbReconnectAdapter>
+      reconnect_adapter;
+  std::unique_ptr<kairosboot::fastboot::SteadyReconnectWaiter>
+      reconnect_waiter;
+  std::unique_ptr<kairosboot::fastboot::ReconnectCoordinator>
+      reconnect_coordinator;
+  std::unique_ptr<kairosboot::fastboot::PrimitiveUpdateDevice> update_device;
+  kairosboot::fastboot::PrimitiveService *service{};
+};
+
+[[nodiscard]] std::expected<PreparedPublicUpdateDevice,
+                            kairosboot::api::OperationErrorPayload>
+prepare_public_update_device(
+    const PreparedTarget &target, const std::uint32_t timeout_ms,
+    const UpdateClock::time_point deadline,
+    const std::stop_token cancellation,
+    kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options) {
+  try {
+    PreparedPublicUpdateDevice result;
+    if (target.selector.kind == kairosboot::api::DeviceSelectorKind::Tcp ||
+        target.selector.kind == kairosboot::api::DeviceSelectorKind::Udp) {
+      kb_command_options_t transport_options{};
+      kb_command_options_init(&transport_options);
+      transport_options.timeout_ms = timeout_ms;
+      auto transport = open_target(target, transport_options, cancellation,
+                                   deadline);
+      if (!transport) {
+        return std::unexpected(std::move(transport.error()));
+      }
+      kairosboot::protocol::SessionOptions session_options{};
+      session_options.io_timeout = std::chrono::milliseconds{timeout_ms};
+      result.direct_session =
+          std::make_unique<kairosboot::protocol::FastbootSession>(
+              std::move(*transport), session_options);
+      result.direct_service =
+          std::make_unique<kairosboot::fastboot::PrimitiveService>(
+              *result.direct_session);
+      result.update_device =
+          std::make_unique<kairosboot::fastboot::PrimitiveUpdateDevice>(
+              *result.direct_service, std::move(device_options));
+      result.service = result.direct_service.get();
+      return result;
+    }
+
+    if (target.usb_runtime == nullptr || !target.usb_device) {
+      return std::unexpected(update_error(
+          KB_E_INTERNAL, "prepared USB update target is incomplete",
+          target.selector.identifier));
+    }
+    const auto budget = kairosboot::transport::process_usb_buffer_budget();
+    const kairosboot::transport::TransferRingConfig data_ring{};
+    kairosboot::protocol::SessionOptions session_options{};
+    session_options.io_timeout = std::chrono::milliseconds{timeout_ms};
+    auto opener =
+        kairosboot::fleet::make_libusb_device_preflight_session_opener(
+            target.usb_runtime, budget, data_ring, session_options);
+    if (!opener) {
+      return std::unexpected(
+          public_update_open_error(opener.error(), target.selector.identifier));
+    }
+    auto opened = (*opener)->open(*target.usb_device, deadline, cancellation);
+    if (!opened) {
+      return std::unexpected(
+          public_update_open_error(opened.error(), target.selector.identifier));
+    }
+    kairosboot::fleet::FastbootDevicePreflightProbe probe;
+    auto probed = probe.probe(*opened->session, deadline, cancellation);
+    if (!probed) {
+      return std::unexpected(
+          public_update_probe_error(probed.error(), target.selector.identifier));
+    }
+    if (probed->mode == kairosboot::fastboot::FastbootUsbMode::Fastbootd) {
+      result.direct_session = std::move(opened->session);
+      result.direct_service =
+          std::make_unique<kairosboot::fastboot::PrimitiveService>(
+              *result.direct_session);
+      result.update_device =
+          std::make_unique<kairosboot::fastboot::PrimitiveUpdateDevice>(
+              *result.direct_service, std::move(device_options));
+      result.service = result.direct_service.get();
+      return result;
+    }
+
+    auto initial = kairosboot::fastboot::bind_initial_libusb_update_session(
+        std::move(*opened), *probed);
+    if (!initial) {
+      return std::unexpected(public_update_device_error(
+          initial.error(), target.selector.identifier));
+    }
+    kairosboot::fastboot::LibusbReconnectAdapterOptions adapter_options{};
+    adapter_options.transport.bulk_out.timeout_ms = timeout_ms;
+    adapter_options.transport.data_ring = data_ring;
+    adapter_options.transport.buffer_budget = budget;
+    adapter_options.protocol = session_options;
+    auto adapter = kairosboot::fastboot::LibusbReconnectAdapter::create(
+        target.usb_runtime, std::move(adapter_options));
+    if (!adapter) {
+      return std::unexpected(update_error(
+          adapter.error().code ==
+                  kairosboot::fastboot::
+                      LibusbReconnectAdapterFactoryErrorCode::ResourceExhausted
+              ? KB_E_OUT_OF_MEMORY
+              : KB_E_INTERNAL,
+          adapter.error().message, target.selector.identifier));
+    }
+    result.reconnect_adapter = std::move(*adapter);
+    result.reconnect_waiter =
+        std::make_unique<kairosboot::fastboot::SteadyReconnectWaiter>();
+    result.reconnect_coordinator =
+        std::make_unique<kairosboot::fastboot::ReconnectCoordinator>(
+            *result.reconnect_adapter, *result.reconnect_adapter,
+            *result.reconnect_waiter);
+    auto device =
+        kairosboot::fastboot::PrimitiveUpdateDevice::create_with_reconnect(
+            std::move(*initial), *result.reconnect_coordinator, {},
+            std::move(device_options));
+    if (!device) {
+      return std::unexpected(public_update_device_error(
+          device.error(), target.selector.identifier));
+    }
+    result.update_device = std::move(*device);
+    result.service =
+        &result.update_device->current_service_for_fleet_actor();
+    return result;
+  } catch (const std::bad_alloc &) {
+    return std::unexpected(update_error(
+        KB_E_OUT_OF_MEMORY, "unable to allocate the public update device actor",
+        target.selector.identifier));
+  } catch (...) {
+    return std::unexpected(update_error(
+        KB_E_INTERNAL, "unable to prepare the public update device actor",
+        target.selector.identifier));
+  }
+}
+
 [[nodiscard]] kairosboot::api::OperationOutcome execute_prepared_public_update(
     const std::shared_ptr<kb_context_usb_state> &usb_state,
     kairosboot::api::DeviceSelector selector,
@@ -2641,26 +2889,28 @@ try_optimize_public_super(
   if (!open_timeout) {
     return operation_failure(std::move(open_timeout.error()));
   }
-  kb_command_options_t transport_options{};
-  kb_command_options_init(&transport_options);
-  transport_options.timeout_ms = *open_timeout;
-  auto transport = open_target(
-      *target, transport_options, task_context.cancellation_token(),
-      deadline);
-  if (!transport) {
-    return operation_failure(std::move(transport.error()));
+  kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options{
+      .host_resparse_limit = kairosboot::image::kDefaultResparseLimitBytes,
+      .explicit_sparse_limit = options.sparse_limit_bytes,
+      .progress = [&options, &identifier](
+                      const kairosboot::fastboot::PrimitiveUpdateProgress
+                          &progress) {
+        return report_update_progress(
+                   options, progress.completed_bytes, progress.total_bytes,
+                   "download", identifier)
+                   ? kairosboot::fastboot::PrimitiveUpdateProgressAction::
+                         Continue
+                   : kairosboot::fastboot::PrimitiveUpdateProgressAction::
+                         Cancel;
+      },
+  };
+  auto public_device = prepare_public_update_device(
+      *target, *open_timeout, deadline, task_context.cancellation_token(),
+      std::move(device_options));
+  if (!public_device) {
+    return operation_failure(std::move(public_device.error()));
   }
-
-  auto protocol_timeout = remaining_update_timeout(
-      deadline, identifier, "device validation");
-  if (!protocol_timeout) {
-    return operation_failure(std::move(protocol_timeout.error()));
-  }
-  kairosboot::protocol::SessionOptions session_options{};
-  session_options.io_timeout = std::chrono::milliseconds{*protocol_timeout};
-  kairosboot::protocol::FastbootSession session(
-      std::move(*transport), session_options);
-  kairosboot::fastboot::PrimitiveService service(session);
+  auto &service = *public_device->service;
 
   const kairosboot::fastboot::UpdateOperationContext slot_context{
       .cancellation = task_context.cancellation_token(),
@@ -2687,24 +2937,6 @@ try_optimize_public_super(
   const auto total_tasks = prepared.plan.tasks.size();
 
   bool callback_cancelled = false;
-  kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options{
-      .host_resparse_limit = kairosboot::image::kDefaultResparseLimitBytes,
-      .explicit_sparse_limit = options.sparse_limit_bytes,
-      .progress = [&options, &identifier](
-                      const kairosboot::fastboot::PrimitiveUpdateProgress
-                          &progress) {
-        return report_update_progress(
-                   options, progress.completed_bytes, progress.total_bytes,
-                   "download", identifier)
-                   ? kairosboot::fastboot::PrimitiveUpdateProgressAction::
-                         Continue
-                   : kairosboot::fastboot::PrimitiveUpdateProgressAction::
-                         Cancel;
-      },
-  };
-  kairosboot::fastboot::PrimitiveUpdateDevice device(
-      service, std::move(device_options));
-
   kairosboot::fastboot::UpdateExecutorOptions executor_options{
       .known_partitions =
           kairosboot::fastboot::frozen_update_known_partitions(),
@@ -2722,7 +2954,8 @@ try_optimize_public_super(
       },
   };
   auto executed = kairosboot::fastboot::execute_prepared_update(
-      prepared, device, executor_options, task_context.cancellation_token());
+      prepared, *public_device->update_device, executor_options,
+      task_context.cancellation_token());
   if (!executed) {
     auto payload = kairosboot::api::normalize_public_error(
         executed.error(), total_tasks, identifier);
