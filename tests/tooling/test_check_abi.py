@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,6 +25,41 @@ SPEC.loader.exec_module(CHECK_ABI)
 
 
 class AbiCheckTests(unittest.TestCase):
+    def test_frozen_manifest_matches_header_linker_lists_and_layout_checks(self) -> None:
+        manifest = CHECK_ABI.abi_manifest()
+        CHECK_ABI.check_frozen_contract(manifest)
+        self.assertEqual(
+            CHECK_ABI.render_layout_checks(manifest),
+            CHECK_ABI.ABI_LAYOUT_CHECKS.read_text(encoding="utf-8"),
+        )
+
+    def test_symbol_addition_requires_an_explicit_freeze_update(self) -> None:
+        manifest = copy.deepcopy(CHECK_ABI.abi_manifest())
+        manifest["symbols"] = manifest["symbols"][:-1]
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                CHECK_ABI.check_frozen_contract(manifest)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("linker whitelist and ABI freeze manifest differ", stderr.getvalue())
+
+    def test_layout_change_requires_regenerated_static_assertions(self) -> None:
+        manifest = copy.deepcopy(CHECK_ABI.abi_manifest())
+        manifest["structs"]["kb_version_t"]["alignment"] = 16
+        with tempfile.TemporaryDirectory(prefix="kairosboot-abi-") as temporary:
+            stale = Path(temporary) / "kairosboot-layout-v1.h"
+            stale.write_text(
+                CHECK_ABI.ABI_LAYOUT_CHECKS.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with mock.patch.object(CHECK_ABI, "ABI_LAYOUT_CHECKS", stale):
+                with contextlib.redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as raised:
+                        CHECK_ABI.check_frozen_contract(manifest)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("kairosboot-layout-v1.h is stale", stderr.getvalue())
+
     def test_nm_parser_keeps_every_defined_export(self) -> None:
         output = "kb_get_version\nrogue_export\n_ZN4test3runEv\n"
         self.assertEqual(
