@@ -251,6 +251,22 @@ KB_API kb_status_t KB_CALL kb_flash_file(
     const char *file_path, const kb_flash_options_t *options_or_null,
     kb_error_t **error);
 
+/* Builds the default Android boot image used by AOSP fastboot flash:raw from
+ * KERNEL and optional RAMDISK/SECOND files, then flashes it to PARTITION. If
+ * KERNEL is already an Android boot image, it is flashed unchanged and both
+ * optional paths must be NULL. SECOND requires a non-NULL RAMDISK. */
+KB_API kb_status_t KB_CALL kb_flash_raw_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *kernel_path,
+    const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flash_raw(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *partition, const char *kernel_path,
+    const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
+    const kb_flash_options_t *options_or_null, kb_error_t **error);
+
 /* Performs complete package preflight before USB enumeration or any transport
  * open. device_selector_or_null uses the typed selector grammar documented
  * below. The selected target is bound exactly once for this operation.

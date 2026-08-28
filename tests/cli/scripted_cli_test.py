@@ -1016,6 +1016,51 @@ def run(cli: pathlib.Path) -> None:
             "file": str(stage_file),
         }
 
+        raw_kernel = directory / "raw-kernel.bin"
+        raw_ramdisk = directory / "raw-ramdisk.bin"
+        raw_kernel_payload = bytes(index & 0xFF for index in range(2048))
+        raw_ramdisk_payload = b"r\x00d"
+        raw_kernel.write_bytes(raw_kernel_payload)
+        raw_ramdisk.write_bytes(raw_ramdisk_payload)
+
+        def flashed_raw_over_tcp(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"download:00001800"
+            send_frame(connection, b"DATA00001800")
+            image = receive_frame(connection)
+            assert len(image) == 6144
+            assert image[:8] == b"ANDROID!"
+            assert int.from_bytes(image[8:12], "little") == 2048
+            assert int.from_bytes(image[12:16], "little") == 0x10008000
+            assert int.from_bytes(image[16:20], "little") == 3
+            assert int.from_bytes(image[20:24], "little") == 0x11000000
+            assert int.from_bytes(image[36:40], "little") == 2048
+            assert image[2048:4096] == raw_kernel_payload
+            assert image[4096:4099] == raw_ramdisk_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"flash:boot"
+            send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--json",
+                "flash:raw",
+                "boot",
+                str(raw_kernel),
+                str(raw_ramdisk),
+            ],
+            flashed_raw_over_tcp,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "flash:raw",
+            "partition": "boot",
+            "kernel": str(raw_kernel),
+        }
+
         stdout, stderr = invoke_udp(
             cli,
             ["--json", "flash", "system", str(stage_file)],

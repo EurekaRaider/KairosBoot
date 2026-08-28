@@ -223,6 +223,7 @@ enum class CommandKind : std::uint8_t {
   Plan,
   Run,
   Flash,
+  FlashRaw,
   Update,
   Flashall,
   MakeBootImage,
@@ -594,6 +595,38 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "flash:raw") {
+    result.kind = CommandKind::FlashRaw;
+    const int operand_count = argc - command_index - 1;
+    if (operand_count < 2 || operand_count > 4) {
+      return error(
+          "flash:raw requires <partition> <kernel> [ramdisk [second]]");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for flash:raw");
+    }
+    result.first = argv[index++];
+    result.second = argv[index++];
+    if (index < argc) {
+      result.third = argv[index++];
+    }
+    if (index < argc) {
+      result.fourth = argv[index];
+    }
+    if (result.first.empty()) {
+      return error("flash:raw partition must not be empty");
+    }
+    if (result.second.empty()) {
+      return error("flash:raw kernel must not be empty");
+    }
+    if (operand_count >= 3 && result.third.empty()) {
+      return error("flash:raw ramdisk must not be empty");
+    }
+    if (operand_count == 4 && result.fourth.empty()) {
+      return error("flash:raw second stage must not be empty");
+    }
+    return result;
+  }
   if (command == "update" || command == "flashall") {
     const bool is_flashall = command == "flashall";
     result.kind = is_flashall ? CommandKind::Flashall : CommandKind::Update;
@@ -952,6 +985,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "run";
   case CommandKind::Flash:
     return "flash";
+  case CommandKind::FlashRaw:
+    return "flash:raw";
   case CommandKind::Update:
     return "update";
   case CommandKind::Flashall:
@@ -1554,6 +1589,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Plan:
   case CommandKind::Run:
   case CommandKind::Flash:
+  case CommandKind::FlashRaw:
   case CommandKind::Update:
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
@@ -1598,6 +1634,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Doctor:
   case CommandKind::Devices:
   case CommandKind::Flash:
+  case CommandKind::FlashRaw:
   case CommandKind::Update:
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
@@ -1772,6 +1809,39 @@ int make_boot_image(const Invocation &invocation) {
   } else {
     std::cout << "Created legacy boot image " << invocation.first << " ("
               << (*built)->size() << " bytes)\n";
+  }
+  return 0;
+}
+
+int flash_raw(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  const std::optional<std::filesystem::path> ramdisk =
+      invocation.third.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{
+                path_from_utf8(invocation.third)};
+  const std::optional<std::filesystem::path> second_stage =
+      invocation.fourth.empty()
+          ? std::nullopt
+          : std::optional<std::filesystem::path>{
+                path_from_utf8(invocation.fourth)};
+  const auto result = context->flash_raw(
+      selector_view(invocation.global), invocation.first,
+      path_from_utf8(invocation.second), ramdisk, second_stage,
+      flash_options(invocation.global));
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"flash:raw\",\"partition\":\""
+              << json_escape(invocation.first) << "\",\"kernel\":\""
+              << json_escape(invocation.second) << "\"}\n";
+  } else {
+    std::cout << "Flashed raw boot image to " << invocation.first << " from "
+              << invocation.second << '\n';
   }
   return 0;
 }
@@ -2087,6 +2157,8 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [--json] [--timeout-ms <milliseconds>] run "
                "<manifest>\n"
                "  kairosboot [global options] flash <partition> <file>\n"
+               "  kairosboot [global options] flash:raw <partition> <kernel> "
+               "[ramdisk [second]]\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] flashall [--wipe]\n"
                "  kairosboot [--json] make-boot-image <output> <kernel> "
@@ -2205,6 +2277,8 @@ int run_cli(const int argc, char **argv) {
     return run_manifest(*invocation);
   case CommandKind::Flash:
     return flash_file(*invocation);
+  case CommandKind::FlashRaw:
+    return flash_raw(*invocation);
   case CommandKind::Update:
   case CommandKind::Flashall:
     return update_package(*invocation);

@@ -1910,6 +1910,61 @@ public:
     return flash_file(std::optional<std::string_view>{serial}, partition, file);
   }
 
+  [[nodiscard]] std::expected<Operation, Error> flash_raw_async(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+
+    const auto to_utf8 = [](const std::filesystem::path &path) {
+      const auto value = path.u8string();
+      return std::string{value.begin(), value.end()};
+    };
+    const std::string selector_string =
+        selector.has_value() ? std::string{*selector} : std::string{};
+    const std::string partition_string{partition};
+    const std::string kernel_string = to_utf8(kernel);
+    const std::optional<std::string> ramdisk_string =
+        ramdisk.has_value()
+            ? std::optional<std::string>{to_utf8(*ramdisk)}
+            : std::nullopt;
+    const std::optional<std::string> second_string =
+        second_stage.has_value()
+            ? std::optional<std::string>{to_utf8(*second_stage)}
+            : std::nullopt;
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_flash_raw_async(
+        handle_, selector.has_value() ? selector_string.c_str() : nullptr,
+        partition_string.c_str(), kernel_string.c_str(),
+        ramdisk_string.has_value() ? ramdisk_string->c_str() : nullptr,
+        second_string.has_value() ? second_string->c_str() : nullptr,
+        &prepared->native, &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<void, Error> flash_raw(
+      DeviceSelector selector, std::string_view partition,
+      const std::filesystem::path &kernel,
+      const std::optional<std::filesystem::path> &ramdisk = std::nullopt,
+      const std::optional<std::filesystem::path> &second_stage = std::nullopt,
+      const FlashOptions &options = {}) const {
+    auto operation = flash_raw_async(selector, partition, kernel, ramdisk,
+                                     second_stage, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
 private:
   template <typename Start>
   [[nodiscard]] std::expected<Operation, Error>

@@ -306,6 +306,32 @@ int main(void) {
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   kb_error_release(error);
 
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_raw_async(context, NULL, "", "kernel", NULL, NULL, NULL,
+                           &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_raw_async(context, NULL, "boot", "kernel", NULL, "second",
+                           NULL, &operation, &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  kb_error_release(error);
+
+  operation = NULL;
+  error = NULL;
+  CHECK(kb_flash_raw_async(context, "tcp:127.0.0.1", "boot",
+                           "kairosboot-test-does-not-exist-kernel", NULL, NULL,
+                           NULL, &operation, &error) == KB_E_IO);
+  CHECK(operation == NULL);
+  CHECK(error != NULL);
+  CHECK(strcmp(kb_error_device_identifier(error), "tcp:127.0.0.1") == 0);
+  kb_error_release(error);
+
   CHECK(kb_operation_wait(NULL, 0U) == KB_E_INVALID_ARGUMENT);
   CHECK(kb_operation_cancel(NULL) == KB_E_INVALID_ARGUMENT);
   CHECK(kb_operation_state(NULL) == KB_OPERATION_FAILED);

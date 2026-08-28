@@ -65,6 +65,7 @@ static_assert(requires(kairosboot::Context &context,
                        kairosboot::CommandOptions options,
                        kairosboot::UpdateOptions update_options,
                        std::filesystem::path package,
+                       std::filesystem::path kernel,
                        std::span<const std::byte> bytes,
                        kairosboot::FetchRange range) {
   { context.getvar_async(selector, "product", options) } ->
@@ -74,6 +75,10 @@ static_assert(requires(kairosboot::Context &context,
   { context.update_package_async(selector, package, update_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.update_package(selector, package, update_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.flash_raw_async(selector, "boot", kernel) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.flash_raw(selector, "boot", kernel) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
   context.erase_async(selector, "userdata", options);
   context.erase(selector, "userdata", options);

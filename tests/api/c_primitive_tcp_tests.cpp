@@ -409,6 +409,84 @@ private:
   std::exception_ptr failure_;
 };
 
+class FlashRawServer final {
+public:
+  FlashRawServer()
+      : acceptor_(context_, tcp::endpoint(tcp::v4(), 0)),
+        port_(acceptor_.local_endpoint().port()),
+        worker_([this] { run(); }) {}
+
+  ~FlashRawServer() {
+    if (worker_.joinable()) {
+      boost::system::error_code ignored;
+      acceptor_.close(ignored);
+      worker_.join();
+    }
+  }
+
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+  void finish() {
+    worker_.join();
+    if (failure_ != nullptr) {
+      std::rethrow_exception(failure_);
+    }
+  }
+
+private:
+  void run() noexcept {
+    try {
+      tcp::socket socket(context_);
+      acceptor_.accept(socket);
+      std::array<char, 4> handshake{};
+      boost::asio::read(socket, boost::asio::buffer(handshake));
+      CHECK((handshake == std::array<char, 4>{'F', 'B', '0', '1'}));
+      boost::asio::write(socket, boost::asio::buffer(handshake));
+
+      CHECK(as_string(read_frame(socket)) == "getvar:max-download-size");
+      write_frame(socket, "OKAY0x00100000");
+      CHECK(as_string(read_frame(socket)) == "download:00001800");
+      write_frame(socket, "DATA00001800");
+      const auto image = read_frame(socket);
+      CHECK(image.size() == 6144U);
+      CHECK(std::memcmp(image.data(), "ANDROID!", 8U) == 0);
+      const auto le32 = [&image](const std::size_t offset) {
+        std::uint32_t result = 0;
+        for (std::size_t byte = 0; byte < 4U; ++byte) {
+          result |= std::to_integer<std::uint32_t>(image[offset + byte])
+                    << (byte * 8U);
+        }
+        return result;
+      };
+      CHECK(le32(8U) == 2048U);
+      CHECK(le32(12U) == 0x10008000U);
+      CHECK(le32(16U) == 3U);
+      CHECK(le32(20U) == 0x11000000U);
+      CHECK(le32(24U) == 0U);
+      CHECK(le32(32U) == 0x10000100U);
+      CHECK(le32(36U) == 2048U);
+      for (std::size_t index = 0; index < 2048U; ++index) {
+        CHECK(image[2048U + index] ==
+              std::byte{static_cast<unsigned char>(index & 0xffU)});
+      }
+      CHECK(image[4096U] == std::byte{'r'});
+      CHECK(image[4097U] == std::byte{0});
+      CHECK(image[4098U] == std::byte{'d'});
+      write_frame(socket, "OKAYdownloaded");
+      CHECK(as_string(read_frame(socket)) == "flash:boot");
+      write_frame(socket, "OKAYflashed");
+    } catch (...) {
+      failure_ = std::current_exception();
+    }
+  }
+
+  boost::asio::io_context context_;
+  tcp::acceptor acceptor_;
+  std::uint16_t port_;
+  std::thread worker_;
+  std::exception_ptr failure_;
+};
+
 class CxxScriptedServer final {
 public:
   CxxScriptedServer()
@@ -1181,6 +1259,31 @@ void run_contract() {
   server.finish();
 }
 
+void run_flash_raw_contract() {
+  FlashRawServer server;
+  const auto selector = "tcp:127.0.0.1:" + std::to_string(server.port());
+
+  std::vector<std::byte> kernel(2048U);
+  for (std::size_t index = 0; index < kernel.size(); ++index) {
+    kernel[index] = std::byte{static_cast<unsigned char>(index & 0xffU)};
+  }
+  const std::array<std::byte, 3> ramdisk{std::byte{'r'}, std::byte{0},
+                                        std::byte{'d'}};
+  TemporaryUpdatePackage kernel_files("version 1\n", kernel);
+  TemporaryUpdatePackage ramdisk_files("version 1\n", ramdisk);
+  const auto kernel_path = (kernel_files.path() / "system.img").string();
+  const auto ramdisk_path = (ramdisk_files.path() / "system.img").string();
+
+  kb_context_t* context = nullptr;
+  kb_error_t* error = nullptr;
+  CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+  CHECK(kb_flash_raw(context, selector.c_str(), "boot", kernel_path.c_str(),
+                     ramdisk_path.c_str(), nullptr, nullptr, &error) == KB_OK);
+  CHECK(error == nullptr);
+  kb_context_release(context);
+  server.finish();
+}
+
 void context_release_is_safe_after_async_update_start() {
   TemporaryUpdatePackage package("version 1\n");
   kb_context_t* context = nullptr;
@@ -1513,6 +1616,7 @@ void run_udp_flash_contract() {
 int main() {
   try {
     run_contract();
+    run_flash_raw_contract();
     context_release_is_safe_after_async_update_start();
     whole_update_timeout_includes_progress_callbacks();
     run_cxx_contract();

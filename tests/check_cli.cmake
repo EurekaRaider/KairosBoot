@@ -21,7 +21,7 @@ execute_process(
 if(NOT HELP_RESULT EQUAL 0 OR NOT HELP_ERROR STREQUAL "")
   message(FATAL_ERROR "--help failed: ${HELP_RESULT} ${HELP_ERROR}")
 endif()
-foreach(HELP_COMMAND IN ITEMS validate plan update flashall flashing gsi
+foreach(HELP_COMMAND IN ITEMS validate plan update flashall flash:raw flashing gsi
                               snapshot-update create-logical-partition
                               delete-logical-partition
                               resize-logical-partition)
@@ -116,6 +116,9 @@ endfunction()
 
 expect_text_parse_error(
   flash_arity "flash requires exactly <partition> and <file>" flash boot)
+expect_text_parse_error(
+  flash_raw_arity
+  "flash:raw requires <partition> <kernel> [ramdisk [second]]" flash:raw boot)
 expect_text_parse_error(
   update_arity "update requires <package>" update)
 expect_text_parse_error(
