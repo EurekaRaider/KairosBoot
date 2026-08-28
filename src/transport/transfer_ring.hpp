@@ -94,6 +94,83 @@ struct TransferRingConfig final {
     std::size_t depth{8};
 };
 
+enum class TransferPermitSettlement : std::uint8_t {
+    fully_transferred,
+    not_submitted,
+    partial_or_unknown,
+};
+
+enum class TransferPermitWaitResult : std::uint8_t {
+    ready,
+    cancelled,
+    timeout,
+};
+
+class TransferPermitProvider;
+
+// Move-only ownership of one scheduler-granted buffer. An armed permit settles
+// conservatively on destruction: before backend acceptance all bytes are known
+// not submitted; after acceptance delivery is partial or unknown.
+class TransferPermit final {
+public:
+    TransferPermit() = default;
+    TransferPermit(const TransferPermit&) = delete;
+    TransferPermit& operator=(const TransferPermit&) = delete;
+    TransferPermit(TransferPermit&& other) noexcept;
+    TransferPermit& operator=(TransferPermit&& other) noexcept;
+    ~TransferPermit();
+
+    [[nodiscard]] explicit operator bool() const noexcept;
+    [[nodiscard]] std::uint64_t token() const noexcept;
+    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] std::span<std::byte> bytes() noexcept;
+    [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
+    [[nodiscard]] std::shared_ptr<const void> lifetime_token() const noexcept;
+
+    void settle(TransferPermitSettlement result) noexcept;
+
+private:
+    friend class TransferPermitProvider;
+    friend class TransferRing;
+
+    TransferPermit(BufferLease buffer,
+                   std::uint64_t token,
+                   std::shared_ptr<TransferPermitProvider> provider);
+    void mark_submission_attempted() noexcept;
+
+    BufferLease buffer_;
+    std::uint64_t token_{};
+    std::shared_ptr<TransferPermitProvider> provider_;
+    bool accepted_{};
+};
+
+// A non-blocking per-chunk scheduler seam. cancel_wait() must make any pending
+// request ineligible and wake provider-owned waiters. The provider is retained
+// by every live permit, so settlement remains valid through backend drain.
+class TransferPermitProvider
+    : public std::enable_shared_from_this<TransferPermitProvider> {
+public:
+    virtual ~TransferPermitProvider() = default;
+
+    [[nodiscard]] virtual std::optional<TransferPermit> try_acquire(
+        std::size_t maximum_bytes) = 0;
+    [[nodiscard]] virtual std::uint64_t readiness_generation() const noexcept = 0;
+    [[nodiscard]] virtual TransferPermitWaitResult wait_for_ready(
+        std::uint64_t observed_generation,
+        std::chrono::steady_clock::time_point deadline) = 0;
+    virtual void cancel_wait() noexcept = 0;
+
+protected:
+    [[nodiscard]] TransferPermit make_permit(BufferLease buffer,
+                                             std::uint64_t token);
+    virtual void settle(std::uint64_t token,
+                        std::size_t bytes,
+                        TransferPermitSettlement result) noexcept = 0;
+
+private:
+    friend class TransferPermit;
+};
+
 using TransferTelemetryTimePoint = std::chrono::steady_clock::time_point;
 using TransferTelemetryNow =
     TransferTelemetryTimePoint (*)(void* context) noexcept;
@@ -211,11 +288,17 @@ public:
     TransferRing(TransferBackend& backend,
                  std::shared_ptr<BufferBudget> budget,
                  TransferRingConfig config = {},
-                 TransferTelemetry* telemetry = nullptr);
+                 TransferTelemetry* telemetry = nullptr,
+                 std::shared_ptr<TransferPermitProvider> permit_provider = nullptr);
 
     [[nodiscard]] bool start(std::shared_ptr<TransferSource> source,
                              bool logical_message_end = false);
     [[nodiscard]] bool pump();
+    // Event-driven retry for a zero-in-flight ring whose provider temporarily
+    // denied a permit. Returns after one provider notification, cancellation,
+    // or deadline; a ready notification immediately repumps on this executor.
+    [[nodiscard]] bool wait_for_permit_until(
+        std::chrono::steady_clock::time_point deadline);
     [[nodiscard]] bool handle_completion(const TransferCompletion& completion);
     void cancel() noexcept;
 
@@ -232,7 +315,7 @@ private:
     struct InFlight final {
         std::uint64_t offset{};
         std::size_t requested_bytes{};
-        BufferLease buffer;
+        TransferPermit permit;
     };
 
     [[nodiscard]] DeliveryCertainty current_certainty() const noexcept;
@@ -243,6 +326,7 @@ private:
 
     TransferBackend& backend_;
     std::shared_ptr<BufferBudget> budget_;
+    std::shared_ptr<TransferPermitProvider> permit_provider_;
     TransferRingConfig config_;
     TransferTelemetry* telemetry_{};
     std::shared_ptr<TransferSource> source_;
@@ -256,6 +340,7 @@ private:
     std::uint64_t completed_bytes_{0};
     std::uint64_t completion_watermark_{0};
     bool logical_message_end_{false};
+    std::uint64_t permit_wait_generation_{};
 };
 
 }  // namespace kairosboot::transport

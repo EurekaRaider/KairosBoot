@@ -23,6 +23,15 @@ public:
     virtual void on_buffer_released() noexcept = 0;
 };
 
+// Internal event seam for schedulers sharing this budget. Notifications occur
+// only after the accounting charge has been returned, including releases from
+// rings or other users outside the scheduler.
+class BufferBudgetAvailabilityObserver {
+public:
+    virtual ~BufferBudgetAvailabilityObserver() = default;
+    virtual void on_buffer_budget_available() noexcept = 0;
+};
+
 // A move-only reservation whose storage and budget charge have the same lifetime.
 class BufferLease final {
 public:
@@ -58,6 +67,8 @@ public:
     [[nodiscard]] std::size_t used() const noexcept;
     [[nodiscard]] std::size_t available() const noexcept;
     [[nodiscard]] std::size_t peak_used() const noexcept;
+    void observe_availability(
+        std::weak_ptr<BufferBudgetAvailabilityObserver> observer) const;
 
 private:
     std::shared_ptr<detail::BufferBudgetState> state_;
