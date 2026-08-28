@@ -231,6 +231,7 @@ add_library(
   src/fleet/controller_scheduler.cpp
   src/fleet/device_actor.cpp
   src/fleet/device_preflight.cpp
+  src/fleet/fleet_coordinator.cpp
   src/fleet/job_plan.cpp
   src/fleet/job_report.cpp
   src/fleet/manifest.cpp
@@ -510,6 +511,17 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_device_actor_tests)
   add_test(NAME device_actor COMMAND kairosboot_device_actor_tests)
   set_tests_properties(device_actor PROPERTIES TIMEOUT 60)
+
+  add_executable(kairosboot_fleet_coordinator_tests
+                 tests/fleet/fleet_coordinator_tests.cpp)
+  target_compile_features(kairosboot_fleet_coordinator_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_fleet_coordinator_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_fleet_coordinator_tests
+                        PRIVATE kairosboot_internal kairosboot_libusb)
+  kairosboot_enable_strict_warnings(kairosboot_fleet_coordinator_tests)
+  add_test(NAME fleet_coordinator COMMAND kairosboot_fleet_coordinator_tests)
+  set_tests_properties(fleet_coordinator PROPERTIES TIMEOUT 60)
 
   add_executable(kairosboot_fleet_manifest_tests
                  tests/fleet/manifest_tests.cpp)
