@@ -109,6 +109,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
+      - name: Trust the container checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Prepare locked dynamic libusb
         run: >-
           python3 scripts/prepare_libusb.py

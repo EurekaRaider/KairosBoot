@@ -248,11 +248,13 @@ void v2_dtb_and_release_fields_change_header_and_layout() {
 
 void v3_v4_use_fixed_modern_layout() {
     for (const std::uint32_t version : {3U, 4U}) {
-        LegacyBootImageOptions options{};
-        options.header_version = version;
-        options.command_line = "console=modern";
-        options.os_version = "14";
-        options.os_patch_level = "2024-12-01";
+        LegacyBootImageOptions options{
+            .command_line = "console=modern",
+            .header_version = version,
+            .os_version = "14",
+            .os_patch_level = "2024-12-01",
+            .dtb_path = {},
+        };
         const auto built = build_boot_image(
             std::make_shared<MemorySource>("kernel"),
             std::make_shared<MemorySource>("ramdisk"), {}, {}, options);

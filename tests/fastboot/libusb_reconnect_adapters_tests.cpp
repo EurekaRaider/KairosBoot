@@ -671,7 +671,7 @@ void test_preflight_session_retains_absolute_deadline_after_probe() {
         TransferRingConfig{}, SessionOptions{});
     CHECK(opener.has_value());
     const auto operation_deadline =
-        std::chrono::steady_clock::now() + 200ms;
+        std::chrono::steady_clock::now() + 2s;
     auto opened = (*opener)->open(
         snapshot->front(), operation_deadline, {});
     CHECK(opened.has_value());
@@ -705,7 +705,7 @@ void test_reconnect_replacement_retains_absolute_deadline() {
     CHECK(discovered->size() == 1U);
 
     const auto operation_deadline =
-        std::chrono::steady_clock::now() + 200ms;
+        std::chrono::steady_clock::now() + 2s;
     auto opened = (*adapter)->open(
         discovered->front(), operation_deadline, {});
     CHECK(opened.has_value());

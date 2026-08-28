@@ -369,7 +369,10 @@ infer_flash_file(const std::string_view partition) {
         return std::unexpected(LocalRuntimeError{
             KB_E_INVALID_ARGUMENT, "ANDROID_PRODUCT_OUT not set"});
       }
-      return *product_out + "/" + std::string{filename};
+      const auto inferred =
+          (path_from_utf8(*product_out) / path_from_utf8(filename)).u8string();
+      return std::string{reinterpret_cast<const char *>(inferred.data()),
+                         inferred.size()};
     }
   }
   return std::unexpected(LocalRuntimeError{
@@ -2165,7 +2168,7 @@ std::expected<void, LocalRuntimeError> write_source_atomically(
   return write_output_atomically_impl(
       output_name, [&source, output_name](std::ofstream &stream)
                        -> std::expected<void, LocalRuntimeError> {
-        std::array<std::byte, 1024U * 1024U> buffer{};
+        std::vector<std::byte> buffer(1024U * 1024U);
         std::uint64_t offset = 0U;
         while (offset < source.size()) {
           const auto requested = static_cast<std::size_t>(
