@@ -117,11 +117,11 @@
     },
     {
       "ids": ["command.get-staged"],
-      "status": "intentional-deviation",
-      "cSymbols": ["kb_upload", "kb_upload_async"],
-      "cliCommands": ["upload"],
-      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
-      "note": "KairosBoot names the host command `upload`; it sends the standard upload wire command used by AOSP get_staged."
+      "status": "implemented",
+      "cSymbols": ["kb_get_staged_file", "kb_get_staged_file_async"],
+      "cliCommands": ["get-staged"],
+      "evidence": ["tests/fastboot/file_receive_service_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "The AOSP get-staged command streams the standard upload response to an atomically replaced host file."
     },
     {
       "ids": ["command.oem"],
@@ -166,24 +166,40 @@
     {
       "ids": ["command.fetch"],
       "status": "implemented",
-      "cSymbols": ["kb_fetch", "kb_fetch_async"],
+      "cSymbols": ["kb_fetch", "kb_fetch_async", "kb_fetch_file", "kb_fetch_file_async"],
       "cliCommands": ["fetch"],
       "evidence": ["tests/fastboot/file_receive_service_tests.cpp", "tests/cli/scripted_cli_test.py"],
-      "note": "Bounded fetch with optional offset and size is implemented."
+      "note": "Bounded fetch with optional offset and size can return memory or stream to an atomically replaced host file."
     },
     {
       "ids": ["command.boot"],
       "status": "partial",
-      "cSymbols": ["kb_boot", "kb_boot_async"],
-      "cliCommands": ["boot-staged"],
-      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py"],
-      "note": "The boot wire primitive is exposed as `boot-staged`, but AOSP-compatible host-side boot image construction from file operands is missing."
+      "cSymbols": ["kb_boot", "kb_boot_async", "kb_boot_file", "kb_boot_file_async"],
+      "cliCommands": ["boot", "boot-staged"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
+      "note": "Prebuilt images use a same-session download-to-boot flow and legacy v0 image construction exists, but the complete AOSP boot operand and modern header option surface is not implemented."
     },
     {
-      "ids": ["command.flash-raw", "command.flashall", "command.format", "command.signature", "command.wipe-super"],
+      "ids": ["command.flash-raw"],
+      "status": "partial",
+      "cSymbols": ["kb_flash_raw", "kb_flash_raw_async"],
+      "cliCommands": ["flash:raw"],
+      "evidence": ["tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/image/boot_image_builder_tests.cpp"],
+      "note": "Legacy Android boot v0 construction and same-session flash are implemented; the complete AOSP mkbootimg option surface remains incomplete."
+    },
+    {
+      "ids": ["command.flashall"],
+      "status": "partial",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["flashall"],
+      "evidence": ["tests/cli/scripted_cli_test.py", "tests/fastboot/update_executor_tests.cpp"],
+      "note": "flashall executes the production update pipeline from ANDROID_PRODUCT_OUT, but the full locked AOSP global option surface remains incomplete."
+    },
+    {
+      "ids": ["command.format", "command.signature", "command.wipe-super"],
       "status": "missing",
       "evidence": [],
-      "note": "No equivalent public host-side orchestration or image-construction command is currently implemented."
+      "note": "No equivalent public command is currently implemented."
     },
 
     {
@@ -253,10 +269,17 @@
       "note": "Physical-port keyed fastbootd re-enumeration and controller-permit rebinding are implemented."
     },
     {
-      "ids": ["capability.boot-image-construction", "capability.vendor-boot-construction", "capability.vbmeta-avb-mutation", "capability.super-image-optimization"],
+      "ids": ["capability.boot-image-construction"],
+      "status": "partial",
+      "cliCommands": ["make-boot-image", "flash:raw"],
+      "evidence": ["tests/image/boot_image_builder_tests.cpp", "tests/cli/boot_image_cli_test.py"],
+      "note": "A bounded legacy Android boot v0 builder is implemented; modern boot/vendor_boot headers and the complete AOSP option surface remain missing."
+    },
+    {
+      "ids": ["capability.vendor-boot-construction", "capability.vbmeta-avb-mutation", "capability.super-image-optimization"],
       "status": "missing",
       "evidence": [],
-      "note": "Host-side construction, mutation, or optimized super rewriting is not implemented."
+      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     },
 
     {

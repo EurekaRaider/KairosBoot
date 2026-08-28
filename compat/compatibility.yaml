@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 34
-    intentional-deviation: 16
-    missing: 36
-    partial: 33
+    implemented: 35
+    intentional-deviation: 15
+    missing: 33
+    partial: 36
 officialDifferentialCoverage:
   status: "not-run"
   requiredEntries: 87
@@ -44,9 +44,11 @@ entries:
   - id: "capability.boot-image-construction"
     kind: "image-plan"
     required: true
-    status: "missing"
-    note: "Host-side construction, mutation, or optimized super rewriting is not implemented."
-    evidence: []
+    status: "partial"
+    note: "A bounded legacy Android boot v0 builder is implemented; modern boot/vendor_boot headers and the complete AOSP option surface remain missing."
+    evidence:
+      - "tests/image/boot_image_builder_tests.cpp"
+      - "tests/cli/boot_image_cli_test.py"
   - id: "capability.dynamic-partitions"
     kind: "image-plan"
     required: true
@@ -85,7 +87,7 @@ entries:
     kind: "image-plan"
     required: true
     status: "missing"
-    note: "Host-side construction, mutation, or optimized super rewriting is not implemented."
+    note: "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     evidence: []
   - id: "capability.update-zip"
     kind: "image-plan"
@@ -100,22 +102,23 @@ entries:
     kind: "image-plan"
     required: true
     status: "missing"
-    note: "Host-side construction, mutation, or optimized super rewriting is not implemented."
+    note: "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     evidence: []
   - id: "capability.vendor-boot-construction"
     kind: "image-plan"
     required: true
     status: "missing"
-    note: "Host-side construction, mutation, or optimized super rewriting is not implemented."
+    note: "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
     evidence: []
   - id: "command.boot"
     kind: "command"
     required: true
     status: "partial"
-    note: "The boot wire primitive is exposed as `boot-staged`, but AOSP-compatible host-side boot image construction from file operands is missing."
+    note: "Prebuilt images use a same-session download-to-boot flow and legacy v0 image construction exists, but the complete AOSP boot operand and modern header option surface is not implemented."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "command.continue"
     kind: "command"
     required: true
@@ -160,7 +163,7 @@ entries:
     kind: "command"
     required: true
     status: "implemented"
-    note: "Bounded fetch with optional offset and size is implemented."
+    note: "Bounded fetch with optional offset and size can return memory or stream to an atomically replaced host file."
     evidence:
       - "tests/fastboot/file_receive_service_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
@@ -176,15 +179,20 @@ entries:
   - id: "command.flash-raw"
     kind: "command"
     required: true
-    status: "missing"
-    note: "No equivalent public host-side orchestration or image-construction command is currently implemented."
-    evidence: []
+    status: "partial"
+    note: "Legacy Android boot v0 construction and same-session flash are implemented; the complete AOSP mkbootimg option surface remains incomplete."
+    evidence:
+      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/image/boot_image_builder_tests.cpp"
   - id: "command.flashall"
     kind: "command"
     required: true
-    status: "missing"
-    note: "No equivalent public host-side orchestration or image-construction command is currently implemented."
-    evidence: []
+    status: "partial"
+    note: "flashall executes the production update pipeline from ANDROID_PRODUCT_OUT, but the full locked AOSP global option surface remains incomplete."
+    evidence:
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/fastboot/update_executor_tests.cpp"
   - id: "command.flashing-get-unlock-ability"
     kind: "command"
     required: true
@@ -229,15 +237,15 @@ entries:
     kind: "command"
     required: true
     status: "missing"
-    note: "No equivalent public host-side orchestration or image-construction command is currently implemented."
+    note: "No equivalent public command is currently implemented."
     evidence: []
   - id: "command.get-staged"
     kind: "command"
     required: true
-    status: "intentional-deviation"
-    note: "KairosBoot names the host command `upload`; it sends the standard upload wire command used by AOSP get_staged."
+    status: "implemented"
+    note: "The AOSP get-staged command streams the standard upload response to an atomically replaced host file."
     evidence:
-      - "tests/api/c_primitive_tcp_tests.cpp"
+      - "tests/fastboot/file_receive_service_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
   - id: "command.getvar"
     kind: "command"
@@ -331,7 +339,7 @@ entries:
     kind: "command"
     required: true
     status: "missing"
-    note: "No equivalent public host-side orchestration or image-construction command is currently implemented."
+    note: "No equivalent public command is currently implemented."
     evidence: []
   - id: "command.snapshot-cancel"
     kind: "command"
@@ -370,7 +378,7 @@ entries:
     kind: "command"
     required: true
     status: "missing"
-    note: "No equivalent public host-side orchestration or image-construction command is currently implemented."
+    note: "No equivalent public command is currently implemented."
     evidence: []
   - id: "deviation.update-plan-artifact-paths"
     kind: "deviation"

@@ -50,14 +50,20 @@
     },
     {
       "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cliCommands": [
+        "make-boot-image",
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/image/boot_image_builder_tests.cpp",
+        "tests/cli/boot_image_cli_test.py"
+      ],
       "id": "capability.boot-image-construction",
       "kind": "image-plan",
-      "note": "Host-side construction, mutation, or optimized super rewriting is not implemented.",
+      "note": "A bounded legacy Android boot v0 builder is implemented; modern boot/vendor_boot headers and the complete AOSP option surface remain missing.",
       "officialDifferentialEvidence": [],
       "required": true,
-      "status": "missing"
+      "status": "partial"
     },
     {
       "cSymbols": [
@@ -143,7 +149,7 @@
       "evidence": [],
       "id": "capability.super-image-optimization",
       "kind": "image-plan",
-      "note": "Host-side construction, mutation, or optimized super rewriting is not implemented.",
+      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "missing"
@@ -174,7 +180,7 @@
       "evidence": [],
       "id": "capability.vbmeta-avb-mutation",
       "kind": "image-plan",
-      "note": "Host-side construction, mutation, or optimized super rewriting is not implemented.",
+      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "missing"
@@ -185,7 +191,7 @@
       "evidence": [],
       "id": "capability.vendor-boot-construction",
       "kind": "image-plan",
-      "note": "Host-side construction, mutation, or optimized super rewriting is not implemented.",
+      "note": "Modern vendor boot construction, AVB mutation, and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "missing"
@@ -193,18 +199,22 @@
     {
       "cSymbols": [
         "kb_boot",
-        "kb_boot_async"
+        "kb_boot_async",
+        "kb_boot_file",
+        "kb_boot_file_async"
       ],
       "cliCommands": [
+        "boot",
         "boot-staged"
       ],
       "evidence": [
         "tests/api/c_primitive_tcp_tests.cpp",
-        "tests/cli/scripted_cli_test.py"
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
       ],
       "id": "command.boot",
       "kind": "command",
-      "note": "The boot wire primitive is exposed as `boot-staged`, but AOSP-compatible host-side boot image construction from file operands is missing.",
+      "note": "Prebuilt images use a same-session download-to-boot flow and legacy v0 image construction exists, but the complete AOSP boot operand and modern header option surface is not implemented.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "boot",
@@ -318,7 +328,9 @@
     {
       "cSymbols": [
         "kb_fetch",
-        "kb_fetch_async"
+        "kb_fetch_async",
+        "kb_fetch_file",
+        "kb_fetch_file_async"
       ],
       "cliCommands": [
         "fetch"
@@ -329,7 +341,7 @@
       ],
       "id": "command.fetch",
       "kind": "command",
-      "note": "Bounded fetch with optional offset and size is implemented.",
+      "note": "Bounded fetch with optional offset and size can return memory or stream to an atomically replaced host file.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "fetch",
@@ -357,28 +369,45 @@
       "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_raw",
+        "kb_flash_raw_async"
+      ],
+      "cliCommands": [
+        "flash:raw"
+      ],
+      "evidence": [
+        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/image/boot_image_builder_tests.cpp"
+      ],
       "id": "command.flash-raw",
       "kind": "command",
-      "note": "No equivalent public host-side orchestration or image-construction command is currently implemented.",
+      "note": "Legacy Android boot v0 construction and same-session flash are implemented; the complete AOSP mkbootimg option surface remains incomplete.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flash:raw",
-      "status": "missing"
+      "status": "partial"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flashall"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/update_executor_tests.cpp"
+      ],
       "id": "command.flashall",
       "kind": "command",
-      "note": "No equivalent public host-side orchestration or image-construction command is currently implemented.",
+      "note": "flashall executes the production update pipeline from ANDROID_PRODUCT_OUT, but the full locked AOSP global option surface remains incomplete.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flashall",
-      "status": "missing"
+      "status": "partial"
     },
     {
       "cSymbols": [
@@ -486,7 +515,7 @@
       "evidence": [],
       "id": "command.format",
       "kind": "command",
-      "note": "No equivalent public host-side orchestration or image-construction command is currently implemented.",
+      "note": "No equivalent public command is currently implemented.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "format",
@@ -494,23 +523,23 @@
     },
     {
       "cSymbols": [
-        "kb_upload",
-        "kb_upload_async"
+        "kb_get_staged_file",
+        "kb_get_staged_file_async"
       ],
       "cliCommands": [
-        "upload"
+        "get-staged"
       ],
       "evidence": [
-        "tests/api/c_primitive_tcp_tests.cpp",
+        "tests/fastboot/file_receive_service_tests.cpp",
         "tests/cli/scripted_cli_test.py"
       ],
       "id": "command.get-staged",
       "kind": "command",
-      "note": "KairosBoot names the host command `upload`; it sends the standard upload wire command used by AOSP get_staged.",
+      "note": "The AOSP get-staged command streams the standard upload response to an atomically replaced host file.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "get_staged",
-      "status": "intentional-deviation"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -741,7 +770,7 @@
       "evidence": [],
       "id": "command.signature",
       "kind": "command",
-      "note": "No equivalent public host-side orchestration or image-construction command is currently implemented.",
+      "note": "No equivalent public command is currently implemented.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "signature",
@@ -834,7 +863,7 @@
       "evidence": [],
       "id": "command.wipe-super",
       "kind": "command",
-      "note": "No equivalent public host-side orchestration or image-construction command is currently implemented.",
+      "note": "No equivalent public command is currently implemented.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "wipe-super",
@@ -2100,10 +2129,10 @@
   "summary": {
     "byKind": {
       "command": {
-        "implemented": 22,
-        "intentional-deviation": 5,
-        "missing": 5,
-        "partial": 2
+        "implemented": 23,
+        "intentional-deviation": 4,
+        "missing": 3,
+        "partial": 4
       },
       "deviation": {
         "implemented": 0,
@@ -2120,8 +2149,8 @@
       "image-plan": {
         "implemented": 3,
         "intentional-deviation": 0,
-        "missing": 4,
-        "partial": 4
+        "missing": 3,
+        "partial": 5
       },
       "option": {
         "implemented": 2,
@@ -2143,10 +2172,10 @@
       }
     },
     "byStatus": {
-      "implemented": 34,
-      "intentional-deviation": 16,
-      "missing": 36,
-      "partial": 33
+      "implemented": 35,
+      "intentional-deviation": 15,
+      "missing": 33,
+      "partial": 36
     },
     "totalEntries": 119
   }
