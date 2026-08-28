@@ -197,9 +197,11 @@
     },
     {
       "ids": ["command.format", "command.signature", "command.wipe-super"],
-      "status": "missing",
-      "evidence": [],
-      "note": "No equivalent public command is currently implemented."
+      "status": "implemented",
+      "cSymbols": ["kb_format_partition", "kb_format_partition_async", "kb_signature_file", "kb_signature_file_async", "kb_wipe_super", "kb_wipe_super_async"],
+      "cliCommands": ["format", "signature", "wipe-super"],
+      "evidence": ["tests/c_api_test.c", "tests/cxx_api_test.cpp", "tests/cli/scripted_cli_test.py", "tests/fastboot/primitive_service_tests.cpp", "tests/fastboot/primitive_update_device_tests.cpp"],
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction."
     },
 
     {
@@ -276,7 +278,15 @@
       "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
     },
     {
-      "ids": ["option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb-offset"],
+      "ids": ["option.disable-verification", "option.disable-verity"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--disable-verification", "--disable-verity"],
+      "evidence": ["tests/image/vbmeta_flag_source_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans."
+    },
+    {
+      "ids": ["option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb-offset"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."
@@ -315,12 +325,20 @@
       "note": "Sparse parsing, validation and bounded resparse planning are implemented."
     },
     {
-      "ids": ["capability.update-zip", "capability.fastboot-info", "capability.dynamic-partitions", "capability.a-b-slots"],
+      "ids": ["capability.update-zip", "capability.fastboot-info", "capability.dynamic-partitions"],
       "status": "partial",
       "cSymbols": ["kb_update_package", "kb_update_package_async"],
       "cliCommands": ["update"],
       "evidence": ["tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_plan_tests.cpp", "tests/fastboot/update_executor_tests.cpp"],
       "note": "The update pipeline implements these paths, but not every Platform-Tools 37.0.1 option and differential scenario is covered."
+    },
+    {
+      "ids": ["capability.a-b-slots"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--slot", "--set-active", "-a"],
+      "evidence": ["tests/fastboot/primitive_service_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Explicit, other, and all slot policies are resolved from device evidence; set-active is serialized on the same session."
     },
     {
       "ids": ["capability.fastbootd-reenumeration"],
@@ -346,10 +364,18 @@
       "note": "The locked vendor_boot v3/v4 workflow fetches the existing partition, strictly repacks the default ramdisk or one named v4 fragment with an optional DTB, and flashes in the same session with bounded memory."
     },
     {
-      "ids": ["capability.vbmeta-avb-mutation", "capability.super-image-optimization"],
+      "ids": ["capability.vbmeta-avb-mutation"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--disable-verification", "--disable-verity"],
+      "evidence": ["tests/image/vbmeta_flag_source_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "KairosBoot applies the locked Fastboot vbmeta disable flags through a validated immutable transformation source."
+    },
+    {
+      "ids": ["capability.super-image-optimization"],
       "status": "missing",
       "evidence": [],
-      "note": "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
+      "note": "Optimized super metadata rewriting is not implemented; tests keep the unoptimized super path explicit."
     },
 
     {

@@ -11,23 +11,29 @@
   "entries": [
     {
       "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
         "kb_update_package",
         "kb_update_package_async"
       ],
       "cliCommands": [
-        "update"
+        "--slot",
+        "--set-active",
+        "-a"
       ],
       "evidence": [
-        "tests/fastboot/update_package_preflight_tests.cpp",
-        "tests/fastboot/update_plan_tests.cpp",
-        "tests/fastboot/update_executor_tests.cpp"
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       ],
       "id": "capability.a-b-slots",
       "kind": "image-plan",
-      "note": "The update pipeline implements these paths, but not every Platform-Tools 37.0.1 option and differential scenario is covered.",
+      "note": "Explicit, other, and all slot policies are resolved from device evidence; set-active is serialized on the same session.",
       "officialDifferentialEvidence": [],
       "required": true,
-      "status": "partial"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -149,7 +155,7 @@
       "evidence": [],
       "id": "capability.super-image-optimization",
       "kind": "image-plan",
-      "note": "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
+      "note": "Optimized super metadata rewriting is not implemented; tests keep the unoptimized super path explicit.",
       "officialDifferentialEvidence": [],
       "required": true,
       "status": "missing"
@@ -175,15 +181,26 @@
       "status": "partial"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-verification",
+        "--disable-verity"
+      ],
+      "evidence": [
+        "tests/image/vbmeta_flag_source_tests.cpp",
+        "tests/cli/scripted_cli_test.py"
+      ],
       "id": "capability.vbmeta-avb-mutation",
       "kind": "image-plan",
-      "note": "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit.",
+      "note": "KairosBoot applies the locked Fastboot vbmeta disable flags through a validated immutable transformation source.",
       "officialDifferentialEvidence": [],
       "required": true,
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -521,16 +538,33 @@
       "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_signature_file",
+        "kb_signature_file_async",
+        "kb_wipe_super",
+        "kb_wipe_super_async"
+      ],
+      "cliCommands": [
+        "format",
+        "signature",
+        "wipe-super"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp"
+      ],
       "id": "command.format",
       "kind": "command",
-      "note": "No equivalent public command is currently implemented.",
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "format",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -776,16 +810,33 @@
       "status": "intentional-deviation"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_signature_file",
+        "kb_signature_file_async",
+        "kb_wipe_super",
+        "kb_wipe_super_async"
+      ],
+      "cliCommands": [
+        "format",
+        "signature",
+        "wipe-super"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp"
+      ],
       "id": "command.signature",
       "kind": "command",
-      "note": "No equivalent public command is currently implemented.",
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "signature",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -869,16 +920,33 @@
       "status": "partial"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_format_partition",
+        "kb_format_partition_async",
+        "kb_signature_file",
+        "kb_signature_file_async",
+        "kb_wipe_super",
+        "kb_wipe_super_async"
+      ],
+      "cliCommands": [
+        "format",
+        "signature",
+        "wipe-super"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp"
+      ],
       "id": "command.wipe-super",
       "kind": "command",
-      "note": "No equivalent public command is currently implemented.",
+      "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "wipe-super",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -1665,28 +1733,56 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-verification",
+        "--disable-verity"
+      ],
+      "evidence": [
+        "tests/image/vbmeta_flag_source_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.disable-verification",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--disable-verification",
-      "status": "missing"
+      "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--disable-verification",
+        "--disable-verity"
+      ],
+      "evidence": [
+        "tests/image/vbmeta_flag_source_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.disable-verity",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--disable-verity",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -2291,25 +2387,18 @@
     "status": "not-run"
   },
   "requiredGaps": [
-    "capability.a-b-slots",
     "capability.boot-image-construction",
     "capability.dynamic-partitions",
     "capability.fastboot-info",
     "capability.super-image-optimization",
     "capability.update-zip",
-    "capability.vbmeta-avb-mutation",
     "command.boot",
     "command.flash-raw",
     "command.flashall",
-    "command.format",
-    "command.signature",
     "command.update",
-    "command.wipe-super",
     "image.boot",
     "image.system",
     "option.disable-super-optimization",
-    "option.disable-verification",
-    "option.disable-verity",
     "option.dtb",
     "option.dtb-offset",
     "option.force",
@@ -2328,9 +2417,9 @@
   "summary": {
     "byKind": {
       "command": {
-        "implemented": 23,
+        "implemented": 26,
         "intentional-deviation": 4,
-        "missing": 3,
+        "missing": 0,
         "partial": 4
       },
       "deviation": {
@@ -2346,15 +2435,15 @@
         "partial": 27
       },
       "image-plan": {
-        "implemented": 4,
+        "implemented": 6,
         "intentional-deviation": 0,
-        "missing": 2,
-        "partial": 5
+        "missing": 1,
+        "partial": 4
       },
       "option": {
-        "implemented": 19,
+        "implemented": 21,
         "intentional-deviation": 4,
-        "missing": 9,
+        "missing": 7,
         "partial": 1
       },
       "protocol": {
@@ -2371,10 +2460,10 @@
       }
     },
     "byStatus": {
-      "implemented": 53,
+      "implemented": 60,
       "intentional-deviation": 15,
-      "missing": 14,
-      "partial": 37
+      "missing": 8,
+      "partial": 36
     },
     "totalEntries": 119
   }

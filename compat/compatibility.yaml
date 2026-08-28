@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 53
+    implemented: 60
     intentional-deviation: 15
-    missing: 14
-    partial: 37
+    missing: 8
+    partial: 36
 officialDifferentialCoverage:
   status: "not-run"
   requiredEntries: 87
@@ -27,12 +27,14 @@ entries:
   - id: "capability.a-b-slots"
     kind: "image-plan"
     required: true
-    status: "partial"
-    note: "The update pipeline implements these paths, but not every Platform-Tools 37.0.1 option and differential scenario is covered."
+    status: "implemented"
+    note: "Explicit, other, and all slot policies are resolved from device evidence; set-active is serialized on the same session."
     evidence:
-      - "tests/fastboot/update_package_preflight_tests.cpp"
-      - "tests/fastboot/update_plan_tests.cpp"
-      - "tests/fastboot/update_executor_tests.cpp"
+      - "tests/fastboot/primitive_service_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "capability.android-sparse"
     kind: "image-plan"
     required: true
@@ -87,7 +89,7 @@ entries:
     kind: "image-plan"
     required: true
     status: "missing"
-    note: "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
+    note: "Optimized super metadata rewriting is not implemented; tests keep the unoptimized super path explicit."
     evidence: []
   - id: "capability.update-zip"
     kind: "image-plan"
@@ -101,9 +103,11 @@ entries:
   - id: "capability.vbmeta-avb-mutation"
     kind: "image-plan"
     required: true
-    status: "missing"
-    note: "AVB mutation and optimized super metadata rewriting are not implemented; tests keep the unoptimized super path explicit."
-    evidence: []
+    status: "implemented"
+    note: "KairosBoot applies the locked Fastboot vbmeta disable flags through a validated immutable transformation source."
+    evidence:
+      - "tests/image/vbmeta_flag_source_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
   - id: "capability.vendor-boot-construction"
     kind: "image-plan"
     required: true
@@ -241,9 +245,14 @@ entries:
   - id: "command.format"
     kind: "command"
     required: true
-    status: "missing"
-    note: "No equivalent public command is currently implemented."
-    evidence: []
+    status: "implemented"
+    note: "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction."
+    evidence:
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/fastboot/primitive_service_tests.cpp"
+      - "tests/fastboot/primitive_update_device_tests.cpp"
   - id: "command.get-staged"
     kind: "command"
     required: true
@@ -343,9 +352,14 @@ entries:
   - id: "command.signature"
     kind: "command"
     required: true
-    status: "missing"
-    note: "No equivalent public command is currently implemented."
-    evidence: []
+    status: "implemented"
+    note: "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction."
+    evidence:
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/fastboot/primitive_service_tests.cpp"
+      - "tests/fastboot/primitive_update_device_tests.cpp"
   - id: "command.snapshot-cancel"
     kind: "command"
     required: true
@@ -382,9 +396,14 @@ entries:
   - id: "command.wipe-super"
     kind: "command"
     required: true
-    status: "missing"
-    note: "No equivalent public command is currently implemented."
-    evidence: []
+    status: "implemented"
+    note: "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction."
+    evidence:
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/fastboot/primitive_service_tests.cpp"
+      - "tests/fastboot/primitive_update_device_tests.cpp"
   - id: "deviation.update-plan-artifact-paths"
     kind: "deviation"
     required: false
@@ -709,15 +728,25 @@ entries:
   - id: "option.disable-verification"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans."
+    evidence:
+      - "tests/image/vbmeta_flag_source_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.disable-verity"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "Both flags strictly validate and mutate the AVB vbmeta header flags before DATA for direct flash and update plans."
+    evidence:
+      - "tests/image/vbmeta_flag_source_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.dtb"
     kind: "option"
     required: true
@@ -981,25 +1010,18 @@ entries:
       - "tests/libusb_runtime/test_main.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
 requiredGaps:
-  - "capability.a-b-slots"
   - "capability.boot-image-construction"
   - "capability.dynamic-partitions"
   - "capability.fastboot-info"
   - "capability.super-image-optimization"
   - "capability.update-zip"
-  - "capability.vbmeta-avb-mutation"
   - "command.boot"
   - "command.flash-raw"
   - "command.flashall"
-  - "command.format"
-  - "command.signature"
   - "command.update"
-  - "command.wipe-super"
   - "image.boot"
   - "image.system"
   - "option.disable-super-optimization"
-  - "option.disable-verification"
-  - "option.disable-verity"
   - "option.dtb"
   - "option.dtb-offset"
   - "option.force"
