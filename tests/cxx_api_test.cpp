@@ -63,6 +63,7 @@ static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
 static_assert(requires(kairosboot::Context &context,
                        kairosboot::DeviceSelector selector,
                        kairosboot::CommandOptions options,
+                       kairosboot::FlashOptions flash_options,
                        kairosboot::UpdateOptions update_options,
                        std::filesystem::path package,
                        std::filesystem::path kernel,
@@ -79,6 +80,10 @@ static_assert(requires(kairosboot::Context &context,
   { context.flash_raw_async(selector, "boot", kernel) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.flash_raw(selector, "boot", kernel) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.boot_file_async(selector, package, flash_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.boot_file(selector, package, flash_options) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
   context.erase_async(selector, "userdata", options);
   context.erase(selector, "userdata", options);

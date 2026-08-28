@@ -2577,6 +2577,190 @@ kb_status_t KB_CALL kb_flash_raw(
   return finish_blocking_operation(operation, error);
 }
 
+kb_status_t KB_CALL kb_boot_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
+                device_selector_or_null);
+  }
+  if (file_path == nullptr || file_path[0] == '\0') {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "boot file path must not be empty", device_selector_or_null);
+  }
+  if (!valid_flash_options(options_or_null)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "boot options have an incompatible size or API version",
+                device_selector_or_null);
+  }
+
+  try {
+    const std::optional<std::string_view> requested_selector =
+        device_selector_or_null == nullptr
+            ? std::nullopt
+            : std::optional<std::string_view>{device_selector_or_null};
+    if (requested_selector.has_value() && requested_selector->empty()) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "explicit device selector must not be empty");
+    }
+    if (requested_selector.has_value() && !valid_utf8(*requested_selector)) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "device selector must be valid UTF-8");
+    }
+    const std::string_view file_path_view{file_path};
+    if (!valid_utf8(file_path_view)) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "boot file path must be valid UTF-8",
+                  device_selector_or_null);
+    }
+
+    const std::string requested_identifier =
+        requested_selector.has_value() ? std::string{*requested_selector}
+                                       : std::string{};
+    auto file_source =
+        kairosboot::image::FileImageSource::open(utf8_path(file_path_view));
+    if (!file_source) {
+      return fail(error, kairosboot::api::normalize_public_error(
+                             file_source.error(), requested_identifier));
+    }
+    if (auto valid_size = kairosboot::fastboot::validate_download_size(
+            (*file_source)->size());
+        !valid_size) {
+      return fail(error, kairosboot::api::normalize_public_error(
+                             valid_size.error(), requested_identifier));
+    }
+
+    auto prepared_target = prepare_flash_target(*context, requested_selector);
+    if (!prepared_target) {
+      return fail(error, prepared_target.error());
+    }
+
+    kb_flash_options_t boot_options;
+    kb_flash_options_init(&boot_options);
+    if (options_or_null != nullptr) {
+      boot_options.timeout_ms = options_or_null->timeout_ms;
+      boot_options.progress_callback = options_or_null->progress_callback;
+      boot_options.progress_user_data = options_or_null->progress_user_data;
+    }
+
+    std::shared_ptr<const kairosboot::image::IImageSource> image_source =
+        std::move(*file_source);
+    auto selected_identifier = prepared_target->selector.identifier;
+    auto task = [target = std::move(*prepared_target),
+                 image_source = std::move(image_source), boot_options,
+                 selected_identifier = std::move(selected_identifier)](
+                    kairosboot::api::OperationState::TaskContext
+                        &task_context) mutable
+        -> kairosboot::api::OperationOutcome {
+      if (task_context.cancel_requested()) {
+        return cancelled_operation(selected_identifier,
+                                   KB_TRANSFER_NOT_SENT);
+      }
+
+      auto source = kairosboot::transport::ImageTransferSource::create(
+          image_source);
+      if (!source) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            source.error(), selected_identifier));
+      }
+
+      kb_command_options_t transport_options;
+      kb_command_options_init(&transport_options);
+      transport_options.timeout_ms = boot_options.timeout_ms;
+      auto opened = open_target(target, transport_options,
+                                task_context.cancellation_token());
+      if (!opened) {
+        return operation_failure(std::move(opened.error()));
+      }
+
+      std::unique_ptr<kairosboot::protocol::ITransportSession>
+          protocol_transport = std::move(*opened);
+      kairosboot::protocol::SessionOptions session_options;
+      session_options.io_timeout =
+          std::chrono::milliseconds{boot_options.timeout_ms};
+      kairosboot::protocol::FastbootSession session(
+          std::move(protocol_transport), session_options);
+      kairosboot::fastboot::PrimitiveService service(session);
+      auto cancellation = task_context.register_cancellation_hook(
+          [&service] { service.request_cancel(); });
+
+      const auto total_size = (*source)->size();
+      if (task_context.cancel_requested() ||
+          !report_progress(boot_options, 0U, total_size, "download",
+                           selected_identifier)) {
+        return cancelled_operation(selected_identifier,
+                                   KB_TRANSFER_NOT_SENT);
+      }
+      const kairosboot::protocol::TransferProgressObserver observer =
+          [&task_context, &boot_options,
+           &selected_identifier](const std::uint64_t completed,
+                                 const std::uint64_t total) {
+            if (task_context.cancel_requested() ||
+                !report_progress(boot_options, completed, total, "download",
+                                 selected_identifier)) {
+              return kairosboot::protocol::TransferProgressAction::cancel;
+            }
+            return kairosboot::protocol::TransferProgressAction::
+                continue_transfer;
+          };
+      auto booted = service.download_and_boot_source(*source, observer);
+      if (!booted) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            booted.error(), selected_identifier));
+      }
+      if (task_context.cancel_requested() ||
+          !report_progress(boot_options, total_size, total_size, "complete",
+                           selected_identifier)) {
+        return cancelled_operation(
+            selected_identifier, KB_TRANSFER_FULLY_TRANSFERRED,
+            "operation cancelled after the boot command completed");
+      }
+      return kairosboot::api::OperationOutcome::succeeded();
+    };
+
+    auto result = std::make_unique<kb_operation>(std::move(task));
+    if (!result->state->start()) {
+      return fail(error, KB_E_INTERNAL,
+                  "unable to start the boot operation",
+                  device_selector_or_null);
+    }
+    *operation = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the boot operation",
+                device_selector_or_null);
+  } catch (const std::filesystem::filesystem_error &exception) {
+    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+                exception.code().value());
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the boot operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_boot_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_error_t **error) {
+  kb_operation_t *operation = nullptr;
+  const kb_status_t start = kb_boot_file_async(
+      context, device_selector_or_null, file_path, options_or_null, &operation,
+      error);
+  if (start != KB_OK) {
+    return start;
+  }
+  return finish_blocking_operation(operation, error);
+}
+
 kb_status_t KB_CALL kb_update_package_async(
     kb_context_t *context, const char *device_selector_or_null,
     const char *package_path, const kb_update_options_t *options_or_null,

@@ -267,6 +267,19 @@ KB_API kb_status_t KB_CALL kb_flash_raw(
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
 
+/* Streams one immutable file through Fastboot download and then issues boot on
+ * the same selected session. The image must be non-empty and fit the protocol's
+ * 32-bit download length. The blocking entry point starts the same operation
+ * and waits for its terminal state. */
+KB_API kb_status_t KB_CALL kb_boot_file_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_operation_t **operation, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_boot_file(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_error_t **error);
+
 /* Performs complete package preflight before USB enumeration or any transport
  * open. device_selector_or_null uses the typed selector grammar documented
  * below. The selected target is bound exactly once for this operation.

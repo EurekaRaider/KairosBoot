@@ -234,6 +234,7 @@ enum class CommandKind : std::uint8_t {
   Continue,
   Oem,
   Raw,
+  BootFile,
   BootStaged,
   Stage,
   Upload,
@@ -627,6 +628,20 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "boot") {
+    result.kind = CommandKind::BootFile;
+    if (argc - command_index != 2) {
+      return error("boot requires exactly <image>");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for boot");
+    }
+    result.first = argv[index];
+    if (result.first.empty()) {
+      return error("boot image must not be empty");
+    }
+    return result;
+  }
   if (command == "update" || command == "flashall") {
     const bool is_flashall = command == "flashall";
     result.kind = is_flashall ? CommandKind::Flashall : CommandKind::Update;
@@ -1007,6 +1022,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "oem";
   case CommandKind::Raw:
     return "raw";
+  case CommandKind::BootFile:
+    return "boot";
   case CommandKind::BootStaged:
     return "boot-staged";
   case CommandKind::Stage:
@@ -1562,6 +1579,8 @@ execute_typed_command(kairosboot::Context &context,
     return context.oem(selector, invocation.joined, options);
   case CommandKind::Raw:
     return context.raw_command(selector, invocation.joined, options);
+  case CommandKind::BootFile:
+    break;
   case CommandKind::BootStaged:
     return context.boot(selector, options);
   case CommandKind::Stage: {
@@ -1645,6 +1664,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Continue:
   case CommandKind::Oem:
   case CommandKind::Raw:
+  case CommandKind::BootFile:
   case CommandKind::BootStaged:
   case CommandKind::Stage:
   case CommandKind::Upload:
@@ -1742,6 +1762,32 @@ int flash_file(const Invocation &invocation) {
   } else {
     std::cout << "Flashed " << invocation.first << " from " << invocation.second
               << '\n';
+  }
+  return 0;
+}
+
+int boot_file(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  InterruptCancellation cancellation;
+  auto options = flash_options(invocation.global);
+  auto operation = context->boot_file_async(
+      selector_view(invocation.global), path_from_utf8(invocation.first),
+      options);
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"boot\",\"image\":\""
+              << json_escape(invocation.first) << "\"}\n";
+  } else {
+    std::cout << "Booted from " << invocation.first << '\n';
   }
   return 0;
 }
@@ -2161,6 +2207,7 @@ constexpr std::string_view usage_text() noexcept {
                "[ramdisk [second]]\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] flashall [--wipe]\n"
+               "  kairosboot [global options] boot <image>\n"
                "  kairosboot [--json] make-boot-image <output> <kernel> "
                "[ramdisk [second]] [layout options]\n"
                "  kairosboot [global options] getvar <variable>\n"
@@ -2282,6 +2329,8 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::Update:
   case CommandKind::Flashall:
     return update_package(*invocation);
+  case CommandKind::BootFile:
+    return boot_file(*invocation);
   case CommandKind::MakeBootImage:
     return make_boot_image(*invocation);
   case CommandKind::Getvar:

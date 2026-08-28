@@ -319,6 +319,8 @@
   "symbols": [
     "kb_boot",
     "kb_boot_async",
+    "kb_boot_file",
+    "kb_boot_file_async",
     "kb_command_options_init",
     "kb_command_result_data",
     "kb_command_result_device_identifier",

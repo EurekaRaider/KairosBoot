@@ -1920,7 +1920,6 @@ public:
     if (!prepared) {
       return std::unexpected(std::move(prepared.error()));
     }
-
     const auto to_utf8 = [](const std::filesystem::path &path) {
       const auto value = path.u8string();
       return std::string{value.begin(), value.end()};
@@ -1965,6 +1964,61 @@ public:
     return operation->wait();
   }
 
+  [[nodiscard]] std::expected<Operation, Error> boot_file_async(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    auto prepared = detail::prepare_flash_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    const auto path_u8 = file.u8string();
+    const std::string path_string{path_u8.begin(), path_u8.end()};
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_boot_file_async(
+        handle_, selector_value, path_string.c_str(), &prepared->native,
+        &operation, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_file_async(
+      const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file_async(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> boot_file_async(
+      const std::string_view selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file_async(DeviceSelector{selector}, file, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_file(
+      const DeviceSelector selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    auto operation = boot_file_async(selector, file, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_file(
+      const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file(std::nullopt, file, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> boot_file(
+      const std::string_view selector, const std::filesystem::path &file,
+      const FlashOptions &options = {}) const {
+    return boot_file(DeviceSelector{selector}, file, options);
+  }
 private:
   template <typename Start>
   [[nodiscard]] std::expected<Operation, Error>

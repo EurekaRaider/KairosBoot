@@ -1072,6 +1072,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_image_cli_test.py"
             --cli "$<TARGET_FILE:kairosboot_cli>")
   set_tests_properties(boot_image_cli PROPERTIES TIMEOUT 30)
+  add_test(
+    NAME boot_file_cli
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_file_cli_test.py"
+            --cli "$<TARGET_FILE:kairosboot_cli>")
+  set_tests_properties(boot_file_cli PROPERTIES TIMEOUT 45)
 endif()
 
 install(
