@@ -58,6 +58,7 @@ typedef struct kb_update_options {
   uint64_t sparse_limit_bytes;
   int32_t force;
   uint32_t filesystem_options;
+  int32_t disable_super_optimization;
 } kb_update_options_t;
 
 typedef struct kb_flash_options {
@@ -183,6 +184,8 @@ static int valid_options(const kb_update_options_t *options) {
           options->disable_fastboot_info == 1) &&
          (options->force == 0 || options->force == 1) &&
          (options->filesystem_options & ~UINT32_C(7)) == 0U &&
+         (options->disable_super_optimization == 0 ||
+          options->disable_super_optimization == 1) &&
          ((options->progress_callback == NULL &&
            options->progress_user_data == NULL) ||
           (options->progress_callback != NULL &&
@@ -719,7 +722,8 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
         options->exclude_dynamic_partitions != 1 ||
         options->disable_fastboot_info != 1 ||
         options->sparse_limit_bytes != 8U * 1024U * 1024U ||
-        options->force != 1 || options->filesystem_options != 3U) {
+        options->force != 1 || options->filesystem_options != 3U ||
+        options->disable_super_optimization != 1) {
       record_failure(37);
       return KB_E_INVALID_ARGUMENT;
     }
@@ -739,7 +743,8 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
         options->exclude_dynamic_partitions != 0 ||
         options->disable_fastboot_info != 0 ||
         options->sparse_limit_bytes != 0 || options->force != 0 ||
-        options->filesystem_options != 0U) {
+        options->filesystem_options != 0U ||
+        options->disable_super_optimization != 0) {
       record_failure(36);
       return KB_E_INVALID_ARGUMENT;
     }
@@ -778,6 +783,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package(
       options->struct_size != (uint32_t)sizeof(*options) ||
       options->api_version != 1 ||
       options->timeout_ms != 17 || options->wipe != 1 ||
+      options->disable_super_optimization != 0 ||
       options->progress_callback != NULL || options->progress_user_data != NULL ||
       !same_string(device_selector, "usb:serial:blocking") ||
       !same_string(package_path, "blocking.zip")) {

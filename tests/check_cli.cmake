@@ -312,7 +312,7 @@ expect_json_parse_error(
   update_wipe_without_package "update requires <package>" update --wipe)
 expect_json_parse_error(
   update_unknown_option
-  "update supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions and --disable-fastboot-info after <package>"
+  "update supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions, --disable-fastboot-info and --disable-super-optimization after <package>"
   update
   package.zip --unknown)
 expect_json_parse_error(
@@ -320,11 +320,11 @@ expect_json_parse_error(
   update package.zip --wipe --wipe)
 expect_json_parse_error(
   flashall_operand
-  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions and --disable-fastboot-info"
+  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions, --disable-fastboot-info and --disable-super-optimization"
   flashall images)
 expect_json_parse_error(
   flashall_unknown_option
-  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions and --disable-fastboot-info"
+  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions, --disable-fastboot-info and --disable-super-optimization"
   flashall --unknown)
 expect_json_parse_error(
   flashall_duplicate_wipe "flashall option --wipe may only be specified once"

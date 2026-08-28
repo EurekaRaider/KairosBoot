@@ -108,6 +108,7 @@ internal struct NativeUpdateOptions
     internal ulong SparseLimitBytes;
     internal int Force;
     internal uint FilesystemOptions;
+    internal int DisableSuperOptimization;
 }
 
 [StructLayout(LayoutKind.Sequential)]

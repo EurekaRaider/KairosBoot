@@ -293,6 +293,7 @@ struct Invocation {
   bool skip_secondary{};
   bool exclude_dynamic_partitions{};
   bool disable_fastboot_info{};
+  bool disable_super_optimization{};
   bool plan_digest{};
 };
 
@@ -1111,10 +1112,13 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
         flag = &result.exclude_dynamic_partitions;
       } else if (option == "--disable-fastboot-info") {
         flag = &result.disable_fastboot_info;
+      } else if (option == "--disable-super-optimization") {
+        flag = &result.disable_super_optimization;
       } else {
         return error(std::string{command} +
                      " supports only --wipe, --skip-reboot, --skip-secondary, "
-                     "--exclude-dynamic-partitions and --disable-fastboot-info" +
+                     "--exclude-dynamic-partitions, --disable-fastboot-info "
+                     "and --disable-super-optimization" +
                      (is_flashall ? "" : " after <package>"));
       }
       if (*flag) {
@@ -2715,6 +2719,8 @@ int update_package(const Invocation &invocation) {
   options.exclude_dynamic_partitions =
       invocation.exclude_dynamic_partitions;
   options.disable_fastboot_info = invocation.disable_fastboot_info;
+  options.disable_super_optimization =
+      invocation.disable_super_optimization;
   options.progress = [&progress](const kairosboot::Progress &value) {
     return progress(value);
   };
@@ -2741,6 +2747,8 @@ int update_package(const Invocation &invocation) {
               << (invocation.exclude_dynamic_partitions ? "true" : "false")
               << ",\"disableFastbootInfo\":"
               << (invocation.disable_fastboot_info ? "true" : "false")
+              << ",\"disableSuperOptimization\":"
+              << (invocation.disable_super_optimization ? "true" : "false")
               << "}\n";
   } else {
     std::cout << (invocation.kind == CommandKind::Flashall
@@ -2990,10 +2998,12 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] signature <file>\n"
                "  kairosboot [global options] update <package> [--wipe] "
                "[--skip-reboot] [--skip-secondary] "
-               "[--exclude-dynamic-partitions] [--disable-fastboot-info]\n"
+               "[--exclude-dynamic-partitions] [--disable-fastboot-info] "
+               "[--disable-super-optimization]\n"
                "  kairosboot [global options] flashall [--wipe] "
                "[--skip-reboot] [--skip-secondary] "
-               "[--exclude-dynamic-partitions] [--disable-fastboot-info]\n"
+               "[--exclude-dynamic-partitions] [--disable-fastboot-info] "
+               "[--disable-super-optimization]\n"
                "  kairosboot [global options] boot <kernel-or-image> "
                "[ramdisk [second]]\n"
                "  kairosboot [--json] make-boot-image <output> <kernel> "

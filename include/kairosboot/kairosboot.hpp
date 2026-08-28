@@ -150,6 +150,7 @@ struct UpdateOptions {
   std::uint64_t sparse_limit_bytes{};
   bool force{};
   FilesystemOptions filesystem_options{};
+  bool disable_super_optimization{};
 };
 
 struct CommandOptions {
@@ -383,6 +384,8 @@ prepare_update_options(const UpdateOptions &options) {
   result.native.sparse_limit_bytes = options.sparse_limit_bytes;
   result.native.force = options.force ? 1 : 0;
   result.native.filesystem_options = options.filesystem_options.native_flags();
+  result.native.disable_super_optimization =
+      options.disable_super_optimization ? 1 : 0;
   if (options.slot) {
     if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
       return std::unexpected(detail_make_error(

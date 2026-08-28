@@ -105,6 +105,7 @@ int main(void) {
   CHECK(update_options.sparse_limit_bytes == 0);
   CHECK(update_options.force == 0);
   CHECK(update_options.filesystem_options == KB_FILESYSTEM_OPTION_NONE);
+  CHECK(update_options.disable_super_optimization == 0);
 
   kb_command_options_t command_options;
   kb_command_options_init(&command_options);
@@ -273,6 +274,16 @@ int main(void) {
     kb_update_options_init(&update_options);
 
     update_options.set_active = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init(&update_options);
+
+    update_options.disable_super_optimization = 2;
     CHECK(kb_update_package_async(
               context, "tcp:127.0.0.1:1", "unused-update-package",
               &update_options, &update_operation, &error) ==

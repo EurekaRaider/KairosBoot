@@ -381,9 +381,11 @@
     },
     {
       "ids": ["capability.super-image-optimization"],
-      "status": "missing",
-      "evidence": [],
-      "note": "Optimized super metadata rewriting is not implemented; tests keep the unoptimized super path explicit."
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["update"],
+      "evidence": ["src/fastboot/super_optimizer.cpp", "tests/fastboot/super_optimizer_tests.cpp", "tests/compat/aosp-super-optimization-37.0.1.json", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Update/flashall validates redundant LP geometry and metadata, rewrites canonical empty single-device A/B super layouts into one deterministic low-memory sparse physical-super flash, preserves AOSP fallback cases, and exposes the disable-super-optimization escape hatch across all public APIs."
     },
 
     {

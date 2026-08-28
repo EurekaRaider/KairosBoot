@@ -411,7 +411,11 @@ internal static class Program
                 (IntPtr.Size == 8 ? 92 : 76),
             "update options filesystem options offset");
         Check(
-            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 96 : 80),
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.DisableSuperOptimization)).ToInt32() ==
+                (IntPtr.Size == 8 ? 96 : 80),
+            "update options disable super optimization offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 104 : 88),
             "update options native size");
         Check(
             NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
@@ -522,6 +526,8 @@ internal static class Program
         Check(!UpdateOptions.Default.Force, "default update force");
         Check(UpdateOptions.Default.FilesystemOptions == FilesystemOptions.None,
             "default update filesystem options");
+        Check(!UpdateOptions.Default.DisableSuperOptimization,
+            "default update enables super optimization");
         Check(
             default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct update timeout");
@@ -535,7 +541,8 @@ internal static class Program
             disableFastbootInfo: true,
             sparseLimitBytes: 8UL * 1024UL * 1024UL,
             force: true,
-            filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid);
+            filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid,
+            disableSuperOptimization: true);
         Check(infiniteWipe.Timeout == Timeout.InfiniteTimeSpan, "explicit infinite update timeout");
         Check(infiniteWipe.Wipe, "explicit update wipe");
         Check(infiniteWipe.SkipReboot, "explicit update skip reboot");
@@ -548,6 +555,8 @@ internal static class Program
         Check(infiniteWipe.FilesystemOptions ==
             (FilesystemOptions.Casefold | FilesystemOptions.Projid),
             "explicit update filesystem options");
+        Check(infiniteWipe.DisableSuperOptimization,
+            "explicit update disables super optimization");
         var slotted = new UpdateOptions(
             Timeout.InfiniteTimeSpan, wipe: false, slot: "other",
             setActive: true, activeSlot: "b");
@@ -1049,7 +1058,8 @@ internal static class Program
                     disableFastbootInfo: true,
                     sparseLimitBytes: 8UL * 1024UL * 1024UL,
                     force: true,
-                    filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid),
+                    filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid,
+                    disableSuperOptimization: true),
                 "usb:serial:device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);

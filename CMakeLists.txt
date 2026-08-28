@@ -226,6 +226,7 @@ add_library(
   src/fastboot/update_executor.cpp
   src/fastboot/update_operation.cpp
   src/fastboot/update_package_preflight.cpp
+  src/fastboot/super_optimizer.cpp
   src/fastboot/update_plan.cpp
   src/fleet/artifact_preflight.cpp
   src/fleet/canonical_json.cpp
@@ -681,6 +682,17 @@ if(BUILD_TESTING)
   add_test(NAME filesystem_formatter
            COMMAND kairosboot_filesystem_formatter_tests)
   set_tests_properties(filesystem_formatter PROPERTIES TIMEOUT 10)
+
+  add_executable(kairosboot_super_optimizer_tests
+                 tests/fastboot/super_optimizer_tests.cpp)
+  target_compile_features(kairosboot_super_optimizer_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_super_optimizer_tests
+                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(kairosboot_super_optimizer_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_super_optimizer_tests)
+  add_test(NAME super_optimizer COMMAND kairosboot_super_optimizer_tests)
+  set_tests_properties(super_optimizer PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_update_executor_tests
                  tests/fastboot/update_executor_tests.cpp)

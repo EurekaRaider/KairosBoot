@@ -853,7 +853,13 @@ def run(cli: pathlib.Path) -> None:
 
         stdout, stderr = invoke(
             cli,
-            ["--json", "update", str(update_package), "--skip-reboot"],
+            [
+                "--json",
+                "update",
+                str(update_package),
+                "--skip-reboot",
+                "--disable-super-optimization",
+            ],
             update_success,
         )
         document = parse_success_json(stdout, stderr)
@@ -866,6 +872,7 @@ def run(cli: pathlib.Path) -> None:
             "skipSecondary": False,
             "excludeDynamicPartitions": False,
             "disableFastbootInfo": False,
+            "disableSuperOptimization": True,
         }
 
         stdout, stderr = invoke(
@@ -912,6 +919,7 @@ def run(cli: pathlib.Path) -> None:
             "skipSecondary": False,
             "excludeDynamicPartitions": False,
             "disableFastbootInfo": False,
+            "disableSuperOptimization": False,
         }
 
         stdout, stderr = invoke(
@@ -968,6 +976,7 @@ def run(cli: pathlib.Path) -> None:
             "skipSecondary": False,
             "excludeDynamicPartitions": False,
             "disableFastbootInfo": False,
+            "disableSuperOptimization": False,
         }
 
         super_empty_image = directory / "custom-super-empty.img"

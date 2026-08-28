@@ -397,6 +397,7 @@ public readonly struct UpdateOptions
     /// <param name="sparseLimitBytes">AOSP -S sparse-part limit in bytes, or zero for automatic limits.</param>
     /// <param name="force">Whether ordinary requirement mismatches may be bypassed.</param>
     /// <param name="filesystemOptions">Filesystem features for generated format images.</param>
+    /// <param name="disableSuperOptimization">Whether to preserve the unoptimized fastbootd path.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
@@ -414,7 +415,8 @@ public readonly struct UpdateOptions
         string? activeSlot = null,
         ulong sparseLimitBytes = 0,
         bool force = false,
-        FilesystemOptions filesystemOptions = FilesystemOptions.None)
+        FilesystemOptions filesystemOptions = FilesystemOptions.None,
+        bool disableSuperOptimization = false)
     {
         ValidateFilesystemOptions(filesystemOptions);
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
@@ -433,6 +435,7 @@ public readonly struct UpdateOptions
         SparseLimitBytes = sparseLimitBytes;
         Force = force;
         FilesystemOptions = filesystemOptions;
+        DisableSuperOptimization = disableSuperOptimization;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -481,6 +484,9 @@ public readonly struct UpdateOptions
 
     /// <summary>Gets filesystem features for update plans that format partitions.</summary>
     public FilesystemOptions FilesystemOptions { get; }
+
+    /// <summary>Gets whether direct optimized physical-super flashing is disabled.</summary>
+    public bool DisableSuperOptimization { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds

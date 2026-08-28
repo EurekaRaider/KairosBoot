@@ -204,7 +204,7 @@ KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->stage) == 8, "kb_progress_t.st
 KB_ABI_STATIC_ASSERT(offsetof(kb_progress_t, device_identifier) == 32, "kb_progress_t.device_identifier offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->device_identifier) == 8, "kb_progress_t.device_identifier size");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 96, "kb_update_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 104, "kb_update_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_update_options_t) == 8, "kb_update_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, struct_size) == 0, "kb_update_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->struct_size) == 4, "kb_update_options_t.struct_size size");
@@ -242,7 +242,9 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, force) == 88, "kb_update_opti
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->force) == 4, "kb_update_options_t.force size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, filesystem_options) == 92, "kb_update_options_t.filesystem_options offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->filesystem_options) == 4, "kb_update_options_t.filesystem_options size");
-KB_ABI_STATIC_ASSERT(KB_UPDATE_OPTIONS_FORCE_FS_SIZE == 96, "KB_UPDATE_OPTIONS_FORCE_FS_SIZE value");
+KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, disable_super_optimization) == 96, "kb_update_options_t.disable_super_optimization offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->disable_super_optimization) == 4, "kb_update_options_t.disable_super_optimization size");
+KB_ABI_STATIC_ASSERT(KB_UPDATE_OPTIONS_SUPER_OPTIMIZATION_SIZE == 104, "KB_UPDATE_OPTIONS_SUPER_OPTIMIZATION_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_version_t) == 32, "kb_version_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_version_t) == 8, "kb_version_t alignment");

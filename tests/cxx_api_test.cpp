@@ -68,6 +68,9 @@ static_assert(std::is_same_v<
               decltype(kairosboot::UpdateOptions{}.sparse_limit_bytes),
               std::uint64_t>);
 static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.force), bool>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.disable_super_optimization),
+              bool>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
@@ -306,6 +309,7 @@ int main() {
     CHECK(defaults->native.wipe == 0);
     CHECK(defaults->native.sparse_limit_bytes == 0U);
     CHECK(defaults->native.force == 0);
+    CHECK(defaults->native.disable_super_optimization == 0);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::UpdateOptions finite;
@@ -314,6 +318,7 @@ int main() {
     finite.sparse_limit_bytes = 16U * 1024U * 1024U;
     finite.force = true;
     finite.filesystem_options.projid = true;
+    finite.disable_super_optimization = true;
     const auto prepared = kairosboot::detail::prepare_update_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 625U);
@@ -321,6 +326,7 @@ int main() {
     CHECK(prepared->native.sparse_limit_bytes == 16U * 1024U * 1024U);
     CHECK(prepared->native.force == 1);
     CHECK(prepared->native.filesystem_options == KB_FILESYSTEM_OPTION_PROJID);
+    CHECK(prepared->native.disable_super_optimization == 1);
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_update_options(finite);

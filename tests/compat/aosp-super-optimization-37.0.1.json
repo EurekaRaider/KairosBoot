@@ -1,0 +1,49 @@
+{
+  "documentType": "kairosboot.aosp-super-optimization-differential-fixture",
+  "schemaVersion": 1,
+  "oracle": {
+    "platformToolsVersion": "37.0.1",
+    "aospSourceCommit": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "kind": "source-derived",
+    "sourceEvidence": [
+      "fastboot/task.cpp:OptimizeFlashSuperTask",
+      "fastboot/super_flash_helper.cpp:SuperFlashHelper",
+      "fs_mgr/liblp/include/liblp/metadata_format.h"
+    ]
+  },
+  "inputPlan": [
+    "flash boot_a boot.img",
+    "reboot fastboot",
+    "update-super super_empty.img",
+    "flash system system.img",
+    "reboot"
+  ],
+  "defaultExpectedPlan": [
+    "flash boot_a boot.img",
+    "flash super kairosboot-optimized-super.img",
+    "reboot"
+  ],
+  "disabledExpectedPlan": [
+    "flash boot_a boot.img",
+    "reboot fastboot",
+    "update-super super_empty.img",
+    "flash system system.img",
+    "reboot"
+  ],
+  "validatedBeforeMutation": [
+    "primary and backup geometry are byte-identical and checksummed",
+    "every primary and backup metadata slot is byte-identical and checksummed",
+    "the input is a canonical empty single-block-device LP layout",
+    "partition attributes, group limits, block geometry and extents are consistent",
+    "current-slot resolves each dynamic partition exactly once",
+    "device partition-size matches the metadata block-device size"
+  ],
+  "aospFallbacks": [
+    "non-A/B or slot-all request",
+    "sparse logical partition image",
+    "writable or slot-suffixed LP metadata",
+    "preallocated extents",
+    "multiple LP block devices"
+  ],
+  "kairosBootFixture": "tests/fastboot/super_optimizer_tests.cpp"
+}

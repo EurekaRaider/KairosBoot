@@ -742,7 +742,7 @@ void update_super_three_state_contract_and_unique_mapping() {
     CHECK(byte_failure.error().artifact == "super_empty.img");
 }
 
-void super_optimization_gap_keeps_candidate_plan_unrewritten() {
+void super_optimization_candidate_is_retained_for_device_validation() {
     TemporaryDirectory temporary;
     const auto package = temporary.path() / "super-optimization-gap";
     create_directory_package(
@@ -774,9 +774,9 @@ void super_optimization_gap_keeps_candidate_plan_unrewritten() {
     // Frozen AOSP recognizes this three-task window as the structural
     // prerequisite for optimized super flashing, then uses validated LP
     // metadata to prove that the following flash targets a dynamic partition.
-    // KairosBoot intentionally keeps the disable-super-optimization-equivalent
-    // task sequence until it has an LP metadata rewriter and sparse super
-    // builder; preflight must never silently claim that the rewrite occurred.
+    // Offline preflight deliberately keeps this sequence: the optimizer must
+    // first compare image metadata with device slot/name/size getvars. The
+    // explicit disable option also uses this exact frozen path.
     CHECK(prepared->plan.tasks.size() == 3U);
     CHECK(prepared->plan.tasks[0].kind == UpdateTaskKind::Reboot);
     CHECK(prepared->plan.tasks[0].reboot_target ==
@@ -1438,8 +1438,8 @@ int main() {
              zip_fallback_requirements_hashes_slots_and_executor_form_one_trace},
         Test{"update-super three-state artifact contract",
              update_super_three_state_contract_and_unique_mapping},
-        Test{"super optimization capability gap",
-             super_optimization_gap_keeps_candidate_plan_unrewritten},
+        Test{"super optimization candidate waits for device validation",
+             super_optimization_candidate_is_retained_for_device_validation},
         Test{"required manifest validation",
              required_manifest_missing_duplicate_and_bounds_fail_closed},
         Test{"wipe path validation",

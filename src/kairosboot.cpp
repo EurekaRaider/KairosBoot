@@ -10,6 +10,7 @@
 #include "src/fastboot/primitive_update_device.hpp"
 #include "src/fastboot/primitive_service.hpp"
 #include "src/fastboot/slot_planner.hpp"
+#include "src/fastboot/super_optimizer.hpp"
 #include "src/fastboot/update_executor.hpp"
 #include "src/fastboot/update_package_preflight.hpp"
 #include "src/fastboot/variable_parser.hpp"
@@ -35,6 +36,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -51,6 +53,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <span>
 #include <utility>
 #include <vector>
@@ -738,7 +741,9 @@ bool valid_update_options(const kb_update_options_t *options) noexcept {
          valid_optional_bool(offsetof(kb_update_options_t, disable_verity)) &&
          valid_optional_bool(
              offsetof(kb_update_options_t, disable_verification)) &&
-         valid_optional_bool(offsetof(kb_update_options_t, force)))) {
+         valid_optional_bool(offsetof(kb_update_options_t, force)) &&
+         valid_optional_bool(
+             offsetof(kb_update_options_t, disable_super_optimization)))) {
     return false;
   }
   if (options->struct_size >= KB_UPDATE_OPTIONS_FORCE_FS_SIZE &&
@@ -914,6 +919,12 @@ update_options_or_default(const kb_update_options_t *options) {
     }
     if (options->struct_size >= KB_UPDATE_OPTIONS_FORCE_FS_SIZE) {
       result.native.filesystem_options = options->filesystem_options;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, disable_super_optimization) +
+            sizeof(options->disable_super_optimization)) {
+      result.native.disable_super_optimization =
+          options->disable_super_optimization;
     }
     auto policy = copy_slot_policy(slot, set_active, active_slot);
     if (!policy) {
@@ -2449,9 +2460,19 @@ apply_update_slot_policy(
     prepared.plan.tasks = std::move(expanded);
   }
 
+  return {};
+}
+
+[[nodiscard]] std::expected<void, kairosboot::api::OperationErrorPayload>
+activate_update_slot_policy(
+    kairosboot::fastboot::PrimitiveService &service,
+    const SlotPolicy &policy,
+    const kairosboot::fastboot::UpdateOperationContext &context,
+    const std::string_view identifier) {
   if (!policy.set_active) {
     return {};
   }
+  kairosboot::fastboot::SlotPlanner planner(service);
   const std::string_view requested = policy.active_slot
       ? std::string_view{*policy.active_slot}
       : policy.slot ? std::string_view{*policy.slot} : std::string_view{};
@@ -2473,6 +2494,91 @@ apply_update_slot_policy(
   if (!activated) {
     return std::unexpected(kairosboot::api::normalize_public_error(
         activated.error(), identifier));
+  }
+  return {};
+}
+
+[[nodiscard]] std::optional<std::string> optional_update_getvar(
+    kairosboot::fastboot::PrimitiveService &service,
+    const std::string_view name) {
+  auto value = service.getvar(name);
+  if (!value) {
+    return std::nullopt;
+  }
+  return value->terminal.payload;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> parse_update_size(
+    std::string_view text) noexcept {
+  if (text.starts_with("0x") || text.starts_with("0X")) {
+    text.remove_prefix(2U);
+    std::uint64_t result{};
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(),
+                                        result, 16);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()
+               ? std::optional<std::uint64_t>{result}
+               : std::nullopt;
+  }
+  std::uint64_t result{};
+  const auto parsed = std::from_chars(text.data(), text.data() + text.size(),
+                                      result, 10);
+  return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()
+             ? std::optional<std::uint64_t>{result}
+             : std::nullopt;
+}
+
+[[nodiscard]] std::expected<void, kairosboot::api::OperationErrorPayload>
+try_optimize_public_super(
+    kairosboot::fastboot::PreparedUpdatePackage &prepared,
+    kairosboot::fastboot::PrimitiveService &service,
+    const kb_update_options_t &options,
+    const SlotPolicy &slot_policy,
+    const std::string_view identifier,
+    const std::stop_token cancellation) {
+  if (options.disable_super_optimization != 0 ||
+      !kairosboot::fastboot::has_super_optimization_candidate(prepared) ||
+      (slot_policy.slot && *slot_policy.slot == "all")) {
+    return {};
+  }
+  auto current_slot = optional_update_getvar(service, "current-slot");
+  if ((!current_slot || current_slot->empty()) && slot_policy.slot) {
+    // Global slot expansion has already resolved every flash task to an exact
+    // partition name; a non-empty marker avoids requiring current-slot again.
+    current_slot = *slot_policy.slot;
+  }
+  auto super_name = optional_update_getvar(service, "super-partition-name");
+  if (!super_name || super_name->empty()) {
+    super_name = std::string{"super"};
+  }
+  auto reported = optional_update_getvar(
+      service, "partition-size:" + *super_name);
+  std::uint64_t super_size = 0U;
+  if (reported) {
+    const auto parsed = parse_update_size(*reported);
+    if (!parsed || *parsed == 0U) {
+      return std::unexpected(update_error(
+          KB_E_INVALID_ARGUMENT,
+          "device reported an invalid super partition size before optimization",
+          identifier));
+    }
+    super_size = *parsed;
+  }
+  auto optimized = kairosboot::fastboot::optimize_prepared_super(
+      prepared,
+      kairosboot::fastboot::SuperOptimizationDeviceInfo{
+          .super_partition = std::move(*super_name),
+          .current_slot = current_slot ? std::move(*current_slot) : std::string{},
+          .super_partition_size = super_size,
+      },
+      cancellation);
+  if (!optimized) {
+    return std::unexpected(update_error(
+        optimized.error().kind ==
+                kairosboot::fastboot::SuperOptimizationErrorKind::Cancelled
+            ? KB_E_CANCELLED
+            : KB_E_INVALID_ARGUMENT,
+        "super optimization preflight failed: " + optimized.error().message,
+        identifier));
   }
   return {};
 }
@@ -2566,6 +2672,17 @@ apply_update_slot_policy(
       prepared, service, slot_policy, slot_context, identifier);
   if (!slotted) {
     return operation_failure(std::move(slotted.error()));
+  }
+  auto optimized = try_optimize_public_super(
+      prepared, service, options, slot_policy, identifier,
+      task_context.cancellation_token());
+  if (!optimized) {
+    return operation_failure(std::move(optimized.error()));
+  }
+  auto activated = activate_update_slot_policy(
+      service, slot_policy, slot_context, identifier);
+  if (!activated) {
+    return operation_failure(std::move(activated.error()));
   }
   const auto total_tasks = prepared.plan.tasks.size();
 

@@ -60,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "b32f7c753ce60f445d5e5aa79d731861748cb5b97fcc66dfd6e33d2aa1e66c33",
+  "headerContractSha256": "c0203bfebf00ee2ba5f64499af5b4f4f57e1edee0ce337479d5830da5bf12db6",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -456,12 +456,17 @@
           "name": "filesystem_options",
           "offset": 92,
           "size": 4
+        },
+        {
+          "name": "disable_super_optimization",
+          "offset": 96,
+          "size": 4
         }
       ],
-      "size": 96,
+      "size": 104,
       "versionSize": {
-        "macro": "KB_UPDATE_OPTIONS_FORCE_FS_SIZE",
-        "value": 96
+        "macro": "KB_UPDATE_OPTIONS_SUPER_OPTIMIZATION_SIZE",
+        "value": 104
       }
     },
     "kb_version_t": {

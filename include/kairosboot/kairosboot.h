@@ -262,6 +262,9 @@ typedef struct kb_update_options {
   int32_t force;
   /* Reserved for update plans that generate a filesystem image. */
   kb_filesystem_options_t filesystem_options;
+  /* Preserve the frozen reboot-fastboot/update-super/logical-flash path even
+   * when LP metadata proves a direct physical-super flash is safe. */
+  int32_t disable_super_optimization;
 } kb_update_options_t;
 
 typedef struct kb_command_options {
@@ -325,6 +328,8 @@ typedef struct kb_job_options {
 #define KB_UPDATE_OPTIONS_FORCE_FS_SIZE                                      \
   ((uint32_t)(offsetof(kb_update_options_t, filesystem_options) +            \
               sizeof(((kb_update_options_t *)0)->filesystem_options)))
+#define KB_UPDATE_OPTIONS_SUPER_OPTIMIZATION_SIZE                            \
+  ((uint32_t)sizeof(kb_update_options_t))
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))

@@ -1665,6 +1665,8 @@ public sealed partial class Context : IDisposable
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.Force = options.Force ? 1 : 0;
             nativeOptions.FilesystemOptions = (uint)options.FilesystemOptions;
+            nativeOptions.DisableSuperOptimization =
+                options.DisableSuperOptimization ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
             slotPolicy.Apply(ref nativeOptions);
