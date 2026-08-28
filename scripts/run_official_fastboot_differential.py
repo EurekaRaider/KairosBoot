@@ -100,6 +100,49 @@ def _sha256_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def _repository_head(repository_root: pathlib.Path) -> str:
+    try:
+        completed = subprocess.run(
+            [
+                "git", "-C", str(repository_root), "rev-parse", "--verify",
+                "HEAD^{commit}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CaptureGateError(
+            f"cannot resolve the KairosBoot source commit: {error}"
+        ) from error
+    commit = completed.stdout.strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise CaptureGateError(
+            "official differential capture requires a Git checkout at an exact commit"
+        )
+    try:
+        status = subprocess.run(
+            [
+                "git", "-C", str(repository_root), "status", "--porcelain",
+                "--untracked-files=no",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CaptureGateError(
+            f"cannot verify the KairosBoot source checkout: {error}"
+        ) from error
+    if status.returncode != 0 or status.stdout.strip():
+        raise CaptureGateError(
+            "official differential capture requires a clean tracked source checkout"
+        )
+    return commit
+
+
 def _require_executable(path: pathlib.Path, label: str) -> pathlib.Path:
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
@@ -726,6 +769,8 @@ def _run_capture(arguments: argparse.Namespace) -> int:
     except (KeyError, TypeError) as error:
         raise CaptureGateError("official Fastboot lock is missing baseline metadata") from error
     kairosboot = _require_executable(arguments.kairosboot, "KairosBoot")
+    kairosboot_commit = _repository_head(repository_root)
+    kairosboot_artifact_sha256 = _sha256_file(kairosboot)
 
     output_dir = arguments.output_dir
     temporary: Optional[tempfile.TemporaryDirectory[str]] = None
@@ -801,7 +846,11 @@ def _run_capture(arguments: argparse.Namespace) -> int:
                 "sha256": verified.sha256,
                 "versionOutput": verified.version_output.splitlines()[0],
             },
-            "kairosboot": {"sha256": _sha256_file(kairosboot)},
+            "kairosboot": {
+                "releaseArtifactSha256": kairosboot_artifact_sha256,
+                "sha256": kairosboot_artifact_sha256,
+                "sourceCommit": kairosboot_commit,
+            },
             "captureFiles": {
                 "aosp": {
                     "path": aosp_path.name,

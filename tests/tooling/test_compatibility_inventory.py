@@ -7,10 +7,12 @@ import importlib.util
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -30,17 +32,18 @@ class CompatibilityInventoryTests(unittest.TestCase):
         self.assertEqual(
             set(inventory["statusVocabulary"]), GENERATOR.ALLOWED_STATUSES
         )
-        self.assertTrue(inventory["requiredGaps"])
+        self.assertEqual(inventory["requiredGaps"], [])
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["status"], "partial"
+            inventory["officialDifferentialCoverage"]["status"], "not-run"
         )
-        self.assertGreater(
+        self.assertEqual(
             inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
             0,
         )
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["matchedScenarios"], 16
+            inventory["officialDifferentialCoverage"]["matchedScenarios"], 0
         )
+        self.assertIn("requiredGaps: []\n", yaml_text)
         for entry in inventory["entries"]:
             self.assertIn(entry["status"], GENERATOR.ALLOWED_STATUSES)
             self.assertNotIn("unknown", entry["status"])
@@ -206,6 +209,181 @@ class CompatibilityInventoryTests(unittest.TestCase):
             metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
             with self.assertRaisesRegex(
                 GENERATOR.InventoryError, "normalized captures do not match"
+            ):
+                GENERATOR.generate(root)
+
+    def test_rejects_self_reported_matched_coverage_id(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            metadata["scenarios"][0]["coverageIds"].append("command.erase")
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GENERATOR.InventoryError,
+                "coverageIds differ from the scenario whitelist",
+            ):
+                GENERATOR.generate(root)
+
+    def test_rejects_matched_capture_with_different_command_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            for descriptor in metadata["captureFiles"].values():
+                capture_path = metadata_path.parent / descriptor["path"]
+                capture = json.loads(capture_path.read_text())
+                capture["scenarios"][0]["events"][0]["argv"] = ["erase", "system"]
+                capture_path.write_text(json.dumps(capture), encoding="utf-8")
+                descriptor["sha256"] = GENERATOR._sha256(capture_path)
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GENERATOR.InventoryError, "CLI command semantics differ"
+            ):
+                GENERATOR.generate(root)
+
+    def test_rejects_uncovered_coverage_reclassified_as_matched(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            metadata["uncoveredScenarios"][0]["coverageIds"] = ["command.getvar"]
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GENERATOR.InventoryError,
+                "uncovered coverageIds differ from the scenario whitelist",
+            ):
+                GENERATOR.generate(root)
+
+    def test_release_artifact_provenance_must_match_binary_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            metadata["kairosboot"]["releaseArtifactSha256"] = "0" * 64
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GENERATOR.InventoryError, "Release artifact provenance is invalid"
+            ):
+                GENERATOR.generate(root)
+
+    def test_only_exact_head_capture_counts_as_official_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            capture_commit = metadata["kairosboot"]["sourceCommit"]
+
+            with mock.patch.object(
+                GENERATOR, "_repository_commit", return_value=capture_commit
+            ):
+                current, _ = GENERATOR.generate(root)
+            self.assertEqual(
+                current["officialDifferentialCoverage"]["matchedScenarios"], 16
+            )
+            self.assertEqual(
+                current["officialDifferentialCoverage"][
+                    "requiredEntriesWithEvidence"
+                ],
+                19,
+            )
+            self.assertFalse(current["claimCompatibility"])
+
+            with mock.patch.object(
+                GENERATOR, "_repository_commit", return_value="f" * 40
+            ):
+                stale, _ = GENERATOR.generate(root)
+            self.assertEqual(
+                stale["officialDifferentialCoverage"]["matchedScenarios"], 0
+            )
+            self.assertEqual(
+                stale["officialDifferentialCoverage"][
+                    "requiredEntriesWithEvidence"
+                ],
+                0,
+            )
+            self.assertTrue(
+                all(not entry["officialDifferentialEvidence"] for entry in stale["entries"])
+            )
+            self.assertFalse(stale["claimCompatibility"])
+
+    def test_persisted_capture_allows_only_an_evidence_only_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+
+            def git(*arguments: str) -> str:
+                completed = subprocess.run(
+                    ["git", "-C", str(root), *arguments],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return completed.stdout.strip()
+
+            git("init")
+            git("config", "user.name", "KairosBoot Test")
+            git("config", "user.email", "kairosboot@example.invalid")
+            (root / "src").mkdir()
+            (root / "src" / "product.cpp").write_text("v1\n", encoding="utf-8")
+            git("add", "src/product.cpp")
+            git("commit", "-m", "source under test")
+            capture_commit = git("rev-parse", "HEAD")
+            self.assertTrue(
+                GENERATOR._capture_matches_current_repository(
+                    root, capture_commit, capture_commit
+                )
+            )
+
+            (root / "compat" / "evidence").mkdir(parents=True)
+            (root / "compat" / "evidence" / "capture.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            git("add", "compat/evidence/capture.json")
+            git("commit", "-m", "persist evidence")
+            evidence_commit = git("rev-parse", "HEAD")
+            self.assertTrue(
+                GENERATOR._capture_matches_current_repository(
+                    root, capture_commit, evidence_commit
+                )
+            )
+
+            (root / "src" / "product.cpp").write_text("v2\n", encoding="utf-8")
+            git("add", "src/product.cpp")
+            git("commit", "-m", "change product")
+            changed_commit = git("rev-parse", "HEAD")
+            self.assertFalse(
+                GENERATOR._capture_matches_current_repository(
+                    root, capture_commit, changed_commit
+                )
+            )
+
+    def test_mismatched_capture_is_rejected_before_claim_evaluation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = self._fixture_root(Path(raw))
+            index = json.loads(
+                (root / GENERATOR.OFFICIAL_EVIDENCE_PATH).read_text()
+            )
+            metadata_path = root / index["captures"][0]
+            metadata = json.loads(metadata_path.read_text())
+            metadata["result"] = "mismatched"
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GENERATOR.InventoryError, "evidence is not a matched v1 capture"
             ):
                 GENERATOR.generate(root)
 

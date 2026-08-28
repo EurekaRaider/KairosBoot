@@ -6,7 +6,7 @@
     "sourceInventorySha256": "ce51a9b97906d0537ce9eb070c04e9c3782ff2b4876fdf9288a89e312e0f3ec8"
   },
   "claimCompatibility": false,
-  "completionRule": "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains",
+  "completionRule": "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence from a Release artifact built at the current source commit (or an evidence-only descendant), and no partial, missing, unknown, or unassessed entry remains",
   "documentType": "kairosboot.fastboot-compatibility-inventory",
   "entries": [
     {
@@ -168,10 +168,7 @@
       "id": "capability.raw-image",
       "kind": "image-plan",
       "note": "Raw image download and flash are implemented.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "status": "implemented"
     },
@@ -315,9 +312,7 @@
       "id": "command.continue",
       "kind": "command",
       "note": "Continue is exposed on every language surface.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "continue",
       "status": "implemented"
@@ -340,9 +335,7 @@
       "id": "command.create-logical-partition",
       "kind": "command",
       "note": "Logical partition management is implemented.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "create-logical-partition",
       "status": "implemented"
@@ -365,9 +358,7 @@
       "id": "command.delete-logical-partition",
       "kind": "command",
       "note": "Logical partition management is implemented.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "delete-logical-partition",
       "status": "implemented"
@@ -449,10 +440,7 @@
       "id": "command.flash",
       "kind": "command",
       "note": "Raw and sparse file flashing are implemented through the public SDK.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flash",
       "status": "implemented"
@@ -523,9 +511,7 @@
       "id": "command.flashing-get-unlock-ability",
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "flashing get_unlock_ability",
       "status": "implemented"
@@ -674,10 +660,7 @@
       "id": "command.getvar",
       "kind": "command",
       "note": "Typed getvar is available synchronously and asynchronously.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "getvar",
       "status": "implemented"
@@ -737,9 +720,7 @@
       "id": "command.gsi-wipe",
       "kind": "command",
       "note": "GSI wipe, disable, and status are typed operations.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "gsi wipe",
       "status": "implemented"
@@ -759,9 +740,7 @@
       "id": "command.oem",
       "kind": "command",
       "note": "OEM passthrough is implemented with a separate raw-command escape hatch.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "oem",
       "status": "implemented"
@@ -781,9 +760,7 @@
       "id": "command.reboot",
       "kind": "command",
       "note": "System reboot uses the same spelling and wire command.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "reboot",
       "status": "implemented"
@@ -803,9 +780,7 @@
       "id": "command.reboot-bootloader",
       "kind": "command",
       "note": "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "reboot-bootloader",
       "status": "intentional-deviation"
@@ -917,10 +892,7 @@
       "id": "command.signature",
       "kind": "command",
       "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-signature",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "signature",
       "status": "implemented"
@@ -940,9 +912,7 @@
       "id": "command.snapshot-cancel",
       "kind": "command",
       "note": "Snapshot cancel and merge are typed operations.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "snapshot-update cancel",
       "status": "implemented"
@@ -982,9 +952,7 @@
       "id": "command.stage",
       "kind": "command",
       "note": "Stage download is implemented.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "stage",
       "status": "implemented"
@@ -1460,10 +1428,7 @@
       "id": "image.system",
       "kind": "image",
       "note": "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      ],
+      "officialDifferentialEvidence": [],
       "partition": "system",
       "required": true,
       "status": "implemented"
@@ -2542,10 +2507,7 @@
       "id": "protocol.command",
       "kind": "protocol",
       "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "status": "implemented"
     },
@@ -2559,10 +2521,7 @@
       "id": "protocol.download",
       "kind": "protocol",
       "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "status": "implemented"
     },
@@ -2609,9 +2568,7 @@
       "id": "transport.tcp",
       "kind": "transport",
       "note": "Boost.Asio TCP transport is covered through the public C API.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "status": "implemented"
     },
@@ -2625,9 +2582,7 @@
       "id": "transport.udp",
       "kind": "transport",
       "note": "Boost.Asio UDP v1 transport is implemented.",
-      "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
-      ],
+      "officialDifferentialEvidence": [],
       "required": true,
       "status": "implemented"
     },
@@ -2654,11 +2609,11 @@
   },
   "inventoryStatus": "generated-known-gaps",
   "officialDifferentialCoverage": {
-    "matchedScenarios": 16,
+    "matchedScenarios": 0,
     "requiredEntries": 87,
-    "requiredEntriesWithEvidence": 19,
-    "status": "partial",
-    "uncoveredCandidateScenarios": 9
+    "requiredEntriesWithEvidence": 0,
+    "status": "not-run",
+    "uncoveredCandidateScenarios": 0
   },
   "requiredGaps": [],
   "schemaVersion": 2,

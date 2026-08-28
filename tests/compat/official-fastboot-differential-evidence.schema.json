@@ -42,9 +42,13 @@
     },
     "kairosboot": {
       "type": "object",
-      "required": ["sha256"],
+      "required": ["releaseArtifactSha256", "sha256", "sourceCommit"],
       "additionalProperties": false,
-      "properties": {"sha256": {"$ref": "#/$defs/sha256"}}
+      "properties": {
+        "releaseArtifactSha256": {"$ref": "#/$defs/sha256"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
     },
     "captureFiles": {
       "type": "object",

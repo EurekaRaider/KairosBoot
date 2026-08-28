@@ -137,6 +137,22 @@ def check_workflows() -> None:
         if '"/p:Version=${package_version}"' not in ci:
             fail("CI package build must align the managed assembly and package version")
 
+    policy_workflow = workflow_dir / "policy.yml"
+    if policy_workflow.is_file():
+        policy = policy_workflow.read_text(encoding="utf-8")
+        if "compatibility_inventory_tooling" not in policy:
+            fail("Policy must execute the compatibility inventory tooling suite")
+        if "ctest --test-dir build --output-on-failure" not in policy:
+            fail("Policy compatibility tooling must propagate CTest failures")
+
+    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    for marker in (
+        "NAME compatibility_inventory_tooling",
+        "tests/tooling/test_compatibility_inventory.py",
+    ):
+        if marker not in cmake:
+            fail(f"root CTest is missing the compatibility inventory gate: {marker}")
+
 
 def check_release_distribution_contract() -> None:
     environment = json.loads(

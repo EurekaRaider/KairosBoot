@@ -97,6 +97,37 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         ):
             self.runner._run_capture(arguments)
 
+    def test_capture_provenance_requires_exact_clean_source_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            repository = pathlib.Path(raw_directory)
+
+            def git(*arguments: str) -> str:
+                completed = subprocess.run(
+                    ["git", "-C", str(repository), *arguments],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return completed.stdout.strip()
+
+            git("init")
+            git("config", "user.name", "KairosBoot Test")
+            git("config", "user.email", "kairosboot@example.invalid")
+            source = repository / "source.txt"
+            source.write_text("tested\n", encoding="utf-8")
+            git("add", "source.txt")
+            git("commit", "-m", "source under test")
+            self.assertEqual(
+                self.runner._repository_head(repository),
+                git("rev-parse", "HEAD"),
+            )
+
+            source.write_text("dirty\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                self.runner.CaptureGateError, "clean tracked source checkout"
+            ):
+                self.runner._repository_head(repository)
+
     def test_fixture_wire_recorder_captures_download_bytes_not_payload(self) -> None:
         scenario = self.runner.Scenario(
             "fixture-flash",
@@ -181,6 +212,11 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             json.loads((self.root / "compat/aosp.lock.json").read_text())[
                 "aosp"
             ]["officialArchives"]["darwin"]["fastbootSha256"],
+        )
+        self.assertRegex(metadata["kairosboot"]["sourceCommit"], r"^[0-9a-f]{40}$")
+        self.assertEqual(
+            metadata["kairosboot"]["releaseArtifactSha256"],
+            metadata["kairosboot"]["sha256"],
         )
 
         captures = []

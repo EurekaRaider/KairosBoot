@@ -63,7 +63,7 @@ jobs:
       - name: Validate ABI, symbols, dependency lock, and release notices
         run: >-
           ctest --test-dir build --output-on-failure
-          -R 'abi_symbols|libusb_dependency_tooling|release_tooling'
+          -R 'abi_symbols|compatibility_inventory_tooling|libusb_dependency_tooling|release_tooling'
 
       - name: Analyze
         uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4

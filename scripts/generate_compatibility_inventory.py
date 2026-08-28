@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -33,6 +34,153 @@ JSON_OUTPUT = Path("compat/generated-inventory.json")
 YAML_OUTPUT = Path("compat/compatibility.yaml")
 C_HEADER = Path("include/kairosboot/kairosboot.h")
 CLI_SOURCE = Path("cli/main.cpp")
+
+
+MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
+    "official-tcp-getvar": {
+        "transport": "tcp",
+        "coverageIds": ["command.getvar", "transport.tcp"],
+        "argv": ["getvar", "product"],
+        "getvars": ["product"],
+        "commands": [],
+        "data": [],
+    },
+    "official-udp-getvar": {
+        "transport": "udp",
+        "coverageIds": ["command.getvar", "transport.udp"],
+        "argv": ["getvar", "product"],
+        "getvars": ["product"],
+        "commands": [],
+        "data": [],
+    },
+    "official-tcp-flash": {
+        "transport": "tcp",
+        "coverageIds": [
+            "command.flash", "protocol.command", "protocol.download",
+            "capability.raw-image", "image.system",
+        ],
+        "argv": ["flash", "system", "<ARTIFACT>/system.img"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system"],
+        "data": [["host-to-device", 32]],
+    },
+    "official-udp-flash": {
+        "transport": "udp",
+        "coverageIds": [
+            "command.flash", "protocol.command", "protocol.download",
+            "capability.raw-image", "image.system",
+        ],
+        "argv": ["flash", "system", "<ARTIFACT>/system.img"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system"],
+        "data": [["host-to-device", 32]],
+    },
+    "official-tcp-signature": {
+        "transport": "tcp",
+        "coverageIds": ["command.signature"],
+        "argv": ["signature", "<ARTIFACT>/signature.bin"],
+        "getvars": [],
+        "commands": ["download:00000100", "signature"],
+        "data": [["host-to-device", 256]],
+    },
+    "official-udp-signature": {
+        "transport": "udp",
+        "coverageIds": ["command.signature"],
+        "argv": ["signature", "<ARTIFACT>/signature.bin"],
+        "getvars": [],
+        "commands": ["download:00000100", "signature"],
+        "data": [["host-to-device", 256]],
+    },
+    "official-tcp-reboot": {
+        "transport": "tcp", "coverageIds": ["command.reboot"],
+        "argv": ["reboot"], "getvars": [], "commands": ["reboot"], "data": [],
+    },
+    "official-tcp-reboot-bootloader": {
+        "transport": "tcp", "coverageIds": ["command.reboot-bootloader"],
+        "argv": ["reboot", "bootloader"], "getvars": [],
+        "commands": ["reboot-bootloader"], "data": [],
+    },
+    "official-tcp-continue": {
+        "transport": "tcp", "coverageIds": ["command.continue"],
+        "argv": ["continue"], "getvars": [], "commands": ["continue"], "data": [],
+    },
+    "official-tcp-oem": {
+        "transport": "tcp", "coverageIds": ["command.oem"],
+        "argv": ["oem", "differential"], "getvars": [],
+        "commands": ["oem differential"], "data": [],
+    },
+    "official-tcp-stage": {
+        "transport": "tcp", "coverageIds": ["command.stage"],
+        "argv": ["stage", "<ARTIFACT>/stage.bin"], "getvars": [],
+        "commands": ["download:00000020"], "data": [["host-to-device", 32]],
+    },
+    "official-tcp-flashing-get-unlock-ability": {
+        "transport": "tcp",
+        "coverageIds": ["command.flashing-get-unlock-ability"],
+        "argv": ["flashing", "get-unlock-ability"], "getvars": [],
+        "commands": ["flashing get_unlock_ability"], "data": [],
+    },
+    "official-tcp-create-logical-partition": {
+        "transport": "tcp", "coverageIds": ["command.create-logical-partition"],
+        "argv": ["create-logical-partition", "differential", "4096"],
+        "getvars": [], "commands": ["create-logical-partition:differential:4096"],
+        "data": [],
+    },
+    "official-tcp-delete-logical-partition": {
+        "transport": "tcp", "coverageIds": ["command.delete-logical-partition"],
+        "argv": ["delete-logical-partition", "differential"], "getvars": [],
+        "commands": ["delete-logical-partition:differential"], "data": [],
+    },
+    "official-tcp-gsi-wipe": {
+        "transport": "tcp", "coverageIds": ["command.gsi-wipe"],
+        "argv": ["gsi", "wipe"], "getvars": [], "commands": ["gsi:wipe"],
+        "data": [],
+    },
+    "official-tcp-snapshot-cancel": {
+        "transport": "tcp", "coverageIds": ["command.snapshot-cancel"],
+        "argv": ["snapshot-update", "cancel"], "getvars": [],
+        "commands": ["snapshot-update:cancel"], "data": [],
+    },
+}
+
+UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
+    "official-scripted-erase": ["command.erase"],
+    "official-scripted-boot-flash-raw": [
+        "command.boot", "command.flash-raw", "capability.boot-image-construction",
+    ],
+    "official-scripted-slot-policy": [
+        "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
+    ],
+    "official-scripted-avb-flags": [
+        "option.disable-verity", "option.disable-verification",
+        "capability.vbmeta-avb-mutation",
+    ],
+    "official-scripted-sparse-limit": [
+        "option.sparse-limit", "capability.android-sparse",
+    ],
+    "official-scripted-format": ["command.format", "option.fs-options"],
+    "official-scripted-wipe-super": [
+        "command.wipe-super", "capability.dynamic-partitions",
+    ],
+    "official-scripted-update-flashall": [
+        "command.update", "command.flashall", "capability.update-zip",
+    ],
+    "official-scripted-resize-logical-partition": [
+        "command.resize-logical-partition",
+    ],
+}
+
+EVIDENCE_ONLY_PATHS = {
+    OFFICIAL_EVIDENCE_PATH.as_posix(),
+    JSON_OUTPUT.as_posix(),
+    YAML_OUTPUT.as_posix(),
+}
 
 
 class InventoryError(RuntimeError):
@@ -98,6 +246,127 @@ def _repository_file(root: Path, value: Any, label: str) -> Path:
     return resolved
 
 
+def _repository_commit(root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    commit = completed.stdout.strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        return None
+    try:
+        status = subprocess.run(
+            [
+                "git", "-C", str(root), "status", "--porcelain",
+                "--untracked-files=no",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if status.returncode != 0 or status.stdout.strip():
+        return None
+    return commit
+
+
+def _capture_matches_current_repository(
+    root: Path, capture_commit: str, current_commit: str | None
+) -> bool:
+    if current_commit is None:
+        return False
+    if capture_commit == current_commit:
+        return True
+    try:
+        ancestor = subprocess.run(
+            [
+                "git", "-C", str(root), "merge-base", "--is-ancestor",
+                capture_commit, current_commit,
+            ],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+        if ancestor.returncode != 0:
+            return False
+        changed = subprocess.run(
+            [
+                "git", "-C", str(root), "diff", "--name-only",
+                f"{capture_commit}..{current_commit}", "--",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if changed.returncode != 0:
+        return False
+    paths = [line for line in changed.stdout.splitlines() if line]
+    return bool(paths) and all(
+        path in EVIDENCE_ONLY_PATHS or path.startswith("compat/evidence/")
+        for path in paths
+    )
+
+
+def _validate_scenario_semantics(
+    metadata_path: str,
+    identifier: str,
+    captured: dict[str, Any],
+    contract: dict[str, Any],
+) -> None:
+    events = captured.get("events")
+    _require(
+        isinstance(events, list) and len(events) >= 2,
+        f"{metadata_path}#{identifier}: normalized scenario has no event stream",
+    )
+    cli_parse = events[0]
+    terminal = events[-1]
+    _require(
+        isinstance(cli_parse, dict)
+        and cli_parse.get("kind") == "CLI_PARSE"
+        and cli_parse.get("result") == "ok"
+        and cli_parse.get("argv") == contract["argv"],
+        f"{metadata_path}#{identifier}: CLI command semantics differ from the whitelist",
+    )
+    _require(
+        isinstance(terminal, dict)
+        and terminal.get("kind") == "EXIT"
+        and terminal.get("code") == 0,
+        f"{metadata_path}#{identifier}: scenario does not have a successful terminal event",
+    )
+    getvars = [
+        event.get("name")
+        for event in events
+        if isinstance(event, dict) and event.get("kind") == "GETVAR"
+    ]
+    commands = [
+        event.get("command")
+        for event in events
+        if isinstance(event, dict) and event.get("kind") == "COMMAND"
+    ]
+    data = [
+        [event.get("direction"), event.get("size")]
+        for event in events
+        if isinstance(event, dict) and event.get("kind") == "DATA"
+    ]
+    _require(
+        getvars == contract["getvars"]
+        and commands == contract["commands"]
+        and data == contract["data"],
+        f"{metadata_path}#{identifier}: protocol event semantics differ from the whitelist",
+    )
+
+
 def _official_differential_coverage(
     root: Path,
     lock: dict[str, Any],
@@ -118,6 +387,7 @@ def _official_differential_coverage(
              "official differential evidence uses a different Platform-Tools version")
     captures = index["captures"]
     _require(isinstance(captures, list), "official differential captures must be a list")
+    current_commit = _repository_commit(root)
 
     mapped: dict[str, list[str]] = {}
     seen_metadata: set[str] = set()
@@ -172,9 +442,27 @@ def _official_differential_coverage(
         kairosboot = metadata["kairosboot"]
         _require(
             isinstance(kairosboot, dict)
+            and set(kairosboot) == {
+                "releaseArtifactSha256", "sha256", "sourceCommit"
+            }
             and re.fullmatch(r"[0-9a-f]{64}", str(kairosboot.get("sha256", "")))
+            is not None
+            and re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(kairosboot.get("releaseArtifactSha256", "")),
+            )
+            is not None
+            and kairosboot["releaseArtifactSha256"] == kairosboot["sha256"]
+            and re.fullmatch(
+                r"[0-9a-f]{40}", str(kairosboot.get("sourceCommit", ""))
+            )
             is not None,
-            f"{metadata_path}: KairosBoot binary hash is invalid",
+            f"{metadata_path}: KairosBoot Release artifact provenance is invalid",
+        )
+        capture_is_current = _capture_matches_current_repository(
+            root,
+            kairosboot["sourceCommit"],
+            current_commit,
         )
 
         capture_documents: list[dict[str, Any]] = []
@@ -203,18 +491,29 @@ def _official_differential_coverage(
         scenarios = metadata["scenarios"]
         _require(isinstance(scenarios, list) and scenarios,
                  f"{metadata_path}: evidence has no scenario mappings")
-        captured_ids = [item.get("id") for item in captured_scenarios
-                        if isinstance(item, dict)]
+        _require(
+            len(scenarios) == len(captured_scenarios),
+            f"{metadata_path}: metadata scenario count differs from the capture",
+        )
+        _require(
+            all(isinstance(item, dict) for item in captured_scenarios),
+            f"{metadata_path}: captured scenarios must be objects",
+        )
+        captured_ids = [item.get("id") for item in captured_scenarios]
         metadata_ids: list[str] = []
-        for scenario in scenarios:
+        scenario_claims: list[tuple[str, list[str]]] = []
+        matched_coverage_ids: set[str] = set()
+        for scenario, captured in zip(scenarios, captured_scenarios):
             _require(isinstance(scenario, dict),
                      f"{metadata_path}: scenario mapping must be an object")
             identifier = scenario.get("id")
             coverage_ids = scenario.get("coverageIds")
+            contract = MATCHED_SCENARIO_CONTRACTS.get(identifier)
             _require(
                 isinstance(identifier, str)
                 and scenario.get("result") == "matched"
-                and scenario.get("transport") in {"tcp", "udp"},
+                and contract is not None
+                and scenario.get("transport") == contract["transport"],
                 f"{metadata_path}: invalid matched scenario mapping",
             )
             key = (metadata_path, identifier)
@@ -227,21 +526,31 @@ def _official_differential_coverage(
                 and len(coverage_ids) == len(set(coverage_ids)),
                 f"{metadata_path}#{identifier}: coverageIds must be unique and non-empty",
             )
+            _require(
+                coverage_ids == contract["coverageIds"],
+                f"{metadata_path}#{identifier}: coverageIds differ from the scenario whitelist",
+            )
+            _require(
+                captured.get("id") == identifier,
+                f"{metadata_path}#{identifier}: metadata scenario differs from its capture",
+            )
+            _validate_scenario_semantics(
+                metadata_path, identifier, captured, contract
+            )
             for coverage_id in coverage_ids:
                 _require(coverage_id in upstream,
                          f"{metadata_path}#{identifier}: unknown coverage id {coverage_id}")
-                mapped.setdefault(coverage_id, []).append(
-                    f"{metadata_path}#{identifier}"
-                )
+                matched_coverage_ids.add(coverage_id)
+            scenario_claims.append((identifier, coverage_ids))
             metadata_ids.append(identifier)
         _require(metadata_ids == captured_ids,
                  f"{metadata_path}: metadata scenarios differ from persisted captures")
-        scenario_count += len(scenarios)
 
         uncovered = metadata["uncoveredScenarios"]
         _require(isinstance(uncovered, list),
                  f"{metadata_path}: uncoveredScenarios must be a list")
         uncovered_ids: set[str] = set()
+        uncovered_coverage_ids: set[str] = set()
         for candidate in uncovered:
             _require(isinstance(candidate, dict),
                      f"{metadata_path}: uncovered scenario must be an object")
@@ -254,10 +563,29 @@ def _official_differential_coverage(
                      f"{metadata_path}#{candidate_id}: uncovered reason is required")
             _require(isinstance(candidate_coverage, list) and candidate_coverage,
                      f"{metadata_path}#{candidate_id}: uncovered coverageIds are required")
+            _require(
+                candidate_id in UNCOVERED_SCENARIO_CONTRACTS
+                and candidate_coverage
+                == UNCOVERED_SCENARIO_CONTRACTS[candidate_id],
+                f"{metadata_path}#{candidate_id}: uncovered coverageIds differ from the scenario whitelist",
+            )
             for coverage_id in candidate_coverage:
                 _require(coverage_id in upstream,
                          f"{metadata_path}#{candidate_id}: unknown coverage id {coverage_id}")
-        uncovered_count += len(uncovered)
+                uncovered_coverage_ids.add(coverage_id)
+        _require(
+            matched_coverage_ids.isdisjoint(uncovered_coverage_ids),
+            f"{metadata_path}: matched and uncovered coverage declarations overlap",
+        )
+
+        if capture_is_current:
+            for identifier, coverage_ids in scenario_claims:
+                for coverage_id in coverage_ids:
+                    mapped.setdefault(coverage_id, []).append(
+                        f"{metadata_path}#{identifier}"
+                    )
+            scenario_count += len(scenarios)
+            uncovered_count += len(uncovered)
 
     return mapped, scenario_count, uncovered_count
 
@@ -442,8 +770,9 @@ def generate(root: Path) -> tuple[dict[str, Any], str]:
         "completionRule": (
             "claimCompatibility may become true only after every required entry is "
             "implemented or an approved intentional deviation, every required entry has "
-            "official Platform-Tools 37.0.1 differential evidence, and no partial, missing, "
-            "unknown, or unassessed entry remains"
+            "official Platform-Tools 37.0.1 differential evidence from a Release artifact "
+            "built at the current source commit (or an evidence-only descendant), and no "
+            "partial, missing, unknown, or unassessed entry remains"
         ),
         "documentType": "kairosboot.fastboot-compatibility-inventory",
         "entries": entries,
@@ -532,9 +861,15 @@ def _render_yaml(inventory: dict[str, Any]) -> str:
             )
         else:
             lines.append("    officialDifferentialEvidence: []")
+    if inventory["requiredGaps"]:
+        lines.append("requiredGaps:")
+        lines.extend(
+            f"  - {_yaml_string(identifier)}"
+            for identifier in inventory["requiredGaps"]
+        )
+    else:
+        lines.append("requiredGaps: []")
     lines.extend([
-        "requiredGaps:",
-        *[f"  - {_yaml_string(identifier)}" for identifier in inventory["requiredGaps"]],
         f"completionRule: {_yaml_string(inventory['completionRule'])}",
         "",
     ])
