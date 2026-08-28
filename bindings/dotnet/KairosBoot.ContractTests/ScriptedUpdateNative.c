@@ -90,6 +90,8 @@ static int32_t blocking_count;
 static int32_t flash_options_init_count;
 static int32_t flash_raw_async_start_count;
 static int32_t flash_raw_blocking_count;
+static int32_t boot_async_start_count;
+static int32_t boot_blocking_count;
 static int32_t cancel_count;
 static int32_t operation_release_count;
 static int32_t context_release_count;
@@ -109,6 +111,10 @@ static const char expected_unicode_package[] = {
 static const char expected_unicode_kernel[] = {
     'i', 'm', 'a', 'g', 'e', 's', '/', (char)0xe5, (char)0x86,
     (char)0x85, (char)0xe6, (char)0xa0, (char)0xb8, '.', 'b', 'i', 'n', 0};
+
+static const char expected_unicode_boot_image[] = {
+    'i', 'm', 'a', 'g', 'e', 's', '/', (char)0xe5, (char)0x90,
+    (char)0xaf, (char)0xe5, (char)0x8a, (char)0xa8, '.', 'i', 'm', 'g', 0};
 
 static int same_string(const char *actual, const char *expected) {
   return actual != NULL && strcmp(actual, expected) == 0;
@@ -174,6 +180,8 @@ KB_TEST_API void KB_TEST_CALL kb_test_reset(void) {
   flash_options_init_count = 0;
   flash_raw_async_start_count = 0;
   flash_raw_blocking_count = 0;
+  boot_async_start_count = 0;
+  boot_blocking_count = 0;
   cancel_count = 0;
   operation_release_count = 0;
   context_release_count = 0;
@@ -211,6 +219,14 @@ KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_raw_async_start_count(void) {
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_raw_blocking_count(void) {
   return flash_raw_blocking_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_boot_async_start_count(void) {
+  return boot_async_start_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_boot_blocking_count(void) {
+  return boot_blocking_count;
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_cancel_count(void) {
@@ -688,6 +704,85 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw(
   }
   *error = NULL;
   ++flash_raw_blocking_count;
+  return KB_OK;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_boot_file_async(
+    void *context, const char *device_selector, const char *file_path,
+    const kb_flash_options_t *options, kb_operation_t **operation,
+    void **error) {
+  if (context != &context_sentinel || operation == NULL || error == NULL ||
+      !valid_flash_options(options)) {
+    record_failure(100);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  int32_t kind = 0;
+  if (same_string(file_path, expected_unicode_boot_image)) {
+    kind = 1;
+    if (!same_string(device_selector, "usb:serial:boot-device") ||
+        options->timeout_ms != 2 || options->progress_callback == NULL) {
+      record_failure(101);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else if (same_string(file_path, "cancel-boot.img")) {
+    kind = 2;
+    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+        options->timeout_ms != UINT32_MAX ||
+        options->progress_callback == NULL) {
+      record_failure(102);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else if (same_string(file_path, "default-boot.img")) {
+    kind = 3;
+    if (device_selector != NULL || options->timeout_ms != UINT32_MAX ||
+        options->progress_callback != NULL ||
+        options->progress_user_data != NULL) {
+      record_failure(103);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else {
+    record_failure(104);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  kb_operation_t *created = (kb_operation_t *)calloc(1, sizeof(*created));
+  if (created == NULL) {
+    record_failure(105);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  created->kind = kind;
+  created->progress_callback = options->progress_callback;
+  created->progress_user_data = options->progress_user_data;
+  const char *identifier = device_selector == NULL ? "" : device_selector;
+  const size_t identifier_size = strlen(identifier) + 1;
+  created->device_identifier = (char *)malloc(identifier_size);
+  if (created->device_identifier == NULL) {
+    free(created);
+    record_failure(106);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  memcpy(created->device_identifier, identifier, identifier_size);
+  *operation = created;
+  *error = NULL;
+  ++boot_async_start_count;
+  return KB_OK;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_boot_file(
+    void *context, const char *device_selector, const char *file_path,
+    const kb_flash_options_t *options, void **error) {
+  if (context != (void *)(uintptr_t)1 || error == NULL ||
+      !valid_flash_options(options) || options->timeout_ms != 17 ||
+      options->progress_callback != NULL ||
+      options->progress_user_data != NULL ||
+      !same_string(device_selector, "usb:serial:blocking-boot") ||
+      !same_string(file_path, "blocking-boot.img")) {
+    record_failure(107);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  *error = NULL;
+  ++boot_blocking_count;
   return KB_OK;
 }
 

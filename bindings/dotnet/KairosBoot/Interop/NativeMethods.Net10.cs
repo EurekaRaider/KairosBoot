@@ -120,6 +120,25 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_boot_file_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int BootFileAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string filePath,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_boot_file", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int BootFile(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string filePath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_update_package_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int UpdatePackageAsync(

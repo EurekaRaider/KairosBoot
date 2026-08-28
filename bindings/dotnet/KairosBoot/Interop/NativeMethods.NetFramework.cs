@@ -99,6 +99,23 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_boot_file_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int BootFileAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_boot_file", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int BootFile(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_update_package_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int UpdatePackageAsync(
         ContextSafeHandle context,

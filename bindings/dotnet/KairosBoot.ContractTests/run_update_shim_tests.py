@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the deterministic managed update-package contract shim."""
+"""Build and run the deterministic managed native-operation contract shim."""
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def main() -> int:
             run([str(executable)], env=env)
         else:
             run(["dotnet", str(managed)], env=env)
-        print(f"scripted update contract passed: {framework}, {native.name}")
+        print(f"scripted native contract passed: {framework}, {native.name}")
 
     return 0
 
@@ -135,5 +135,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        print(f"update shim test failed: {error}", file=sys.stderr)
+        print(f"native shim test failed: {error}", file=sys.stderr)
         sys.exit(1)

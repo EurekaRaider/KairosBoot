@@ -197,6 +197,37 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>Downloads an image file and boots it with native default options.</summary>
+    public Task BootFileAsync(
+        string filePath,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootFileCoreAsync(
+            filePath,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Downloads an image file and boots it with a typed per-I/O timeout.</summary>
+    public Task BootFileAsync(
+        string filePath,
+        FlashOptions options,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return BootFileCoreAsync(
+            filePath,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
     /// <summary>Starts a complete update-package operation with safe defaults.</summary>
     public Task UpdatePackageAsync(
         string packagePath,
@@ -855,6 +886,62 @@ public sealed partial class Context : IDisposable
                 kernelPath,
                 ramdiskPath,
                 secondStagePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task BootFileCoreAsync(
+        string filePath,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(filePath, nameof(filePath));
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.BootFileAsync(
+                handle,
+                deviceSelector,
+                filePath,
                 ref nativeOptions,
                 out var rawOperation,
                 out var rawError);
