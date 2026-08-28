@@ -741,6 +741,56 @@ void update_super_three_state_contract_and_unique_mapping() {
     CHECK(byte_failure.error().artifact == "super_empty.img");
 }
 
+void super_optimization_gap_keeps_candidate_plan_unrewritten() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "super-optimization-gap";
+    create_directory_package(
+        package, "",
+        "reboot fastboot\n"
+        "update-super\n"
+        "flash system system.img\n");
+
+    const auto super_empty = valid_empty_sparse_image();
+    write_bytes(package / "super_empty.img", super_empty);
+    write_text(package / "system.img", "system-payload");
+
+    std::vector<std::string> opened_artifacts;
+    ArtifactSourceLimits source_limits;
+    source_limits.package_entry_observer =
+        [&](const std::string_view name) {
+            if (name != "android-info.txt" && name != "fastboot-info.txt") {
+                opened_artifacts.emplace_back(name);
+            }
+        };
+    ArtifactSourceResolver resolver(source_limits);
+    auto prepared = preflight_update_package(resolver, package, false);
+
+    CHECK(prepared);
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::Prepared);
+    CHECK(prepared->prepared_super_artifact);
+
+    // Frozen AOSP recognizes this three-task window as the structural
+    // prerequisite for optimized super flashing, then uses validated LP
+    // metadata to prove that the following flash targets a dynamic partition.
+    // KairosBoot intentionally keeps the disable-super-optimization-equivalent
+    // task sequence until it has an LP metadata rewriter and sparse super
+    // builder; preflight must never silently claim that the rewrite occurred.
+    CHECK(prepared->plan.tasks.size() == 3U);
+    CHECK(prepared->plan.tasks[0].kind == UpdateTaskKind::Reboot);
+    CHECK(prepared->plan.tasks[0].reboot_target ==
+          kairosboot::fastboot::PlannedRebootTarget::Fastboot);
+    CHECK(prepared->plan.tasks[1].kind == UpdateTaskKind::UpdateSuper);
+    CHECK(prepared->plan.tasks[2].kind == UpdateTaskKind::Flash);
+    CHECK(prepared->plan.tasks[2].partition == "system");
+    CHECK(prepared->plan.tasks[2].artifact == "system.img");
+
+    CHECK(prepared->artifacts.size() == 1U);
+    CHECK(prepared->artifacts[0].name == "system.img");
+    CHECK(std::ranges::count(opened_artifacts, "super_empty.img") == 1);
+    CHECK(std::ranges::count(opened_artifacts, "system.img") == 1);
+}
+
 void required_manifest_missing_duplicate_and_bounds_fail_closed() {
     TemporaryDirectory temporary;
     const auto missing = temporary.path() / "missing";
@@ -1295,6 +1345,8 @@ int main() {
              zip_fallback_requirements_hashes_slots_and_executor_form_one_trace},
         Test{"update-super three-state artifact contract",
              update_super_three_state_contract_and_unique_mapping},
+        Test{"super optimization capability gap",
+             super_optimization_gap_keeps_candidate_plan_unrewritten},
         Test{"required manifest validation",
              required_manifest_missing_duplicate_and_bounds_fail_closed},
         Test{"wipe path validation",
