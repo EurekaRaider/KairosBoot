@@ -618,6 +618,10 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     if b"option -S may only be specified once" not in stderr:
         raise AssertionError(f"duplicate sparse limit was not rejected: {stderr!r}")
 
+    stdout, stderr = local(["-h"], 0)
+    if not stdout.startswith(b"Usage:\n") or stderr != b"":
+        raise AssertionError(f"short help output changed: {stdout!r}, {stderr!r}")
+
 
 def run(cli: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="kairosboot-cli-") as raw_directory:
@@ -1328,7 +1332,7 @@ def run(cli: pathlib.Path) -> None:
             [
                 "--slot",
                 "all",
-                "--set-active",
+                "-a",
                 "--json",
                 "update",
                 str(slotted_update),

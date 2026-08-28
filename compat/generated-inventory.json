@@ -1536,15 +1536,20 @@
     },
     {
       "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cliCommands": [
+        "-a",
+        "-h"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
       "id": "option.a",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "-a",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -1776,15 +1781,20 @@
     },
     {
       "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cliCommands": [
+        "-a",
+        "-h"
+      ],
+      "evidence": [
+        "tests/cli/scripted_cli_test.py"
+      ],
       "id": "option.help-short",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "-h",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -2263,7 +2273,6 @@
     "command.wipe-super",
     "image.boot",
     "image.system",
-    "option.a",
     "option.disable-super-optimization",
     "option.disable-verification",
     "option.disable-verity",
@@ -2272,7 +2281,6 @@
     "option.force",
     "option.fs-options",
     "option.header-version",
-    "option.help-short",
     "option.os-patch-level",
     "option.os-version",
     "option.vendor-id",
@@ -2312,9 +2320,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 15,
+        "implemented": 17,
         "intentional-deviation": 4,
-        "missing": 14,
+        "missing": 12,
         "partial": 0
       },
       "protocol": {
@@ -2331,9 +2339,9 @@
       }
     },
     "byStatus": {
-      "implemented": 48,
+      "implemented": 50,
       "intentional-deviation": 15,
-      "missing": 20,
+      "missing": 18,
       "partial": 36
     },
     "totalEntries": 119

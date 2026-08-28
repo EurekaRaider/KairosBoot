@@ -254,7 +254,14 @@
       "note": "-S SIZE[K|M|G] is exposed by C, C++23, .NET and CLI; explicit limits force raw-to-sparse or sparse resparse segmentation and are safely bounded by max-download-size and AOSP's 1 GiB ceiling for flash, update and flashall."
     },
     {
-      "ids": ["option.a", "option.help-short", "option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset", "option.verbose"],
+      "ids": ["option.a", "option.help-short"],
+      "status": "implemented",
+      "cliCommands": ["-a", "-h"],
+      "evidence": ["tests/cli/scripted_cli_test.py"],
+      "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
+    },
+    {
+      "ids": ["option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset", "option.verbose"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."

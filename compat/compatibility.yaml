@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 48
+    implemented: 50
     intentional-deviation: 15
-    missing: 20
+    missing: 18
     partial: 36
 officialDifferentialCoverage:
   status: "not-run"
@@ -655,9 +655,10 @@ entries:
   - id: "option.a"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
+    evidence:
+      - "tests/cli/scripted_cli_test.py"
   - id: "option.base"
     kind: "option"
     required: true
@@ -762,9 +763,10 @@ entries:
   - id: "option.help-short"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
+    evidence:
+      - "tests/cli/scripted_cli_test.py"
   - id: "option.kernel-offset"
     kind: "option"
     required: true
@@ -983,7 +985,6 @@ requiredGaps:
   - "command.wipe-super"
   - "image.boot"
   - "image.system"
-  - "option.a"
   - "option.disable-super-optimization"
   - "option.disable-verification"
   - "option.disable-verity"
@@ -992,7 +993,6 @@ requiredGaps:
   - "option.force"
   - "option.fs-options"
   - "option.header-version"
-  - "option.help-short"
   - "option.os-patch-level"
   - "option.os-version"
   - "option.vendor-id"

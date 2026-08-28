@@ -346,7 +346,8 @@ bool is_global_option(const std::string_view value) noexcept {
          value == "--page-size" || value == "--kernel-offset" ||
          value == "--ramdisk-offset" || value == "--second-offset" ||
          value == "--tags-offset" || value == "--slot" ||
-         value == "--set-active" || value.starts_with("--set-active=");
+         value == "-a" || value == "--set-active" ||
+         value.starts_with("--set-active=");
 }
 
 template <typename Integer>
@@ -572,7 +573,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       index += 2;
       continue;
     }
-    if (argument == "--set-active" || argument.starts_with("--set-active=")) {
+    if (argument == "-a" || argument == "--set-active" ||
+        argument.starts_with("--set-active=")) {
       if (set_active_seen) {
         return error("option --set-active may only be specified once");
       }
@@ -640,8 +642,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     return error("unknown command");
   }
   const std::string_view command{argv[index]};
-  if (command.starts_with("--") && command != "--version" &&
-      command != "--help") {
+  if (command.starts_with("-") && command != "--version" &&
+      command != "--help" && command != "-h") {
     return error("unknown option " + std::string{command});
   }
   const int command_index = index++;
@@ -699,7 +701,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
-  if (command == "--help" || command == "help") {
+  if (command == "--help" || command == "-h" || command == "help") {
     result.kind = CommandKind::Help;
     if (argc - command_index != 1) {
       return error(std::string{command} + " does not accept operands");
@@ -2631,7 +2633,7 @@ int run_management_command(const Invocation &invocation) {
 constexpr std::string_view usage_text() noexcept {
   return "Usage:\n"
                "  kairosboot --version [--json]\n"
-               "  kairosboot --help [--json]\n"
+               "  kairosboot -h | --help [--json]\n"
                "  kairosboot doctor [--json]\n"
                "  kairosboot devices [--json]\n"
                "  kairosboot [--json] validate <manifest>\n"
@@ -2680,7 +2682,7 @@ constexpr std::string_view usage_text() noexcept {
                "<partition> <size-bytes>\n"
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
-               "  --slot <a|b|other|all> --set-active[=<a|b|other>]\n"
+               "  --slot <a|b|other|all> -a | --set-active[=<a|b|other>]\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
                "  --disable-verity --disable-verification\n"
@@ -2736,6 +2738,7 @@ int run_cli(const int argc, char **argv) {
   }
   if (argc == 3 &&
       (std::string_view{argv[1]} == "--help" ||
+       std::string_view{argv[1]} == "-h" ||
        std::string_view{argv[1]} == "help") &&
       std::string_view{argv[2]} == "--json") {
     return print_help(true);
