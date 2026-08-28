@@ -366,30 +366,51 @@ KB_API void KB_CALL kb_job_options_init_sized(kb_job_options_t *options,
 KB_API void KB_CALL kb_version_init_sized(kb_version_t *version,
                                           uint32_t struct_size);
 
-/* Keep existing source calls easy and complete while retaining the legacy
- * one-argument symbols for already-built binaries. Define
+/* Keep existing source calls and function pointers easy and complete while
+ * retaining the legacy one-argument symbols for already-built binaries. The
+ * object-like aliases deliberately cover direct calls, parenthesized function
+ * designators, and address-taking. Define
  * KAIROSBOOT_DISABLE_SIZED_INITIALIZER_MACROS before including this header to
- * call those frozen-prefix symbols directly. */
+ * call or take the address of the frozen-prefix symbols directly. */
 #if !defined(KAIROSBOOT_BUILDING_LIBRARY) &&                                  \
     !defined(KAIROSBOOT_DISABLE_SIZED_INITIALIZER_MACROS)
-#define kb_context_options_init(options)                                      \
-  kb_context_options_init_sized((options),                                    \
-                                (uint32_t)sizeof(kb_context_options_t))
-#define kb_flash_options_init(options)                                        \
-  kb_flash_options_init_sized((options), (uint32_t)sizeof(kb_flash_options_t))
-#define kb_legacy_boot_options_init(options)                                  \
-  kb_legacy_boot_options_init_sized(                                          \
-      (options), (uint32_t)sizeof(kb_legacy_boot_options_t))
-#define kb_update_options_init(options)                                       \
-  kb_update_options_init_sized((options),                                     \
-                               (uint32_t)sizeof(kb_update_options_t))
-#define kb_command_options_init(options)                                      \
-  kb_command_options_init_sized((options),                                    \
-                                (uint32_t)sizeof(kb_command_options_t))
-#define kb_job_options_init(options)                                          \
-  kb_job_options_init_sized((options), (uint32_t)sizeof(kb_job_options_t))
-#define kb_version_init(version)                                              \
-  kb_version_init_sized((version), (uint32_t)sizeof(kb_version_t))
+static inline void KB_CALL
+kb_context_options_init_current(kb_context_options_t *options) {
+  kb_context_options_init_sized(options,
+                                (uint32_t)sizeof(kb_context_options_t));
+}
+static inline void KB_CALL
+kb_flash_options_init_current(kb_flash_options_t *options) {
+  kb_flash_options_init_sized(options, (uint32_t)sizeof(kb_flash_options_t));
+}
+static inline void KB_CALL
+kb_legacy_boot_options_init_current(kb_legacy_boot_options_t *options) {
+  kb_legacy_boot_options_init_sized(
+      options, (uint32_t)sizeof(kb_legacy_boot_options_t));
+}
+static inline void KB_CALL
+kb_update_options_init_current(kb_update_options_t *options) {
+  kb_update_options_init_sized(options, (uint32_t)sizeof(kb_update_options_t));
+}
+static inline void KB_CALL
+kb_command_options_init_current(kb_command_options_t *options) {
+  kb_command_options_init_sized(options,
+                                (uint32_t)sizeof(kb_command_options_t));
+}
+static inline void KB_CALL
+kb_job_options_init_current(kb_job_options_t *options) {
+  kb_job_options_init_sized(options, (uint32_t)sizeof(kb_job_options_t));
+}
+static inline void KB_CALL kb_version_init_current(kb_version_t *version) {
+  kb_version_init_sized(version, (uint32_t)sizeof(kb_version_t));
+}
+#define kb_context_options_init kb_context_options_init_current
+#define kb_flash_options_init kb_flash_options_init_current
+#define kb_legacy_boot_options_init kb_legacy_boot_options_init_current
+#define kb_update_options_init kb_update_options_init_current
+#define kb_command_options_init kb_command_options_init_current
+#define kb_job_options_init kb_job_options_init_current
+#define kb_version_init kb_version_init_current
 #endif
 
 KB_API kb_status_t KB_CALL kb_get_version(kb_version_t *version);
@@ -521,11 +542,10 @@ KB_API kb_status_t KB_CALL kb_signature_file(
 /* Performs complete package preflight before USB enumeration or any transport
  * open. device_selector_or_null uses the typed selector grammar documented
  * below. The selected target is bound exactly once for this operation.
- * Packages that require bootloader-to-fastbootd re-enumeration fail with
- * KB_E_NOT_SUPPORTED before any destructive task until the production USB
- * opener can provide a verified physical-port reconnect binding. An already
- * open fastbootd target remains supported. The blocking entry point starts the
- * same async operation and waits for its terminal state. */
+ * USB packages may transition from bootloader Fastboot to fastbootd through a
+ * fail-closed reconnect bound to the verified physical port and live device
+ * identity. The blocking entry point starts the same async operation and waits
+ * for its terminal state. */
 KB_API kb_status_t KB_CALL kb_update_package_async(
     kb_context_t *context, const char *device_selector_or_null,
     const char *package_path, const kb_update_options_t *options_or_null,

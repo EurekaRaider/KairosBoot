@@ -57,6 +57,15 @@ private:
     return timeout >= room ? Clock::time_point::max() : now + timeout;
 }
 
+[[nodiscard]] Clock::time_point bounded_deadline(
+    const std::chrono::milliseconds timeout,
+    const std::optional<Clock::time_point> absolute_deadline) noexcept {
+    const auto local_deadline = deadline_after(timeout);
+    return absolute_deadline.has_value()
+        ? std::min(local_deadline, *absolute_deadline)
+        : local_deadline;
+}
+
 [[nodiscard]] std::chrono::milliseconds remaining_until(
     const Clock::time_point deadline) noexcept {
     if (deadline == Clock::time_point::max()) {
@@ -298,7 +307,7 @@ UsbFastbootTransport::open(
         }
         auto verified = runtime->open_bulk_out_verified(
             device,
-            Clock::time_point::max(),
+            options.absolute_deadline.value_or(Clock::time_point::max()),
             {},
             options.bulk_out);
         if (!verified.has_value()) {
@@ -436,7 +445,7 @@ protocol::TransferResult UsbFastbootTransport::write_source_impl(
             .detail = {},
         };
     }
-    const auto deadline = deadline_after(timeout);
+    const auto deadline = bounded_deadline(timeout, options_.absolute_deadline);
     if (Clock::now() >= deadline) {
         auto failure = protocol::TransferResult{
             .status = protocol::TransportStatus::Timeout,
@@ -670,7 +679,21 @@ protocol::TransferResult UsbFastbootTransport::read(
                                 : "Fastboot USB transport is closed",
         };
     }
-    auto result = read_result(backend_->read_logical_response(destination, timeout));
+    const auto deadline = bounded_deadline(timeout, options_.absolute_deadline);
+    const auto remaining = remaining_until(deadline);
+    if (remaining <= std::chrono::milliseconds::zero()) {
+        auto failure = protocol::TransferResult{
+            .status = protocol::TransportStatus::Timeout,
+            .transferred = 0,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
+            .detail = "USB bulk IN deadline expired before submission",
+        };
+        poison_and_stop();
+        return failure;
+    }
+    auto result = read_result(
+        backend_->read_logical_response(destination, remaining));
     if (result.status != protocol::TransportStatus::Ok || result.truncated) {
         poison_and_stop();
     }
@@ -694,7 +717,20 @@ protocol::TransferResult UsbFastbootTransport::read_data(
                                 : "Fastboot USB transport is closed",
         };
     }
-    auto result = read_result(backend_->read_data(destination, timeout));
+    const auto deadline = bounded_deadline(timeout, options_.absolute_deadline);
+    const auto remaining = remaining_until(deadline);
+    if (remaining <= std::chrono::milliseconds::zero()) {
+        auto failure = protocol::TransferResult{
+            .status = protocol::TransportStatus::Timeout,
+            .transferred = 0,
+            .certainty = protocol::TransferCertainty::NotTransferred,
+            .truncated = false,
+            .detail = "USB bulk IN DATA deadline expired before submission",
+        };
+        poison_and_stop();
+        return failure;
+    }
+    auto result = read_result(backend_->read_data(destination, remaining));
     if (result.status != protocol::TransportStatus::Ok || result.truncated) {
         poison_and_stop();
     }

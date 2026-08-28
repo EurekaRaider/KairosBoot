@@ -791,7 +791,9 @@ if(BUILD_TESTING)
            COMMAND kairosboot_sequential_streaming_transport_tests)
   set_tests_properties(sequential_streaming_transport PROPERTIES TIMEOUT 10)
 
-  add_executable(kairosboot_c_api_test tests/c_api_test.c)
+  add_executable(kairosboot_c_api_test
+                 tests/c_api_test.c
+                 tests/c_api_legacy_initializer_test.c)
   set_target_properties(
     kairosboot_c_api_test
     PROPERTIES C_STANDARD 11

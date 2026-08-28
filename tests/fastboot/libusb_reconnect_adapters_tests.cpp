@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/libusb_reconnect_adapters.hpp"
 #include "src/fastboot/primitive_update_device.hpp"
+#include "src/fastboot/primitive_service.hpp"
 
 #include "src/fleet/job_plan.hpp"
 
@@ -35,6 +36,8 @@ namespace {
 using namespace std::chrono_literals;
 using kairosboot::fastboot::FastbootUsbMode;
 using kairosboot::fastboot::LibusbReconnectAdapter;
+using kairosboot::fastboot::PrimitiveErrorCode;
+using kairosboot::fastboot::PrimitiveService;
 using kairosboot::fastboot::PreparedReconnectBinding;
 using kairosboot::fastboot::PreparedReconnectBindingErrorCode;
 using kairosboot::fastboot::ReconnectCandidate;
@@ -54,6 +57,7 @@ using kairosboot::fleet::DevicePreflightTimePoint;
 using kairosboot::fleet::DevicePreflightUsbFingerprint;
 using kairosboot::fleet::DevicePreflightUsbIdentity;
 using kairosboot::fleet::FlashJobManifest;
+using kairosboot::fleet::FastbootDevicePreflightProbe;
 using kairosboot::fleet::IDevicePreflightProbe;
 using kairosboot::fleet::IDevicePreflightSessionOpener;
 using kairosboot::fleet::JobPlan;
@@ -67,9 +71,11 @@ using kairosboot::fleet::ManifestStep;
 using kairosboot::fleet::ManifestTarget;
 using kairosboot::fleet::OpenedDevicePreflightSession;
 using kairosboot::fleet::make_job_plan;
+using kairosboot::fleet::make_libusb_device_preflight_session_opener;
 using kairosboot::fleet::preflight_fleet_devices;
 using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::ITransportSession;
+using kairosboot::protocol::SessionOptions;
 using kairosboot::protocol::SessionState;
 using kairosboot::protocol::TransferCertainty;
 using kairosboot::protocol::TransferResult;
@@ -78,6 +84,12 @@ using kairosboot::transport::LibusbFunctions;
 using kairosboot::transport::LibusbRuntime;
 using kairosboot::transport::LibusbRuntimeErrorKind;
 using kairosboot::transport::LinuxUsbTopology;
+using kairosboot::transport::MacUsbTopology;
+using kairosboot::transport::MacUsbTopologyDeviceQuery;
+using kairosboot::transport::MacUsbTopologyDeviceResult;
+using kairosboot::transport::MacUsbTopologyError;
+using kairosboot::transport::BufferBudget;
+using kairosboot::transport::TransferRingConfig;
 using kairosboot::transport::UsbDeviceInfo;
 using kairosboot::transport::UsbInterfaceFilter;
 
@@ -475,6 +487,60 @@ private:
     return *runtime;
 }
 
+[[nodiscard]] std::shared_ptr<LibusbRuntime> create_runtime(
+    LibusbFunctions functions) {
+    auto runtime = LibusbRuntime::create(std::move(functions));
+    CHECK(runtime.has_value());
+    return *runtime;
+}
+
+// Fleet preflight normalization requires one complete platform topology per
+// enumerated device. Mirror the runtime's fake macOS resolver so the
+// LibusbDevicePreflightSessionOpener can open the synthetic device.
+[[nodiscard]] LibusbFunctions topology_functions(
+    const std::shared_ptr<FakeLibusb>& fake) {
+    auto functions = fake->functions();
+    functions.resolve_macos_topology =
+        [](const std::span<const MacUsbTopologyDeviceQuery> devices,
+           const auto, const std::stop_token) {
+            const auto& query = devices.front().interfaces.front();
+            return std::expected<std::vector<MacUsbTopologyDeviceResult>,
+                                 MacUsbTopologyError>{
+                std::vector<MacUsbTopologyDeviceResult>{
+                    std::vector<MacUsbTopology>{MacUsbTopology{
+                        .physical_port_path = "usb:2-3.4",
+                        .root_controller_id =
+                            "macos-iokit:0000000000000011",
+                        .hub_port_chain = query.port_numbers,
+                        .registry_entry_id = 0x21U,
+                        .session_id = query.session_id,
+                        .interface_registry_entry_id = 0x41U,
+                        .location_id = 0x02340000U,
+                        .vendor_id = query.vendor_id,
+                        .product_id = query.product_id,
+                        .bus_number = query.bus_number,
+                        .device_address = query.device_address,
+                        .interface_fingerprint = query.interface_fingerprint,
+                        .serial_utf8 = query.serial_utf8,
+                        .product_utf8 = std::nullopt,
+                        .registry_path = "IOService:/USB/device",
+                        .interface_registry_path =
+                            "IOService:/USB/device/interface",
+                        .root_controller_registry_path =
+                            "IOService:/USB/controller",
+                    }}}};
+        };
+    return functions;
+}
+
+[[nodiscard]] UsbInterfaceFilter fastboot_filter() {
+    UsbInterfaceFilter filter;
+    filter.interface_class = 0xFFU;
+    filter.interface_subclass = 0x42U;
+    filter.interface_protocol = 0x03U;
+    return filter;
+}
+
 void test_cancellable_passive_enumeration() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -580,6 +646,72 @@ void test_discovery_open_probe_and_ownership() {
     CHECK(fake->claim_calls == 1);
     CHECK(fake->release_calls == 1);
     CHECK(fake->close_calls == 1);
+    adapter->reset();
+    runtime->stop();
+}
+
+void test_preflight_session_retains_absolute_deadline_after_probe() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(topology_functions(fake));
+    auto snapshot = runtime->enumerate(
+        fastboot_filter(), std::chrono::steady_clock::now() + 2s, {});
+    CHECK(snapshot.has_value());
+    CHECK(snapshot->size() == 1U);
+
+    auto opener = make_libusb_device_preflight_session_opener(
+        runtime, std::make_shared<BufferBudget>(8U * 1024U * 1024U),
+        TransferRingConfig{}, SessionOptions{});
+    CHECK(opener.has_value());
+    const auto operation_deadline =
+        std::chrono::steady_clock::now() + 200ms;
+    auto opened = (*opener)->open(
+        snapshot->front(), operation_deadline, {});
+    CHECK(opened.has_value());
+    FastbootDevicePreflightProbe probe;
+    auto probed = probe.probe(
+        *opened->session, operation_deadline, {});
+    CHECK(probed.has_value());
+    CHECK(fake->command_count() == 2U);
+
+    std::this_thread::sleep_until(operation_deadline);
+    PrimitiveService service(*opened->session);
+    auto late = service.getvar("product");
+    CHECK(!late.has_value());
+    CHECK(late.error().code == PrimitiveErrorCode::Timeout);
+    CHECK(late.error().outbound_certainty ==
+          TransferCertainty::NotTransferred);
+    CHECK(fake->command_count() == 2U);
+    opened->session.reset();
+    opener->reset();
+    runtime->stop();
+}
+
+void test_reconnect_replacement_retains_absolute_deadline() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    auto adapter = LibusbReconnectAdapter::create(runtime);
+    CHECK(adapter.has_value());
+    auto discovered = (*adapter)->discover(
+        std::chrono::steady_clock::now() + 2s, {});
+    CHECK(discovered.has_value());
+    CHECK(discovered->size() == 1U);
+
+    const auto operation_deadline =
+        std::chrono::steady_clock::now() + 200ms;
+    auto opened = (*adapter)->open(
+        discovered->front(), operation_deadline, {});
+    CHECK(opened.has_value());
+    CHECK(fake->command_count() == 3U);
+    std::this_thread::sleep_until(operation_deadline);
+
+    PrimitiveService service(*opened->session);
+    auto late = service.getvar("product");
+    CHECK(!late.has_value());
+    CHECK(late.error().code == PrimitiveErrorCode::Timeout);
+    CHECK(late.error().outbound_certainty ==
+          TransferCertainty::NotTransferred);
+    CHECK(fake->command_count() == 3U);
+    opened->session.reset();
     adapter->reset();
     runtime->stop();
 }
@@ -1233,6 +1365,8 @@ int main() {
     try {
         test_cancellable_passive_enumeration();
         test_discovery_open_probe_and_ownership();
+        test_preflight_session_retains_absolute_deadline_after_probe();
+        test_reconnect_replacement_retains_absolute_deadline();
         test_failed_discovery_does_not_invalidate_another_open_capability();
         test_discovery_open_capabilities_are_attempt_local_and_one_shot();
         test_each_discovered_device_has_an_independent_open_capability();

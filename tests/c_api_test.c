@@ -14,26 +14,22 @@
     }                                                                           \
   } while (0)
 
-#define CHECK_LEGACY_INIT_BOUND(initializer, type, legacy_size)                \
+#define CHECK_CURRENT_INIT_DESIGNATORS(initializer, type)                     \
   do {                                                                         \
-    _Alignas(type) unsigned char storage[(legacy_size) + 16U];                 \
-    uint32_t initialized_size = 0U;                                            \
-    uint32_t initialized_version = 0U;                                         \
-    size_t canary_index = 0U;                                                  \
-    memset(storage, 0xa5, sizeof(storage));                                    \
-    /* Parenthesizing bypasses the function-like source redirect and calls */  \
-    /* the legacy ABI symbol, as an old binary or dlsym caller would. */        \
-    (initializer)((type *)(void *)storage);                                    \
-    memcpy(&initialized_size, storage, sizeof(initialized_size));              \
-    memcpy(&initialized_version, storage + sizeof(uint32_t),                   \
-           sizeof(initialized_version));                                       \
-    CHECK(initialized_size == (legacy_size));                                  \
-    CHECK(initialized_version == KB_API_VERSION);                              \
-    for (canary_index = (legacy_size); canary_index < sizeof(storage);         \
-         ++canary_index) {                                                     \
-      CHECK(storage[canary_index] == 0xa5U);                                   \
-    }                                                                          \
+    type pointer_value;                                                        \
+    type parenthesized_value;                                                  \
+    void(KB_CALL *initializer_pointer)(type *) = (initializer);                \
+    memset(&pointer_value, 0xa5, sizeof(pointer_value));                       \
+    memset(&parenthesized_value, 0xa5, sizeof(parenthesized_value));           \
+    initializer_pointer(&pointer_value);                                       \
+    (initializer)(&parenthesized_value);                                       \
+    CHECK(pointer_value.struct_size == sizeof(type));                          \
+    CHECK(pointer_value.api_version == KB_API_VERSION);                        \
+    CHECK(parenthesized_value.struct_size == sizeof(type));                    \
+    CHECK(parenthesized_value.api_version == KB_API_VERSION);                  \
   } while (0)
+
+int kb_test_legacy_initializer_bounds(void);
 
 struct update_progress_probe {
   int calls;
@@ -142,20 +138,17 @@ int main(void) {
   CHECK(job_options.api_version == KB_API_VERSION);
   CHECK(job_options.timeout_ms == KB_WAIT_INFINITE);
 
-  CHECK_LEGACY_INIT_BOUND(kb_context_options_init, kb_context_options_t,
-                          KB_CONTEXT_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_flash_options_init, kb_flash_options_t,
-                          KB_FLASH_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_legacy_boot_options_init,
-                          kb_legacy_boot_options_t,
-                          KB_LEGACY_BOOT_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_update_options_init, kb_update_options_t,
-                          KB_UPDATE_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_command_options_init, kb_command_options_t,
-                          KB_COMMAND_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_job_options_init, kb_job_options_t,
-                          KB_JOB_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_version_init, kb_version_t, KB_VERSION_V1_SIZE);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_context_options_init,
+                                 kb_context_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_flash_options_init, kb_flash_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_legacy_boot_options_init,
+                                 kb_legacy_boot_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_update_options_init, kb_update_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_command_options_init,
+                                 kb_command_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_job_options_init, kb_job_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_version_init, kb_version_t);
+  CHECK(kb_test_legacy_initializer_bounds() == 0);
 
   kb_error_t *error = NULL;
   CHECK(kb_context_create(NULL, NULL, &error) == KB_E_INVALID_ARGUMENT);

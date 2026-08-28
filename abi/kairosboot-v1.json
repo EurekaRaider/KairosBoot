@@ -60,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "bc8491d7b5773e3f2424d5cf52dbea53633a1aec781fda062b6017911c65674e",
+  "headerContractSha256": "6a6fe966c693c73d7f2a6cbb178c0f9d934dcaab9d8defc3cf63bdc793628fe8",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {

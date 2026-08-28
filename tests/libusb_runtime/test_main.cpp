@@ -3640,6 +3640,40 @@ void test_usb_transport_uses_process_budget_by_default() {
     runtime->stop();
 }
 
+void test_usb_transport_keeps_one_absolute_deadline_across_operations() {
+    auto fake = std::make_shared<FakeLibusb>();
+    auto runtime = create_runtime(fake);
+    const auto snapshot = matching_device(runtime);
+    UsbFastbootTransportOptions options;
+    options.data_ring = TransferRingConfig{4, 2};
+    options.buffer_budget = std::make_shared<BufferBudget>(8);
+    const auto operation_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds{200};
+    options.absolute_deadline = operation_deadline;
+
+    auto opened = UsbFastbootTransport::open(runtime, snapshot, options);
+    KB_CHECK(opened.has_value());
+    auto transport = std::move(*opened);
+    const auto bytes = payload(4);
+    auto first_write = std::async(std::launch::async, [&] {
+        return transport->write(*bytes, std::chrono::seconds{10});
+    });
+    wait_for_submissions(*fake, 1);
+    fake->complete_submission(0, LIBUSB_TRANSFER_COMPLETED, 4);
+    const auto first = first_write.get();
+    KB_CHECK(first.status == TransportStatus::Ok);
+
+    std::this_thread::sleep_until(operation_deadline);
+    const auto submission_count = fake->submission_count();
+    const auto second =
+        transport->write(*bytes, std::chrono::seconds{10});
+    KB_CHECK(second.status == TransportStatus::Timeout);
+    KB_CHECK(second.certainty == TransferCertainty::NotTransferred);
+    KB_CHECK(fake->submission_count() == submission_count);
+    KB_CHECK(!transport->is_open());
+    runtime->stop();
+}
+
 void test_usb_data_transport_exposes_internal_telemetry_snapshot() {
     auto fake = std::make_shared<FakeLibusb>();
     auto runtime = create_runtime(fake);
@@ -4478,6 +4512,8 @@ int main() {
         {"explicit zero packet contract", test_explicit_zero_packet_contract},
         {"USB default process budget",
          test_usb_transport_uses_process_budget_by_default},
+        {"USB absolute deadline spans multiple operations",
+         test_usb_transport_keeps_one_absolute_deadline_across_operations},
         {"USB DATA internal telemetry snapshot",
          test_usb_data_transport_exposes_internal_telemetry_snapshot},
         {"USB logical read ZLP, short packet, overflow",

@@ -464,7 +464,13 @@ public:
             });
         }
         auto transport = transport::UsbFastbootTransport::adopt_verified(
-            std::move(*verified), options_);
+            std::move(*verified), [&] {
+                auto options = options_;
+                options.absolute_deadline = options.absolute_deadline.has_value()
+                    ? std::min(*options.absolute_deadline, deadline)
+                    : deadline;
+                return options;
+            }());
         if (!transport) {
             return std::unexpected(runtime_open_error(transport.error()));
         }
@@ -577,6 +583,20 @@ private:
     };
 }
 
+[[nodiscard]] protocol::TransferCertainty aggregate_probe_certainty(
+    const protocol::TransferCertainty aggregate,
+    const protocol::TransferCertainty next) noexcept {
+    if (aggregate == protocol::TransferCertainty::PartialOrUnknown ||
+        next == protocol::TransferCertainty::PartialOrUnknown) {
+        return protocol::TransferCertainty::PartialOrUnknown;
+    }
+    if (aggregate == protocol::TransferCertainty::FullyTransferred ||
+        next == protocol::TransferCertainty::FullyTransferred) {
+        return protocol::TransferCertainty::FullyTransferred;
+    }
+    return protocol::TransferCertainty::NotTransferred;
+}
+
 }  // namespace
 
 std::expected<std::unique_ptr<IDevicePreflightSessionOpener>,
@@ -627,6 +647,8 @@ FastbootDevicePreflightProbe::probe(
     protocol::FastbootSession& session,
     const DevicePreflightTimePoint deadline,
     const std::stop_token cancellation) {
+    auto attempt_certainty = protocol::TransferCertainty::NotTransferred;
+    bool probe_in_flight = false;
     try {
         if (cancellation.stop_requested()) {
             return std::unexpected(DevicePreflightProbeError{
@@ -643,18 +665,25 @@ FastbootDevicePreflightProbe::probe(
 
         ProbeInterruptionGuard guard(session, deadline, cancellation);
         fastboot::PrimitiveService service(session);
+        probe_in_flight = true;
         auto product = service.getvar("product");
+        probe_in_flight = false;
         if (!product) {
-            return std::unexpected(primitive_probe_error(
+            auto error = primitive_probe_error(
                 std::move(product.error()),
                 guard.deadline_fired(),
-                cancellation));
+                cancellation);
+            error.outbound_certainty = aggregate_probe_certainty(
+                attempt_certainty, error.outbound_certainty);
+            return std::unexpected(std::move(error));
         }
+        attempt_certainty = aggregate_probe_certainty(
+            attempt_certainty, product->outbound_certainty);
         if (cancellation.stop_requested()) {
             return std::unexpected(DevicePreflightProbeError{
                 .code = DevicePreflightProbeErrorCode::Cancelled,
                 .message = "Fastboot identity probe was cancelled",
-                .outbound_certainty = product->outbound_certainty,
+                .outbound_certainty = attempt_certainty,
             });
         }
         if (guard.deadline_fired() ||
@@ -662,34 +691,38 @@ FastbootDevicePreflightProbe::probe(
             return std::unexpected(DevicePreflightProbeError{
                 .code = DevicePreflightProbeErrorCode::DeadlineExceeded,
                 .message = "Fastboot identity probe deadline expired",
-                .outbound_certainty = product->outbound_certainty,
+                .outbound_certainty = attempt_certainty,
             });
         }
         if (product->terminal.payload.empty()) {
             return std::unexpected(DevicePreflightProbeError{
                 .code = DevicePreflightProbeErrorCode::InvalidResponse,
                 .message = "Fastboot getvar:product returned an empty identity",
-                .outbound_certainty = product->outbound_certainty,
+                .outbound_certainty = attempt_certainty,
             });
         }
 
+        probe_in_flight = true;
         auto mode = service.getvar("is-userspace");
+        probe_in_flight = false;
         auto observed_mode = fastboot::FastbootUsbMode::Bootloader;
-        protocol::TransferCertainty mode_certainty{
-            protocol::TransferCertainty::FullyTransferred};
         if (!mode) {
-            mode_certainty = mode.error().outbound_certainty;
+            attempt_certainty = aggregate_probe_certainty(
+                attempt_certainty, mode.error().outbound_certainty);
             if (mode.error().code != fastboot::PrimitiveErrorCode::DeviceFail) {
-                return std::unexpected(primitive_probe_error(
+                auto error = primitive_probe_error(
                     std::move(mode.error()),
                     guard.deadline_fired(),
-                    cancellation));
+                    cancellation);
+                error.outbound_certainty = attempt_certainty;
+                return std::unexpected(std::move(error));
             }
             // Frozen AOSP compatibility: an explicit FAIL for is-userspace is
             // the legacy bootloader-mode result. The query still occurred on
             // the live protocol session.
         } else {
-            mode_certainty = mode->outbound_certainty;
+            attempt_certainty = aggregate_probe_certainty(
+                attempt_certainty, mode->outbound_certainty);
             if (mode->terminal.payload == "yes") {
                 observed_mode = fastboot::FastbootUsbMode::Fastbootd;
             } else if (mode->terminal.payload != "no") {
@@ -697,7 +730,7 @@ FastbootDevicePreflightProbe::probe(
                     .code = DevicePreflightProbeErrorCode::InvalidResponse,
                     .message =
                         "Fastboot is-userspace must be exactly 'yes' or 'no'",
-                    .outbound_certainty = mode->outbound_certainty,
+                    .outbound_certainty = attempt_certainty,
                 });
             }
         }
@@ -705,7 +738,7 @@ FastbootDevicePreflightProbe::probe(
             return std::unexpected(DevicePreflightProbeError{
                 .code = DevicePreflightProbeErrorCode::Cancelled,
                 .message = "Fastboot identity probe was cancelled",
-                .outbound_certainty = mode_certainty,
+                .outbound_certainty = attempt_certainty,
             });
         }
         if (guard.deadline_fired() ||
@@ -713,7 +746,7 @@ FastbootDevicePreflightProbe::probe(
             return std::unexpected(DevicePreflightProbeError{
                 .code = DevicePreflightProbeErrorCode::DeadlineExceeded,
                 .message = "Fastboot identity probe deadline expired",
-                .outbound_certainty = mode_certainty,
+                .outbound_certainty = attempt_certainty,
             });
         }
 
@@ -728,14 +761,18 @@ FastbootDevicePreflightProbe::probe(
             .code = DevicePreflightProbeErrorCode::ResourceExhausted,
             .message = {},
             .native_code = 0,
-            .outbound_certainty = protocol::TransferCertainty::NotTransferred,
+            .outbound_certainty = probe_in_flight
+                ? protocol::TransferCertainty::PartialOrUnknown
+                : attempt_certainty,
         });
     } catch (...) {
         return std::unexpected(DevicePreflightProbeError{
             .code = DevicePreflightProbeErrorCode::UnexpectedFailure,
             .message = {},
             .native_code = 0,
-            .outbound_certainty = protocol::TransferCertainty::NotTransferred,
+            .outbound_certainty = probe_in_flight
+                ? protocol::TransferCertainty::PartialOrUnknown
+                : attempt_certainty,
         });
     }
 }

@@ -1432,6 +1432,77 @@ void built_in_probe_reads_product_and_mode_from_fastboot_wire() {
     CHECK(observer->complete());
 }
 
+class FailingSecondProbeTransport final : public ITransportSession {
+public:
+    explicit FailingSecondProbeTransport(const bool throw_on_second)
+        : throw_on_second_(throw_on_second) {}
+
+    [[nodiscard]] TransferResult write(
+        const std::span<const std::byte> bytes,
+        std::chrono::milliseconds) override {
+        ++writes_;
+        if (writes_ == 2U) {
+            if (throw_on_second_) {
+                throw std::bad_alloc{};
+            }
+            return {
+                .status = TransportStatus::Timeout,
+                .transferred = 0,
+                .certainty = TransferCertainty::NotTransferred,
+            };
+        }
+        return {.transferred = bytes.size()};
+    }
+
+    [[nodiscard]] TransferResult read(
+        const std::span<std::byte> destination,
+        std::chrono::milliseconds) override {
+        constexpr std::string_view response{"OKAYwire-product"};
+        CHECK(response.size() <= destination.size());
+        std::memcpy(destination.data(), response.data(), response.size());
+        return {.transferred = response.size()};
+    }
+
+    [[nodiscard]] TransferResult read_data(
+        std::span<std::byte>, std::chrono::milliseconds) override {
+        return {
+            .status = TransportStatus::IoError,
+            .certainty = TransferCertainty::NotTransferred,
+        };
+    }
+
+    void request_cancel() noexcept override { cancelled_ = true; }
+    void close() noexcept override { cancelled_ = true; }
+
+private:
+    bool throw_on_second_{};
+    std::size_t writes_{};
+    bool cancelled_{};
+};
+
+void built_in_probe_never_downgrades_prior_or_in_flight_bytes() {
+    {
+        FastbootSession session(
+            std::make_unique<FailingSecondProbeTransport>(false));
+        FastbootDevicePreflightProbe probe;
+        auto result = probe.probe(session, deadline(), {});
+        CHECK(!result.has_value());
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::FullyTransferred);
+    }
+    {
+        FastbootSession session(
+            std::make_unique<FailingSecondProbeTransport>(true));
+        FastbootDevicePreflightProbe probe;
+        auto result = probe.probe(session, deadline(), {});
+        CHECK(!result.has_value());
+        CHECK(result.error().code ==
+              DevicePreflightProbeErrorCode::ResourceExhausted);
+        CHECK(result.error().outbound_certainty ==
+              TransferCertainty::PartialOrUnknown);
+    }
+}
+
 class BlockingProbeTransport final : public ITransportSession {
 public:
     [[nodiscard]] TransferResult write(
@@ -1505,7 +1576,7 @@ void built_in_probe_interrupts_blocking_io_on_deadline_and_stop() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 20U> tests{
+    const std::array<Test, 21U> tests{
         Test{"selectors are exact, deduplicated, and ignore unrelated devices",
              &selectors_are_exact_deduplicated_and_ignore_unrelated_devices},
         Test{"unmatched invalid and duplicate devices are ignored",
@@ -1544,6 +1615,8 @@ int main() {
              &prepared_gate_is_plan_bound_and_sessions_are_consumed_once},
         Test{"built-in probe reads product and mode from Fastboot wire",
              &built_in_probe_reads_product_and_mode_from_fastboot_wire},
+        Test{"built-in probe preserves aggregate outbound certainty",
+             &built_in_probe_never_downgrades_prior_or_in_flight_bytes},
         Test{"built-in probe interrupts blocking I/O on deadline and stop",
              &built_in_probe_interrupts_blocking_io_on_deadline_and_stop},
     };
