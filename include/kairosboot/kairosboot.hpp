@@ -105,6 +105,10 @@ struct UpdateOptions {
   // Whole-operation timeout. milliseconds::max() selects no deadline.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
   bool wipe{};
+  bool skip_reboot{};
+  bool skip_secondary{};
+  bool exclude_dynamic_partitions{};
+  bool disable_fastboot_info{};
   std::function<ProgressAction(const Progress &)> progress;
 };
 
@@ -322,6 +326,11 @@ prepare_update_options(const UpdateOptions &options) {
   kb_update_options_init(&result.native);
   result.native.timeout_ms = *timeout;
   result.native.wipe = options.wipe ? 1 : 0;
+  result.native.skip_reboot = options.skip_reboot ? 1 : 0;
+  result.native.skip_secondary = options.skip_secondary ? 1 : 0;
+  result.native.exclude_dynamic_partitions =
+      options.exclude_dynamic_partitions ? 1 : 0;
+  result.native.disable_fastboot_info = options.disable_fastboot_info ? 1 : 0;
   if (options.progress) {
     result.callback_state =
         std::make_shared<ProgressCallbackState>(ProgressCallbackState{

@@ -185,6 +185,15 @@ typedef struct kb_update_options {
    * immutable image payload is being transferred. */
   kb_progress_callback_t progress_callback;
   void *progress_user_data;
+  /* Skip the final system reboot normally appended by update/flashall. */
+  int32_t skip_reboot;
+  /* Do not execute flash tasks that target a secondary slot. */
+  int32_t skip_secondary;
+  /* Execute only flash tasks proven to target static partitions, followed by
+   * the optional final reboot. */
+  int32_t exclude_dynamic_partitions;
+  /* Ignore fastboot-info.txt and build the frozen AOSP image-list plan. */
+  int32_t disable_fastboot_info;
 } kb_update_options_t;
 
 typedef struct kb_command_options {

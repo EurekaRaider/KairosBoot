@@ -38,6 +38,10 @@ typedef struct kb_update_options {
   int32_t wipe;
   kb_progress_callback_t progress_callback;
   void *progress_user_data;
+  int32_t skip_reboot;
+  int32_t skip_secondary;
+  int32_t exclude_dynamic_partitions;
+  int32_t disable_fastboot_info;
 } kb_update_options_t;
 
 typedef struct kb_flash_options {
@@ -141,6 +145,13 @@ static int valid_options(const kb_update_options_t *options) {
   return options != NULL &&
          options->struct_size == (uint32_t)sizeof(*options) &&
          options->api_version == 1 &&
+         (options->wipe == 0 || options->wipe == 1) &&
+         (options->skip_reboot == 0 || options->skip_reboot == 1) &&
+         (options->skip_secondary == 0 || options->skip_secondary == 1) &&
+         (options->exclude_dynamic_partitions == 0 ||
+          options->exclude_dynamic_partitions == 1) &&
+         (options->disable_fastboot_info == 0 ||
+          options->disable_fastboot_info == 1) &&
          ((options->progress_callback == NULL &&
            options->progress_user_data == NULL) ||
           (options->progress_callback != NULL &&
@@ -642,6 +653,12 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
       record_failure(31);
       return KB_E_INVALID_ARGUMENT;
     }
+    if (options->skip_reboot != 1 || options->skip_secondary != 1 ||
+        options->exclude_dynamic_partitions != 1 ||
+        options->disable_fastboot_info != 1) {
+      record_failure(37);
+      return KB_E_INVALID_ARGUMENT;
+    }
   } else if (same_string(package_path, "cancel.zip")) {
     kind = 2;
     if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
@@ -653,7 +670,10 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
     kind = 3;
     if (device_selector != NULL || options->timeout_ms != UINT32_MAX ||
         options->wipe != 0 || options->progress_callback != NULL ||
-        options->progress_user_data != NULL) {
+        options->progress_user_data != NULL || options->skip_reboot != 0 ||
+        options->skip_secondary != 0 ||
+        options->exclude_dynamic_partitions != 0 ||
+        options->disable_fastboot_info != 0) {
       record_failure(36);
       return KB_E_INVALID_ARGUMENT;
     }

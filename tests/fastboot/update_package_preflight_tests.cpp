@@ -45,6 +45,7 @@ using kairosboot::fastboot::UpdateExecutorOptions;
 using kairosboot::fastboot::UpdateOperationContext;
 using kairosboot::fastboot::UpdatePackagePreflightErrorKind;
 using kairosboot::fastboot::UpdatePackagePreflightLimits;
+using kairosboot::fastboot::UpdatePackagePolicy;
 using kairosboot::fastboot::UpdateSuperPreparationState;
 using kairosboot::fastboot::UpdateTaskKind;
 using kairosboot::image::ArtifactSourceErrorKind;
@@ -1327,6 +1328,56 @@ void cancellation_precedes_manifest_and_artifact_work() {
     CHECK(result.error().kind == UpdatePackagePreflightErrorKind::Cancelled);
 }
 
+void update_policy_switches_change_the_immutable_plan() {
+    TemporaryDirectory temporary;
+    const auto package = temporary.path() / "policy";
+    create_directory_package(
+        package, "",
+        "flash boot boot.img\n"
+        "flash --slot-other vendor vendor.img\n"
+        "reboot fastboot\n"
+        "update-super\n"
+        "erase cache\n");
+    write_text(package / "boot.img", "boot");
+    write_text(package / "vendor.img", "vendor");
+
+    ArtifactSourceResolver resolver;
+    auto prepared = preflight_update_package(
+        resolver, package, false,
+        UpdatePackagePolicy{
+            .append_final_reboot = true,
+            .skip_secondary = true,
+            .exclude_dynamic_partitions = true,
+        },
+        {}, std::chrono::steady_clock::time_point::max());
+    CHECK(prepared);
+    CHECK(prepared->plan.tasks.size() == 2U);
+    CHECK(prepared->plan.tasks[0].kind == UpdateTaskKind::Flash);
+    CHECK(prepared->plan.tasks[0].partition == "boot");
+    CHECK(prepared->plan.tasks[0].exclude_if_dynamic);
+    CHECK(prepared->plan.tasks[1].kind == UpdateTaskKind::Reboot);
+    CHECK(!prepared->plan.tasks[1].exclude_if_dynamic);
+    CHECK(prepared->artifacts.size() == 1U);
+    CHECK(prepared->artifacts[0].name == "boot.img");
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::NotRequired);
+
+    const auto fallback = temporary.path() / "disabled-fastboot-info";
+    create_directory_package(fallback, "", "not-a-valid-command\n");
+    write_text(fallback / "boot.img", "boot");
+    write_text(fallback / "system.img", "system");
+    ArtifactSourceResolver fallback_resolver;
+    auto disabled = preflight_update_package(
+        fallback_resolver, fallback, false,
+        UpdatePackagePolicy{.disable_fastboot_info = true}, {},
+        std::chrono::steady_clock::time_point::max());
+    CHECK(disabled);
+    CHECK(disabled->plan.tasks.size() == 2U);
+    CHECK(disabled->plan.tasks[0].partition == "boot");
+    CHECK(disabled->plan.tasks[1].partition == "system");
+    CHECK(disabled->artifacts.size() == 2U);
+}
+
 void wipe_super_preflight_binds_one_immutable_wipe_transaction() {
     TemporaryDirectory temporary;
     const auto image = temporary.path() / "custom-empty.img";
@@ -1414,6 +1465,8 @@ int main() {
              crc_missing_and_budget_failures_publish_no_prepared_plan},
         Test{"preflight cancellation",
              cancellation_precedes_manifest_and_artifact_work},
+        Test{"update policy switches",
+             update_policy_switches_change_the_immutable_plan},
         Test{"wipe-super immutable preflight",
              wipe_super_preflight_binds_one_immutable_wipe_transaction},
     };

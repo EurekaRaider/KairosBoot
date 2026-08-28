@@ -40,6 +40,13 @@ struct UpdatePackagePreflightLimits final {
     std::uint64_t maximum_total_artifact_bytes{512ULL * 1024ULL * 1024ULL * 1024ULL};
 };
 
+struct UpdatePackagePolicy final {
+    bool append_final_reboot{};
+    bool skip_secondary{};
+    bool exclude_dynamic_partitions{};
+    bool disable_fastboot_info{};
+};
+
 struct PreparedUpdateArtifact final {
     std::string name{};
     std::shared_ptr<const image::ResolvedArtifact> resolved{};
@@ -122,6 +129,19 @@ preflight_update_package(
     image::ArtifactSourceResolver& resolver,
     const std::filesystem::path& package_directory_or_zip,
     bool wants_wipe,
+    const UpdatePackagePreflightLimits& limits,
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token cancellation = {});
+
+// Applies the locked AOSP update/flashall policy switches while constructing
+// the immutable plan. Dynamic partition exclusion is completed by the
+// executor before any destructive task is prepared.
+[[nodiscard]] std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_update_package(
+    image::ArtifactSourceResolver& resolver,
+    const std::filesystem::path& package_directory_or_zip,
+    bool wants_wipe,
+    const UpdatePackagePolicy& policy,
     const UpdatePackagePreflightLimits& limits,
     std::chrono::steady_clock::time_point deadline,
     std::stop_token cancellation = {});

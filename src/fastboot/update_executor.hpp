@@ -126,6 +126,7 @@ enum class UpdateExecutionEventKind : std::uint8_t {
     ValidationCompleted,
     TaskStarted,
     TaskCompleted,
+    TaskSkipped,
     TaskFailed,
     ExecutionCompleted,
 };

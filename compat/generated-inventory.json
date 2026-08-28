@@ -1612,16 +1612,29 @@
       "status": "intentional-deviation"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.disable-fastboot-info",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--disable-fastboot-info",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -1684,16 +1697,29 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.exclude-dynamic-partitions",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--exclude-dynamic-partitions",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -1886,28 +1912,54 @@
       "status": "missing"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.skip-reboot",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--skip-reboot",
-      "status": "missing"
+      "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "--skip-reboot",
+        "--skip-secondary",
+        "--exclude-dynamic-partitions",
+        "--disable-fastboot-info"
+      ],
+      "evidence": [
+        "tests/fastboot/update_package_preflight_tests.cpp",
+        "tests/fastboot/update_executor_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.skip-secondary",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--skip-secondary",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -2164,13 +2216,11 @@
     "image.boot",
     "image.system",
     "option.a",
-    "option.disable-fastboot-info",
     "option.disable-super-optimization",
     "option.disable-verification",
     "option.disable-verity",
     "option.dtb",
     "option.dtb-offset",
-    "option.exclude-dynamic-partitions",
     "option.force",
     "option.fs-options",
     "option.header-version",
@@ -2178,8 +2228,6 @@
     "option.os-patch-level",
     "option.os-version",
     "option.set-active",
-    "option.skip-reboot",
-    "option.skip-secondary",
     "option.slot",
     "option.sparse-limit",
     "option.vendor-id",
@@ -2219,9 +2267,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 8,
+        "implemented": 12,
         "intentional-deviation": 4,
-        "missing": 21,
+        "missing": 17,
         "partial": 0
       },
       "protocol": {
@@ -2238,9 +2286,9 @@
       }
     },
     "byStatus": {
-      "implemented": 41,
+      "implemented": 45,
       "intentional-deviation": 15,
-      "missing": 27,
+      "missing": 23,
       "partial": 36
     },
     "totalEntries": 119

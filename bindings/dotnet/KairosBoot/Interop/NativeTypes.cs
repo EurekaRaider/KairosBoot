@@ -78,6 +78,10 @@ internal struct NativeUpdateOptions
     internal int Wipe;
     internal IntPtr ProgressCallback;
     internal IntPtr ProgressUserData;
+    internal int SkipReboot;
+    internal int SkipSecondary;
+    internal int ExcludeDynamicPartitions;
+    internal int DisableFastbootInfo;
 }
 
 [StructLayout(LayoutKind.Sequential)]

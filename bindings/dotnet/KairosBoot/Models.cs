@@ -226,15 +226,33 @@ public readonly struct UpdateOptions
     /// <param name="wipe">
     /// Whether wipe-conditioned package tasks may erase user data.
     /// </param>
+    /// <param name="skipReboot">Whether to omit the final system reboot.</param>
+    /// <param name="skipSecondary">Whether to omit secondary-slot flashes.</param>
+    /// <param name="excludeDynamicPartitions">
+    /// Whether to exclude partitions reported as logical by the device.
+    /// </param>
+    /// <param name="disableFastbootInfo">
+    /// Whether to use the frozen image-list plan instead of fastboot-info.txt.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
-    public UpdateOptions(TimeSpan timeout, bool wipe = false)
+    public UpdateOptions(
+        TimeSpan timeout,
+        bool wipe = false,
+        bool skipReboot = false,
+        bool skipSecondary = false,
+        bool excludeDynamicPartitions = false,
+        bool disableFastbootInfo = false)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
         Wipe = wipe;
+        SkipReboot = skipReboot;
+        SkipSecondary = skipSecondary;
+        ExcludeDynamicPartitions = excludeDynamicPartitions;
+        DisableFastbootInfo = disableFastbootInfo;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -247,6 +265,18 @@ public readonly struct UpdateOptions
 
     /// <summary>Gets whether wipe-conditioned package tasks may erase user data.</summary>
     public bool Wipe { get; }
+
+    /// <summary>Gets whether the final system reboot is omitted.</summary>
+    public bool SkipReboot { get; }
+
+    /// <summary>Gets whether secondary-slot flash tasks are omitted.</summary>
+    public bool SkipSecondary { get; }
+
+    /// <summary>Gets whether logical partitions are excluded.</summary>
+    public bool ExcludeDynamicPartitions { get; }
+
+    /// <summary>Gets whether the frozen image-list plan replaces fastboot-info.txt.</summary>
+    public bool DisableFastbootInfo { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds

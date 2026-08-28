@@ -296,18 +296,28 @@ expect_json_parse_error(
 expect_json_parse_error(
   update_wipe_without_package "update requires <package>" update --wipe)
 expect_json_parse_error(
-  update_unknown_option "update supports only --wipe after <package>" update
+  update_unknown_option
+  "update supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions and --disable-fastboot-info after <package>"
+  update
   package.zip --unknown)
 expect_json_parse_error(
   update_duplicate_wipe "update option --wipe may only be specified once"
   update package.zip --wipe --wipe)
 expect_json_parse_error(
-  flashall_operand "flashall supports only --wipe" flashall images)
+  flashall_operand
+  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions and --disable-fastboot-info"
+  flashall images)
 expect_json_parse_error(
-  flashall_unknown_option "flashall supports only --wipe" flashall --unknown)
+  flashall_unknown_option
+  "flashall supports only --wipe, --skip-reboot, --skip-secondary, --exclude-dynamic-partitions and --disable-fastboot-info"
+  flashall --unknown)
 expect_json_parse_error(
   flashall_duplicate_wipe "flashall option --wipe may only be specified once"
   flashall --wipe --wipe)
+expect_json_parse_error(
+  update_duplicate_policy
+  "update option --skip-reboot may only be specified once"
+  update package.zip --skip-reboot --skip-reboot)
 expect_json_parse_error(
   receive_limit_update "option --max-receive-bytes is not valid for update"
   --max-receive-bytes 1 update package.zip)

@@ -319,7 +319,23 @@ internal static class Program
                 (IntPtr.Size == 8 ? 24 : 20),
             "update options callback state offset");
         Check(
-            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 32 : 24),
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SkipReboot)).ToInt32() ==
+                (IntPtr.Size == 8 ? 32 : 24),
+            "update options skip reboot offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SkipSecondary)).ToInt32() ==
+                (IntPtr.Size == 8 ? 36 : 28),
+            "update options skip secondary offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ExcludeDynamicPartitions)).ToInt32() ==
+                (IntPtr.Size == 8 ? 40 : 32),
+            "update options exclude dynamic offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.DisableFastbootInfo)).ToInt32() ==
+                (IntPtr.Size == 8 ? 44 : 36),
+            "update options disable fastboot-info offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 48 : 40),
             "update options native size");
         Check(
             NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
@@ -419,13 +435,27 @@ internal static class Program
             UpdateOptions.Default.Timeout == Timeout.InfiniteTimeSpan,
             "default update timeout");
         Check(!UpdateOptions.Default.Wipe, "default update preserves data");
+        Check(!UpdateOptions.Default.SkipReboot, "default update reboots");
+        Check(!UpdateOptions.Default.SkipSecondary, "default update flashes secondary");
+        Check(!UpdateOptions.Default.ExcludeDynamicPartitions, "default update includes dynamic");
+        Check(!UpdateOptions.Default.DisableFastbootInfo, "default update uses fastboot-info");
         Check(
             default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct update timeout");
 
-        var infiniteWipe = new UpdateOptions(Timeout.InfiniteTimeSpan, wipe: true);
+        var infiniteWipe = new UpdateOptions(
+            Timeout.InfiniteTimeSpan,
+            wipe: true,
+            skipReboot: true,
+            skipSecondary: true,
+            excludeDynamicPartitions: true,
+            disableFastbootInfo: true);
         Check(infiniteWipe.Timeout == Timeout.InfiniteTimeSpan, "explicit infinite update timeout");
         Check(infiniteWipe.Wipe, "explicit update wipe");
+        Check(infiniteWipe.SkipReboot, "explicit update skip reboot");
+        Check(infiniteWipe.SkipSecondary, "explicit update skip secondary");
+        Check(infiniteWipe.ExcludeDynamicPartitions, "explicit update excludes dynamic");
+        Check(infiniteWipe.DisableFastbootInfo, "explicit update disables fastboot-info");
 
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
         Check(new UpdateOptions(fractional).Timeout == fractional, "finite update timeout");
@@ -846,7 +876,13 @@ internal static class Program
             var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
             await context.UpdatePackageAsync(
                 "images/升级.zip",
-                new UpdateOptions(fractional, wipe: true),
+                new UpdateOptions(
+                    fractional,
+                    wipe: true,
+                    skipReboot: true,
+                    skipSecondary: true,
+                    excludeDynamicPartitions: true,
+                    disableFastbootInfo: true),
                 "usb:serial:device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);

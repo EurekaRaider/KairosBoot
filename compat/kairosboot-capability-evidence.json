@@ -238,7 +238,15 @@
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
     },
     {
-      "ids": ["option.a", "option.help-short", "option.sparse-limit", "option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.exclude-dynamic-partitions", "option.disable-fastboot-info", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.set-active", "option.skip-reboot", "option.skip-secondary", "option.slot", "option.dtb", "option.dtb-offset", "option.verbose"],
+      "ids": ["option.skip-reboot", "option.skip-secondary", "option.exclude-dynamic-partitions", "option.disable-fastboot-info"],
+      "status": "implemented",
+      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["--skip-reboot", "--skip-secondary", "--exclude-dynamic-partitions", "--disable-fastboot-info"],
+      "evidence": ["tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/cli/scripted_cli_test.py", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared."
+    },
+    {
+      "ids": ["option.a", "option.help-short", "option.sparse-limit", "option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.set-active", "option.slot", "option.dtb", "option.dtb-offset", "option.verbose"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."

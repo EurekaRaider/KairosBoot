@@ -273,6 +273,10 @@ struct Invocation {
   std::string filesystem_type;
   std::uint64_t format_partition_size{};
   bool wipe{};
+  bool skip_reboot{};
+  bool skip_secondary{};
+  bool exclude_dynamic_partitions{};
+  bool disable_fastboot_info{};
   bool plan_digest{};
 };
 
@@ -751,7 +755,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     const bool is_flashall = command == "flashall";
     result.kind = is_flashall ? CommandKind::Flashall : CommandKind::Update;
     if (!is_flashall) {
-      if (index >= argc || std::string_view{argv[index]} == "--wipe") {
+      if (index >= argc || std::string_view{argv[index]}.starts_with("--")) {
         return error("update requires <package>");
       }
       result.first = argv[index++];
@@ -761,16 +765,28 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     while (index < argc) {
       const std::string_view option{argv[index++]};
-      if (option != "--wipe") {
+      bool *flag = nullptr;
+      if (option == "--wipe") {
+        flag = &result.wipe;
+      } else if (option == "--skip-reboot") {
+        flag = &result.skip_reboot;
+      } else if (option == "--skip-secondary") {
+        flag = &result.skip_secondary;
+      } else if (option == "--exclude-dynamic-partitions") {
+        flag = &result.exclude_dynamic_partitions;
+      } else if (option == "--disable-fastboot-info") {
+        flag = &result.disable_fastboot_info;
+      } else {
         return error(std::string{command} +
-                     (is_flashall ? " supports only --wipe"
-                                  : " supports only --wipe after <package>"));
+                     " supports only --wipe, --skip-reboot, --skip-secondary, "
+                     "--exclude-dynamic-partitions and --disable-fastboot-info" +
+                     (is_flashall ? "" : " after <package>"));
       }
-      if (result.wipe) {
-        return error(std::string{command} +
-                     " option --wipe may only be specified once");
+      if (*flag) {
+        return error(std::string{command} + " option " + std::string{option} +
+                     " may only be specified once");
       }
-      result.wipe = true;
+      *flag = true;
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for " +
@@ -2221,6 +2237,11 @@ int update_package(const Invocation &invocation) {
   UpdateProgressReporter progress{invocation.global.json, command};
   auto options = update_options(invocation.global);
   options.wipe = invocation.wipe;
+  options.skip_reboot = invocation.skip_reboot;
+  options.skip_secondary = invocation.skip_secondary;
+  options.exclude_dynamic_partitions =
+      invocation.exclude_dynamic_partitions;
+  options.disable_fastboot_info = invocation.disable_fastboot_info;
   options.progress = [&progress](const kairosboot::Progress &value) {
     return progress(value);
   };
@@ -2238,7 +2259,16 @@ int update_package(const Invocation &invocation) {
     std::cout << "{\"ok\":true,\"command\":\"" << command
               << "\",\"package\":\"" << json_escape(package)
               << "\",\"wipe\":"
-              << (invocation.wipe ? "true" : "false") << "}\n";
+              << (invocation.wipe ? "true" : "false")
+              << ",\"skipReboot\":"
+              << (invocation.skip_reboot ? "true" : "false")
+              << ",\"skipSecondary\":"
+              << (invocation.skip_secondary ? "true" : "false")
+              << ",\"excludeDynamicPartitions\":"
+              << (invocation.exclude_dynamic_partitions ? "true" : "false")
+              << ",\"disableFastbootInfo\":"
+              << (invocation.disable_fastboot_info ? "true" : "false")
+              << "}\n";
   } else {
     std::cout << (invocation.kind == CommandKind::Flashall
                       ? "Flashed all from "
@@ -2483,8 +2513,12 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] flash:raw <partition> <kernel> "
                "[ramdisk [second]]\n"
                "  kairosboot [global options] signature <file>\n"
-               "  kairosboot [global options] update <package> [--wipe]\n"
-               "  kairosboot [global options] flashall [--wipe]\n"
+               "  kairosboot [global options] update <package> [--wipe] "
+               "[--skip-reboot] [--skip-secondary] "
+               "[--exclude-dynamic-partitions] [--disable-fastboot-info]\n"
+               "  kairosboot [global options] flashall [--wipe] "
+               "[--skip-reboot] [--skip-secondary] "
+               "[--exclude-dynamic-partitions] [--disable-fastboot-info]\n"
                "  kairosboot [global options] boot <kernel-or-image> "
                "[ramdisk [second]]\n"
                "  kairosboot [--json] make-boot-image <output> <kernel> "

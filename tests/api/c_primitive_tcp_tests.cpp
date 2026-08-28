@@ -1296,6 +1296,7 @@ void run_contract() {
   std::vector<std::uint64_t> update_watermarks;
   kb_update_options_t update_options;
   kb_update_options_init(&update_options);
+  update_options.skip_reboot = 1;
   update_options.progress_callback = record_progress;
   update_options.progress_user_data = &update_watermarks;
   const auto package_path = update_package.path().string();
@@ -1338,6 +1339,7 @@ void run_contract() {
   const auto wipe_path = wipe_package.path().string();
   kb_update_options_init(&update_options);
   update_options.wipe = 1;
+  update_options.skip_reboot = 1;
   CHECK(kb_update_package(context, selector.c_str(), wipe_path.c_str(),
                           &update_options, &error) == KB_OK);
   CHECK(error == nullptr);

@@ -1405,6 +1405,12 @@ public sealed partial class Context : IDisposable
             NativeMethods.UpdateOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.Wipe = options.Wipe ? 1 : 0;
+            nativeOptions.SkipReboot = options.SkipReboot ? 1 : 0;
+            nativeOptions.SkipSecondary = options.SkipSecondary ? 1 : 0;
+            nativeOptions.ExcludeDynamicPartitions =
+                options.ExcludeDynamicPartitions ? 1 : 0;
+            nativeOptions.DisableFastbootInfo =
+                options.DisableFastbootInfo ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 
@@ -1465,6 +1471,12 @@ public sealed partial class Context : IDisposable
             NativeMethods.UpdateOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
             nativeOptions.Wipe = 1;
+            nativeOptions.SkipReboot = options.SkipReboot ? 1 : 0;
+            nativeOptions.SkipSecondary = options.SkipSecondary ? 1 : 0;
+            nativeOptions.ExcludeDynamicPartitions =
+                options.ExcludeDynamicPartitions ? 1 : 0;
+            nativeOptions.DisableFastbootInfo =
+                options.DisableFastbootInfo ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
 

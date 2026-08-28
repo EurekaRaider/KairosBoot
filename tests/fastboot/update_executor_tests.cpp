@@ -1051,6 +1051,48 @@ void actor_exceptions_and_empty_plans_are_structured() {
     CHECK(empty_result->trace[3].kind == UpdateExecutionEventKind::ExecutionCompleted);
 }
 
+void dynamic_exclusion_is_resolved_before_any_destructive_task() {
+    auto boot = flash_task("boot", "boot.img", 100U);
+    boot.exclude_if_dynamic = true;
+    auto system = flash_task("system", "system.img", 101U);
+    system.exclude_if_dynamic = true;
+    std::vector<PlannedUpdateTask> tasks;
+    tasks.push_back(std::move(boot));
+    tasks.push_back(std::move(system));
+    tasks.push_back(reboot_task(PlannedRebootTarget::System, 102U));
+
+    std::vector<PreparedUpdateArtifact> artifacts;
+    artifacts.push_back(make_artifact("boot.img"));
+    artifacts.push_back(make_artifact("system.img"));
+    auto prepared = make_package({}, std::move(tasks), std::move(artifacts));
+
+    ScriptedUpdateDevice device;
+    device.variables = {
+        {"is-logical:boot", "no"},
+        {"is-logical:system", "yes"},
+    };
+    auto result = execute_prepared_update(prepared, device);
+    CHECK(result);
+    CHECK(result->completed_tasks == 3U);
+    CHECK(device.getvar_calls == std::vector<std::string>({
+                                     "is-logical:boot",
+                                     "is-logical:system",
+                                 }));
+    CHECK(device.prepare_calls == std::vector<std::string>({
+                                      "flash:boot:boot.img:default:no-vbmeta",
+                                      "reboot:0",
+                                  }));
+    CHECK(device.task_calls == device.prepare_calls);
+    const auto skipped = std::ranges::find_if(
+        result->trace, [](const auto& event) {
+            return event.kind == UpdateExecutionEventKind::TaskSkipped;
+        });
+    CHECK(skipped != result->trace.end());
+    CHECK(skipped->task_index == 1U);
+    CHECK(skipped->name == "flash:system:system.img");
+    CHECK(skipped->value == "logical");
+}
+
 struct Test final {
     std::string_view name;
     void (*run)();
@@ -1091,6 +1133,8 @@ int main() {
              device_error_fidelity_survives_task_failed_observer_exception},
         Test{"actor exceptions and empty plan",
              actor_exceptions_and_empty_plans_are_structured},
+        Test{"dynamic exclusion policy",
+             dynamic_exclusion_is_resolved_before_any_destructive_task},
     };
 
     std::size_t failures = 0;

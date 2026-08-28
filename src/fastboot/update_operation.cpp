@@ -184,7 +184,7 @@ run_update_package_operation(
     try {
         auto prepared = preflight_update_package(
             resolver, package_directory_or_zip, options.wants_wipe,
-            options.preflight_limits, deadline, cancellation);
+            options.policy, options.preflight_limits, deadline, cancellation);
         if (!prepared) {
             return std::unexpected(
                 preflight_failure(std::move(prepared.error()), deadline));

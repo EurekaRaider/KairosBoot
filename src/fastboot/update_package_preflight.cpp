@@ -514,6 +514,20 @@ preflight_update_package(
     const UpdatePackagePreflightLimits& limits,
     const std::chrono::steady_clock::time_point deadline,
     const std::stop_token cancellation) {
+    return preflight_update_package(
+        resolver, package_directory_or_zip, wants_wipe, UpdatePackagePolicy{},
+        limits, deadline, cancellation);
+}
+
+std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_update_package(
+    image::ArtifactSourceResolver& resolver,
+    const std::filesystem::path& package_directory_or_zip,
+    const bool wants_wipe,
+    const UpdatePackagePolicy& policy,
+    const UpdatePackagePreflightLimits& limits,
+    const std::chrono::steady_clock::time_point deadline,
+    const std::stop_token cancellation) {
     try {
         if (cancellation.stop_requested()) {
             return std::unexpected(failure(UpdatePackagePreflightErrorKind::Cancelled,
@@ -548,21 +562,26 @@ preflight_update_package(
 
         std::string fastboot_text;
         bool use_hardcoded_fallback = false;
-        auto fastboot = snapshot.resolve(kFastbootInfoName);
-        if (fastboot) {
-            auto contents =
-                read_manifest(**fastboot, kFastbootInfoName,
-                              limits.manifest.maximum_file_bytes, cancellation);
-            if (!contents) {
-                return std::unexpected(std::move(contents.error()));
-            }
-            fastboot_text = std::move(*contents);
-        } else {
-            if (fastboot.error().kind != image::ArtifactSourceErrorKind::NotFound) {
-                return std::unexpected(
-                    artifact_failure(kFastbootInfoName, std::move(fastboot.error())));
-            }
+        if (policy.disable_fastboot_info) {
             use_hardcoded_fallback = true;
+        } else {
+            auto fastboot = snapshot.resolve(kFastbootInfoName);
+            if (fastboot) {
+                auto contents = read_manifest(
+                    **fastboot, kFastbootInfoName,
+                    limits.manifest.maximum_file_bytes, cancellation);
+                if (!contents) {
+                    return std::unexpected(std::move(contents.error()));
+                }
+                fastboot_text = std::move(*contents);
+            } else {
+                if (fastboot.error().kind !=
+                    image::ArtifactSourceErrorKind::NotFound) {
+                    return std::unexpected(artifact_failure(
+                        kFastbootInfoName, std::move(fastboot.error())));
+                }
+                use_hardcoded_fallback = true;
+            }
         }
 
         auto parsed =
@@ -586,16 +605,47 @@ preflight_update_package(
             plan = make_update_plan(*parsed, wants_wipe);
         }
 
+        if (policy.skip_secondary) {
+            std::erase_if(plan.tasks, [](const PlannedUpdateTask& task) {
+                return task.kind == UpdateTaskKind::Flash &&
+                       task.slot == PlannedSlot::Other;
+            });
+        }
+        if (policy.exclude_dynamic_partitions) {
+            std::erase_if(plan.tasks, [](const PlannedUpdateTask& task) {
+                return task.kind != UpdateTaskKind::Flash;
+            });
+            for (auto& task : plan.tasks) {
+                task.exclude_if_dynamic = true;
+            }
+        }
+
         auto prepared_super = prepare_update_super(
             snapshot, &plan, wants_wipe, cancellation);
         if (!prepared_super) {
             return std::unexpected(std::move(prepared_super.error()));
         }
-        if (use_hardcoded_fallback &&
-            plan.tasks.size() > limits.manifest.maximum_tasks) {
+        if (policy.append_final_reboot) {
+            if (plan.tasks.size() >= limits.manifest.maximum_tasks) {
+                return std::unexpected(failure(
+                    UpdatePackagePreflightErrorKind::LimitExceeded,
+                    "update plan has no capacity for the final reboot task"));
+            }
+            plan.tasks.push_back(PlannedUpdateTask{
+                .kind = UpdateTaskKind::Reboot,
+                .location = UpdateSourceLocation{
+                    .manifest = UpdateManifestKind::FastbootInfo,
+                    .line = plan.tasks.size() + 1U,
+                    .column = 1U,
+                    .byte_offset = 0U,
+                },
+                .reboot_target = PlannedRebootTarget::System,
+            });
+        }
+        if (plan.tasks.size() > limits.manifest.maximum_tasks) {
             return std::unexpected(failure(
                 UpdatePackagePreflightErrorKind::LimitExceeded,
-                "hardcoded update plan exceeds the configured task limit"));
+                "update plan exceeds the configured task limit"));
         }
 
         std::vector<std::string> artifact_names;

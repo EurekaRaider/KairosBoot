@@ -564,10 +564,28 @@ legacy_boot_options_or_default(const kb_legacy_boot_options_t *options) {
 }
 
 bool valid_update_options(const kb_update_options_t *options) noexcept {
-  return options == nullptr ||
-         (options->struct_size >= KB_UPDATE_OPTIONS_V1_SIZE &&
-          options->api_version == KB_API_VERSION &&
-          (options->wipe == 0 || options->wipe == 1));
+  if (options == nullptr) {
+    return true;
+  }
+  const auto valid_optional_bool = [options](const std::size_t offset) noexcept {
+    if (options->struct_size < offset + sizeof(int32_t)) {
+      return true;
+    }
+    int32_t value{};
+    std::memcpy(&value,
+                reinterpret_cast<const std::byte *>(options) + offset,
+                sizeof(value));
+    return value == 0 || value == 1;
+  };
+  return options->struct_size >= KB_UPDATE_OPTIONS_V1_SIZE &&
+         options->api_version == KB_API_VERSION &&
+         (options->wipe == 0 || options->wipe == 1) &&
+         valid_optional_bool(offsetof(kb_update_options_t, skip_reboot)) &&
+         valid_optional_bool(offsetof(kb_update_options_t, skip_secondary)) &&
+         valid_optional_bool(
+             offsetof(kb_update_options_t, exclude_dynamic_partitions)) &&
+         valid_optional_bool(
+             offsetof(kb_update_options_t, disable_fastboot_info));
 }
 
 [[nodiscard]] kb_update_options_t update_options_or_default(
@@ -581,6 +599,27 @@ bool valid_update_options(const kb_update_options_t *options) noexcept {
     result.wipe = options->wipe;
     result.progress_callback = options->progress_callback;
     result.progress_user_data = options->progress_user_data;
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, skip_reboot) +
+            sizeof(options->skip_reboot)) {
+      result.skip_reboot = options->skip_reboot;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, skip_secondary) +
+            sizeof(options->skip_secondary)) {
+      result.skip_secondary = options->skip_secondary;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, exclude_dynamic_partitions) +
+            sizeof(options->exclude_dynamic_partitions)) {
+      result.exclude_dynamic_partitions =
+          options->exclude_dynamic_partitions;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, disable_fastboot_info) +
+            sizeof(options->disable_fastboot_info)) {
+      result.disable_fastboot_info = options->disable_fastboot_info;
+    }
   }
   return result;
 }
@@ -1752,6 +1791,7 @@ public:
     return "prepare";
   case UpdateExecutionEventKind::TaskStarted:
   case UpdateExecutionEventKind::TaskCompleted:
+  case UpdateExecutionEventKind::TaskSkipped:
   case UpdateExecutionEventKind::TaskFailed:
   case UpdateExecutionEventKind::ExecutionCompleted:
     return "execute";
@@ -2111,6 +2151,13 @@ kb_status_t start_flash_source_async(
   kairosboot::image::ArtifactSourceResolver resolver;
   auto prepared = kairosboot::fastboot::preflight_update_package(
       resolver, package_path, options.wipe != 0,
+      kairosboot::fastboot::UpdatePackagePolicy{
+          .append_final_reboot = options.skip_reboot == 0,
+          .skip_secondary = options.skip_secondary != 0,
+          .exclude_dynamic_partitions =
+              options.exclude_dynamic_partitions != 0,
+          .disable_fastboot_info = options.disable_fastboot_info != 0,
+      },
       kairosboot::fastboot::UpdatePackagePreflightLimits{}, *deadline,
       task_context.cancellation_token());
   if (!prepared) {
@@ -3165,7 +3212,7 @@ kb_status_t KB_CALL kb_update_package_async(
   if (!valid_update_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "update options have an incompatible size, API version, or "
-                "wipe value",
+                "boolean policy value",
                 device_selector_or_null);
   }
 

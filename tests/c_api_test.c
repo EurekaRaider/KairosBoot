@@ -139,6 +139,28 @@ int main(void) {
   }
 
   {
+    struct legacy_update_options_v1 {
+      uint32_t struct_size;
+      uint32_t api_version;
+      uint32_t timeout_ms;
+      int32_t wipe;
+      kb_progress_callback_t progress_callback;
+      void *progress_user_data;
+    } legacy_options = {0};
+    legacy_options.struct_size = sizeof(legacy_options);
+    legacy_options.api_version = KB_API_VERSION;
+    legacy_options.timeout_ms = KB_WAIT_INFINITE;
+    kb_operation_t *legacy_operation = NULL;
+    CHECK(kb_update_package_async(
+              context, "unknown:device", "unused-update-package",
+              (const kb_update_options_t *)&legacy_options,
+              &legacy_operation, &error) == KB_E_INVALID_ARGUMENT);
+    CHECK(legacy_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "unknown scheme") != NULL);
+    kb_error_release(error);
+    error = NULL;
+
     struct extended_update_options {
       kb_update_options_t v1;
       uint64_t future_field;
@@ -177,6 +199,18 @@ int main(void) {
               &update_options, &update_operation, &error) ==
           KB_E_INVALID_ARGUMENT);
     CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init(&update_options);
+
+    update_options.exclude_dynamic_partitions = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "boolean policy") != NULL);
     kb_error_release(error);
     error = NULL;
     kb_update_options_init(&update_options);

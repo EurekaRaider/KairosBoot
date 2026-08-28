@@ -780,7 +780,9 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYerased")
 
         stdout, stderr = invoke(
-            cli, ["--json", "update", str(update_package)], update_success
+            cli,
+            ["--json", "update", str(update_package), "--skip-reboot"],
+            update_success,
         )
         document = parse_success_json(stdout, stderr)
         assert document == {
@@ -788,10 +790,14 @@ def run(cli: pathlib.Path) -> None:
             "command": "update",
             "package": str(update_package),
             "wipe": False,
+            "skipReboot": True,
+            "skipSecondary": False,
+            "excludeDynamicPartitions": False,
+            "disableFastbootInfo": False,
         }
 
         stdout, stderr = invoke(
-            cli, ["update", str(update_package)], update_success
+            cli, ["update", str(update_package), "--skip-reboot"], update_success
         )
         if (
             b"Updated from " not in stdout
@@ -820,7 +826,7 @@ def run(cli: pathlib.Path) -> None:
         flashall_environment["ANDROID_PRODUCT_OUT"] = str(update_package)
         stdout, stderr = invoke(
             cli,
-            ["--json", "flashall"],
+            ["--json", "flashall", "--skip-reboot"],
             update_success,
             environment=flashall_environment,
         )
@@ -830,11 +836,15 @@ def run(cli: pathlib.Path) -> None:
             "command": "flashall",
             "package": str(update_package),
             "wipe": False,
+            "skipReboot": True,
+            "skipSecondary": False,
+            "excludeDynamicPartitions": False,
+            "disableFastbootInfo": False,
         }
 
         stdout, stderr = invoke(
             cli,
-            ["flashall"],
+            ["flashall", "--skip-reboot"],
             update_success,
             environment=flashall_environment,
         )
@@ -861,7 +871,7 @@ def run(cli: pathlib.Path) -> None:
 
         stdout, stderr = invoke(
             cli,
-            ["--json", "update", str(wipe_package), "--wipe"],
+            ["--json", "update", str(wipe_package), "--wipe", "--skip-reboot"],
             wipe_success,
         )
         document = parse_success_json(stdout, stderr)
@@ -872,7 +882,7 @@ def run(cli: pathlib.Path) -> None:
         flashall_environment["ANDROID_PRODUCT_OUT"] = str(wipe_package)
         stdout, stderr = invoke(
             cli,
-            ["--json", "flashall", "--wipe"],
+            ["--json", "flashall", "--wipe", "--skip-reboot"],
             wipe_success,
             environment=flashall_environment,
         )
@@ -882,6 +892,10 @@ def run(cli: pathlib.Path) -> None:
             "command": "flashall",
             "package": str(wipe_package),
             "wipe": True,
+            "skipReboot": True,
+            "skipSecondary": False,
+            "excludeDynamicPartitions": False,
+            "disableFastbootInfo": False,
         }
 
         super_empty_image = directory / "custom-super-empty.img"
