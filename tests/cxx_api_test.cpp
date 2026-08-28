@@ -51,6 +51,12 @@ static_assert(std::is_same_v<
               decltype(kairosboot::UpdateOptions{}.disable_verity), bool>);
 static_assert(std::is_same_v<
               decltype(kairosboot::UpdateOptions{}.disable_verification), bool>);
+static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.slot),
+                             std::optional<std::string>>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.timeout),
+                             std::chrono::milliseconds>);
+static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.active_slot),
+                             std::optional<std::string>>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
@@ -407,6 +413,21 @@ int main() {
       invalid_update_timeout);
   CHECK(!rejected_update_timeout.has_value());
   CHECK(rejected_update_timeout.error().status() == KB_E_INVALID_ARGUMENT);
+
+  kairosboot::UpdateOptions invalid_update_slot;
+  invalid_update_slot.active_slot = "b";
+  const auto rejected_update_slot = context->update_package_async(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      std::filesystem::path{"unused-update-package"}, invalid_update_slot);
+  CHECK(!rejected_update_slot.has_value());
+  CHECK(rejected_update_slot.error().status() == KB_E_INVALID_ARGUMENT);
+
+  kairosboot::FlashOptions invalid_flash_slot;
+  invalid_flash_slot.active_slot = "b";
+  auto rejected_flash_slot = kairosboot::detail::prepare_flash_options(
+      invalid_flash_slot);
+  CHECK(!rejected_flash_slot.has_value());
+  CHECK(rejected_flash_slot.error().status() == KB_E_INVALID_ARGUMENT);
 
   const auto invalid_wipe_selector = context->wipe_super_async(
       kairosboot::DeviceSelector{"unknown:device"},

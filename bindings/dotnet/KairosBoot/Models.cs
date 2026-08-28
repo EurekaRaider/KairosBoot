@@ -79,13 +79,32 @@ public readonly struct FlashOptions
     }
 
     /// <summary>Creates flash options with AOSP-compatible vbmeta flags.</summary>
-    public FlashOptions(TimeSpan timeout, bool disableVerity, bool disableVerification)
+    public FlashOptions(
+        TimeSpan timeout,
+        bool disableVerity,
+        bool disableVerification,
+        string? slot = null,
+        bool setActive = false,
+        string? activeSlot = null)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
         hasExplicitTimeout = true;
         DisableVerity = disableVerity;
         DisableVerification = disableVerification;
+        Slot = slot;
+        SetActive = setActive;
+        ActiveSlot = activeSlot;
+    }
+
+    /// <summary>Creates flash options with an A/B slot policy.</summary>
+    public FlashOptions(
+        TimeSpan timeout,
+        string? slot,
+        bool setActive = false,
+        string? activeSlot = null)
+        : this(timeout, false, false, slot, setActive, activeSlot)
+    {
     }
 
     /// <summary>Gets options that use the native infinite timeout default.</summary>
@@ -101,6 +120,15 @@ public readonly struct FlashOptions
 
     /// <summary>Gets whether vbmeta disables verification.</summary>
     public bool DisableVerification { get; }
+
+    /// <summary>Gets the requested slot, or null for the device default.</summary>
+    public string? Slot { get; }
+
+    /// <summary>Gets whether set_active is issued before flash tasks.</summary>
+    public bool SetActive { get; }
+
+    /// <summary>Gets the explicit set_active slot, or null to derive it.</summary>
+    public string? ActiveSlot { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
@@ -259,7 +287,10 @@ public readonly struct UpdateOptions
         bool excludeDynamicPartitions = false,
         bool disableFastbootInfo = false,
         bool disableVerity = false,
-        bool disableVerification = false)
+        bool disableVerification = false,
+        string? slot = null,
+        bool setActive = false,
+        string? activeSlot = null)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
@@ -271,6 +302,9 @@ public readonly struct UpdateOptions
         DisableFastbootInfo = disableFastbootInfo;
         DisableVerity = disableVerity;
         DisableVerification = disableVerification;
+        Slot = slot;
+        SetActive = setActive;
+        ActiveSlot = activeSlot;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -301,6 +335,15 @@ public readonly struct UpdateOptions
 
     /// <summary>Gets whether update vbmeta images disable verification.</summary>
     public bool DisableVerification { get; }
+
+    /// <summary>Gets the global update slot, or null to preserve the package plan.</summary>
+    public string? Slot { get; }
+
+    /// <summary>Gets whether set_active is issued before update tasks.</summary>
+    public bool SetActive { get; }
+
+    /// <summary>Gets the explicit set_active slot, or null to derive it.</summary>
+    public string? ActiveSlot { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds

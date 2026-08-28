@@ -246,10 +246,18 @@
       "note": "Update policy options alter the immutable task plan; dynamic exclusion is proven with is-logical before any destructive task is prepared."
     },
     {
-      "ids": ["option.a", "option.help-short", "option.sparse-limit", "option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.set-active", "option.slot", "option.dtb", "option.dtb-offset", "option.verbose"],
+      "ids": ["option.a", "option.help-short", "option.sparse-limit", "option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset", "option.verbose"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."
+    },
+    {
+      "ids": ["option.slot", "option.set-active"],
+      "status": "implemented",
+      "cSymbols": ["kb_flash_file", "kb_flash_file_async", "kb_update_package", "kb_update_package_async"],
+      "cliCommands": ["flash", "flash:raw", "update", "flashall"],
+      "evidence": ["tests/fastboot/primitive_service_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/c_api_test.c", "tests/cxx_api_test.cpp", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks."
     },
 
     {

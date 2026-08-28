@@ -335,7 +335,19 @@ internal static class Program
                 (IntPtr.Size == 8 ? 44 : 36),
             "update options disable fastboot-info offset");
         Check(
-            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 48 : 40),
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.Slot)).ToInt32() ==
+                (IntPtr.Size == 8 ? 56 : 48),
+            "update options slot offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SetActive)).ToInt32() ==
+                (IntPtr.Size == 8 ? 64 : 52),
+            "update options set-active offset");
+        Check(
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.ActiveSlot)).ToInt32() ==
+                (IntPtr.Size == 8 ? 72 : 56),
+            "update options active slot offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 80 : 60),
             "update options native size");
         Check(
             NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
@@ -439,6 +451,9 @@ internal static class Program
         Check(!UpdateOptions.Default.SkipSecondary, "default update flashes secondary");
         Check(!UpdateOptions.Default.ExcludeDynamicPartitions, "default update includes dynamic");
         Check(!UpdateOptions.Default.DisableFastbootInfo, "default update uses fastboot-info");
+        Check(UpdateOptions.Default.Slot == null, "default update slot");
+        Check(!UpdateOptions.Default.SetActive, "default update set-active");
+        Check(UpdateOptions.Default.ActiveSlot == null, "default update active slot");
         Check(
             default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct update timeout");
@@ -456,6 +471,12 @@ internal static class Program
         Check(infiniteWipe.SkipSecondary, "explicit update skip secondary");
         Check(infiniteWipe.ExcludeDynamicPartitions, "explicit update excludes dynamic");
         Check(infiniteWipe.DisableFastbootInfo, "explicit update disables fastboot-info");
+        var slotted = new UpdateOptions(
+            Timeout.InfiniteTimeSpan, wipe: false, slot: "other",
+            setActive: true, activeSlot: "b");
+        Check(slotted.Slot == "other", "update slot option");
+        Check(slotted.SetActive, "update set-active option");
+        Check(slotted.ActiveSlot == "b", "update active slot option");
 
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
         Check(new UpdateOptions(fractional).Timeout == fractional, "finite update timeout");
@@ -781,6 +802,9 @@ internal static class Program
         Check(
             FlashOptions.Default.Timeout == Timeout.InfiniteTimeSpan,
             "default flash timeout");
+        Check(FlashOptions.Default.Slot == null, "default flash slot");
+        Check(!FlashOptions.Default.SetActive, "default flash set-active");
+        Check(FlashOptions.Default.ActiveSlot == null, "default flash active slot");
         Check(
             default(FlashOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct flash timeout");
@@ -790,6 +814,11 @@ internal static class Program
 
         var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
         Check(new FlashOptions(fractional).Timeout == fractional, "finite flash timeout");
+        var slotted = new FlashOptions(
+            Timeout.InfiniteTimeSpan, "all", setActive: true, activeSlot: "a");
+        Check(slotted.Slot == "all", "flash slot option");
+        Check(slotted.SetActive, "flash set-active option");
+        Check(slotted.ActiveSlot == "a", "flash active slot option");
 
         Expect<ArgumentOutOfRangeException>(
             () => _ = new FlashOptions(TimeSpan.FromTicks(-1)));

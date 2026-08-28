@@ -1100,6 +1100,32 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYdownloaded")
             assert receive_frame(connection) == b"flash:vbmeta"
             send_frame(connection, b"OKAYflashed")
+        def flashed_all_slots(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:current-slot"
+            send_frame(connection, b"OKAYa")
+            assert receive_frame(connection) == b"set_active:b"
+            send_frame(connection, b"OKAYactive")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            for slot in (b"a", b"b"):
+                assert receive_frame(connection) == b"download:00000010"
+                send_frame(connection, b"DATA00000010")
+                assert receive_frame(connection) == stage_payload
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:system_" + slot
+                send_frame(connection, b"OKAYflashed")
 
         stdout, stderr = invoke(
             cli,
@@ -1157,6 +1183,84 @@ def run(cli: pathlib.Path) -> None:
         stdout, stderr = invoke(
             cli,
             [
+                "--slot",
+                "all",
+                "--set-active=other",
+                "--json",
+                "flash",
+                "system",
+                str(stage_file),
+            ],
+            flashed_all_slots,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "flash"
+
+        def ambiguous_other_slot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY3")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--slot", "other", "--json", "flash", "system", str(stage_file)],
+            ambiguous_other_slot,
+            expected_exit=4,
+        )
+        parse_failure_json(stdout, stderr, "invalid_argument")
+
+        def unsupported_slot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--slot", "a", "--json", "flash", "system", str(stage_file)],
+            unsupported_slot,
+            expected_exit=4,
+        )
+        parse_failure_json(stdout, stderr, "not_supported")
+
+        slotted_update = make_update_package(
+            directory, "slotted-update", "version 1\nflash boot boot.img\n"
+        )
+        (slotted_update / "boot.img").write_bytes(stage_payload)
+
+        def update_all_slots(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:has-slot:boot"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
+            assert receive_frame(connection) == b"set_active:a"
+            send_frame(connection, b"OKAYactive")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            for slot in (b"a", b"b"):
+                assert receive_frame(connection) == b"download:00000010"
+                send_frame(connection, b"DATA00000010")
+                assert receive_frame(connection) == stage_payload
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:boot_" + slot
+                send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            [
                 "--disable-verity",
                 "--disable-verification",
                 "--json",
@@ -1164,6 +1268,21 @@ def run(cli: pathlib.Path) -> None:
                 str(update_vbmeta_package),
             ],
             updated_vbmeta,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "update"
+
+        stdout, stderr = invoke(
+            cli,
+            [
+                "--slot",
+                "all",
+                "--set-active",
+                "--json",
+                "update",
+                str(slotted_update),
+            ],
+            update_all_slots,
         )
         document = parse_success_json(stdout, stderr)
         assert document["command"] == "update"

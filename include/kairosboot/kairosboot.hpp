@@ -91,6 +91,9 @@ struct FlashOptions {
   bool disable_verity{};
   bool disable_verification{};
   std::function<ProgressAction(const FlashProgress &)> progress;
+  std::optional<std::string> slot;
+  bool set_active{};
+  std::optional<std::string> active_slot;
 };
 
 struct LegacyBootOptions {
@@ -114,6 +117,9 @@ struct UpdateOptions {
   bool disable_verity{};
   bool disable_verification{};
   std::function<ProgressAction(const Progress &)> progress;
+  std::optional<std::string> slot;
+  bool set_active{};
+  std::optional<std::string> active_slot;
 };
 
 struct CommandOptions {
@@ -288,6 +294,8 @@ progress_trampoline(const kb_progress_t *progress, void *user_data) noexcept {
 struct PreparedFlashOptions final {
   kb_flash_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
+  std::shared_ptr<std::string> slot;
+  std::shared_ptr<std::string> active_slot;
 };
 
 struct PreparedLegacyBootOptions final {
@@ -298,6 +306,8 @@ struct PreparedLegacyBootOptions final {
 struct PreparedUpdateOptions final {
   kb_update_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
+  std::shared_ptr<std::string> slot;
+  std::shared_ptr<std::string> active_slot;
 };
 
 [[nodiscard]] inline std::expected<std::uint32_t, Error>
@@ -337,6 +347,30 @@ prepare_update_options(const UpdateOptions &options) {
   result.native.disable_fastboot_info = options.disable_fastboot_info ? 1 : 0;
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
+  if (options.slot) {
+    if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "update slot must be non-empty and NUL-free"));
+    }
+    result.slot = std::make_shared<std::string>(*options.slot);
+    result.native.slot = result.slot->c_str();
+  }
+  result.native.set_active = options.set_active ? 1 : 0;
+  if (options.active_slot) {
+    if (!options.set_active) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT,
+          "update active_slot requires set_active"));
+    }
+    if (options.active_slot->empty() ||
+        options.active_slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT,
+          "update active_slot must be non-empty and NUL-free"));
+    }
+    result.active_slot = std::make_shared<std::string>(*options.active_slot);
+    result.native.active_slot = result.active_slot->c_str();
+  }
   if (options.progress) {
     result.callback_state =
         std::make_shared<ProgressCallbackState>(ProgressCallbackState{
@@ -360,6 +394,29 @@ prepare_flash_options(const FlashOptions &options) {
   result.native.timeout_ms = *timeout;
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
+  if (options.slot) {
+    if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "flash slot must be non-empty and NUL-free"));
+    }
+    result.slot = std::make_shared<std::string>(*options.slot);
+    result.native.slot = result.slot->c_str();
+  }
+  result.native.set_active = options.set_active ? 1 : 0;
+  if (options.active_slot) {
+    if (!options.set_active) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "flash active_slot requires set_active"));
+    }
+    if (options.active_slot->empty() ||
+        options.active_slot->find('\0') != std::string::npos) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT,
+          "flash active_slot must be non-empty and NUL-free"));
+    }
+    result.active_slot = std::make_shared<std::string>(*options.active_slot);
+    result.native.active_slot = result.active_slot->c_str();
+  }
   if (options.progress) {
     // This ordinary C++ allocation/copy happens before calling the C ABI and
     // may propagate std::bad_alloc or a callable-defined copy exception.

@@ -216,6 +216,9 @@ struct GlobalOptions {
   bool disable_verity{};
   bool disable_verification{};
   bool legacy_boot_options_set{false};
+  std::optional<std::string> slot;
+  bool set_active{};
+  std::optional<std::string> active_slot;
 };
 
 enum class CommandKind : std::uint8_t {
@@ -339,7 +342,8 @@ bool is_global_option(const std::string_view value) noexcept {
          value == "--base" || value == "--cmdline" ||
          value == "--page-size" || value == "--kernel-offset" ||
          value == "--ramdisk-offset" || value == "--second-offset" ||
-         value == "--tags-offset";
+         value == "--tags-offset" || value == "--slot" ||
+         value == "--set-active" || value.starts_with("--set-active=");
 }
 
 template <typename Integer>
@@ -415,6 +419,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool ramdisk_offset_seen = false;
   bool second_offset_seen = false;
   bool tags_offset_seen = false;
+  bool slot_seen = false;
+  bool set_active_seen = false;
   const auto error = [&result](std::string message) {
     return std::unexpected(ParseError{result.global.json, std::move(message)});
   };
@@ -494,6 +500,36 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     if (argument == "--disable-verification") {
       result.global.disable_verification = true;
+      ++index;
+      continue;
+    }
+    if (argument == "--slot") {
+      if (slot_seen) {
+        return error("option --slot may only be specified once");
+      }
+      if (index + 1 >= argc || argv[index + 1][0] == '\0' ||
+          std::string_view{argv[index + 1]}.starts_with("--")) {
+        return error("option --slot requires a non-empty slot");
+      }
+      result.global.slot = std::string{argv[index + 1]};
+      slot_seen = true;
+      index += 2;
+      continue;
+    }
+    if (argument == "--set-active" || argument.starts_with("--set-active=")) {
+      if (set_active_seen) {
+        return error("option --set-active may only be specified once");
+      }
+      result.global.set_active = true;
+      set_active_seen = true;
+      if (argument.starts_with("--set-active=")) {
+        const auto value = argument.substr(
+            std::string_view{"--set-active="}.size());
+        if (value.empty()) {
+          return error("option --set-active requires a non-empty slot after '='");
+        }
+        result.global.active_slot = std::string{value};
+      }
       ++index;
       continue;
     }
@@ -584,6 +620,12 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       command != "flash:raw") {
     return error("legacy boot layout options are not valid for " +
                  std::string{command});
+  }
+  if ((result.global.slot.has_value() || result.global.set_active) &&
+      command != "flash" && command != "flash:raw" && command != "update" &&
+      command != "flashall") {
+    return error("options --slot and --set-active are valid only for flash, "
+                 "flash:raw, update, and flashall");
   }
 
   if (command == "--version") {
@@ -1431,6 +1473,9 @@ kairosboot::FlashOptions flash_options(const GlobalOptions &options) {
   }
   result.disable_verity = options.disable_verity;
   result.disable_verification = options.disable_verification;
+  result.slot = options.slot;
+  result.set_active = options.set_active;
+  result.active_slot = options.active_slot;
   return result;
 }
 
@@ -1441,6 +1486,9 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
   }
   result.disable_verity = options.disable_verity;
   result.disable_verification = options.disable_verification;
+  result.slot = options.slot;
+  result.set_active = options.set_active;
+  result.active_slot = options.active_slot;
   return result;
 }
 
@@ -2569,6 +2617,7 @@ constexpr std::string_view usage_text() noexcept {
                "<partition> <size-bytes>\n"
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
+               "  --slot <a|b|other|all> --set-active[=<a|b|other>]\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
                "  --disable-verity --disable-verification\n"

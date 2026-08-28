@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 45
+    implemented: 47
     intentional-deviation: 15
-    missing: 23
+    missing: 21
     partial: 36
 officialDifferentialCoverage:
   status: "not-run"
@@ -815,9 +815,14 @@ entries:
   - id: "option.set-active"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks."
+    evidence:
+      - "tests/fastboot/primitive_service_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.skip-reboot"
     kind: "option"
     required: true
@@ -841,9 +846,14 @@ entries:
   - id: "option.slot"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks."
+    evidence:
+      - "tests/fastboot/primitive_service_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.sparse-limit"
     kind: "option"
     required: true
@@ -980,8 +990,6 @@ requiredGaps:
   - "option.help-short"
   - "option.os-patch-level"
   - "option.os-version"
-  - "option.set-active"
-  - "option.slot"
   - "option.sparse-limit"
   - "option.vendor-id"
   - "option.verbose"

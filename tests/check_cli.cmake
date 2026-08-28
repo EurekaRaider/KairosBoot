@@ -326,6 +326,22 @@ expect_json_parse_error(
   "option --max-receive-bytes is not valid for flashall"
   --max-receive-bytes 1 flashall)
 expect_json_parse_error(
+  slot_missing "option --slot requires a non-empty slot" --slot)
+expect_json_parse_error(
+  slot_duplicate "option --slot may only be specified once"
+  --slot a --slot b flash system image.img)
+expect_json_parse_error(
+  set_active_duplicate "option --set-active may only be specified once"
+  --set-active --set-active=b flash system image.img)
+expect_json_parse_error(
+  set_active_empty
+  "option --set-active requires a non-empty slot after '='"
+  --set-active= flash system image.img)
+expect_json_parse_error(
+  slot_wrong_command
+  "options --slot and --set-active are valid only for flash, flash:raw, update, and flashall"
+  --slot a getvar product)
+expect_json_parse_error(
   typed_trailing_global "global options must precede the command" getvar
   product --timeout-ms 1)
 expect_json_parse_error(

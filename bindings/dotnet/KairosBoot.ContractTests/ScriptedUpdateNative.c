@@ -42,6 +42,11 @@ typedef struct kb_update_options {
   int32_t skip_secondary;
   int32_t exclude_dynamic_partitions;
   int32_t disable_fastboot_info;
+  int32_t disable_verity;
+  int32_t disable_verification;
+  const char *slot;
+  int32_t set_active;
+  const char *active_slot;
 } kb_update_options_t;
 
 typedef struct kb_flash_options {
@@ -50,6 +55,11 @@ typedef struct kb_flash_options {
   uint32_t timeout_ms;
   kb_progress_callback_t progress_callback;
   void *progress_user_data;
+  int32_t disable_verity;
+  int32_t disable_verification;
+  const char *slot;
+  int32_t set_active;
+  const char *active_slot;
 } kb_flash_options_t;
 
 typedef struct kb_legacy_boot_options {

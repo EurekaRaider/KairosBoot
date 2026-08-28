@@ -158,6 +158,15 @@ typedef struct kb_flash_options {
    * ends in vbmeta, vbmeta_a, or vbmeta_b. */
   int32_t disable_verity;
   int32_t disable_verification;
+  /* NULL selects the device's current slot. Otherwise accepts an explicit
+   * slot (for example "a" or "b"), "other", or "all". The library copies
+   * this UTF-8/ASCII value before an asynchronous call returns. */
+  const char *slot;
+  /* When one, issue set_active before executing the prepared flash tasks. */
+  int32_t set_active;
+  /* Optional explicit target for set_active. NULL uses slot when present,
+   * otherwise the device's current slot. Requires set_active == 1. */
+  const char *active_slot;
 } kb_flash_options_t;
 
 /* Legacy Android boot header v0 layout used only when constructing an image
@@ -201,6 +210,15 @@ typedef struct kb_update_options {
   /* Applied to vbmeta artifacts before any device is opened. */
   int32_t disable_verity;
   int32_t disable_verification;
+  /* Global slot policy for every package flash task. NULL preserves the
+   * package plan; otherwise accepts an explicit slot, "other", or "all". */
+  const char *slot;
+  /* When one, issue set_active on the selected session before executing the
+   * prepared update/flashall task plan. */
+  int32_t set_active;
+  /* Optional explicit set_active target. NULL uses slot when present,
+   * otherwise the device's current slot. Requires set_active == 1. */
+  const char *active_slot;
 } kb_update_options_t;
 
 typedef struct kb_command_options {
@@ -237,6 +255,9 @@ typedef struct kb_job_options {
 #define KB_FLASH_OPTIONS_AVB_FLAGS_SIZE                                      \
   ((uint32_t)(offsetof(kb_flash_options_t, disable_verification) +           \
               sizeof(((kb_flash_options_t *)0)->disable_verification)))
+#define KB_FLASH_OPTIONS_SLOT_POLICY_SIZE                                    \
+  ((uint32_t)(offsetof(kb_flash_options_t, active_slot) +                    \
+              sizeof(((kb_flash_options_t *)0)->active_slot)))
 #define KB_LEGACY_BOOT_OPTIONS_V1_SIZE                                       \
   ((uint32_t)(offsetof(kb_legacy_boot_options_t, tags_offset) +              \
               sizeof(((kb_legacy_boot_options_t *)0)->tags_offset)))
@@ -246,6 +267,9 @@ typedef struct kb_job_options {
 #define KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE                                     \
   ((uint32_t)(offsetof(kb_update_options_t, disable_verification) +          \
               sizeof(((kb_update_options_t *)0)->disable_verification)))
+#define KB_UPDATE_OPTIONS_SLOT_POLICY_SIZE                                   \
+  ((uint32_t)(offsetof(kb_update_options_t, active_slot) +                   \
+              sizeof(((kb_update_options_t *)0)->active_slot)))
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))

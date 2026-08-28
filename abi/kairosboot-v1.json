@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "b6167627a7079d761081a628f0ad7152d7b94236c36bada68866a5a784916056",
+  "headerContractSha256": "112d1705e44d2ffb35613eb5befec0932772787895824869a68f32d9eff304cc",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -166,12 +166,27 @@
           "name": "disable_verification",
           "offset": 36,
           "size": 4
+        },
+        {
+          "name": "slot",
+          "offset": 40,
+          "size": 8
+        },
+        {
+          "name": "set_active",
+          "offset": 48,
+          "size": 4
+        },
+        {
+          "name": "active_slot",
+          "offset": 56,
+          "size": 8
         }
       ],
-      "size": 40,
+      "size": 64,
       "versionSize": {
-        "macro": "KB_FLASH_OPTIONS_AVB_FLAGS_SIZE",
-        "value": 40
+        "macro": "KB_FLASH_OPTIONS_SLOT_POLICY_SIZE",
+        "value": 64
       }
     },
     "kb_job_options_t": {
@@ -362,12 +377,27 @@
           "name": "disable_verification",
           "offset": 52,
           "size": 4
+        },
+        {
+          "name": "slot",
+          "offset": 56,
+          "size": 8
+        },
+        {
+          "name": "set_active",
+          "offset": 64,
+          "size": 4
+        },
+        {
+          "name": "active_slot",
+          "offset": 72,
+          "size": 8
         }
       ],
-      "size": 56,
+      "size": 80,
       "versionSize": {
-        "macro": "KB_UPDATE_OPTIONS_AVB_FLAGS_SIZE",
-        "value": 56
+        "macro": "KB_UPDATE_OPTIONS_SLOT_POLICY_SIZE",
+        "value": 80
       }
     },
     "kb_version_t": {

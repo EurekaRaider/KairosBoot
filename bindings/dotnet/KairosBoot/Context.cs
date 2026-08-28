@@ -23,6 +23,69 @@ public sealed partial class Context : IDisposable
         out IntPtr operation,
         out IntPtr error);
 
+    private sealed class NativeSlotPolicy : IDisposable
+    {
+        private IntPtr slot;
+        private IntPtr activeSlot;
+        private readonly bool setActive;
+
+        internal NativeSlotPolicy(string? slot, bool setActive, string? activeSlot)
+        {
+            Validate(slot, nameof(slot));
+            Validate(activeSlot, nameof(activeSlot));
+            if (activeSlot != null && !setActive)
+            {
+                throw new ArgumentException(
+                    "An active slot requires setActive.", nameof(activeSlot));
+            }
+
+            this.setActive = setActive;
+            try
+            {
+                this.slot = slot == null ? IntPtr.Zero : Utf8String.Allocate(slot);
+                this.activeSlot = activeSlot == null
+                    ? IntPtr.Zero
+                    : Utf8String.Allocate(activeSlot);
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        internal void Apply(ref NativeFlashOptions options)
+        {
+            options.Slot = slot;
+            options.SetActive = setActive ? 1 : 0;
+            options.ActiveSlot = activeSlot;
+        }
+
+        internal void Apply(ref NativeUpdateOptions options)
+        {
+            options.Slot = slot;
+            options.SetActive = setActive ? 1 : 0;
+            options.ActiveSlot = activeSlot;
+        }
+
+        public void Dispose()
+        {
+            Utf8String.Free(slot);
+            Utf8String.Free(activeSlot);
+            slot = IntPtr.Zero;
+            activeSlot = IntPtr.Zero;
+        }
+
+        private static void Validate(string? value, string name)
+        {
+            if (value != null && (value.Length == 0 || value.IndexOf('\0') >= 0))
+            {
+                throw new ArgumentException(
+                    "A slot must be non-empty and NUL-free.", name);
+            }
+        }
+    }
+
     /// <summary>Gets the runtime and ABI version of the loaded native library.</summary>
     public static KairosBootVersion Version
     {
@@ -1006,6 +1069,8 @@ public sealed partial class Context : IDisposable
 
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
 
         ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
         var contextReferenceAdded = false;
@@ -1026,6 +1091,7 @@ public sealed partial class Context : IDisposable
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
 
             var status = NativeMethods.FlashFileAsync(
                 handle,
@@ -1078,6 +1144,8 @@ public sealed partial class Context : IDisposable
 
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
 
         ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
         var contextReferenceAdded = false;
@@ -1098,6 +1166,7 @@ public sealed partial class Context : IDisposable
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
 
             int status;
             IntPtr rawOperation;
@@ -1398,6 +1467,8 @@ public sealed partial class Context : IDisposable
 
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        using var slotPolicy = new NativeSlotPolicy(
+            options.Slot, options.SetActive, options.ActiveSlot);
 
         ProgressCallbackRegistration<UpdateProgress>? progressRegistration = null;
         var contextReferenceAdded = false;
@@ -1425,6 +1496,7 @@ public sealed partial class Context : IDisposable
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
             nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+            slotPolicy.Apply(ref nativeOptions);
 
             var status = NativeMethods.UpdatePackageAsync(
                 handle,

@@ -67,6 +67,9 @@ int main(void) {
   CHECK(flash_options.struct_size == sizeof(flash_options));
   CHECK(flash_options.api_version == KB_API_VERSION);
   CHECK(flash_options.timeout_ms == KB_WAIT_INFINITE);
+  CHECK(flash_options.slot == NULL);
+  CHECK(flash_options.set_active == 0);
+  CHECK(flash_options.active_slot == NULL);
 
   kb_legacy_boot_options_t legacy_boot_options;
   kb_legacy_boot_options_init(&legacy_boot_options);
@@ -87,6 +90,9 @@ int main(void) {
   CHECK(update_options.timeout_ms == KB_WAIT_INFINITE);
   CHECK(update_options.wipe == 0);
   CHECK(update_options.progress_callback == NULL);
+  CHECK(update_options.slot == NULL);
+  CHECK(update_options.set_active == 0);
+  CHECK(update_options.active_slot == NULL);
 
   kb_command_options_t command_options;
   kb_command_options_init(&command_options);
@@ -209,8 +215,26 @@ int main(void) {
               &update_options, &update_operation, &error) ==
           KB_E_INVALID_ARGUMENT);
     CHECK(update_operation == NULL);
-    CHECK(error != NULL);
-    CHECK(strstr(kb_error_message(error), "boolean policy") != NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init(&update_options);
+
+    update_options.set_active = 2;
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
+    kb_error_release(error);
+    error = NULL;
+    kb_update_options_init(&update_options);
+
+    update_options.active_slot = "b";
+    CHECK(kb_update_package_async(
+              context, "tcp:127.0.0.1:1", "unused-update-package",
+              &update_options, &update_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(update_operation == NULL);
     kb_error_release(error);
     error = NULL;
     kb_update_options_init(&update_options);

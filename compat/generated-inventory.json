@@ -1900,16 +1900,32 @@
       "status": "intentional-deviation"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.set-active",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--set-active",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -1962,16 +1978,32 @@
       "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "flash",
+        "flash:raw",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/fastboot/primitive_service_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.slot",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "The global slot policy resolves explicit, other, and all targets from device evidence; optional set-active is resolved and issued on the same serialized session before prepared flash/update tasks.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "--slot",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -2227,8 +2259,6 @@
     "option.help-short",
     "option.os-patch-level",
     "option.os-version",
-    "option.set-active",
-    "option.slot",
     "option.sparse-limit",
     "option.vendor-id",
     "option.verbose"
@@ -2267,9 +2297,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 12,
+        "implemented": 14,
         "intentional-deviation": 4,
-        "missing": 17,
+        "missing": 15,
         "partial": 0
       },
       "protocol": {
@@ -2286,9 +2316,9 @@
       }
     },
     "byStatus": {
-      "implemented": 45,
+      "implemented": 47,
       "intentional-deviation": 15,
-      "missing": 23,
+      "missing": 21,
       "partial": 36
     },
     "totalEntries": 119

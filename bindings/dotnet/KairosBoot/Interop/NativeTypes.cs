@@ -55,6 +55,9 @@ internal struct NativeFlashOptions
     internal IntPtr ProgressUserData;
     internal int DisableVerity;
     internal int DisableVerification;
+    internal IntPtr Slot;
+    internal int SetActive;
+    internal IntPtr ActiveSlot;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -86,6 +89,9 @@ internal struct NativeUpdateOptions
     internal int DisableFastbootInfo;
     internal int DisableVerity;
     internal int DisableVerification;
+    internal IntPtr Slot;
+    internal int SetActive;
+    internal IntPtr ActiveSlot;
 }
 
 [StructLayout(LayoutKind.Sequential)]
