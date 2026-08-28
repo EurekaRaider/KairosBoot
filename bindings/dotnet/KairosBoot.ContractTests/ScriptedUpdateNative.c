@@ -40,6 +40,14 @@ typedef struct kb_update_options {
   void *progress_user_data;
 } kb_update_options_t;
 
+typedef struct kb_flash_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  uint32_t timeout_ms;
+  kb_progress_callback_t progress_callback;
+  void *progress_user_data;
+} kb_flash_options_t;
+
 typedef struct kb_operation {
   int32_t kind;
   int32_t polls;
@@ -79,6 +87,9 @@ static int32_t failure_code;
 static int32_t options_init_count;
 static int32_t async_start_count;
 static int32_t blocking_count;
+static int32_t flash_options_init_count;
+static int32_t flash_raw_async_start_count;
+static int32_t flash_raw_blocking_count;
 static int32_t cancel_count;
 static int32_t operation_release_count;
 static int32_t context_release_count;
@@ -95,11 +106,25 @@ static const char expected_unicode_package[] = {
     'i', 'm', 'a', 'g', 'e', 's', '/', (char)0xe5, (char)0x8d,
     (char)0x87, (char)0xe7, (char)0xba, (char)0xa7, '.', 'z', 'i', 'p', 0};
 
+static const char expected_unicode_kernel[] = {
+    'i', 'm', 'a', 'g', 'e', 's', '/', (char)0xe5, (char)0x86,
+    (char)0x85, (char)0xe6, (char)0xa0, (char)0xb8, '.', 'b', 'i', 'n', 0};
+
 static int same_string(const char *actual, const char *expected) {
   return actual != NULL && strcmp(actual, expected) == 0;
 }
 
 static int valid_options(const kb_update_options_t *options) {
+  return options != NULL &&
+         options->struct_size == (uint32_t)sizeof(*options) &&
+         options->api_version == 1 &&
+         ((options->progress_callback == NULL &&
+           options->progress_user_data == NULL) ||
+          (options->progress_callback != NULL &&
+           options->progress_user_data != NULL));
+}
+
+static int valid_flash_options(const kb_flash_options_t *options) {
   return options != NULL &&
          options->struct_size == (uint32_t)sizeof(*options) &&
          options->api_version == 1 &&
@@ -146,6 +171,9 @@ KB_TEST_API void KB_TEST_CALL kb_test_reset(void) {
   options_init_count = 0;
   async_start_count = 0;
   blocking_count = 0;
+  flash_options_init_count = 0;
+  flash_raw_async_start_count = 0;
+  flash_raw_blocking_count = 0;
   cancel_count = 0;
   operation_release_count = 0;
   context_release_count = 0;
@@ -171,6 +199,18 @@ KB_TEST_API int32_t KB_TEST_CALL kb_test_async_start_count(void) {
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_blocking_count(void) {
   return blocking_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_options_init_count(void) {
+  return flash_options_init_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_raw_async_start_count(void) {
+  return flash_raw_async_start_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_flash_raw_blocking_count(void) {
+  return flash_raw_blocking_count;
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_cancel_count(void) {
@@ -243,6 +283,19 @@ KB_TEST_API void KB_TEST_CALL kb_update_options_init(
   options->api_version = 1;
   options->timeout_ms = UINT32_MAX;
   ++options_init_count;
+}
+
+KB_TEST_API void KB_TEST_CALL kb_flash_options_init(
+    kb_flash_options_t *options) {
+  if (options == NULL) {
+    record_failure(21);
+    return;
+  }
+  memset(options, 0, sizeof(*options));
+  options->struct_size = (uint32_t)sizeof(*options);
+  options->api_version = 1;
+  options->timeout_ms = UINT32_MAX;
+  ++flash_options_init_count;
 }
 
 KB_TEST_API void KB_TEST_CALL kb_job_options_init(kb_job_options_t *options) {
@@ -561,6 +614,83 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package(
   return KB_OK;
 }
 
+KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
+    void *context, const char *device_selector, const char *partition,
+    const char *kernel_path, const char *ramdisk_path,
+    const char *second_stage_path, const kb_flash_options_t *options,
+    kb_operation_t **operation, void **error) {
+  if (context != &context_sentinel || operation == NULL || error == NULL ||
+      !valid_flash_options(options) || !same_string(partition, "boot")) {
+    record_failure(41);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  int32_t kind = 0;
+  if (same_string(kernel_path, expected_unicode_kernel)) {
+    kind = 4;
+    if (!same_string(device_selector, "usb:serial:raw") ||
+        !same_string(ramdisk_path, "ramdisk.img") ||
+        second_stage_path != NULL || options->timeout_ms != 2 ||
+        options->progress_callback == NULL) {
+      record_failure(42);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else if (same_string(kernel_path, "cancel-kernel.bin")) {
+    kind = 5;
+    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+        ramdisk_path != NULL || second_stage_path != NULL ||
+        options->timeout_ms != UINT32_MAX ||
+        options->progress_callback == NULL) {
+      record_failure(43);
+      return KB_E_INVALID_ARGUMENT;
+    }
+  } else {
+    record_failure(44);
+    return KB_E_INVALID_ARGUMENT;
+  }
+
+  kb_operation_t *created = (kb_operation_t *)calloc(1, sizeof(*created));
+  if (created == NULL) {
+    record_failure(45);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  created->kind = kind;
+  created->progress_callback = options->progress_callback;
+  created->progress_user_data = options->progress_user_data;
+  const size_t identifier_size = strlen(device_selector) + 1;
+  created->device_identifier = (char *)malloc(identifier_size);
+  if (created->device_identifier == NULL) {
+    free(created);
+    record_failure(46);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  memcpy(created->device_identifier, device_selector, identifier_size);
+  *operation = created;
+  *error = NULL;
+  ++flash_raw_async_start_count;
+  return KB_OK;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw(
+    void *context, const char *device_selector, const char *partition,
+    const char *kernel_path, const char *ramdisk_path,
+    const char *second_stage_path, const kb_flash_options_t *options,
+    void **error) {
+  if (context != (void *)(uintptr_t)1 || error == NULL ||
+      !valid_flash_options(options) || options->timeout_ms != 17 ||
+      options->progress_callback != NULL ||
+      !same_string(device_selector, "usb:serial:blocking-raw") ||
+      !same_string(partition, "boot") ||
+      !same_string(kernel_path, "blocking-kernel.bin") ||
+      ramdisk_path != NULL || second_stage_path != NULL) {
+    record_failure(47);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  *error = NULL;
+  ++flash_raw_blocking_count;
+  return KB_OK;
+}
+
 KB_TEST_API int32_t KB_TEST_CALL kb_operation_wait(kb_operation_t *operation,
                                                    uint32_t timeout_ms) {
   if (operation == NULL || timeout_ms != 0) {
@@ -573,7 +703,11 @@ KB_TEST_API int32_t KB_TEST_CALL kb_operation_wait(kb_operation_t *operation,
       ++operation->polls;
       return KB_OK;
     }
-    emit_progress(operation, "preflight", 0, 0);
+    if (operation->kind == 4 || operation->kind == 5) {
+      emit_progress(operation, "download", 0, 4);
+    } else {
+      emit_progress(operation, "preflight", 0, 0);
+    }
     ++operation->polls;
     if (operation->cancelled) {
       return KB_E_CANCELLED;
@@ -585,7 +719,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_operation_wait(kb_operation_t *operation,
     return KB_E_CANCELLED;
   }
 
-  if (operation->kind == 2) {
+  if (operation->kind == 2 || operation->kind == 5) {
     return KB_E_TIMEOUT;
   }
 

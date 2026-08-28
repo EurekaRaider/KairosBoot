@@ -75,7 +75,7 @@ internal static class Program
             await CheckFlashFailsAccurately().ConfigureAwait(false);
             await CheckPreCancellation().ConfigureAwait(false);
             await CheckTypedPreCancellation().ConfigureAwait(false);
-            CheckTypedManagedPreflight();
+            await CheckTypedManagedPreflight().ConfigureAwait(false);
 #if NET10_0_OR_GREATER
             await CheckScriptedTcpParity().ConfigureAwait(false);
 #endif
@@ -114,15 +114,17 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 101)
+        if (uniqueEntryPoints.Count != 103)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 101 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 103 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 101, "unique entry points");
+        Check(uniqueEntryPoints.Count == 103, "unique entry points");
+        Check(entryPoints.Contains("kb_flash_raw_async"), "async flash:raw import");
+        Check(entryPoints.Contains("kb_flash_raw"), "blocking flash:raw import");
         Check(entryPoints.Contains("kb_update_options_init"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
@@ -195,7 +197,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 101, "net48 DllImport count");
+        Check(methods.Count == 103, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -204,7 +206,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 73, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 83, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -222,7 +224,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 101, "net10 LibraryImport count");
+        Check(groups.Count == 103, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -233,7 +235,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 45, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 47, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -423,6 +425,27 @@ internal static class Program
 
     private static void CheckTypedPublicSurface()
     {
+        var flashRawMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "FlashRawAsync")
+            .ToList();
+        Check(flashRawMethods.Count == 2, "managed flash:raw overloads");
+        Check(
+            flashRawMethods.All(method => method.ReturnType == typeof(Task)),
+            "managed flash:raw returns Task");
+        Check(
+            flashRawMethods.Count(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(FlashOptions))) == 1,
+            "managed flash:raw typed options overload");
+        Check(
+            flashRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(IProgress<FlashProgress>))),
+            "managed flash:raw progress type");
+        Check(
+            flashRawMethods.All(method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(CancellationToken))),
+            "managed flash:raw cancellation");
+
         var updateMethods = typeof(Context)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "UpdatePackageAsync")
@@ -636,6 +659,21 @@ internal static class Program
                 out var rawError);
             Check(status == (int)KairosBootStatus.Ok, "blocking update shim status");
             Check(rawError == IntPtr.Zero, "blocking update shim error ownership");
+
+            var nativeFlashOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeFlashOptions);
+            nativeFlashOptions.TimeoutMilliseconds = 17;
+            status = NativeMethods.FlashRaw(
+                context,
+                "usb:serial:blocking-raw",
+                "boot",
+                "blocking-kernel.bin",
+                null,
+                null,
+                ref nativeFlashOptions,
+                out rawError);
+            Check(status == (int)KairosBootStatus.Ok, "blocking flash:raw shim status");
+            Check(rawError == IntPtr.Zero, "blocking flash:raw shim error ownership");
         }
 
         var reports = new List<UpdateProgress>();
@@ -690,14 +728,70 @@ internal static class Program
                 () => context.UpdatePackageAsync(
                     "update.zip",
                     deviceSelector: string.Empty)).ConfigureAwait(false);
+
+            var rawReports = new List<FlashProgress>();
+            var rawProgress = new InlineProgress<FlashProgress>(rawReports.Add);
+            await context.FlashRawAsync(
+                "boot",
+                "images/内核.bin",
+                new FlashOptions(fractional),
+                ramdiskPath: "ramdisk.img",
+                deviceSelector: "usb:serial:raw",
+                progress: rawProgress,
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            Check(rawReports.Count == 3, "flash:raw progress count");
+            Check(
+                rawReports[0].Stage == "download" &&
+                rawReports[0].BytesCompleted == 0 &&
+                rawReports[0].BytesTotal == 4,
+                "flash:raw initial progress");
+            Check(
+                rawReports[1].Stage == "download" &&
+                rawReports[1].BytesCompleted == 2,
+                "flash:raw transfer progress");
+            Check(rawReports[2].Stage == "complete", "flash:raw completion progress");
+            Check(
+                rawReports.All(report => report.DeviceIdentifier == "usb:serial:raw"),
+                "flash:raw progress device identifier");
+
+            using (var source = new CancellationTokenSource())
+            {
+                var cancellationProgress = new InlineProgress<FlashProgress>(_ => source.Cancel());
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "cancel-kernel.bin",
+                        deviceSelector: "tcp:127.0.0.1:5554",
+                        progress: cancellationProgress,
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
+
+            using (var source = new CancellationTokenSource())
+            {
+                source.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.FlashRawAsync(
+                        "boot",
+                        "not-started-kernel.bin",
+                        cancellationToken: source.Token)).ConfigureAwait(false);
+            }
         }
 
         Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "scripted native assertions");
         Check(ScriptedUpdateNativeMethods.OptionsInitCount() == 4, "update options init calls");
         Check(ScriptedUpdateNativeMethods.AsyncStartCount() == 3, "async update starts");
         Check(ScriptedUpdateNativeMethods.BlockingCount() == 1, "blocking update import call");
-        Check(ScriptedUpdateNativeMethods.CancelCount() == 1, "native update cancellation");
-        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 3, "update operation release");
+        Check(
+            ScriptedUpdateNativeMethods.FlashOptionsInitCount() == 3,
+            "flash:raw options init calls");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawAsyncStartCount() == 2,
+            "async flash:raw starts");
+        Check(
+            ScriptedUpdateNativeMethods.FlashRawBlockingCount() == 1,
+            "blocking flash:raw import call");
+        Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "native operation cancellation");
+        Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 5, "operation release");
         Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "update context release");
     }
 
@@ -1191,6 +1285,17 @@ internal static class Program
             Check(exception.DeviceIdentifier == "设备-一", "UTF-8 serial");
             Check(!exception.InboundExpectedBytes.HasValue, "flash inbound size unspecified");
             Check(reports == 0, "no fabricated progress");
+
+            var rawException = await ExpectAsync<KairosBootException>(
+                () => context.FlashRawAsync(
+                    "boot",
+                    "missing-内核.bin",
+                    deviceSelector: "tcp:127.0.0.1:5554")).ConfigureAwait(false);
+            Check(rawException.Status == KairosBootStatus.Io, "flash:raw file status");
+            Check(rawException.TransferState == TransferState.NotSent, "flash:raw transfer state");
+            Check(
+                rawException.DeviceIdentifier == "tcp:127.0.0.1:5554",
+                "flash:raw selector");
         }
     }
 
@@ -1202,6 +1307,9 @@ internal static class Program
             source.Cancel();
             await ExpectAsync<OperationCanceledException>(
                 () => context.FlashFileAsync("system", "system.img", cancellationToken: source.Token))
+                .ConfigureAwait(false);
+            await ExpectAsync<OperationCanceledException>(
+                () => context.FlashRawAsync("boot", "kernel", cancellationToken: source.Token))
                 .ConfigureAwait(false);
         }
     }
@@ -1218,13 +1326,23 @@ internal static class Program
         }
     }
 
-    private static void CheckTypedManagedPreflight()
+    private static async Task CheckTypedManagedPreflight()
     {
         using (var context = Context.Create())
         {
             Expect<ArgumentException>(() => _ = context.StageAsync(Array.Empty<byte>()));
             Expect<ArgumentException>(
                 () => _ = context.CreateLogicalPartitionAsync("system\0other", 0));
+            await ExpectAsync<ArgumentException>(
+                () => context.FlashRawAsync(
+                    "boot",
+                    "kernel",
+                    secondStagePath: "second")).ConfigureAwait(false);
+            await ExpectAsync<ArgumentException>(
+                () => context.FlashRawAsync(
+                    "boot",
+                    "kernel",
+                    ramdiskPath: string.Empty)).ConfigureAwait(false);
         }
     }
 
@@ -1767,6 +1885,15 @@ internal static class Program
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_blocking_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int BlockingCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_options_init_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FlashOptionsInitCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_raw_async_start_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FlashRawAsyncStartCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_flash_raw_blocking_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FlashRawBlockingCount();
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_cancel_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int CancelCount();

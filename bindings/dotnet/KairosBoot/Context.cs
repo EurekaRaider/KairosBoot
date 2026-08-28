@@ -154,6 +154,49 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>Builds and flashes a default Android boot image.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            FlashOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Builds and flashes a default Android boot image with a typed timeout.</summary>
+    public Task FlashRawAsync(
+        string partition,
+        string kernelPath,
+        FlashOptions options,
+        string? ramdiskPath = null,
+        string? secondStagePath = null,
+        string? deviceSelector = null,
+        IProgress<FlashProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return FlashRawCoreAsync(
+            partition,
+            kernelPath,
+            ramdiskPath,
+            secondStagePath,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
     /// <summary>Starts a complete update-package operation with safe defaults.</summary>
     public Task UpdatePackageAsync(
         string packagePath,
@@ -762,6 +805,77 @@ public sealed partial class Context : IDisposable
         }
     }
 
+    private async Task FlashRawCoreAsync(
+        string partition,
+        string kernelPath,
+        string? ramdiskPath,
+        string? secondStagePath,
+        FlashOptions options,
+        string? deviceSelector,
+        IProgress<FlashProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredText(partition, nameof(partition));
+        ValidateRequiredText(kernelPath, nameof(kernelPath));
+        ValidateOptionalText(ramdiskPath, nameof(ramdiskPath));
+        ValidateOptionalText(secondStagePath, nameof(secondStagePath));
+        if (secondStagePath != null && ramdiskPath == null)
+        {
+            throw new ArgumentException(
+                "A second-stage path requires a ramdisk path.",
+                nameof(secondStagePath));
+        }
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<FlashProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<FlashProgress>(
+                    progress,
+                    CreateFlashProgress);
+            }
+
+            var nativeOptions = new NativeFlashOptions();
+            NativeMethods.FlashOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.FlashRawAsync(
+                handle,
+                deviceSelector,
+                partition,
+                kernelPath,
+                ramdiskPath,
+                secondStagePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
     private async Task UpdatePackageCoreAsync(
         string packagePath,
         UpdateOptions options,
@@ -969,6 +1083,14 @@ public sealed partial class Context : IDisposable
         if (value.IndexOf('\0') >= 0)
         {
             throw new ArgumentException("Value must not contain a NUL character.", parameterName);
+        }
+    }
+
+    private static void ValidateOptionalText(string? value, string parameterName)
+    {
+        if (value != null)
+        {
+            ValidateRequiredText(value, parameterName);
         }
     }
 

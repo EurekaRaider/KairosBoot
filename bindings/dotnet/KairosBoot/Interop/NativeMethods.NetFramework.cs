@@ -76,6 +76,29 @@ internal static partial class NativeMethods
         ref NativeFlashOptions options,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_flash_raw_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashRawAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeFlashOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_flash_raw", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FlashRaw(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string partition,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kernelPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? ramdiskPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? secondStagePath,
+        ref NativeFlashOptions options,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_update_package_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int UpdatePackageAsync(
         ContextSafeHandle context,
