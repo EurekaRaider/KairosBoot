@@ -2083,16 +2083,26 @@
       "status": "intentional-deviation"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_context_create"
+      ],
+      "cliCommands": [
+        "-i",
+        "--vendor-id"
+      ],
+      "evidence": [
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.vendor-id",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "-v",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [],
@@ -2283,7 +2293,6 @@
     "option.header-version",
     "option.os-patch-level",
     "option.os-version",
-    "option.vendor-id",
     "option.verbose"
   ],
   "schemaVersion": 2,
@@ -2320,9 +2329,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 17,
+        "implemented": 18,
         "intentional-deviation": 4,
-        "missing": 12,
+        "missing": 11,
         "partial": 0
       },
       "protocol": {
@@ -2339,9 +2348,9 @@
       }
     },
     "byStatus": {
-      "implemented": 50,
+      "implemented": 51,
       "intentional-deviation": 15,
-      "missing": 18,
+      "missing": 17,
       "partial": 36
     },
     "totalEntries": 119

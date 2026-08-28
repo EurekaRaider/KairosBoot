@@ -211,6 +211,7 @@ struct GlobalOptions {
   std::string_view selector_option;
   bool json{false};
   std::optional<std::uint32_t> timeout_ms;
+  std::optional<std::uint16_t> usb_vendor_id;
   std::uint64_t maximum_receive_bytes{kDefaultMaximumReceiveBytes};
   bool maximum_receive_bytes_set{false};
   bool disable_verity{};
@@ -222,6 +223,8 @@ struct GlobalOptions {
   bool set_active{};
   std::optional<std::string> active_slot;
 };
+
+kairosboot::ContextOptions context_options(const GlobalOptions &options);
 
 enum class CommandKind : std::uint8_t {
   Version,
@@ -338,6 +341,7 @@ utf8_from_wide(const std::wstring_view value) {
 
 bool is_global_option(const std::string_view value) noexcept {
   return value == "--json" || value == "--device" || value == "--serial" ||
+         value == "-i" || value == "--vendor-id" ||
          value == "--timeout-ms" || value == "--max-receive-bytes" ||
          value == "--disable-verity" ||
          value == "--disable-verification" ||
@@ -456,6 +460,7 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   bool device_seen = false;
   bool serial_seen = false;
   bool timeout_seen = false;
+  bool vendor_id_seen = false;
   bool cmdline_seen = false;
   bool base_seen = false;
   bool page_size_seen = false;
@@ -517,6 +522,26 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       }
       result.global.timeout_ms = static_cast<std::uint32_t>(parsed);
       timeout_seen = true;
+      index += 2;
+      continue;
+    }
+    if (argument == "-i" || argument == "--vendor-id") {
+      if (vendor_id_seen) {
+        return error("option " + std::string{argument} +
+                     " may only be specified once");
+      }
+      if (index + 1 >= argc) {
+        return error("option " + std::string{argument} +
+                     " requires a USB vendor id in [1, 0xffff]");
+      }
+      std::uint32_t parsed = 0;
+      if (!parse_u32_auto(argv[index + 1], parsed) || parsed == 0U ||
+          parsed > std::numeric_limits<std::uint16_t>::max()) {
+        return error("option " + std::string{argument} +
+                     " requires a USB vendor id in [1, 0xffff]");
+      }
+      result.global.usb_vendor_id = static_cast<std::uint16_t>(parsed);
+      vendor_id_seen = true;
       index += 2;
       continue;
     }
@@ -665,6 +690,11 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     if (result.global.maximum_receive_bytes_set) {
       return error("option --max-receive-bytes is not valid for " +
+                   std::string{command});
+    }
+    if (result.global.usb_vendor_id.has_value() && command != "doctor" &&
+        command != "devices") {
+      return error("option --vendor-id is not valid for " +
                    std::string{command});
     }
     if (result.global.legacy_boot_options_set) {
@@ -1450,9 +1480,10 @@ int print_version(const bool json) {
   return 0;
 }
 
-int doctor(const bool json) {
+int doctor(const GlobalOptions &options) {
+  const bool json = options.json;
   const kairosboot::Version current = kairosboot::version();
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(options));
   if (!context) {
     if (!json) {
       return print_runtime_error(context.error(), false);
@@ -1488,8 +1519,9 @@ int doctor(const bool json) {
   return 0;
 }
 
-int print_devices(const bool json) {
-  auto context = kairosboot::Context::create();
+int print_devices(const GlobalOptions &options) {
+  const bool json = options.json;
+  auto context = kairosboot::Context::create(context_options(options));
   if (!context) {
     return print_runtime_error(context.error(), json);
   }
@@ -2045,8 +2077,14 @@ int print_command_success(const Invocation &invocation,
   return 0;
 }
 
+kairosboot::ContextOptions context_options(const GlobalOptions &options) {
+  return kairosboot::ContextOptions{
+      .usb_vendor_id = options.usb_vendor_id.value_or(0U),
+  };
+}
+
 int flash_file(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2068,7 +2106,7 @@ int flash_file(const Invocation &invocation) {
 }
 
 int format_partition(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2101,7 +2139,7 @@ int format_partition(const Invocation &invocation) {
 }
 
 int boot_file(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2212,7 +2250,7 @@ int make_boot_image(const Invocation &invocation) {
 }
 
 int flash_raw(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2254,7 +2292,7 @@ int flash_raw(const Invocation &invocation) {
 }
 
 int signature_file(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2358,7 +2396,7 @@ int update_package(const Invocation &invocation) {
 #endif
   }
 
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2414,7 +2452,7 @@ int update_package(const Invocation &invocation) {
 }
 
 int wipe_super(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2558,7 +2596,7 @@ int print_fleet_run_result(const Invocation &invocation,
 }
 
 int run_manifest(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2596,7 +2634,7 @@ int run_typed_command(const Invocation &invocation) {
     stage_data = std::move(*loaded);
   }
 
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2613,7 +2651,7 @@ int run_typed_command(const Invocation &invocation) {
 }
 
 int run_management_command(const Invocation &invocation) {
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
@@ -2682,6 +2720,7 @@ constexpr std::string_view usage_text() noexcept {
                "<partition> <size-bytes>\n"
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
+               "  -i <vendor-id> | --vendor-id <vendor-id>\n"
                "  --slot <a|b|other|all> -a | --set-active[=<a|b|other>]\n"
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
@@ -2745,11 +2784,11 @@ int run_cli(const int argc, char **argv) {
   }
   if (argc == 3 && std::string_view{argv[1]} == "doctor" &&
       std::string_view{argv[2]} == "--json") {
-    return doctor(true);
+    return doctor(GlobalOptions{.json = true});
   }
   if (argc == 3 && std::string_view{argv[1]} == "devices" &&
       std::string_view{argv[2]} == "--json") {
-    return print_devices(true);
+    return print_devices(GlobalOptions{.json = true});
   }
 
   const auto invocation = parse_invocation(argc, argv);
@@ -2767,9 +2806,9 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::Help:
     return print_help(invocation->global.json);
   case CommandKind::Doctor:
-    return doctor(invocation->global.json);
+    return doctor(invocation->global);
   case CommandKind::Devices:
-    return print_devices(invocation->global.json);
+    return print_devices(invocation->global);
   case CommandKind::Validate:
     return validate_manifest(*invocation);
   case CommandKind::Plan:

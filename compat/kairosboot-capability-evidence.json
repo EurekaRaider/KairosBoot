@@ -261,7 +261,15 @@
       "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
     },
     {
-      "ids": ["option.vendor-id", "option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset", "option.verbose"],
+      "ids": ["option.vendor-id"],
+      "status": "implemented",
+      "cSymbols": ["kb_context_create"],
+      "cliCommands": ["-i", "--vendor-id"],
+      "evidence": ["tests/c_api_test.c", "tests/cxx_api_test.cpp", "tests/cli/scripted_cli_test.py", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected."
+    },
+    {
+      "ids": ["option.disable-verification", "option.disable-verity", "option.disable-super-optimization", "option.force", "option.fs-options", "option.header-version", "option.os-patch-level", "option.os-version", "option.dtb", "option.dtb-offset", "option.verbose"],
       "status": "missing",
       "evidence": [],
       "note": "The locked AOSP option is not exposed by the KairosBoot CLI."

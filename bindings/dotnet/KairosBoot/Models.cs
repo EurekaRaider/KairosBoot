@@ -2,6 +2,23 @@ using System;
 
 namespace KairosBoot;
 
+/// <summary>Controls process-wide resources owned by a KairosBoot context.</summary>
+public readonly struct ContextOptions
+{
+    /// <summary>Creates context options with an optional Fastboot USB vendor filter.</summary>
+    /// <param name="usbVendorId">
+    /// A non-zero USB vendor identifier, or zero to accept every Fastboot vendor.
+    /// TCP and UDP selectors are unaffected.
+    /// </param>
+    public ContextOptions(ushort usbVendorId)
+    {
+        UsbVendorId = usbVendorId;
+    }
+
+    /// <summary>Gets the USB vendor filter, or zero when no filter is applied.</summary>
+    public ushort UsbVendorId { get; }
+}
+
 /// <summary>Runtime and ABI version of the loaded KairosBoot native library.</summary>
 public sealed class KairosBootVersion
 {

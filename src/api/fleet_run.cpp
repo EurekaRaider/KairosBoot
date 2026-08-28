@@ -757,6 +757,10 @@ production_device_dependencies(
     }
 
     kairosboot::transport::UsbInterfaceFilter filter;
+    const auto vendor_id = kairosboot::api::fleet_usb_vendor_id(context);
+    if (vendor_id != 0U) {
+        filter.vendor_id = vendor_id;
+    }
     filter.interface_class = 0xFFU;
     filter.interface_subclass = 0x42U;
     filter.interface_protocol = 0x03U;

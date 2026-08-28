@@ -36,6 +36,12 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, EntryPoint = "kb_context_create", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int ContextCreate(IntPtr options, out IntPtr context, out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_context_create", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int ContextCreateWithOptions(
+        ref NativeContextOptions options,
+        out IntPtr context,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_context_release", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void ContextRelease(IntPtr context);
 

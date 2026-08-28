@@ -402,6 +402,9 @@ int main() {
 
   auto context = kairosboot::Context::create();
   CHECK(context.has_value());
+  auto vendor_context = kairosboot::Context::create(
+      kairosboot::ContextOptions{.usb_vendor_id = 0x18d1U});
+  CHECK(vendor_context.has_value());
 
   const auto invalid_selector = context->getvar_async(
       kairosboot::DeviceSelector{"unknown:device"}, "product");

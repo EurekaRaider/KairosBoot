@@ -17,6 +17,8 @@ internal static partial class NativeMethods
         checked((uint)Marshal.SizeOf<NativeProgress>());
     internal static readonly uint FlashOptionsStructSize =
         checked((uint)Marshal.SizeOf<NativeFlashOptions>());
+    internal static readonly uint ContextOptionsStructSize =
+        checked((uint)Marshal.SizeOf<NativeContextOptions>());
     internal static readonly uint LegacyBootOptionsStructSize =
         checked((uint)Marshal.SizeOf<NativeLegacyBootOptions>());
     internal static readonly uint UpdateOptionsStructSize =
@@ -45,6 +47,7 @@ internal struct NativeContextOptions
     internal uint ApiVersion;
     internal IntPtr LogCallback;
     internal IntPtr LogUserData;
+    internal ulong UsbVendorId;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "9bf6e98fd2d68cfe05a57eab6a78582c1b4e5439679c9cab9bd324a46ddff333",
+  "headerContractSha256": "5a710a9ca56b319ddeed3907e41cb33301893656eeb668a04d49c72ed081ba05",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -121,12 +121,17 @@
           "name": "log_user_data",
           "offset": 16,
           "size": 8
+        },
+        {
+          "name": "usb_vendor_id",
+          "offset": 24,
+          "size": 8
         }
       ],
-      "size": 24,
+      "size": 32,
       "versionSize": {
-        "macro": "KB_CONTEXT_OPTIONS_V1_SIZE",
-        "value": 24
+        "macro": "KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE",
+        "value": 32
       }
     },
     "kb_flash_options_t": {

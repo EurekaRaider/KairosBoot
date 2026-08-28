@@ -31,6 +31,14 @@ typedef struct kb_progress {
 typedef int32_t(KB_TEST_CALL *kb_progress_callback_t)(
     const kb_progress_t *progress, void *user_data);
 
+typedef struct kb_context_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  void *log_callback;
+  void *log_user_data;
+  uint64_t usb_vendor_id;
+} kb_context_options_t;
+
 typedef struct kb_update_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -350,9 +358,18 @@ KB_TEST_API const char *KB_TEST_CALL kb_status_string(int32_t status) {
 
 KB_TEST_API int32_t KB_TEST_CALL kb_context_create(
     const void *options, void **context, void **error) {
-  if (options != NULL || context == NULL || error == NULL) {
+  if (context == NULL || error == NULL) {
     record_failure(10);
     return KB_E_INVALID_ARGUMENT;
+  }
+  if (options != NULL) {
+    const kb_context_options_t *typed =
+        (const kb_context_options_t *)options;
+    if (typed->struct_size != (uint32_t)sizeof(*typed) ||
+        typed->api_version != 1 || typed->usb_vendor_id != 0x18D1U) {
+      record_failure(10);
+      return KB_E_INVALID_ARGUMENT;
+    }
   }
   *context = &context_sentinel;
   *error = NULL;

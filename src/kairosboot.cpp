@@ -55,6 +55,7 @@
 struct kb_context_usb_state {
   mutable std::mutex usb_runtime_mutex;
   std::shared_ptr<kairosboot::transport::LibusbRuntime> usb_runtime;
+  std::uint16_t usb_vendor_id{};
 };
 
 struct kb_context {
@@ -438,8 +439,12 @@ make_flash_raw_source(const std::string_view kernel_path,
       std::move(*built)};
 }
 
-kairosboot::transport::UsbInterfaceFilter fastboot_usb_filter() {
+kairosboot::transport::UsbInterfaceFilter
+fastboot_usb_filter(const std::uint16_t vendor_id = 0U) {
   kairosboot::transport::UsbInterfaceFilter filter;
+  if (vendor_id != 0U) {
+    filter.vendor_id = vendor_id;
+  }
   filter.interface_class = 0xFF;
   filter.interface_subclass = 0x42;
   filter.interface_protocol = 0x03;
@@ -531,9 +536,16 @@ bool report_progress(const kb_flash_options_t &options,
 }
 
 bool valid_context_options(const kb_context_options_t *options) noexcept {
-  return options == nullptr ||
-         (options->struct_size >= KB_CONTEXT_OPTIONS_V1_SIZE &&
-          options->api_version == KB_API_VERSION);
+  if (options == nullptr) {
+    return true;
+  }
+  if (options->struct_size < KB_CONTEXT_OPTIONS_V1_SIZE ||
+      options->api_version != KB_API_VERSION) {
+    return false;
+  }
+  return options->struct_size < KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE ||
+         options->usb_vendor_id <=
+             std::numeric_limits<std::uint16_t>::max();
 }
 
 bool valid_flash_options(const kb_flash_options_t *options) noexcept {
@@ -1422,7 +1434,8 @@ parse_target_selector(const char *selector_text) {
                             kairosboot::api::OperationErrorPayload>
 bind_target(
     kairosboot::api::DeviceSelector selector,
-    std::shared_ptr<kairosboot::transport::LibusbRuntime> usb_runtime) {
+    std::shared_ptr<kairosboot::transport::LibusbRuntime> usb_runtime,
+    const std::uint16_t usb_vendor_id = 0U) {
   PreparedTarget target{
       .selector = std::move(selector),
       .usb_runtime = {},
@@ -1448,7 +1461,7 @@ bind_target(
     });
   }
 
-  auto devices = usb_runtime->enumerate(fastboot_usb_filter());
+  auto devices = usb_runtime->enumerate(fastboot_usb_filter(usb_vendor_id));
   if (!devices) {
     return std::unexpected(kairosboot::api::normalize_public_error(
         devices.error(), target.selector.identifier));
@@ -1493,7 +1506,8 @@ prepare_target(kb_context_t &context, const char *selector_text) {
     return std::unexpected(kairosboot::api::normalize_public_error(
         runtime.error(), parsed->identifier));
   }
-  return bind_target(std::move(*parsed), std::move(*runtime));
+  return bind_target(std::move(*parsed), std::move(*runtime),
+                     context.usb_state->usb_vendor_id);
 }
 
 [[nodiscard]] std::expected<PreparedTarget,
@@ -1516,7 +1530,8 @@ prepare_flash_target(
     return std::unexpected(kairosboot::api::normalize_public_error(
         runtime.error(), requested_identifier));
   }
-  auto enumerated = (*runtime)->enumerate(fastboot_usb_filter());
+  auto enumerated = (*runtime)->enumerate(
+      fastboot_usb_filter(context.usb_state->usb_vendor_id));
   if (!enumerated) {
     return std::unexpected(kairosboot::api::normalize_public_error(
         enumerated.error(), requested_identifier));
@@ -2277,7 +2292,8 @@ apply_update_slot_policy(
       return operation_failure(kairosboot::api::normalize_public_error(
           runtime.error(), identifier));
     }
-    target = bind_target(std::move(selector), std::move(*runtime));
+    target = bind_target(std::move(selector), std::move(*runtime),
+                         usb_state->usb_vendor_id);
   }
   if (!target) {
     return operation_failure(std::move(target.error()));
@@ -2855,6 +2871,10 @@ acquire_fleet_usb_runtime(kb_context_t &context) {
   return std::move(*runtime);
 }
 
+std::uint16_t fleet_usb_vendor_id(const kb_context_t &context) noexcept {
+  return context.usb_state == nullptr ? 0U : context.usb_state->usb_vendor_id;
+}
+
 } // namespace kairosboot::api
 
 extern "C" {
@@ -2990,6 +3010,11 @@ kb_status_t KB_CALL kb_context_create(const kb_context_options_t *options,
     if (options != nullptr) {
       result->options.log_callback = options->log_callback;
       result->options.log_user_data = options->log_user_data;
+      if (options->struct_size >= KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE) {
+        result->options.usb_vendor_id = options->usb_vendor_id;
+        result->usb_state->usb_vendor_id =
+            static_cast<std::uint16_t>(options->usb_vendor_id);
+      }
     }
     *context = result.release();
     return KB_OK;
@@ -3022,11 +3047,8 @@ kb_status_t KB_CALL kb_enumerate_devices(kb_context_t *context,
                 runtime.error().native_code);
   }
 
-  kairosboot::transport::UsbInterfaceFilter filter;
-  filter.interface_class = 0xFF;
-  filter.interface_subclass = 0x42;
-  filter.interface_protocol = 0x03;
-  auto enumerated = (*runtime)->enumerate(filter);
+  auto enumerated = (*runtime)->enumerate(
+      fastboot_usb_filter(context->usb_state->usb_vendor_id));
   if (!enumerated) {
     const auto status = runtime_error_status(enumerated.error().kind);
     return fail(error, status,

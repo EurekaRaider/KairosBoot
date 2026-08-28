@@ -274,6 +274,16 @@ internal static class Program
         Check(
             NativeMethods.FlashOptionsStructSize == Marshal.SizeOf<NativeFlashOptions>(),
             "flash options declared size");
+        Check(
+            Marshal.OffsetOf<NativeContextOptions>(nameof(NativeContextOptions.UsbVendorId)).ToInt32() ==
+                (IntPtr.Size == 8 ? 24 : 16),
+            "context options vendor id offset");
+        Check(
+            Marshal.SizeOf<NativeContextOptions>() == (IntPtr.Size == 8 ? 32 : 24),
+            "context options native size");
+        Check(
+            NativeMethods.ContextOptionsStructSize == Marshal.SizeOf<NativeContextOptions>(),
+            "context options declared size");
 
         Check(
             Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.StructSize)).ToInt32() == 0,
@@ -886,6 +896,11 @@ internal static class Program
     private static async Task CheckScriptedUpdateShim()
     {
         ScriptedUpdateNativeMethods.Reset();
+
+        using (var context = Context.Create(new ContextOptions(0x18D1)))
+        {
+            Check(context != null, "context USB vendor options");
+        }
 
         using (var context = new ContextSafeHandle(new IntPtr(1)))
         {

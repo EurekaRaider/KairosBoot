@@ -61,6 +61,7 @@ int main(void) {
   kb_context_options_init(&context_options);
   CHECK(context_options.struct_size == sizeof(context_options));
   CHECK(context_options.api_version == KB_API_VERSION);
+  CHECK(context_options.usb_vendor_id == 0U);
 
   kb_flash_options_t flash_options;
   kb_flash_options_init(&flash_options);
@@ -116,6 +117,25 @@ int main(void) {
   CHECK(kb_context_create(NULL, &context, &error) == KB_OK);
   CHECK(context != NULL);
   CHECK(error == NULL);
+
+  {
+    kb_context_options_t vendor_options;
+    kb_context_options_init(&vendor_options);
+    vendor_options.usb_vendor_id = UINT32_C(0x18d1);
+    kb_context_t *vendor_context = NULL;
+    CHECK(kb_context_create(&vendor_options, &vendor_context, &error) == KB_OK);
+    CHECK(vendor_context != NULL);
+    CHECK(error == NULL);
+    kb_context_release(vendor_context);
+
+    vendor_options.usb_vendor_id = UINT32_C(0x10000);
+    CHECK(kb_context_create(&vendor_options, &vendor_context, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(vendor_context == NULL);
+    CHECK(error != NULL);
+    kb_error_release(error);
+    error = NULL;
+  }
 
   {
     struct extended_command_options {

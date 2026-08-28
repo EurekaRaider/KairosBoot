@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 50
+    implemented: 51
     intentional-deviation: 15
-    missing: 18
+    missing: 17
     partial: 36
 officialDifferentialCoverage:
   status: "not-run"
@@ -887,9 +887,13 @@ entries:
   - id: "option.vendor-id"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected."
+    evidence:
+      - "tests/c_api_test.c"
+      - "tests/cxx_api_test.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.verbose"
     kind: "option"
     required: true
@@ -995,6 +999,5 @@ requiredGaps:
   - "option.header-version"
   - "option.os-patch-level"
   - "option.os-version"
-  - "option.vendor-id"
   - "option.verbose"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"

@@ -112,6 +112,22 @@ public sealed partial class Context : IDisposable
     public static Context Create()
     {
         var status = NativeMethods.ContextCreate(IntPtr.Zero, out var rawContext, out var rawError);
+        return CompleteCreate(status, rawContext, rawError);
+    }
+
+    /// <summary>Creates a KairosBoot context with explicit USB selection options.</summary>
+    public static Context Create(ContextOptions options)
+    {
+        var native = new NativeContextOptions();
+        NativeMethods.ContextOptionsInit(ref native);
+        native.UsbVendorId = options.UsbVendorId;
+        var status = NativeMethods.ContextCreateWithOptions(
+            ref native, out var rawContext, out var rawError);
+        return CompleteCreate(status, rawContext, rawError);
+    }
+
+    private static Context CompleteCreate(int status, IntPtr rawContext, IntPtr rawError)
+    {
         if (status != (int)KairosBootStatus.Ok)
         {
             if (rawContext != IntPtr.Zero)

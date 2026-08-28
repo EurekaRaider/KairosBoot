@@ -85,6 +85,11 @@ struct FetchRange {
 
 using DeviceSelector = std::optional<std::string_view>;
 
+struct ContextOptions {
+  // Zero accepts every Fastboot USB vendor. Network transports are unaffected.
+  std::uint16_t usb_vendor_id{};
+};
+
 struct FlashOptions {
   // Per-I/O timeout. milliseconds::max() selects the native infinite default.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
@@ -1043,10 +1048,14 @@ private:
 
 class Context {
 public:
-  static std::expected<Context, Error> create() {
+  static std::expected<Context, Error>
+  create(const ContextOptions &options = {}) {
+    kb_context_options_t native{};
+    kb_context_options_init(&native);
+    native.usb_vendor_id = options.usb_vendor_id;
     kb_context_t *handle = nullptr;
     kb_error_t *error = nullptr;
-    const kb_status_t status = kb_context_create(nullptr, &handle, &error);
+    const kb_status_t status = kb_context_create(&native, &handle, &error);
     if (status != KB_OK) {
       return std::unexpected(detail_take_error(status, error));
     }

@@ -128,6 +128,9 @@ typedef struct kb_context_options {
   uint32_t api_version;
   kb_log_callback_t log_callback;
   void *log_user_data;
+  /* Zero accepts every Fastboot USB vendor. A non-zero value filters USB
+   * enumeration and selection; TCP and UDP selectors are unaffected. */
+  uint64_t usb_vendor_id;
 } kb_context_options_t;
 
 typedef struct kb_progress {
@@ -257,6 +260,9 @@ typedef struct kb_job_options {
 #define KB_CONTEXT_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_context_options_t, log_user_data) +                \
               sizeof(((kb_context_options_t *)0)->log_user_data)))
+#define KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE                                    \
+  ((uint32_t)(offsetof(kb_context_options_t, usb_vendor_id) +                \
+              sizeof(((kb_context_options_t *)0)->usb_vendor_id)))
 #define KB_FLASH_OPTIONS_V1_SIZE                                             \
   ((uint32_t)(offsetof(kb_flash_options_t, progress_user_data) +             \
               sizeof(((kb_flash_options_t *)0)->progress_user_data)))

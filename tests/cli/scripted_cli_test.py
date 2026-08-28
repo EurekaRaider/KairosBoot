@@ -621,6 +621,9 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     stdout, stderr = local(["-h"], 0)
     if not stdout.startswith(b"Usage:\n") or stderr != b"":
         raise AssertionError(f"short help output changed: {stdout!r}, {stderr!r}")
+    stdout, stderr = local(["-i", "0x10000", "-h"], 2)
+    if b"requires a USB vendor id in [1, 0xffff]" not in stderr:
+        raise AssertionError(f"vendor id range error changed: {stderr!r}")
 
 
 def run(cli: pathlib.Path) -> None:
@@ -636,7 +639,9 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYv\x00\xff")
 
         stdout, stderr = invoke(
-            cli, ["--json", "getvar", "binary"], binary_getvar
+            cli,
+            ["--vendor-id", "0x18d1", "--json", "getvar", "binary"],
+            binary_getvar,
         )
         document = parse_success_json(stdout, stderr)
         assert document["command"] == "getvar"

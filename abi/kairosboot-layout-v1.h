@@ -95,7 +95,7 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_command_options_t, maximum_receive_bytes) == 32
 KB_ABI_STATIC_ASSERT(sizeof(((kb_command_options_t *)0)->maximum_receive_bytes) == 8, "kb_command_options_t.maximum_receive_bytes size");
 KB_ABI_STATIC_ASSERT(KB_COMMAND_OPTIONS_V1_SIZE == 40, "KB_COMMAND_OPTIONS_V1_SIZE value");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_context_options_t) == 24, "kb_context_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_context_options_t) == 32, "kb_context_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_context_options_t) == 8, "kb_context_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, struct_size) == 0, "kb_context_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->struct_size) == 4, "kb_context_options_t.struct_size size");
@@ -105,7 +105,9 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, log_callback) == 8, "kb_cont
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->log_callback) == 8, "kb_context_options_t.log_callback size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, log_user_data) == 16, "kb_context_options_t.log_user_data offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->log_user_data) == 8, "kb_context_options_t.log_user_data size");
-KB_ABI_STATIC_ASSERT(KB_CONTEXT_OPTIONS_V1_SIZE == 24, "KB_CONTEXT_OPTIONS_V1_SIZE value");
+KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, usb_vendor_id) == 24, "kb_context_options_t.usb_vendor_id offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->usb_vendor_id) == 8, "kb_context_options_t.usb_vendor_id size");
+KB_ABI_STATIC_ASSERT(KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE == 32, "KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 72, "kb_flash_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_flash_options_t) == 8, "kb_flash_options_t alignment");

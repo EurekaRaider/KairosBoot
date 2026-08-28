@@ -7,6 +7,7 @@
 #include <kairosboot/kairosboot.h>
 
 #include <expected>
+#include <cstdint>
 #include <memory>
 
 namespace kairosboot::api {
@@ -17,5 +18,8 @@ namespace kairosboot::api {
 [[nodiscard]] std::expected<std::shared_ptr<transport::LibusbRuntime>,
                             OperationErrorPayload>
 acquire_fleet_usb_runtime(kb_context_t& context);
+
+[[nodiscard]] std::uint16_t
+fleet_usb_vendor_id(const kb_context_t& context) noexcept;
 
 }  // namespace kairosboot::api

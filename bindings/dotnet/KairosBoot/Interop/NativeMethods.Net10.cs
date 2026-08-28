@@ -47,6 +47,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ContextCreate(IntPtr options, out IntPtr context, out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_context_create")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ContextCreateWithOptions(
+        ref NativeContextOptions options,
+        out IntPtr context,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_context_release")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void ContextRelease(IntPtr context);
