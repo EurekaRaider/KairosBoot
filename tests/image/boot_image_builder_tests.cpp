@@ -268,13 +268,14 @@ void source_contract_and_cancellation_are_reported() {
 }  // namespace
 
 int main() {
-    const std::array tests{
-        std::pair{"canonical v0", canonical_v0_layout_addresses_hash_and_padding},
-        std::pair{"cmdline and custom layout", command_line_split_and_custom_layout_are_exact},
-        std::pair{"cross-piece reads", reads_cross_piece_boundaries_without_copying_payloads},
-        std::pair{"invalid boundaries", rejects_unsupported_or_unrepresentable_inputs_before_publication},
-        std::pair{"source and cancellation", source_contract_and_cancellation_are_reported},
-    };
+    using TestCase = std::pair<std::string_view, void (*)()>;
+    const std::array<TestCase, 5> tests{{
+        {"canonical v0", canonical_v0_layout_addresses_hash_and_padding},
+        {"cmdline and custom layout", command_line_split_and_custom_layout_are_exact},
+        {"cross-piece reads", reads_cross_piece_boundaries_without_copying_payloads},
+        {"invalid boundaries", rejects_unsupported_or_unrepresentable_inputs_before_publication},
+        {"source and cancellation", source_contract_and_cancellation_are_reported},
+    }};
     try {
         for (const auto& [name, test] : tests) {
             test();
