@@ -514,6 +514,38 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     if f"{semantic_manifest}:3:1: ".encode("utf-8") not in stderr:
         raise AssertionError(f"failed plan lost 3:1 mark: {stderr!r}")
 
+    # run: the CLI uses the public C++23 wrapper. Without a production device
+    # factory it fails closed while still returning the canonical job report.
+    stdout, stderr = local(["--json", "run", str(fixture)], 4)
+    if stderr != b"":
+        raise AssertionError(f"JSON run wrote stderr: {stderr!r}")
+    run_document = json.loads(stdout)
+    if run_document.get("ok") is not False or run_document.get("command") != "run":
+        raise AssertionError(f"unexpected run JSON envelope: {run_document!r}")
+    if run_document.get("status") != "not_supported":
+        raise AssertionError(f"run did not fail closed: {run_document!r}")
+    run_report = run_document.get("report")
+    if not isinstance(run_report, dict) or run_report.get("state") != "failed":
+        raise AssertionError(f"run lost its failure report: {run_document!r}")
+    report_error = run_report.get("error")
+    if (
+        not isinstance(report_error, dict)
+        or report_error.get("code") != 3
+        or report_error.get("status") != "not_supported"
+    ):
+        raise AssertionError(f"run report lost not-supported: {run_report!r}")
+
+    stdout, stderr = local(["run", str(fixture)], 4)
+    if stdout != b"" or b"kairosboot: " not in stderr or b"Fleet report: {" not in stderr:
+        raise AssertionError(f"human run failure changed: {stdout!r}, {stderr!r}")
+
+    stdout, stderr = local(
+        ["--json", "--timeout-ms", "0", "run", str(fixture)], 4
+    )
+    timeout_document = json.loads(stdout)
+    if timeout_document.get("status") != "timeout":
+        raise AssertionError(f"run timeout exit changed: {timeout_document!r}")
+
     # Usage errors follow the repository's exit-2 parse contract.
     stdout, stderr = local(["validate"], 2)
     if stdout != b"" or not stderr.startswith(
@@ -526,6 +558,16 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
         b"kairosboot: plan requires exactly <manifest>\nUsage:\n"
     ):
         raise AssertionError(f"plan arity error changed: {stderr!r}")
+
+    stdout, stderr = local(["run"], 2)
+    if stdout != b"" or b"run requires exactly <manifest>" not in stderr:
+        raise AssertionError(f"run arity error changed: {stderr!r}")
+
+    stdout, stderr = local(
+        ["--device", "usb:1-1", "run", str(fixture)], 2
+    )
+    if b"option --device is not valid for run" not in stderr:
+        raise AssertionError(f"run device rejection changed: {stderr!r}")
 
     stdout, stderr = local(["plan", "job.yaml", "extra.yaml"], 2)
     if b"plan supports only --digest after <manifest>" not in stderr:
