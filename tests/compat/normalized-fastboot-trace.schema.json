@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kairosboot.io/schemas/normalized-fastboot-trace-v1.json",
+  "title": "KairosBoot normalized Fastboot differential trace",
+  "type": "object",
+  "required": ["schemaVersion", "scenarios"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/scenario"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "timestampNs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "elapsedMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["id", "events", "deviceState"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "events": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 65536,
+          "items": {"$ref": "#/$defs/event"}
+        },
+        "deviceState": {
+          "type": "object",
+          "maxProperties": 4096,
+          "additionalProperties": true
+        }
+      }
+    },
+    "event": {
+      "oneOf": [
+        {"$ref": "#/$defs/cliParse"},
+        {"$ref": "#/$defs/command"},
+        {"$ref": "#/$defs/getvar"},
+        {"$ref": "#/$defs/data"},
+        {"$ref": "#/$defs/response"},
+        {"$ref": "#/$defs/file"},
+        {"$ref": "#/$defs/exit"}
+      ]
+    },
+    "cliParse": {
+      "type": "object",
+      "required": ["kind", "argv", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "CLI_PARSE"},
+        "argv": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"type": "string", "maxLength": 65536}
+        },
+        "result": {"enum": ["ok", "error"]},
+        "message": {"type": "string", "maxLength": 65536},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": ["kind", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "COMMAND"},
+        "command": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    },
+    "getvar": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "GETVAR"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    },
+    "data": {
+      "type": "object",
+      "required": ["kind", "direction", "size", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "DATA"},
+        "direction": {"enum": ["host-to-device", "device-to-host"]},
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["INFO", "TEXT", "OKAY", "FAIL"]},
+        "message": {"type": "string", "maxLength": 65536},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["kind", "path", "size", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "FILE"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    },
+    "exit": {
+      "type": "object",
+      "required": ["kind", "code"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "EXIT"},
+        "code": {"type": "integer", "minimum": 0, "maximum": 255},
+        "timestamp": {"$ref": "#/$defs/timestamp"},
+        "timestampNs": {"$ref": "#/$defs/timestampNs"},
+        "elapsedMs": {"$ref": "#/$defs/elapsedMs"}
+      }
+    }
+  }
+}

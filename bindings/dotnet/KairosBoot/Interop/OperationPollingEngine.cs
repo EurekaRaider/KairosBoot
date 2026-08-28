@@ -98,3 +98,28 @@ internal sealed class NativeOperationPollTarget : IOperationPollTarget
         return NativeError.FromBorrowed(status, NativeMethods.OperationError(operation));
     }
 }
+
+internal sealed class NativeJobPollTarget : IOperationPollTarget
+{
+    private readonly JobSafeHandle job;
+
+    internal NativeJobPollTarget(JobSafeHandle job)
+    {
+        this.job = job;
+    }
+
+    public int Poll()
+    {
+        return NativeMethods.JobWait(job, NativeMethods.PollTimeoutMilliseconds);
+    }
+
+    public void RequestCancel()
+    {
+        _ = NativeMethods.JobCancel(job);
+    }
+
+    public Exception CreateFailure(int status)
+    {
+        return NativeError.FromBorrowed(status, NativeMethods.JobError(job));
+    }
+}

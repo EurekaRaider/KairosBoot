@@ -105,6 +105,12 @@ struct CommandOptions {
   std::uint64_t maximum_receive_bytes{64ULL * 1024ULL * 1024ULL};
 };
 
+struct JobOptions {
+  // Whole-job timeout. milliseconds::max() selects no deadline.
+  std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
+  std::function<ProgressAction(const Progress &)> progress;
+};
+
 class Error {
 public:
   [[nodiscard]] kb_status_t status() const noexcept { return status_; }
@@ -339,6 +345,32 @@ struct PreparedCommandOptions final {
   kb_command_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
 };
+
+struct PreparedJobOptions final {
+  kb_job_options_t native{};
+  std::shared_ptr<ProgressCallbackState> callback_state;
+};
+
+[[nodiscard]] inline std::expected<PreparedJobOptions, Error>
+prepare_job_options(const JobOptions &options) {
+  auto timeout = prepare_timeout(options.timeout, "job timeout");
+  if (!timeout) {
+    return std::unexpected(std::move(timeout.error()));
+  }
+
+  PreparedJobOptions result;
+  kb_job_options_init(&result.native);
+  result.native.timeout_ms = *timeout;
+  if (options.progress) {
+    result.callback_state =
+        std::make_shared<ProgressCallbackState>(ProgressCallbackState{
+            options.progress,
+        });
+    result.native.progress_callback = &progress_trampoline;
+    result.native.progress_user_data = result.callback_state.get();
+  }
+  return result;
+}
 
 [[nodiscard]] inline std::expected<PreparedCommandOptions, Error>
 prepare_command_options(const CommandOptions &options) {
@@ -588,6 +620,35 @@ private:
   kb_job_plan_t *handle_{};
 };
 
+class JobReport {
+public:
+  explicit JobReport(kb_job_report_t *handle) noexcept : handle_(handle) {}
+  ~JobReport() { kb_job_report_release(handle_); }
+
+  JobReport(const JobReport &) = delete;
+  JobReport &operator=(const JobReport &) = delete;
+
+  JobReport(JobReport &&other) noexcept
+      : handle_(std::exchange(other.handle_, nullptr)) {}
+  JobReport &operator=(JobReport &&other) noexcept {
+    if (this != &other) {
+      kb_job_report_release(handle_);
+      handle_ = std::exchange(other.handle_, nullptr);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] std::string_view json() const noexcept {
+    std::size_t size = 0;
+    const char *value = kb_job_report_json(handle_, &size);
+    return value == nullptr ? std::string_view{}
+                            : std::string_view{value, size};
+  }
+
+private:
+  kb_job_report_t *handle_{};
+};
+
 /* Context-free manifest entry points: failures surface the manifest source
  * path and, when known, its line and column inside the error message. */
 [[nodiscard]] inline std::expected<void, Error>
@@ -746,6 +807,116 @@ private:
       : resources_(handle, std::move(callback_state)) {}
 
   detail::OperationResources resources_;
+};
+
+class Job {
+public:
+  explicit Job(kb_job_t *handle) noexcept : handle_(handle) {}
+  ~Job() { reset(); }
+
+  Job(const Job &) = delete;
+  Job &operator=(const Job &) = delete;
+
+  Job(Job &&other) noexcept
+      : handle_(std::exchange(other.handle_, nullptr)),
+        callback_state_(std::move(other.callback_state_)) {}
+  Job &operator=(Job &&other) noexcept {
+    if (this != &other) {
+      reset();
+      handle_ = std::exchange(other.handle_, nullptr);
+      callback_state_ = std::move(other.callback_state_);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] kb_operation_state_t state() const noexcept {
+    return kb_job_state(handle_);
+  }
+
+  [[nodiscard]] std::optional<Error> error() const {
+    const kb_error_t *native = kb_job_error(handle_);
+    if (native == nullptr) {
+      return std::nullopt;
+    }
+    return detail_copy_error(kb_error_status(native), native);
+  }
+
+  [[nodiscard]] std::expected<void, Error>
+  wait(std::uint32_t timeout_ms = KB_WAIT_INFINITE) {
+    const kb_status_t status = kb_job_wait(handle_, timeout_ms);
+    if (status != KB_OK) {
+      return std::unexpected(
+          detail_copy_error(status, kb_job_error(handle_)));
+    }
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, Error>
+  wait(const std::chrono::milliseconds timeout) {
+    auto native_timeout = detail::prepare_timeout(timeout, "job wait timeout");
+    if (!native_timeout) {
+      return std::unexpected(std::move(native_timeout.error()));
+    }
+    return wait(*native_timeout);
+  }
+
+  [[nodiscard]] std::expected<void, Error>
+  wait(const std::stop_token stop_token,
+       const std::chrono::milliseconds timeout =
+           std::chrono::milliseconds::max()) {
+    auto native_timeout = detail::prepare_timeout(timeout, "job wait timeout");
+    if (!native_timeout) {
+      return std::unexpected(std::move(native_timeout.error()));
+    }
+    std::atomic<bool> stop_observed{false};
+    auto result = [&] {
+      std::stop_callback cancel_on_stop{
+          stop_token, [handle = handle_, &stop_observed] {
+            stop_observed.store(true, std::memory_order_release);
+            (void)kb_job_cancel(handle);
+          }};
+      return wait(*native_timeout);
+    }();
+    if (!result && result.error().status() == KB_E_TIMEOUT &&
+        stop_observed.load(std::memory_order_acquire)) {
+      return wait(KB_WAIT_INFINITE);
+    }
+    return result;
+  }
+
+  [[nodiscard]] std::expected<void, Error> cancel() {
+    const kb_status_t status = kb_job_cancel(handle_);
+    if (status != KB_OK) {
+      return std::unexpected(detail_copy_error(status, nullptr));
+    }
+    return {};
+  }
+
+  [[nodiscard]] std::expected<JobReport, Error> report() const {
+    kb_job_report_t *report = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = kb_job_get_report(handle_, &report, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return JobReport{report};
+  }
+
+private:
+  friend class Context;
+
+  Job(kb_job_t *handle,
+      std::shared_ptr<detail::ProgressCallbackState> callback_state) noexcept
+      : handle_(handle), callback_state_(std::move(callback_state)) {}
+
+  void reset() noexcept {
+    kb_job_t *handle = std::exchange(handle_, nullptr);
+    kb_job_release(handle);
+    callback_state_.reset();
+  }
+
+  kb_job_t *handle_{};
+  std::shared_ptr<detail::ProgressCallbackState> callback_state_;
 };
 
 class Context {
@@ -1412,6 +1583,39 @@ public:
       const std::string_view partition, const FetchRange range = {},
       const CommandOptions &options = {}) const {
     return fetch(std::nullopt, partition, range, options);
+  }
+
+  [[nodiscard]] std::expected<Job, Error> run_job_file_async(
+      const std::filesystem::path &manifest,
+      const JobOptions &options = {}) const {
+    auto prepared = detail::prepare_job_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+    const auto path_u8 = manifest.u8string();
+    const std::string path_storage{path_u8.begin(), path_u8.end()};
+    kb_job_t *job = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_run_job_file_async(
+        handle_, path_storage.c_str(), &prepared->native, &job, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Job{job, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<JobReport, Error> run_job_file(
+      const std::filesystem::path &manifest,
+      const JobOptions &options = {}) const {
+    auto job = run_job_file_async(manifest, options);
+    if (!job) {
+      return std::unexpected(std::move(job.error()));
+    }
+    auto waited = job->wait();
+    if (!waited) {
+      return std::unexpected(std::move(waited.error()));
+    }
+    return job->report();
   }
 
   [[nodiscard]] std::expected<Operation, Error> update_package_async(

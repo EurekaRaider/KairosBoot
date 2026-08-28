@@ -218,6 +218,7 @@ enum class CommandKind : std::uint8_t {
   Devices,
   Validate,
   Plan,
+  Run,
   Flash,
   Update,
   Getvar,
@@ -530,6 +531,24 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "run") {
+    result.kind = CommandKind::Run;
+    if (argc - command_index != 2) {
+      return error("run requires exactly <manifest>");
+    }
+    result.first = argv[index];
+    if (result.first.empty()) {
+      return error("run manifest must not be empty");
+    }
+    if (result.global.selector.has_value()) {
+      return error("option " + std::string{result.global.selector_option} +
+                   " is not valid for run");
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for run");
+    }
+    return result;
+  }
   if (command == "flash") {
     result.kind = CommandKind::Flash;
     if (argc - command_index != 3) {
@@ -812,6 +831,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "validate";
   case CommandKind::Plan:
     return "plan";
+  case CommandKind::Run:
+    return "run";
   case CommandKind::Flash:
     return "flash";
   case CommandKind::Update:
@@ -1359,6 +1380,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Devices:
   case CommandKind::Validate:
   case CommandKind::Plan:
+  case CommandKind::Run:
   case CommandKind::Flash:
   case CommandKind::Update:
   case CommandKind::Flashing:
@@ -1416,6 +1438,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Fetch:
   case CommandKind::Validate:
   case CommandKind::Plan:
+  case CommandKind::Run:
     break;
   }
   std::terminate();
@@ -1591,29 +1614,8 @@ struct FleetError {
   std::int32_t native_code{0};
 };
 
-class JobPlanOwner final {
-public:
-  explicit JobPlanOwner(kb_job_plan_t *plan) noexcept : plan_{plan} {}
-  ~JobPlanOwner() { kb_job_plan_release(plan_); }
-
-  JobPlanOwner(const JobPlanOwner &) = delete;
-  JobPlanOwner &operator=(const JobPlanOwner &) = delete;
-
-  [[nodiscard]] kb_job_plan_t *get() const noexcept { return plan_; }
-
-private:
-  kb_job_plan_t *plan_;
-};
-
-std::optional<FleetError> take_fleet_error(const kb_status_t fallback,
-                                           kb_error_t *handle) {
-  if (handle == nullptr) {
-    return FleetError{fallback, kb_status_string(fallback), 0};
-  }
-  FleetError result{kb_error_status(handle), kb_error_message(handle),
-                    kb_error_native_code(handle)};
-  kb_error_release(handle);
-  return result;
+FleetError fleet_error(const kairosboot::Error &error) {
+  return FleetError{error.status(), error.message(), error.native_code()};
 }
 
 int print_fleet_error(const FleetError &error, const bool json) {
@@ -1630,11 +1632,10 @@ int print_fleet_error(const FleetError &error, const bool json) {
 }
 
 int validate_manifest(const Invocation &invocation) {
-  const std::string manifest{invocation.first};
-  kb_error_t *error = nullptr;
-  const kb_status_t status = kb_validate_job_file(manifest.c_str(), &error);
-  if (status != KB_OK) {
-    return print_fleet_error(*take_fleet_error(status, error),
+  const auto validated =
+      kairosboot::validate_job_file(path_from_utf8(invocation.first));
+  if (!validated) {
+    return print_fleet_error(fleet_error(validated.error()),
                              invocation.global.json);
   }
   if (invocation.global.json) {
@@ -1647,24 +1648,93 @@ int validate_manifest(const Invocation &invocation) {
 }
 
 int plan_manifest(const Invocation &invocation) {
-  const std::string manifest{invocation.first};
-  kb_job_plan_t *raw_plan = nullptr;
-  kb_error_t *error = nullptr;
-  const kb_status_t status =
-      kb_plan_job_file(manifest.c_str(), &raw_plan, &error);
-  if (status != KB_OK) {
-    return print_fleet_error(*take_fleet_error(status, error), false);
+  auto plan = kairosboot::plan_job_file(path_from_utf8(invocation.first));
+  if (!plan) {
+    return print_fleet_error(fleet_error(plan.error()), false);
   }
-  const JobPlanOwner plan{raw_plan};
   if (invocation.plan_digest) {
-    std::cout << kb_job_plan_sha256_hex(plan.get()) << '\n';
+    std::cout << plan->sha256_hex() << '\n';
     return 0;
   }
-  std::size_t size = 0;
-  const char *canonical = kb_job_plan_canonical_json(plan.get(), &size);
-  std::cout.write(canonical, static_cast<std::streamsize>(size));
+  std::cout << plan->canonical_json();
   std::cout << '\n';
   return 0;
+}
+
+class FleetProgressReporter final {
+public:
+  explicit FleetProgressReporter(const bool json) noexcept : json_(json) {}
+
+  kairosboot::ProgressAction operator()(const kairosboot::Progress &progress) {
+    std::scoped_lock lock(mutex_);
+    if (!json_) {
+      std::cerr << "run: " << progress.stage;
+      if (progress.bytes_total != 0U) {
+        std::cerr << ' ' << progress.bytes_completed << '/'
+                  << progress.bytes_total << " bytes";
+      }
+      if (!progress.device_identifier.empty()) {
+        std::cerr << " [" << progress.device_identifier << ']';
+      }
+      std::cerr << '\n';
+    }
+    return kairosboot::ProgressAction::Continue;
+  }
+
+private:
+  bool json_{};
+  std::mutex mutex_;
+};
+
+int print_fleet_run_result(const Invocation &invocation,
+                           const kairosboot::JobReport &report,
+                           const kairosboot::Error *error) {
+  const bool succeeded = error == nullptr;
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":" << (succeeded ? "true" : "false")
+              << ",\"command\":\"run\"";
+    if (error != nullptr) {
+      std::cout << ",\"status\":\"" << status_name(error->status())
+                << "\",\"message\":\"" << json_escape(error->message())
+                << '"';
+    }
+    std::cout << ",\"report\":" << report.json() << "}\n";
+  } else if (succeeded) {
+    std::cout << "Fleet job completed\n" << report.json() << '\n';
+  } else {
+    std::cerr << "kairosboot: " << error->message() << '\n'
+              << "Fleet report: " << report.json() << '\n';
+  }
+  return succeeded ? 0 : 4;
+}
+
+int run_manifest(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+  InterruptCancellation cancellation;
+  FleetProgressReporter progress{invocation.global.json};
+  kairosboot::JobOptions options;
+  if (invocation.global.timeout_ms) {
+    options.timeout =
+        std::chrono::milliseconds{*invocation.global.timeout_ms};
+  }
+  options.progress = [&progress](const kairosboot::Progress &value) {
+    return progress(value);
+  };
+  auto job = context->run_job_file_async(path_from_utf8(invocation.first),
+                                         options);
+  if (!job) {
+    return print_runtime_error(job.error(), invocation.global.json);
+  }
+  auto waited = job->wait(cancellation.token());
+  auto report = job->report();
+  if (!report) {
+    return print_runtime_error(report.error(), invocation.global.json);
+  }
+  return print_fleet_run_result(invocation, *report,
+                                waited ? nullptr : &waited.error());
 }
 
 int run_typed_command(const Invocation &invocation) {
@@ -1727,6 +1797,8 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot devices [--json]\n"
                "  kairosboot [--json] validate <manifest>\n"
                "  kairosboot plan <manifest> [--digest]\n"
+               "  kairosboot [--json] [--timeout-ms <milliseconds>] run "
+               "<manifest>\n"
                "  kairosboot [global options] flash <partition> <file>\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] getvar <variable>\n"
@@ -1755,7 +1827,8 @@ constexpr std::string_view usage_text() noexcept {
                "Global options:\n"
                "  --device <selector> | --serial <id>\n"
                "  --json --timeout-ms <milliseconds> "
-               "--max-receive-bytes <bytes>\n";
+               "--max-receive-bytes <bytes>\n"
+               "Exit codes: 0 success, 2 usage error, 4 runtime/cancelled\n";
 }
 
 void print_usage(std::ostream &output) { output << usage_text(); }
@@ -1837,6 +1910,8 @@ int run_cli(const int argc, char **argv) {
     return validate_manifest(*invocation);
   case CommandKind::Plan:
     return plan_manifest(*invocation);
+  case CommandKind::Run:
+    return run_manifest(*invocation);
   case CommandKind::Flash:
     return flash_file(*invocation);
   case CommandKind::Update:

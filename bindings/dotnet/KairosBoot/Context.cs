@@ -9,7 +9,7 @@ using KairosBoot.Interop;
 namespace KairosBoot;
 
 /// <summary>Owns a native KairosBoot context and exposes the managed SDK.</summary>
-public sealed class Context : IDisposable
+public sealed partial class Context : IDisposable
 {
     private readonly ContextSafeHandle handle;
 

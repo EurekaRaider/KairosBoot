@@ -98,6 +98,25 @@ def check_workflows() -> None:
             if marker not in release:
                 fail(f"release workflow is missing {contract}: {marker}")
 
+        for forbidden in (
+            "dotnet nuget push",
+            "nuget push",
+            "npm publish",
+            "cargo publish",
+            "twine upload",
+        ):
+            if forbidden in release.lower():
+                fail(f"release workflow must not publish to a registry: {forbidden}")
+        for marker in (
+            "scripts/check_release_context.py",
+            "scripts/check_release_build.py",
+            "--write-evidence",
+            "--write-checksums",
+            "--signing-mode \"$SIGNING_MODE\"",
+        ):
+            if marker not in release:
+                fail(f"release workflow is missing a hard Release gate: {marker}")
+
         xcode = "/Applications/Xcode_26.3.app/Contents/Developer"
         if xcode not in release:
             fail(f"release workflow must pin the validated macOS Xcode: {xcode}")
