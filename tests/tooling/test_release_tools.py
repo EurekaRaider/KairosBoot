@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -39,8 +40,8 @@ class ReleaseToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def create_install_tree(self) -> Path:
-        install = self.root / "install"
+    def create_install_tree(self, platform: str = "linux-x64") -> Path:
+        install = self.root / f"install-{platform}-{len(list(self.root.glob('install-*')))}"
         (install / "bin").mkdir(parents=True)
         (install / "include" / "kairosboot").mkdir(parents=True)
         (install / "lib" / "cmake" / "KairosBoot").mkdir(parents=True)
@@ -66,6 +67,30 @@ class ReleaseToolTests(unittest.TestCase):
         (install / "share" / "kairosboot" / "yaml-cpp" / "LICENSE").write_text(
             "yaml-cpp MIT\n", encoding="utf-8"
         )
+        windows = platform.startswith("windows-")
+        (install / "share" / "kairosboot" / "release-build.json").write_text(
+            json.dumps(
+                {
+                    "documentType": "kairosboot.release-build",
+                    "schemaVersion": 1,
+                    "platform": platform,
+                    "configuration": "Release",
+                    "optimization": "O2" if windows else "O3",
+                    "ndebug": True,
+                    "cmakeFlags": {
+                        "CMAKE_C_FLAGS_RELEASE": "/O2 /DNDEBUG"
+                        if windows
+                        else "-O3 -DNDEBUG",
+                        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /DNDEBUG"
+                        if windows
+                        else "-O3 -DNDEBUG",
+                    },
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return install
 
     def create_symbols(self) -> Path:
@@ -79,6 +104,117 @@ class ReleaseToolTests(unittest.TestCase):
         (symbols / "kairosboot-cli.pdb").write_bytes(b"cli pdb")
         (symbols / "libusb-1.0.pdb").write_bytes(b"dependency pdb")
         return symbols
+
+    def create_release_assets(self, version: str = "1.2.3") -> Path:
+        assets = self.root / f"release-assets-{len(list(self.root.glob('release-assets-*')))}"
+        assets.mkdir()
+        run_script(
+            "check_release_assets.py",
+            "--assets",
+            assets,
+            "--version",
+            version,
+            "--write-manifest",
+        )
+        manifest = assets / f"KairosBoot-v{version}-assets.json"
+        names = json.loads(manifest.read_text(encoding="utf-8"))["assets"]
+        for name in names:
+            path = assets / name
+            if not path.exists() and name not in {
+                "KairosBoot.spdx.json",
+                "provenance.intoto.json",
+                "SHA256SUMS",
+                "signing-status.json",
+            }:
+                path.write_bytes(f"fixture:{name}\n".encode())
+
+        source_name = f"KairosBoot-v{version}-source.tar.gz"
+        sbom = {
+            "spdxVersion": "SPDX-2.3",
+            "packages": [
+                {
+                    "name": "KairosBoot",
+                    "versionInfo": version,
+                    "checksums": [
+                        {
+                            "algorithm": "SHA256",
+                            "checksumValue": hashlib.sha256(
+                                (assets / source_name).read_bytes()
+                            ).hexdigest(),
+                        }
+                    ],
+                },
+                {
+                    "name": "libusb",
+                    "versionInfo": "1.0.30",
+                    "checksums": [
+                        {
+                            "algorithm": "SHA256",
+                            "checksumValue": hashlib.sha256(
+                                (assets / "libusb-1.0.30.tar.bz2").read_bytes()
+                            ).hexdigest(),
+                        }
+                    ],
+                },
+            ],
+        }
+        (assets / "KairosBoot.spdx.json").write_text(
+            json.dumps(sbom, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        (assets / "signing-status.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "mode": "off",
+                    "authenticode": False,
+                    "developerId": False,
+                    "notarized": False,
+                    "checksumSignature": False,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.refresh_release_integrity(assets, version)
+        return assets
+
+    def refresh_release_integrity(self, assets: Path, version: str) -> None:
+        (assets / "provenance.intoto.json").unlink(missing_ok=True)
+        (assets / "SHA256SUMS").unlink(missing_ok=True)
+        run_script(
+            "generate_provenance.py",
+            "--assets",
+            assets,
+            "--output",
+            assets / "provenance.intoto.json",
+            "--signing-mode",
+            "off",
+            "--commit",
+            "a" * 40,
+        )
+        run_script(
+            "check_release_assets.py",
+            "--assets",
+            assets,
+            "--version",
+            version,
+            "--write-checksums",
+        )
+
+    def write_cmake_cache(
+        self, build_type: str, flags: str, *, windows: bool = False
+    ) -> Path:
+        cache = self.root / f"CMakeCache-{build_type}-{len(list(self.root.glob('CMakeCache-*')))}.txt"
+        lines = [] if windows else [f"CMAKE_BUILD_TYPE:STRING={build_type}"]
+        lines.extend(
+            (
+                f"CMAKE_C_FLAGS_RELEASE:STRING={flags}",
+                f"CMAKE_CXX_FLAGS_RELEASE:STRING={flags}",
+            )
+        )
+        cache.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return cache
 
     def test_native_archives_have_expected_shape_and_modes(self) -> None:
         install = self.create_install_tree()
@@ -154,8 +290,102 @@ class ReleaseToolTests(unittest.TestCase):
             )
             self.assertFalse(any("/00-" in name or "/01-" in name for name in names))
 
-    def test_windows_packages_are_zip_archives(self) -> None:
+    def test_release_build_gate_accepts_only_optimized_release(self) -> None:
+        cases = (
+            ("linux-x64", "-O3 -DNDEBUG", False),
+            ("macos-arm64", "-O3 -DNDEBUG", False),
+            ("windows-x64", "/O2 /DNDEBUG", True),
+        )
+        for platform, flags, windows in cases:
+            with self.subTest(platform=platform):
+                install = self.create_install_tree(platform)
+                cache = self.write_cmake_cache("Release", flags, windows=windows)
+                run_script(
+                    "check_release_build.py",
+                    "--cache",
+                    cache,
+                    "--install-root",
+                    install,
+                    "--platform",
+                    platform,
+                    "--configuration",
+                    "Release",
+                    "--write-evidence",
+                )
+
+    def test_release_build_gate_rejects_debug_relwithdebinfo_and_missing_flags(self) -> None:
         install = self.create_install_tree()
+        cases = (
+            ("Debug", "Release", "-O3 -DNDEBUG", "CMAKE_BUILD_TYPE"),
+            ("Release", "RelWithDebInfo", "-O3 -DNDEBUG", "configuration must be Release"),
+            ("Release", "Release", "-DNDEBUG", "lacks required flags"),
+        )
+        for build_type, configuration, flags, message in cases:
+            with self.subTest(build_type=build_type, configuration=configuration):
+                cache = self.write_cmake_cache(build_type, flags)
+                completed = subprocess.run(
+                    [
+                        "python3",
+                        str(ROOT / "scripts" / "check_release_build.py"),
+                        "--cache",
+                        str(cache),
+                        "--install-root",
+                        str(install),
+                        "--platform",
+                        "linux-x64",
+                        "--configuration",
+                        configuration,
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(message, completed.stderr + completed.stdout)
+
+    def test_release_context_requires_tag_version_and_exact_main_head(self) -> None:
+        version_file = self.root / "version.json"
+        version_file.write_text('{"version":"1.2.3"}\n', encoding="utf-8")
+        commit = "a" * 40
+        run_script(
+            "check_release_context.py",
+            "--tag",
+            "v1.2.3",
+            "--version-file",
+            version_file,
+            "--tag-commit",
+            commit,
+            "--main-commit",
+            commit,
+            "--checkout-commit",
+            commit,
+        )
+        completed = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "check_release_context.py"),
+                "--tag",
+                "v1.2.3",
+                "--version-file",
+                str(version_file),
+                "--tag-commit",
+                commit,
+                "--main-commit",
+                "b" * 40,
+                "--checkout-commit",
+                commit,
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("same exact head", completed.stderr + completed.stdout)
+
+    def test_windows_packages_are_zip_archives(self) -> None:
+        install = self.create_install_tree("windows-x64")
         symbols = self.create_symbols()
         output = self.root / "dist"
         run_script(
@@ -185,7 +415,7 @@ class ReleaseToolTests(unittest.TestCase):
             self.assertIn(f"{prefix}/libusb-1.0.pdb", names)
 
     def test_duplicate_symbol_basenames_are_rejected(self) -> None:
-        install = self.create_install_tree()
+        install = self.create_install_tree("windows-x64")
         symbols = self.root / "duplicate-symbols"
         (symbols / "one").mkdir(parents=True)
         (symbols / "two").mkdir(parents=True)
@@ -336,17 +566,8 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertEqual(dependency["digest"]["gitCommit"], "b" * 40)
 
     def test_release_asset_contract_is_explicit_and_exact(self) -> None:
-        assets = self.root / "release-assets"
-        assets.mkdir()
         version = "1.2.3"
-        run_script(
-            "check_release_assets.py",
-            "--assets",
-            assets,
-            "--version",
-            version,
-            "--write-manifest",
-        )
+        assets = self.create_release_assets(version)
         manifest = assets / f"KairosBoot-v{version}-assets.json"
         document = json.loads(manifest.read_text(encoding="utf-8"))
         expected = document["assets"]
@@ -358,10 +579,6 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertIn("miniz-3.1.2-LICENSE", expected)
         self.assertIn("yaml-cpp-0.9.0.tar.gz", expected)
         self.assertIn("yaml-cpp-0.9.0-LICENSE", expected)
-        for name in expected:
-            path = assets / name
-            if not path.exists():
-                path.write_bytes(b"asset")
         run_script(
             "check_release_assets.py",
             "--assets",
@@ -390,6 +607,76 @@ class ReleaseToolTests(unittest.TestCase):
         )
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn(missing.name, failed.stderr + failed.stdout)
+
+    def test_release_assets_reject_bad_hash_wrong_libusb_and_signing_mode(self) -> None:
+        version = "1.2.3"
+        assets = self.create_release_assets(version)
+        target = assets / f"KairosBoot-v{version}-linux-x64-cli.tar.gz"
+        target.write_bytes(target.read_bytes() + b"tampered")
+        bad_hash = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "check_release_assets.py"),
+                "--assets",
+                str(assets),
+                "--version",
+                version,
+                "--validate",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(bad_hash.returncode, 0)
+        self.assertIn("SHA256SUMS mismatch", bad_hash.stderr + bad_hash.stdout)
+
+        assets = self.root / "wrong-libusb"
+        shutil.copytree(self.create_release_assets(version), assets)
+        sbom_path = assets / "KairosBoot.spdx.json"
+        sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+        next(package for package in sbom["packages"] if package["name"] == "libusb")[
+            "versionInfo"
+        ] = "1.0.29"
+        sbom_path.write_text(json.dumps(sbom) + "\n", encoding="utf-8")
+        self.refresh_release_integrity(assets, version)
+        wrong_libusb = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "check_release_assets.py"),
+                "--assets",
+                str(assets),
+                "--version",
+                version,
+                "--validate",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(wrong_libusb.returncode, 0)
+        self.assertIn("wrong libusb version", wrong_libusb.stderr + wrong_libusb.stdout)
+
+        invalid_mode = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "scripts" / "check_release_assets.py"),
+                "--assets",
+                str(assets),
+                "--version",
+                version,
+                "--signing-mode",
+                "required",
+                "--validate",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(invalid_mode.returncode, 0)
+        self.assertIn("unsupported SIGNING_MODE", invalid_mode.stderr + invalid_mode.stdout)
 
     def test_compression_runtime_dependency_gate_is_platform_specific(self) -> None:
         fixtures = {

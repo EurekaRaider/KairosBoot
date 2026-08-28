@@ -4,11 +4,42 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
+
+
+def require_release_evidence(install_root: Path, platform: str) -> None:
+    path = install_root / "share" / "kairosboot" / "release-build.json"
+    if not path.is_file():
+        raise SystemExit("install root is missing Release build evidence")
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    expected = {
+        "documentType": "kairosboot.release-build",
+        "schemaVersion": 1,
+        "platform": platform,
+        "configuration": "Release",
+        "optimization": "O2" if platform.startswith("windows-") else "O3",
+        "ndebug": True,
+    }
+    for key, value in expected.items():
+        if evidence.get(key) != value:
+            raise SystemExit(
+                f"invalid Release build evidence field {key}: {evidence.get(key)!r}"
+            )
+    flags = evidence.get("cmakeFlags")
+    if not isinstance(flags, dict) or set(flags) != {
+        "CMAKE_C_FLAGS_RELEASE",
+        "CMAKE_CXX_FLAGS_RELEASE",
+    }:
+        raise SystemExit("Release build evidence has invalid CMake flags")
+    required_flags = ("/O2", "/DNDEBUG") if platform.startswith("windows-") else ("-O3", "-DNDEBUG")
+    for name, value in flags.items():
+        if not isinstance(value, str) or any(flag not in value.split() for flag in required_flags):
+            raise SystemExit(f"Release build evidence has invalid {name}: {value!r}")
 
 
 def normalize_tar_mode(member: tarfile.TarInfo, relative: Path) -> tarfile.TarInfo:
@@ -56,6 +87,7 @@ def main() -> None:
     install_root = args.install_root.resolve()
     if not (install_root / "bin").is_dir() or not (install_root / "include").is_dir():
         raise SystemExit("install root does not contain the expected SDK layout")
+    require_release_evidence(install_root, args.platform)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     use_zip = args.platform.startswith("windows-")

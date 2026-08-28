@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -22,7 +23,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--signing-mode", choices=("off",), default="off")
+    parser.add_argument("--commit")
     args = parser.parse_args()
+
+    commit = args.commit or os.environ.get("GITHUB_SHA", "")
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise SystemExit("provenance requires a full lowercase release commit SHA-1")
 
     subjects = []
     for path in sorted(args.assets.iterdir()):
@@ -36,8 +43,8 @@ def main() -> None:
             "buildDefinition": {
                 "buildType": "https://github.com/EurekaRaider/KairosBoot/.github/workflows/release.yml",
                 "externalParameters": {"ref": os.environ.get("GITHUB_REF", "")},
-                "internalParameters": {"signingMode": "off"},
-                "resolvedDependencies": [{"uri": os.environ.get("GITHUB_SERVER_URL", "https://github.com") + "/" + os.environ.get("GITHUB_REPOSITORY", "EurekaRaider/KairosBoot"), "digest": {"gitCommit": os.environ.get("GITHUB_SHA", "")}}]
+                "internalParameters": {"signingMode": args.signing_mode},
+                "resolvedDependencies": [{"uri": os.environ.get("GITHUB_SERVER_URL", "https://github.com") + "/" + os.environ.get("GITHUB_REPOSITORY", "EurekaRaider/KairosBoot"), "digest": {"gitCommit": commit}}]
             },
             "runDetails": {
                 "builder": {"id": os.environ.get("GITHUB_SERVER_URL", "https://github.com") + "/" + os.environ.get("GITHUB_REPOSITORY", "EurekaRaider/KairosBoot") + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")},

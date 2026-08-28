@@ -70,10 +70,14 @@ jobs:
           fi
           commit=$(git rev-list -n 1 "$RELEASE_TAG")
           git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$commit" origin/main; then
-            echo "tagged commit is not on main"
-            exit 1
-          fi
+          main_commit=$(git rev-parse origin/main)
+          checkout_commit=$(git rev-parse HEAD)
+          python3 scripts/check_release_context.py \
+            --tag "$RELEASE_TAG" \
+            --version-file version.json \
+            --tag-commit "$commit" \
+            --main-commit "$main_commit" \
+            --checkout-commit "$checkout_commit"
 
           require_success() {
             workflow=$1
@@ -138,6 +142,15 @@ jobs:
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
           cmake --install build --prefix "${RUNNER_TEMP}/install"
+
+      - name: Prove optimized Linux Release install
+        run: >-
+          python3 scripts/check_release_build.py
+          --cache build/CMakeCache.txt
+          --install-root "${RUNNER_TEMP}/install"
+          --platform "${{ matrix.id }}"
+          --configuration Release
+          --write-evidence
 
       - name: Extract symbols and package SDK/CLI
         env:
@@ -269,6 +282,16 @@ jobs:
           ctest --test-dir build -C Release --output-on-failure
           cmake --install build --config Release --prefix "${{ runner.temp }}/install"
 
+      - name: Prove optimized Windows Release install
+        if: runner.os == 'Windows'
+        run: >-
+          python scripts/check_release_build.py
+          --cache build/CMakeCache.txt
+          --install-root "$env:RUNNER_TEMP/install"
+          --platform "${{ matrix.id }}"
+          --configuration Release
+          --write-evidence
+
       - name: Stage and validate Windows symbols
         if: runner.os == 'Windows'
         shell: pwsh
@@ -300,6 +323,16 @@ jobs:
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
           cmake --install build --prefix "${RUNNER_TEMP}/install"
+
+      - name: Prove optimized macOS Release install
+        if: runner.os == 'macOS'
+        run: >-
+          python3 scripts/check_release_build.py
+          --cache build/CMakeCache.txt
+          --install-root "${RUNNER_TEMP}/install"
+          --platform "${{ matrix.id }}"
+          --configuration Release
+          --write-evidence
 
       - name: Extract macOS symbols
         if: runner.os == 'macOS'
@@ -464,6 +497,8 @@ jobs:
             /restore \
             /t:Pack \
             /p:Configuration=Release \
+            /p:ContinuousIntegrationBuild=true \
+            /p:Optimize=true \
             /p:PackageOutputPath="$PWD/nuget" \
             /p:Version="$VERSION" \
             /p:PackageVersion="$VERSION" \
@@ -620,6 +655,7 @@ jobs:
         env:
           VERSION: ${{ needs.verify.outputs.version }}
           COMMIT: ${{ needs.verify.outputs.commit }}
+          SIGNING_MODE: off
         run: |
           set -eu
           git archive --format=tar.gz --prefix="KairosBoot-v${VERSION}/" \
@@ -680,13 +716,19 @@ jobs:
             --output release-assets/KairosBoot.spdx.json
           python3 scripts/generate_provenance.py \
             --assets release-assets \
-            --output release-assets/provenance.intoto.json
-          find release-assets -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | \
-            sort -z | xargs -0 -I{} sha256sum "release-assets/{}" | \
-            sed 's|  release-assets/|  |' >release-assets/SHA256SUMS
+            --output release-assets/provenance.intoto.json \
+            --signing-mode "$SIGNING_MODE" \
+            --commit "$COMMIT"
           python3 scripts/check_release_assets.py \
             --assets release-assets \
             --version "$VERSION" \
+            --signing-mode "$SIGNING_MODE" \
+            --write-checksums
+          python3 scripts/check_release_assets.py \
+            --assets release-assets \
+            --version "$VERSION" \
+            --signing-mode "$SIGNING_MODE" \
+            --commit "$COMMIT" \
             --validate
 
       - name: Attest assembled release assets
