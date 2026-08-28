@@ -392,6 +392,12 @@ public:
                 self->cancel_queued_.contains(transfer)) {
                 return LIBUSB_ERROR_NOT_FOUND;
             }
+            if (std::ranges::any_of(
+                    self->events_, [transfer](const Event& event) {
+                        return event.transfer == transfer;
+                    })) {
+                return LIBUSB_ERROR_NOT_FOUND;
+            }
             self->cancel_queued_.insert(transfer);
             const auto inbound =
                 (transfer->endpoint & LIBUSB_ENDPOINT_IN) == LIBUSB_ENDPOINT_IN;

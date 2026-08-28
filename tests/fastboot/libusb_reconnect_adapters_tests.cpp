@@ -428,6 +428,14 @@ private:
         if (!active_.contains(transfer)) {
             return LIBUSB_ERROR_NOT_FOUND;
         }
+        if (std::ranges::any_of(events_, [transfer](const Event& event) {
+                return event.transfer == transfer;
+            })) {
+            // libusb invokes one callback per submission. If completion is
+            // already queued, cancellation loses the race and must not create
+            // a second callback for the same transfer.
+            return LIBUSB_ERROR_NOT_FOUND;
+        }
         events_.push_back(
             Event{transfer, LIBUSB_TRANSFER_CANCELLED, 0});
         condition_.notify_all();

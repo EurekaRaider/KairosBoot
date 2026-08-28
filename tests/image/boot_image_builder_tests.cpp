@@ -140,7 +140,7 @@ void canonical_v0_layout_addresses_identity_and_padding() {
     const auto kernel = std::make_shared<MemorySource>("KERNEL");
     const auto ramdisk = std::make_shared<MemorySource>("RAM");
     const auto second = std::make_shared<MemorySource>("S");
-    LegacyBootImageOptions options;
+    LegacyBootImageOptions options{};
     options.command_line = "console=ttyS0";
 
     const auto built = build_legacy_boot_image(kernel, ramdisk, second, options);
@@ -178,7 +178,7 @@ void canonical_v0_layout_addresses_identity_and_padding() {
 }
 
 void command_line_split_and_custom_layout_are_exact() {
-    LegacyBootImageOptions options;
+    LegacyBootImageOptions options{};
     options.command_line = std::string(700U, 'x');
     options.base = 0x20000000U;
     options.page_size = 4096U;
@@ -220,7 +220,7 @@ void reads_cross_piece_boundaries_without_copying_payloads() {
 }
 
 void v2_dtb_and_release_fields_change_header_and_layout() {
-    LegacyBootImageOptions options;
+    LegacyBootImageOptions options{};
     options.header_version = 2U;
     options.os_version = "15.2.1";
     options.os_patch_level = "2025-02-05";
@@ -248,7 +248,7 @@ void v2_dtb_and_release_fields_change_header_and_layout() {
 
 void v3_v4_use_fixed_modern_layout() {
     for (const std::uint32_t version : {3U, 4U}) {
-        LegacyBootImageOptions options;
+        LegacyBootImageOptions options{};
         options.header_version = version;
         options.command_line = "console=modern";
         options.os_version = "14";

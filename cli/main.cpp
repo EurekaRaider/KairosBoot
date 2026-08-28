@@ -29,6 +29,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -307,6 +308,30 @@ struct LocalRuntimeError {
   std::string message;
 };
 
+[[nodiscard]] std::optional<std::string>
+environment_value(const char *name) {
+#if defined(_WIN32)
+  char *value = nullptr;
+  std::size_t length = 0U;
+  const int error = ::_dupenv_s(&value, &length, name);
+  std::unique_ptr<char, decltype(&std::free)> owned(value, &std::free);
+  if (error != 0 || owned == nullptr) {
+    return std::nullopt;
+  }
+  std::string result(owned.get());
+#else
+  const char *value = std::getenv(name);
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  std::string result(value);
+#endif
+  if (result.empty()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
 std::expected<std::string, LocalRuntimeError>
 infer_flash_file(const std::string_view partition) {
   constexpr std::array<std::pair<std::string_view, std::string_view>, 24>
@@ -339,12 +364,12 @@ infer_flash_file(const std::string_view partition) {
 
   for (const auto &[nickname, filename] : images) {
     if (partition == nickname) {
-      const char *const product_out = std::getenv("ANDROID_PRODUCT_OUT");
-      if (product_out == nullptr || product_out[0] == '\0') {
+      const auto product_out = environment_value("ANDROID_PRODUCT_OUT");
+      if (!product_out.has_value()) {
         return std::unexpected(LocalRuntimeError{
             KB_E_INVALID_ARGUMENT, "ANDROID_PRODUCT_OUT not set"});
       }
-      return std::string{product_out} + "/" + std::string{filename};
+      return *product_out + "/" + std::string{filename};
     }
   }
   return std::unexpected(LocalRuntimeError{
@@ -1204,18 +1229,18 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       }
     }
 
-    bool cmdline_seen = false;
-    bool base_seen = false;
-    bool page_size_seen = false;
-    bool kernel_offset_seen = false;
-    bool ramdisk_offset_seen = false;
-    bool second_offset_seen = false;
-    bool tags_offset_seen = false;
-    bool header_version_seen = false;
-    bool os_version_seen = false;
-    bool os_patch_level_seen = false;
-    bool dtb_seen = false;
-    bool dtb_offset_seen = false;
+    bool make_boot_cmdline_seen = false;
+    bool make_boot_base_seen = false;
+    bool make_boot_page_size_seen = false;
+    bool make_boot_kernel_offset_seen = false;
+    bool make_boot_ramdisk_offset_seen = false;
+    bool make_boot_second_offset_seen = false;
+    bool make_boot_tags_offset_seen = false;
+    bool make_boot_header_version_seen = false;
+    bool make_boot_os_version_seen = false;
+    bool make_boot_os_patch_level_seen = false;
+    bool make_boot_dtb_seen = false;
+    bool make_boot_dtb_offset_seen = false;
     while (index < argc) {
       const std::string_view option{argv[index++]};
       bool *seen = nullptr;
@@ -1223,40 +1248,40 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       std::uint64_t *number64 = nullptr;
       std::string *text = nullptr;
       if (option == "--cmdline") {
-        seen = &cmdline_seen;
+        seen = &make_boot_cmdline_seen;
         text = &result.boot_image_options.command_line;
       } else if (option == "--base") {
-        seen = &base_seen;
+        seen = &make_boot_base_seen;
         number = &result.boot_image_options.base;
       } else if (option == "--page-size") {
-        seen = &page_size_seen;
+        seen = &make_boot_page_size_seen;
         number = &result.boot_image_options.page_size;
       } else if (option == "--kernel-offset") {
-        seen = &kernel_offset_seen;
+        seen = &make_boot_kernel_offset_seen;
         number = &result.boot_image_options.kernel_offset;
       } else if (option == "--ramdisk-offset") {
-        seen = &ramdisk_offset_seen;
+        seen = &make_boot_ramdisk_offset_seen;
         number = &result.boot_image_options.ramdisk_offset;
       } else if (option == "--second-offset") {
-        seen = &second_offset_seen;
+        seen = &make_boot_second_offset_seen;
         number = &result.boot_image_options.second_offset;
       } else if (option == "--tags-offset") {
-        seen = &tags_offset_seen;
+        seen = &make_boot_tags_offset_seen;
         number = &result.boot_image_options.tags_offset;
       } else if (option == "--header-version") {
-        seen = &header_version_seen;
+        seen = &make_boot_header_version_seen;
         number = &result.boot_image_options.header_version;
       } else if (option == "--os-version") {
-        seen = &os_version_seen;
+        seen = &make_boot_os_version_seen;
         text = &result.boot_image_options.os_version;
       } else if (option == "--os-patch-level") {
-        seen = &os_patch_level_seen;
+        seen = &make_boot_os_patch_level_seen;
         text = &result.boot_image_options.os_patch_level;
       } else if (option == "--dtb") {
-        seen = &dtb_seen;
+        seen = &make_boot_dtb_seen;
         text = &result.boot_image_options.dtb_path;
       } else if (option == "--dtb-offset") {
-        seen = &dtb_offset_seen;
+        seen = &make_boot_dtb_offset_seen;
         number64 = &result.boot_image_options.dtb_offset;
       } else {
         return error("unknown make-boot-image option " + std::string{option});
