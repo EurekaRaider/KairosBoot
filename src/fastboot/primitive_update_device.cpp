@@ -3,6 +3,7 @@
 
 #include "src/fastboot/variable_parser.hpp"
 #include "src/transport/image_transfer_source.hpp"
+#include "src/transport/transfer_ring.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -490,6 +491,21 @@ public:
     }
 
     [[nodiscard]] std::expected<void, UpdateDeviceError>
+    configure_transfer_permits(
+        std::shared_ptr<transport::TransferPermitProvider> provider,
+        const transport::TransferRingConfig& config) {
+        if (provider == nullptr ||
+            !current_service().configure_transfer_permits(provider, config)) {
+            return std::unexpected(local_error(
+                UpdateDeviceErrorKind::Unsupported,
+                "selected transport cannot accept fleet DATA permits"));
+        }
+        permit_provider_ = std::move(provider);
+        permit_config_ = config;
+        return {};
+    }
+
+    [[nodiscard]] std::expected<void, UpdateDeviceError>
     validate_fastbootd_transition_configuration() const {
         if (!reconnect_enabled()) {
             return {};
@@ -781,6 +797,18 @@ public:
 
         try {
             auto replacement_session = std::move(reconnected->session);
+            if (permit_provider_ != nullptr &&
+                !replacement_session->configure_transfer_permits(
+                    permit_provider_, permit_config_)) {
+                auto error = local_error(
+                    UpdateDeviceErrorKind::Failed,
+                    "replacement fastbootd transport rejected fleet DATA permits",
+                    protocol::ProtocolPhase::Validation,
+                    protocol::TransferCertainty::NotTransferred,
+                    true);
+                describe_task_failure(error, 1U, 2U);
+                return std::unexpected(std::move(error));
+            }
             auto replacement_service =
                 std::make_unique<PrimitiveService>(*replacement_session);
             retired_service_ = std::move(owned_service_);
@@ -856,6 +884,8 @@ private:
     ReconnectCoordinator* reconnect_coordinator_{};
     ReconnectTarget reconnect_target_{};
     ReconnectOptions reconnect_options_{};
+    std::shared_ptr<transport::TransferPermitProvider> permit_provider_;
+    transport::TransferRingConfig permit_config_{};
     // Retain the one retired initial session until every prepared token and
     // scripted/HIL observer has finished. It is closed before publication and
     // can never again be selected by current_service_.
@@ -2120,6 +2150,19 @@ PrimitiveUpdateDevice::prepare_task(
             UpdateDeviceErrorKind::Failed,
             "update task preparation failed with a non-standard exception"));
     }
+}
+
+std::expected<void, UpdateDeviceError>
+PrimitiveUpdateDevice::configure_transfer_permits(
+    std::shared_ptr<transport::TransferPermitProvider> provider,
+    const transport::TransferRingConfig& config) {
+    return session_actor_->configure_transfer_permits(
+        std::move(provider), config);
+}
+
+PrimitiveService& PrimitiveUpdateDevice::current_service_for_fleet_actor()
+    noexcept {
+    return session_actor_->current_service();
 }
 
 }  // namespace kairosboot::fastboot

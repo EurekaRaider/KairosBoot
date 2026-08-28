@@ -719,6 +719,12 @@ std::expected<PrimitiveReply, PrimitiveError> PrimitiveService::raw_command(
     return command(PrimitiveOperation::RawCommand, *validated);
 }
 
+bool PrimitiveService::configure_transfer_permits(
+    std::shared_ptr<transport::TransferPermitProvider> provider,
+    const transport::TransferRingConfig& config) noexcept {
+    return session_.configure_transfer_permits(std::move(provider), config);
+}
+
 void PrimitiveService::request_cancel() noexcept {
     session_.request_cancel();
 }

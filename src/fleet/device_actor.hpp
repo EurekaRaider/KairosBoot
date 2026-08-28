@@ -2,7 +2,9 @@
 #pragma once
 
 #include "src/fastboot/primitive_update_device.hpp"
+#include "src/fastboot/libusb_reconnect_adapters.hpp"
 #include "src/fleet/artifact_preflight.hpp"
+#include "src/fleet/controller_scheduler.hpp"
 #include "src/fleet/device_preflight.hpp"
 #include "src/fleet/job_report.hpp"
 
@@ -44,6 +46,32 @@ struct FleetActorPrepareError final {
     std::optional<std::size_t> step_index;
     std::optional<fastboot::UpdateDeviceError> device_error;
 };
+
+struct FleetReconnectDependencies final {
+    std::shared_ptr<fastboot::IReconnectDiscovery> discovery;
+    std::shared_ptr<fastboot::IReconnectSessionOpener> opener;
+    std::shared_ptr<fastboot::IReconnectWaiter> waiter;
+};
+
+using FleetReconnectFactory = std::function<
+    std::expected<FleetReconnectDependencies, FleetActorPrepareError>(
+        const PreparedDeviceSession&, std::size_t)>;
+
+// Internal execution wiring frozen before the destructive barrier. Production
+// callers use make_libusb_fleet_execution_runtime(); tests may inject scripted
+// reconnect dependencies while exercising the same actor factory.
+struct FleetExecutionRuntime final {
+    std::shared_ptr<transport::BufferBudget> buffer_budget;
+    transport::TransferRingConfig data_ring{};
+    FleetReconnectFactory reconnect_factory;
+    fastboot::ReconnectOptions reconnect_options{};
+};
+
+[[nodiscard]] std::expected<FleetExecutionRuntime, FleetActorPrepareError>
+make_libusb_fleet_execution_runtime(
+    std::shared_ptr<transport::LibusbRuntime> runtime,
+    fastboot::LibusbReconnectAdapterOptions adapter_options = {},
+    fastboot::ReconnectOptions reconnect_options = {});
 
 enum class FleetActorExecutionEventKind : std::uint8_t {
     DeviceStarted,
@@ -104,8 +132,14 @@ public:
 private:
     struct PreparedStep;
 
-    FleetDeviceActor(PreparedDeviceSession&& prepared,
-                     const ManifestTarget& target);
+    explicit FleetDeviceActor(const ManifestTarget& target) noexcept;
+
+    [[nodiscard]] static std::expected<std::unique_ptr<FleetDeviceActor>,
+                                       FleetActorPrepareError>
+    create(PreparedDeviceSession&& prepared,
+           const ManifestTarget& target,
+           const FleetExecutionRuntime* runtime,
+           std::size_t device_index);
 
     [[nodiscard]] std::expected<ReportDeviceSpec,
                                 FleetActorPrepareError>
@@ -120,13 +154,24 @@ private:
             const FleetActorExecutionObserver& observer);
 
     void retire() noexcept;
+    [[nodiscard]] std::expected<void, FleetActorPrepareError>
+    bind_transfer_provider(
+        std::shared_ptr<transport::TransferPermitProvider> provider,
+        const transport::TransferRingConfig& config,
+        std::size_t device_index);
+    [[nodiscard]] std::uint64_t host_to_device_data_bytes() const noexcept;
 
     // Declaration order is a lifetime contract. Destruction runs steps,
     // update adapter and primitive service before the underlying session.
     std::unique_ptr<protocol::FastbootSession> session_;
     std::unique_ptr<fastboot::PrimitiveService> service_;
+    fastboot::PrimitiveService* service_view_{};
+    FleetReconnectDependencies reconnect_dependencies_;
+    std::unique_ptr<fastboot::ReconnectCoordinator> reconnect_coordinator_;
     std::unique_ptr<fastboot::PrimitiveUpdateDevice> update_;
+    std::shared_ptr<transport::TransferPermitProvider> permit_provider_;
     std::vector<PreparedStep> steps_;
+    std::uint64_t host_to_device_data_bytes_{};
     std::atomic<std::uint8_t> state_{0U};
     const ManifestTarget* target_{};
 
@@ -154,6 +199,8 @@ public:
 private:
     PreparedFleetActorBatch(
         PreparedFleetArtifacts&& artifacts,
+        std::optional<FleetExecutionRuntime>&& runtime,
+        std::unique_ptr<WeightedControllerScheduler>&& scheduler,
         std::vector<std::unique_ptr<FleetDeviceActor>>&& actors,
         std::vector<ReportDeviceSpec>&& report_specs) noexcept;
 
@@ -162,10 +209,13 @@ private:
     prepare(const JobPlan& plan,
             PreparedFleetArtifacts&& artifacts,
             PreparedDeviceBatchConsumption&& devices,
+            std::optional<FleetExecutionRuntime>&& runtime,
             const fastboot::UpdateOperationContext& context);
 
     // The sealed artifact owner outlives every task that aliases its sources.
     PreparedFleetArtifacts artifacts_;
+    std::optional<FleetExecutionRuntime> runtime_;
+    std::unique_ptr<WeightedControllerScheduler> scheduler_;
     std::vector<std::unique_ptr<FleetDeviceActor>> actors_;
     std::vector<ReportDeviceSpec> report_specs_;
 
@@ -174,6 +224,13 @@ private:
         const JobPlan&,
         PreparedFleetArtifacts&&,
         PreparedDeviceBatchConsumption&&,
+        const fastboot::UpdateOperationContext&);
+    friend std::expected<PreparedFleetActorBatch, FleetActorPrepareError>
+    prepare_fleet_device_actors(
+        const JobPlan&,
+        PreparedFleetArtifacts&&,
+        PreparedDeviceBatchConsumption&&,
+        FleetExecutionRuntime,
         const fastboot::UpdateOperationContext&);
 };
 
@@ -185,6 +242,14 @@ prepare_fleet_device_actors(
     const JobPlan& plan,
     PreparedFleetArtifacts&& artifacts,
     PreparedDeviceBatchConsumption&& devices,
+    const fastboot::UpdateOperationContext& context = {});
+
+[[nodiscard]] std::expected<PreparedFleetActorBatch, FleetActorPrepareError>
+prepare_fleet_device_actors(
+    const JobPlan& plan,
+    PreparedFleetArtifacts&& artifacts,
+    PreparedDeviceBatchConsumption&& devices,
+    FleetExecutionRuntime runtime,
     const fastboot::UpdateOperationContext& context = {});
 
 }  // namespace kairosboot::fleet

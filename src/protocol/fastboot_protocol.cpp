@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "fastboot_protocol.hpp"
 
+#include "src/transport/transfer_ring.hpp"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -662,6 +664,20 @@ SessionState FastbootSession::state() const noexcept {
 std::optional<ProtocolError> FastbootSession::poison_error() const {
     std::scoped_lock lock(mutex_);
     return poison_error_;
+}
+
+bool FastbootSession::configure_transfer_permits(
+    std::shared_ptr<transport::TransferPermitProvider> provider,
+    const transport::TransferRingConfig& config) noexcept {
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock() || state_ != SessionState::Ready || provider == nullptr) {
+        return false;
+    }
+    auto* configurable =
+        dynamic_cast<transport::ITransferPermitConfigurableTransport*>(
+            transport_.get());
+    return configurable != nullptr &&
+        configurable->configure_transfer_permits(std::move(provider), config);
 }
 
 void FastbootSession::request_cancel() noexcept {

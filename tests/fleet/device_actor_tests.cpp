@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "src/fleet/device_actor.hpp"
+#include "src/fleet/fleet_coordinator.hpp"
 #include "src/image/sparse_flash_plan.hpp"
 #include "src/image/sparse_image.hpp"
+#include "src/transport/transfer_ring.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -33,6 +35,16 @@ namespace {
 
 using namespace std::chrono_literals;
 using kairosboot::fastboot::FastbootUsbMode;
+using kairosboot::fastboot::IReconnectDiscovery;
+using kairosboot::fastboot::IReconnectSessionOpener;
+using kairosboot::fastboot::OpenedReconnectSession;
+using kairosboot::fastboot::ReconnectCandidate;
+using kairosboot::fastboot::ReconnectDeviceIdentity;
+using kairosboot::fastboot::ReconnectDiscoveryError;
+using kairosboot::fastboot::ReconnectOpenError;
+using kairosboot::fastboot::ReconnectTimePoint;
+using kairosboot::fastboot::ReconnectUsbFingerprint;
+using kairosboot::fastboot::UsbPhysicalPortPath;
 using kairosboot::fastboot::UpdateOperationContext;
 using kairosboot::fleet::DevicePreflightProbeError;
 using kairosboot::fleet::DevicePreflightProbeResult;
@@ -42,6 +54,11 @@ using kairosboot::fleet::DevicePreflightUsbIdentity;
 using kairosboot::fleet::FlashJobManifest;
 using kairosboot::fleet::FleetActorExecutionErrorKind;
 using kairosboot::fleet::FleetActorPrepareErrorKind;
+using kairosboot::fleet::FleetCoordinator;
+using kairosboot::fleet::FleetCoordinatorDeviceState;
+using kairosboot::fleet::FleetCoordinatorState;
+using kairosboot::fleet::FleetExecutionRuntime;
+using kairosboot::fleet::FleetReconnectDependencies;
 using kairosboot::fleet::IDevicePreflightProbe;
 using kairosboot::fleet::IDevicePreflightSessionOpener;
 using kairosboot::fleet::JobPlan;
@@ -82,6 +99,17 @@ using kairosboot::protocol::TransferProgressObserver;
 using kairosboot::protocol::TransferResult;
 using kairosboot::protocol::TransportStatus;
 using kairosboot::transport::LinuxUsbTopology;
+using kairosboot::transport::BufferBudget;
+using kairosboot::transport::CompletionCode;
+using kairosboot::transport::ITransferPermitConfigurableTransport;
+using kairosboot::transport::SubmitResult;
+using kairosboot::transport::TransferBackend;
+using kairosboot::transport::TransferCompletion;
+using kairosboot::transport::TransferPermitProvider;
+using kairosboot::transport::TransferRing;
+using kairosboot::transport::TransferRingConfig;
+using kairosboot::transport::TransferRingState;
+using kairosboot::transport::TransferSubmission;
 using kairosboot::transport::UsbDeviceInfo;
 
 class CheckFailure final : public std::runtime_error {
@@ -322,10 +350,63 @@ struct TransportState final {
     std::uint64_t maximum_download_size{1024U * 1024U};
     bool slotted{true};
     std::string current_slot{"a"};
+    std::string product{"product-a"};
+    std::string serial{"SERIAL-0"};
+    bool userspace{};
+    std::shared_ptr<TransferPermitProvider> permit_provider;
+    TransferRingConfig ring_config{};
+    std::size_t permit_bind_count{};
+    std::size_t peak_ring_in_flight{};
+};
+
+class CompletingTransferBackend final : public TransferBackend {
+public:
+    explicit CompletingTransferBackend(std::span<std::byte> output)
+        : output_(output) {}
+
+    [[nodiscard]] SubmitResult submit(
+        const TransferSubmission& submission) override {
+        if (submission.offset > output_.size() ||
+            submission.payload.size() > output_.size() - submission.offset) {
+            return SubmitResult::io_error;
+        }
+        std::ranges::copy(
+            submission.payload,
+            output_.begin() + static_cast<std::ptrdiff_t>(submission.offset));
+        completions_.push_back(TransferCompletion{
+            .id = submission.id,
+            .code = CompletionCode::success,
+            .transferred_bytes = submission.payload.size(),
+        });
+        return SubmitResult::accepted;
+    }
+
+    void cancel(const kairosboot::transport::TransferId id) noexcept override {
+        for (auto& completion : completions_) {
+            if (completion.id == id) {
+                completion.code = CompletionCode::cancelled;
+                completion.transferred_bytes = 0U;
+            }
+        }
+    }
+
+    [[nodiscard]] std::optional<TransferCompletion> next() {
+        if (completions_.empty()) {
+            return std::nullopt;
+        }
+        auto completion = completions_.front();
+        completions_.erase(completions_.begin());
+        return completion;
+    }
+
+private:
+    std::span<std::byte> output_;
+    std::vector<TransferCompletion> completions_;
 };
 
 class AutomaticTransport final : public ITransportSession,
-                                 public IStreamingTransportSession {
+                                 public IStreamingTransportSession,
+                                 public ITransferPermitConfigurableTransport {
 public:
     explicit AutomaticTransport(std::shared_ptr<TransportState> state)
         : state_(std::move(state)) {}
@@ -368,6 +449,13 @@ public:
             } else if (name == "max-download-size") {
                 state_->pending_response =
                     "OKAY" + std::to_string(state_->maximum_download_size);
+            } else if (name == "is-userspace") {
+                state_->pending_response =
+                    state_->userspace ? "OKAYyes" : "OKAYno";
+            } else if (name == "product") {
+                state_->pending_response = "OKAY" + state_->product;
+            } else if (name == "serialno") {
+                state_->pending_response = "OKAY" + state_->serial;
             } else {
                 state_->pending_response = "OKAYyes";
             }
@@ -429,7 +517,7 @@ public:
 
     [[nodiscard]] TransferResult write_source(
         const std::shared_ptr<ITransferSource> source,
-        std::chrono::milliseconds,
+        const std::chrono::milliseconds timeout,
         const TransferProgressObserver& observer) override {
         if (source == nullptr ||
             source->size() > std::numeric_limits<std::size_t>::max()) {
@@ -442,19 +530,95 @@ public:
                 .native_code = 0,
             };
         }
-        std::string payload(static_cast<std::size_t>(source->size()), '\0');
-        if (!source->read_exact(
-                0U, std::as_writable_bytes(std::span(payload)))) {
-            return {
-                .status = TransportStatus::IoError,
-                .transferred = 0U,
-                .certainty = TransferCertainty::NotTransferred,
-                .truncated = false,
-                .detail = "unable to read prepared source",
-                .native_code = 0,
-            };
+        std::shared_ptr<TransferPermitProvider> provider;
+        TransferRingConfig config;
+        {
+            std::lock_guard lock(state_->mutex);
+            provider = state_->permit_provider;
+            config = state_->ring_config;
         }
-        if (observer &&
+        std::vector<std::byte> payload(
+            static_cast<std::size_t>(source->size()));
+        if (provider == nullptr) {
+            if (!source->read_exact(0U, payload)) {
+                return {
+                    .status = TransportStatus::IoError,
+                    .transferred = 0U,
+                    .certainty = TransferCertainty::NotTransferred,
+                    .truncated = false,
+                    .detail = "unable to read prepared source",
+                    .native_code = 0,
+                };
+            }
+        } else {
+            CompletingTransferBackend backend(payload);
+            TransferRing ring(backend, nullptr, config, nullptr, provider);
+            if (!ring.start(source, true)) {
+                return {
+                    .status = TransportStatus::IoError,
+                    .transferred = 0U,
+                    .certainty = TransferCertainty::NotTransferred,
+                    .truncated = false,
+                    .detail = "unable to start scripted transfer ring",
+                    .native_code = 0,
+                };
+            }
+            const auto deadline = std::chrono::steady_clock::now() + timeout;
+            std::uint64_t observed_watermark{};
+            while (ring.state() == TransferRingState::running) {
+                {
+                    std::lock_guard lock(state_->mutex);
+                    state_->peak_ring_in_flight = std::max(
+                        state_->peak_ring_in_flight, ring.in_flight());
+                }
+                if (auto completion = backend.next()) {
+                    CHECK(ring.handle_completion(*completion));
+                    if (observer &&
+                        ring.completion_watermark() > observed_watermark) {
+                        observed_watermark = ring.completion_watermark();
+                        if (observer(observed_watermark, source->size()) ==
+                            TransferProgressAction::cancel) {
+                            ring.cancel();
+                        }
+                    }
+                    continue;
+                }
+                if (ring.in_flight() == 0U) {
+                    if (!ring.wait_for_permit_until(deadline)) {
+                        bool cancelled{};
+                        {
+                            std::lock_guard lock(state_->mutex);
+                            cancelled = state_->cancellation_requested;
+                        }
+                        if (cancelled ||
+                            std::chrono::steady_clock::now() >= deadline) {
+                            ring.cancel();
+                        }
+                    }
+                    continue;
+                }
+                throw CheckFailure("scripted ring lost an accepted completion");
+            }
+            while (auto completion = backend.next()) {
+                CHECK(ring.handle_completion(*completion));
+            }
+            if (ring.state() != TransferRingState::completed) {
+                return {
+                    .status = TransportStatus::Cancelled,
+                    .transferred = static_cast<std::size_t>(
+                        ring.completion_watermark()),
+                    .certainty = ring.submitted_bytes() == 0U
+                        ? TransferCertainty::NotTransferred
+                        : TransferCertainty::PartialOrUnknown,
+                    .truncated = false,
+                    .detail = "scripted transfer ring was cancelled",
+                    .native_code = 0,
+                };
+            }
+        }
+        std::string completed_payload(payload.size(), '\0');
+        std::memcpy(completed_payload.data(), payload.data(), payload.size());
+        if (provider == nullptr && observer &&
             observer(source->size(), source->size()) ==
                 TransferProgressAction::cancel) {
             return {
@@ -467,7 +631,7 @@ public:
             };
         }
         std::lock_guard lock(state_->mutex);
-        state_->payloads.push_back(std::move(payload));
+        state_->payloads.push_back(std::move(completed_payload));
         state_->pending_response = "OKAY";
         return {
             .status = TransportStatus::Ok,
@@ -479,11 +643,32 @@ public:
         };
     }
 
-    void request_cancel() noexcept override {
+    [[nodiscard]] bool configure_transfer_permits(
+        std::shared_ptr<TransferPermitProvider> provider,
+        const TransferRingConfig config) noexcept override {
+        if (provider == nullptr || config.chunk_size == 0U ||
+            config.depth == 0U) {
+            return false;
+        }
         std::lock_guard lock(state_->mutex);
-        state_->cancellation_requested = true;
-        state_->release_block = true;
-        state_->condition.notify_all();
+        state_->permit_provider = std::move(provider);
+        state_->ring_config = config;
+        ++state_->permit_bind_count;
+        return true;
+    }
+
+    void request_cancel() noexcept override {
+        std::shared_ptr<TransferPermitProvider> provider;
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->cancellation_requested = true;
+            state_->release_block = true;
+            provider = state_->permit_provider;
+            state_->condition.notify_all();
+        }
+        if (provider != nullptr) {
+            provider->cancel_wait();
+        }
     }
 
     void close() noexcept override {
@@ -497,7 +682,9 @@ private:
     std::shared_ptr<TransportState> state_;
 };
 
-[[nodiscard]] UsbDeviceInfo device(const std::size_t index) {
+[[nodiscard]] UsbDeviceInfo device(
+    const std::size_t index,
+    const std::size_t controller_index = 0U) {
     const auto address = static_cast<std::uint8_t>(index + 1U);
     UsbDeviceInfo result{
         .vendor_id = 0x18D1U,
@@ -526,7 +713,8 @@ private:
     };
     result.linux_topology = LinuxUsbTopology{
         .physical_port_path = "usb:1-" + std::to_string(index + 1U),
-        .root_controller_id = "linux-sysfs:/controller0",
+        .root_controller_id =
+            "linux-sysfs:/controller" + std::to_string(controller_index),
         .hub_port_chain = result.port_path,
         .vendor_id = result.vendor_id,
         .product_id = result.product_id,
@@ -608,6 +796,76 @@ public:
     }
 };
 
+[[nodiscard]] ReconnectUsbFingerprint reconnect_fingerprint(
+    const DevicePreflightUsbIdentity& usb) {
+    return {
+        .vendor_id = usb.usb_fingerprint.vendor_id,
+        .product_id = usb.usb_fingerprint.product_id,
+        .interface_number = usb.usb_fingerprint.interface_number,
+        .interface_class = usb.usb_fingerprint.interface_class,
+        .interface_subclass = usb.usb_fingerprint.interface_subclass,
+        .interface_protocol = usb.usb_fingerprint.interface_protocol,
+    };
+}
+
+class OneShotReconnectEndpoint final : public IReconnectDiscovery,
+                                       public IReconnectSessionOpener {
+public:
+    OneShotReconnectEndpoint(
+        ReconnectCandidate candidate,
+        ReconnectDeviceIdentity identity,
+        std::shared_ptr<TransportState> replacement_state)
+        : candidate_(std::move(candidate)),
+          identity_(std::move(identity)),
+          replacement_state_(std::move(replacement_state)) {}
+
+    [[nodiscard]] std::expected<std::vector<ReconnectCandidate>,
+                                ReconnectDiscoveryError>
+    discover(ReconnectTimePoint, std::stop_token cancellation) override {
+        ++discovery_calls;
+        if (cancellation.stop_requested()) {
+            return std::unexpected(ReconnectDiscoveryError{
+                .message = "scripted reconnect was cancelled",
+                .native_code = 0,
+                .retryable = false,
+            });
+        }
+        return std::vector<ReconnectCandidate>{candidate_};
+    }
+
+    [[nodiscard]] std::expected<OpenedReconnectSession, ReconnectOpenError>
+    open(const ReconnectCandidate& candidate,
+         ReconnectTimePoint,
+         std::stop_token cancellation) override {
+        ++open_calls;
+        if (cancellation.stop_requested() || opened_ ||
+            candidate.physical_port != candidate_.physical_port) {
+            return std::unexpected(ReconnectOpenError{
+                .message = "scripted reconnect open was rejected",
+                .native_code = 0,
+                .retryable = false,
+                .outbound_certainty = TransferCertainty::NotTransferred,
+            });
+        }
+        opened_ = true;
+        return OpenedReconnectSession{
+            .verified_identity = identity_,
+            .session = std::make_unique<FastbootSession>(
+                std::make_unique<AutomaticTransport>(replacement_state_)),
+            .outbound_certainty = TransferCertainty::FullyTransferred,
+        };
+    }
+
+    std::size_t discovery_calls{};
+    std::size_t open_calls{};
+
+private:
+    ReconnectCandidate candidate_;
+    ReconnectDeviceIdentity identity_;
+    std::shared_ptr<TransportState> replacement_state_;
+    bool opened_{};
+};
+
 struct PreparedInputs final {
     std::vector<UsbDeviceInfo> snapshot;
     std::vector<std::shared_ptr<TransportState>> states;
@@ -615,13 +873,17 @@ struct PreparedInputs final {
 };
 
 [[nodiscard]] PreparedInputs prepare_devices(const JobPlan& plan,
-                                             const std::size_t count) {
+                                             const std::size_t count,
+                                             const std::size_t controller_count = 1U) {
+    CHECK(controller_count != 0U);
     PreparedInputs result;
     result.snapshot.reserve(count);
     result.states.reserve(count);
     for (std::size_t index = 0U; index < count; ++index) {
-        result.snapshot.push_back(device(index));
-        result.states.push_back(std::make_shared<TransportState>());
+        result.snapshot.push_back(device(index, index % controller_count));
+        auto state = std::make_shared<TransportState>();
+        state->serial = result.snapshot.back().serial_utf8;
+        result.states.push_back(std::move(state));
     }
     AutomaticOpener opener(result.states);
     AutomaticProbe probe;
@@ -1495,6 +1757,181 @@ void primitive_command_cancellation_races_preserve_sticky_poisoning() {
     }
 }
 
+void coordinator_uses_controller_scheduler_for_thirty_two_data_rings() {
+    TemporaryDirectory temporary;
+    const std::string payload(64U, 'K');
+    write_bytes(temporary.path() / "images/image.img", payload);
+    auto plan = make_plan(
+        serials(32U), {flash_step("boot", "image")}, payload);
+    auto artifacts = preflight_fleet_artifacts(plan, temporary.path());
+    CHECK(artifacts.has_value());
+    auto inputs = prepare_devices(plan, 32U, 2U);
+    {
+        std::lock_guard lock(inputs.states[7U]->mutex);
+        inputs.states[7U]->fail_command = "flash:boot_a";
+    }
+
+    auto budget = std::make_shared<BufferBudget>(16U);
+    auto batch = prepare_fleet_device_actors(
+        plan, std::move(*artifacts), std::move(*inputs.devices),
+        FleetExecutionRuntime{
+            .buffer_budget = budget,
+            .data_ring = TransferRingConfig{.chunk_size = 4U, .depth = 2U},
+            .reconnect_factory = {},
+            .reconnect_options = {},
+        });
+    if (!batch.has_value()) {
+        throw CheckFailure("runtime batch preparation failed: " +
+                           batch.error().message);
+    }
+    for (const auto& state : inputs.states) {
+        std::lock_guard lock(state->mutex);
+        CHECK(state->permit_bind_count == 1U);
+        CHECK(state->ring_config.chunk_size == 4U);
+        CHECK(state->ring_config.depth == 2U);
+    }
+
+    auto coordinator = FleetCoordinator::create(
+        std::move(*batch), plan.manifest().policy);
+    CHECK(coordinator.has_value());
+    auto result = (*coordinator)->run(UpdateOperationContext{
+        .cancellation = {},
+        .deadline = std::chrono::steady_clock::now() + 10s,
+    });
+    CHECK(result.has_value());
+    CHECK(result->state == FleetCoordinatorState::PartiallyFailed);
+    CHECK(result->devices.size() == 32U);
+    for (std::size_t index = 0U; index < result->devices.size(); ++index) {
+        const auto expected_state = index == 7U
+            ? FleetCoordinatorDeviceState::Failed
+            : FleetCoordinatorDeviceState::Succeeded;
+        if (result->devices[index].state != expected_state) {
+            throw CheckFailure(
+                "unexpected coordinator state for device " +
+                std::to_string(index) + ": " +
+                std::to_string(static_cast<unsigned>(
+                    result->devices[index].state)) +
+                (result->devices[index].error
+                     ? " (" + result->devices[index].error->message + ")"
+                     : std::string{}));
+        }
+        std::lock_guard lock(inputs.states[index]->mutex);
+        CHECK(inputs.states[index]->payloads.size() == 1U);
+        CHECK(inputs.states[index]->payloads.front() == payload);
+        CHECK(inputs.states[index]->peak_ring_in_flight > 0U);
+        CHECK(inputs.states[index]->peak_ring_in_flight <= 2U);
+    }
+    CHECK(budget->peak_used() > 0U);
+    CHECK(budget->peak_used() <= budget->limit());
+    CHECK(budget->used() == 0U);
+}
+
+void fastbootd_reconnect_rebinds_the_prepared_flow_provider() {
+    TemporaryDirectory temporary;
+    const std::string payload = "unused-reconnect-artifact";
+    write_bytes(temporary.path() / "images/image.img", payload);
+    auto plan = make_plan(
+        serials(1U), {reboot_step(ManifestRebootTarget::Fastboot)}, payload);
+    auto artifacts = preflight_fleet_artifacts(plan, temporary.path());
+    CHECK(artifacts.has_value());
+    auto inputs = prepare_devices(plan, 1U);
+    auto replacement_state = std::make_shared<TransportState>();
+    replacement_state->serial = "SERIAL-0";
+    replacement_state->userspace = true;
+    auto endpoint_slot =
+        std::make_shared<std::shared_ptr<OneShotReconnectEndpoint>>();
+    auto budget = std::make_shared<BufferBudget>(8U);
+
+    FleetExecutionRuntime runtime{
+        .buffer_budget = budget,
+        .data_ring = TransferRingConfig{.chunk_size = 4U, .depth = 2U},
+        .reconnect_factory =
+            [endpoint_slot, replacement_state](
+                const PreparedDeviceSession& prepared,
+                const std::size_t device_index)
+                -> std::expected<FleetReconnectDependencies,
+                                 kairosboot::fleet::FleetActorPrepareError> {
+                CHECK(device_index == 0U);
+                const auto& usb = prepared.usb_identity();
+                const auto physical_port = UsbPhysicalPortPath{
+                    .bus_number = usb.bus_number,
+                    .ports = usb.hub_port_chain,
+                };
+                const auto fingerprint = reconnect_fingerprint(usb);
+                auto endpoint = std::make_shared<OneShotReconnectEndpoint>(
+                    ReconnectCandidate{
+                        .physical_port = physical_port,
+                        .serial = usb.serial,
+                        .usb_fingerprint = fingerprint,
+                        .open_capability = nullptr,
+                    },
+                    ReconnectDeviceIdentity{
+                        .physical_port = physical_port,
+                        .serial = usb.serial,
+                        .usb_fingerprint = fingerprint,
+                        .product = std::string(prepared.observed_product()),
+                        .mode = FastbootUsbMode::Fastbootd,
+                    },
+                    replacement_state);
+                *endpoint_slot = endpoint;
+                return FleetReconnectDependencies{
+                    .discovery = endpoint,
+                    .opener = endpoint,
+                    .waiter = std::make_shared<
+                        kairosboot::fastboot::SteadyReconnectWaiter>(),
+                };
+            },
+    };
+    auto batch = prepare_fleet_device_actors(
+        plan, std::move(*artifacts), std::move(*inputs.devices),
+        std::move(runtime));
+    if (!batch.has_value()) {
+        throw CheckFailure("reconnect batch preparation failed: " +
+                           batch.error().message);
+    }
+    CHECK(*endpoint_slot != nullptr);
+    {
+        std::lock_guard lock(inputs.states.front()->mutex);
+        CHECK(inputs.states.front()->permit_bind_count == 1U);
+    }
+
+    auto coordinator = FleetCoordinator::create(
+        std::move(*batch), plan.manifest().policy);
+    CHECK(coordinator.has_value());
+    auto result = (*coordinator)->run(UpdateOperationContext{
+        .cancellation = {},
+        .deadline = std::chrono::steady_clock::now() + 5s,
+    });
+    CHECK(result.has_value());
+    CHECK(result->state == FleetCoordinatorState::Succeeded);
+    CHECK(result->devices.size() == 1U);
+    CHECK(result->devices.front().state ==
+          FleetCoordinatorDeviceState::Succeeded);
+    CHECK((*endpoint_slot)->discovery_calls == 1U);
+    CHECK((*endpoint_slot)->open_calls == 1U);
+    const std::vector<std::string> expected_initial_commands{
+        "getvar:is-userspace",
+        "getvar:product",
+        "getvar:serialno",
+        "reboot-fastboot",
+    };
+    const auto actual_initial_commands = commands(inputs.states.front());
+    if (actual_initial_commands != expected_initial_commands) {
+        std::string trace;
+        for (const auto& command : actual_initial_commands) {
+            trace += "[" + command + "]";
+        }
+        throw CheckFailure("unexpected reconnect command trace: " + trace);
+    }
+    {
+        std::lock_guard lock(replacement_state->mutex);
+        CHECK(replacement_state->permit_bind_count == 1U);
+        CHECK(replacement_state->ring_config.chunk_size == 4U);
+        CHECK(replacement_state->ring_config.depth == 2U);
+    }
+    CHECK(budget->used() == 0U);
+}
+
 }  // namespace
 
 int main() {
@@ -1520,6 +1957,10 @@ int main() {
          primitive_commands_report_single_action_on_failure},
         {"primitive command cancellation races",
          primitive_command_cancellation_races_preserve_sticky_poisoning},
+        {"coordinator scheduler ring integration",
+         coordinator_uses_controller_scheduler_for_thirty_two_data_rings},
+        {"fastbootd reconnect provider integration",
+         fastbootd_reconnect_rebinds_the_prepared_flow_provider},
     };
 
     std::size_t failures = 0U;
