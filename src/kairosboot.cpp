@@ -5248,13 +5248,10 @@ kb_status_t KB_CALL kb_format_partition_async(
           slot.erase(slot.begin());
         }
         if (slot.empty()) {
-          return operation_failure({
-              .status = KB_E_PROTOCOL,
-              .message = "device returned an empty current-slot for a slotted partition",
-              .native_code = 0,
-              .transfer_state = KB_TRANSFER_NOT_SENT,
-              .device_identifier = selected_identifier,
-          });
+          return operation_failure(update_error(
+              KB_E_PROTOCOL,
+              "device returned an empty current-slot for a slotted partition",
+              selected_identifier));
         }
         resolved_partition += "_" + slot;
       }
@@ -5312,13 +5309,10 @@ kb_status_t KB_CALL kb_format_partition_async(
         if (!parsed_size.has_value() || *parsed_size == 0U ||
             *parsed_size >
                 static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-          return operation_failure({
-              .status = KB_E_PROTOCOL,
-              .message = "device returned an invalid partition-size value",
-              .native_code = 0,
-              .transfer_state = KB_TRANSFER_NOT_SENT,
-              .device_identifier = selected_identifier,
-          });
+          return operation_failure(update_error(
+              KB_E_PROTOCOL,
+              "device returned an invalid partition-size value",
+              selected_identifier));
         }
         partition_size = *parsed_size;
       }

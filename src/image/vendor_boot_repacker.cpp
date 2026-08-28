@@ -543,6 +543,8 @@ repack_vendor_boot(
                     .size = size,
                     .source_offset = source_offset,
                     .source = std::move(source),
+                    .bytes = nullptr,
+                    .zero = false,
                 });
             }
         };
@@ -553,7 +555,10 @@ repack_vendor_boot(
                 impl->pieces.push_back({
                     .output_offset = output,
                     .size = bytes->size(),
+                    .source_offset = 0U,
+                    .source = nullptr,
                     .bytes = std::move(bytes),
+                    .zero = false,
                 });
             }
         };
@@ -563,6 +568,9 @@ repack_vendor_boot(
                 impl->pieces.push_back({
                     .output_offset = output,
                     .size = size,
+                    .source_offset = 0U,
+                    .source = nullptr,
+                    .bytes = nullptr,
                     .zero = true,
                 });
             }
