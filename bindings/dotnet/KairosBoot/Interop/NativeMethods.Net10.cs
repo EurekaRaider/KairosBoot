@@ -158,6 +158,25 @@ internal static partial class NativeMethods
         ref NativeUpdateOptions options,
         out IntPtr error);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_wipe_super_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int WipeSuperAsync(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string? superEmptyImage,
+        ref NativeUpdateOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_wipe_super", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int WipeSuper(
+        ContextSafeHandle context,
+        string? deviceSelector,
+        string? superEmptyImage,
+        ref NativeUpdateOptions options,
+        out IntPtr error);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_getvar_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int GetVarAsync(

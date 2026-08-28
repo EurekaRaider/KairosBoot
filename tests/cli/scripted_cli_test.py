@@ -884,6 +884,52 @@ def run(cli: pathlib.Path) -> None:
             "wipe": True,
         }
 
+        super_empty_image = directory / "custom-super-empty.img"
+        super_empty_payload = b"immutable-empty-super"
+        super_empty_image.write_bytes(super_empty_payload)
+
+        def wipe_super_success(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:super-partition-name"
+            send_frame(connection, b"OKAYsuper_main")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYyes")
+            encoded_size = f"{len(super_empty_payload):08x}".encode("ascii")
+            assert receive_frame(connection) == b"download:" + encoded_size
+            send_frame(connection, b"DATA" + encoded_size)
+            assert receive_frame(connection) == super_empty_payload
+            send_frame(connection, b"OKAYdownloaded")
+            assert receive_frame(connection) == b"update-super:super_main:wipe"
+            send_frame(connection, b"OKAYwiped")
+
+        stdout, stderr = invoke(
+            cli,
+            ["--json", "wipe-super", str(super_empty_image)],
+            wipe_super_success,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document == {
+            "ok": True,
+            "command": "wipe-super",
+            "image": str(super_empty_image),
+        }
+
+        stdout, stderr = invoke(
+            cli, ["wipe-super", str(super_empty_image)], wipe_super_success
+        )
+        if b"Wiped super using " not in stdout:
+            raise AssertionError(f"unexpected wipe-super output: {stdout!r}")
+        if (
+            b"wipe-super: preflight" not in stderr
+            or b"wipe-super: complete" not in stderr
+        ):
+            raise AssertionError(
+                f"wipe-super did not report progress: {stderr!r}"
+            )
+
         failed_update_package = make_update_package(
             directory, "failed-update", "version 1\nerase metadata\n"
         )

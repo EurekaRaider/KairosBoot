@@ -243,6 +243,37 @@ public sealed partial class Context : IDisposable
             cancellationToken);
     }
 
+    /// <summary>Wipes dynamic partitions using the AOSP super_empty image lookup.</summary>
+    public Task WipeSuperAsync(
+        string? superEmptyImage = null,
+        string? deviceSelector = null,
+        IProgress<UpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return WipeSuperCoreAsync(
+            superEmptyImage,
+            UpdateOptions.Default,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
+    /// <summary>Wipes dynamic partitions with typed timeout and progress options.</summary>
+    public Task WipeSuperAsync(
+        string? superEmptyImage,
+        UpdateOptions options,
+        string? deviceSelector = null,
+        IProgress<UpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return WipeSuperCoreAsync(
+            superEmptyImage,
+            options,
+            deviceSelector,
+            progress,
+            cancellationToken);
+    }
+
     /// <summary>Starts a complete update-package operation with typed options.</summary>
     public Task UpdatePackageAsync(
         string packagePath,
@@ -999,6 +1030,66 @@ public sealed partial class Context : IDisposable
                 handle,
                 deviceSelector,
                 packagePath,
+                ref nativeOptions,
+                out var rawOperation,
+                out var rawError);
+
+            using (var operation = TakeStartedOperation(status, rawOperation, rawError))
+            {
+                await OperationPollingEngine.WaitAsync(
+                    new NativeOperationPollTarget(operation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            progressRegistration?.Dispose();
+            if (contextReferenceAdded)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    private async Task WipeSuperCoreAsync(
+        string? superEmptyImage,
+        UpdateOptions options,
+        string? deviceSelector,
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (superEmptyImage != null)
+        {
+            ValidateRequiredText(superEmptyImage, nameof(superEmptyImage));
+        }
+        ValidateSelector(deviceSelector);
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProgressCallbackRegistration<UpdateProgress>? progressRegistration = null;
+        var contextReferenceAdded = false;
+        try
+        {
+            handle.DangerousAddRef(ref contextReferenceAdded);
+            if (progress != null)
+            {
+                progressRegistration = new ProgressCallbackRegistration<UpdateProgress>(
+                    progress,
+                    CreateUpdateProgress);
+            }
+
+            var nativeOptions = new NativeUpdateOptions();
+            NativeMethods.UpdateOptionsInit(ref nativeOptions);
+            nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.Wipe = 1;
+            nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
+            nativeOptions.ProgressUserData = progressRegistration?.UserData ?? IntPtr.Zero;
+
+            var status = NativeMethods.WipeSuperAsync(
+                handle,
+                deviceSelector,
+                superEmptyImage,
                 ref nativeOptions,
                 out var rawOperation,
                 out var rawError);

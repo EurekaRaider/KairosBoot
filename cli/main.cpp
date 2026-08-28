@@ -228,6 +228,7 @@ enum class CommandKind : std::uint8_t {
   Update,
   Flashall,
   MakeBootImage,
+  WipeSuper,
   Getvar,
   Erase,
   SetActive,
@@ -757,6 +758,22 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "wipe-super") {
+    result.kind = CommandKind::WipeSuper;
+    if (argc - command_index > 2) {
+      return error("wipe-super accepts at most one <super_empty.img>");
+    }
+    if (argc - command_index == 2) {
+      result.first = argv[index];
+      if (result.first.empty()) {
+        return error("wipe-super image must not be empty");
+      }
+    }
+    if (result.global.maximum_receive_bytes_set) {
+      return error("option --max-receive-bytes is not valid for wipe-super");
+    }
+    return result;
+  }
 
   const auto parse_single_operand = [&](const CommandKind kind,
                                         const std::string_view description)
@@ -1009,6 +1026,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "flashall";
   case CommandKind::MakeBootImage:
     return "make-boot-image";
+  case CommandKind::WipeSuper:
+    return "wipe-super";
   case CommandKind::Getvar:
     return "getvar";
   case CommandKind::Erase:
@@ -1589,6 +1608,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Update:
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
+  case CommandKind::WipeSuper:
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
@@ -1634,6 +1654,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Update:
   case CommandKind::Flashall:
   case CommandKind::MakeBootImage:
+  case CommandKind::WipeSuper:
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
@@ -1996,6 +2017,50 @@ int update_package(const Invocation &invocation) {
   return 0;
 }
 
+int wipe_super(const Invocation &invocation) {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    return print_runtime_error(context.error(), invocation.global.json);
+  }
+
+  InterruptCancellation cancellation;
+  UpdateProgressReporter progress{invocation.global.json, "wipe-super"};
+  auto options = update_options(invocation.global);
+  options.progress = [&progress](const kairosboot::Progress &value) {
+    return progress(value);
+  };
+  std::optional<std::filesystem::path> image;
+  if (!invocation.first.empty()) {
+    image = path_from_utf8(invocation.first);
+  }
+  auto operation = context->wipe_super_async(
+      selector_view(invocation.global), image, options);
+  if (!operation) {
+    return print_runtime_error(operation.error(), invocation.global.json);
+  }
+  auto result = operation->wait(cancellation.token());
+  if (!result) {
+    return print_runtime_error(result.error(), invocation.global.json);
+  }
+
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"wipe-super\",\"image\":";
+    if (invocation.first.empty()) {
+      std::cout << "null";
+    } else {
+      std::cout << '"' << json_escape(invocation.first) << '"';
+    }
+    std::cout << "}\n";
+  } else {
+    std::cout << "Wiped super";
+    if (!invocation.first.empty()) {
+      std::cout << " using " << invocation.first;
+    }
+    std::cout << '\n';
+  }
+  return 0;
+}
+
 struct FleetError {
   kb_status_t status{KB_E_INTERNAL};
   std::string message;
@@ -2187,6 +2252,7 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] boot <image>\n"
                "  kairosboot [--json] make-boot-image <output> <kernel> "
                "[ramdisk [second]] [layout options]\n"
+               "  kairosboot [global options] wipe-super [super_empty.img]\n"
                "  kairosboot [global options] getvar <variable>\n"
                "  kairosboot [global options] erase <partition>\n"
                "  kairosboot [global options] set-active <slot>\n"
@@ -2310,6 +2376,8 @@ int run_cli(const int argc, char **argv) {
     return boot_file(*invocation);
   case CommandKind::MakeBootImage:
     return make_boot_image(*invocation);
+  case CommandKind::WipeSuper:
+    return wipe_super(*invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:

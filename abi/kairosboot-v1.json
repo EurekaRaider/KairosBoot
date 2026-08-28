@@ -56,7 +56,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "d2059381763e0f3b2caea37e1200628dd242f734aebebc26bf997b8a12495930",
+  "headerContractSha256": "20493789dcd38896822b6eea9d93a302a3637ed7acee5857b635defb18bd9563",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -424,7 +424,9 @@
     "kb_upload_file",
     "kb_upload_file_async",
     "kb_validate_job_file",
-    "kb_version_init"
+    "kb_version_init",
+    "kb_wipe_super",
+    "kb_wipe_super_async"
   ],
   "typedefs": {
     "kb_command_message_kind_t": {

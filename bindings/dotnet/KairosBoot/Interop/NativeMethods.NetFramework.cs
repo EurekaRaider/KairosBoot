@@ -133,6 +133,23 @@ internal static partial class NativeMethods
         ref NativeUpdateOptions options,
         out IntPtr error);
 
+    [DllImport(LibraryName, EntryPoint = "kb_wipe_super_async", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int WipeSuperAsync(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? superEmptyImage,
+        ref NativeUpdateOptions options,
+        out IntPtr operation,
+        out IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "kb_wipe_super", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int WipeSuper(
+        ContextSafeHandle context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceSelector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? superEmptyImage,
+        ref NativeUpdateOptions options,
+        out IntPtr error);
+
     [DllImport(LibraryName, EntryPoint = "kb_getvar_async", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int GetVarAsync(
         ContextSafeHandle context,

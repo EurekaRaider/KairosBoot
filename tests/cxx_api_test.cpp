@@ -85,6 +85,10 @@ static_assert(requires(kairosboot::Context &context,
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
   { context.boot_file(selector, package, flash_options) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
+  { context.wipe_super_async(selector, package, update_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  { context.wipe_super(selector, package, update_options) } ->
+      std::same_as<std::expected<void, kairosboot::Error>>;
   context.erase_async(selector, "userdata", options);
   context.erase(selector, "userdata", options);
   context.set_active_async(selector, "a", options);
@@ -368,6 +372,20 @@ int main() {
       invalid_update_timeout);
   CHECK(!rejected_update_timeout.has_value());
   CHECK(rejected_update_timeout.error().status() == KB_E_INVALID_ARGUMENT);
+
+  const auto invalid_wipe_selector = context->wipe_super_async(
+      kairosboot::DeviceSelector{"unknown:device"},
+      std::filesystem::path{"unused-super-empty.img"});
+  CHECK(!invalid_wipe_selector.has_value());
+  CHECK(invalid_wipe_selector.error().status() == KB_E_INVALID_ARGUMENT);
+
+  auto missing_wipe = context->wipe_super(
+      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+      std::filesystem::path{
+          "kairosboot-hermetic-super-empty-does-not-exist.img"});
+  CHECK(!missing_wipe.has_value());
+  CHECK(missing_wipe.error().status() == KB_E_IO);
+  CHECK(missing_wipe.error().transfer_state() == KB_TRANSFER_NOT_SENT);
 
   const kairosboot::DeviceSelector invalid_target{"unknown:device"};
   const auto invalid_flashing = context->flashing_async(

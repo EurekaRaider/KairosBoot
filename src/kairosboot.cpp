@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <expected>
 #include <exception>
 #include <filesystem>
@@ -1754,34 +1755,15 @@ public:
                                : KB_TRANSFER_PARTIAL_OR_UNKNOWN;
 }
 
-[[nodiscard]] kairosboot::api::OperationOutcome run_prepared_public_update(
+[[nodiscard]] kairosboot::api::OperationOutcome execute_prepared_public_update(
     const std::shared_ptr<kb_context_usb_state> &usb_state,
     kairosboot::api::DeviceSelector selector,
-    const std::filesystem::path &package_path,
+    kairosboot::fastboot::PreparedUpdatePackage prepared,
+    const UpdateClock::time_point deadline,
     const kb_update_options_t &options,
     kairosboot::api::OperationState::TaskContext &task_context) {
   auto identifier = selector.identifier;
-  const auto started = UpdateClock::now();
-  auto deadline = update_deadline(started, options.timeout_ms, identifier);
-  if (!deadline) {
-    return operation_failure(std::move(deadline.error()));
-  }
-  if (task_context.cancel_requested() ||
-      !report_update_progress(options, 0U, 0U, "preflight", identifier)) {
-    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
-                               "update cancelled before package preflight");
-  }
-
-  kairosboot::image::ArtifactSourceResolver resolver;
-  auto prepared = kairosboot::fastboot::preflight_update_package(
-      resolver, package_path, options.wipe != 0,
-      kairosboot::fastboot::UpdatePackagePreflightLimits{}, *deadline,
-      task_context.cancellation_token());
-  if (!prepared) {
-    return operation_failure(kairosboot::api::normalize_public_error(
-        prepared.error(), identifier));
-  }
-  const auto total_tasks = prepared->plan.tasks.size();
+  const auto total_tasks = prepared.plan.tasks.size();
   if (task_context.cancel_requested() ||
       !report_update_progress(options, 0U, 0U, "select", identifier)) {
     return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
@@ -1792,7 +1774,7 @@ public:
                                "update cancelled before device selection");
   }
   if (auto remaining = remaining_update_timeout(
-          *deadline, identifier, "device selection");
+          deadline, identifier, "device selection");
       !remaining) {
     return operation_failure(std::move(remaining.error()));
   }
@@ -1826,7 +1808,7 @@ public:
                                "update cancelled before transport open");
   }
   auto open_timeout = remaining_update_timeout(
-      *deadline, identifier, "transport open");
+      deadline, identifier, "transport open");
   if (!open_timeout) {
     return operation_failure(std::move(open_timeout.error()));
   }
@@ -1835,13 +1817,13 @@ public:
   transport_options.timeout_ms = *open_timeout;
   auto transport = open_target(
       *target, transport_options, task_context.cancellation_token(),
-      *deadline);
+      deadline);
   if (!transport) {
     return operation_failure(std::move(transport.error()));
   }
 
   auto protocol_timeout = remaining_update_timeout(
-      *deadline, identifier, "device validation");
+      deadline, identifier, "device validation");
   if (!protocol_timeout) {
     return operation_failure(std::move(protocol_timeout.error()));
   }
@@ -1872,9 +1854,9 @@ public:
   kairosboot::fastboot::UpdateExecutorOptions executor_options{
       .known_partitions =
           kairosboot::fastboot::frozen_update_known_partitions(),
-      .deadline = *deadline == UpdateClock::time_point::max()
+      .deadline = deadline == UpdateClock::time_point::max()
                       ? std::optional<UpdateClock::time_point>{}
-                      : std::optional<UpdateClock::time_point>{*deadline},
+                      : std::optional<UpdateClock::time_point>{deadline},
       .observer = [&options, &identifier, &callback_cancelled](
                       const kairosboot::fastboot::UpdateExecutionEvent &event) {
         if (!report_update_progress(
@@ -1885,7 +1867,7 @@ public:
       },
   };
   auto executed = kairosboot::fastboot::execute_prepared_update(
-      *prepared, device, executor_options, task_context.cancellation_token());
+      prepared, device, executor_options, task_context.cancellation_token());
   if (!executed) {
     auto payload = kairosboot::api::normalize_public_error(
         executed.error(), total_tasks, identifier);
@@ -1899,7 +1881,7 @@ public:
   }
 
   if (auto completion = remaining_update_timeout(
-          *deadline, identifier, "completion");
+          deadline, identifier, "completion");
       !completion) {
     auto payload = std::move(completion.error());
     payload.transfer_state = completed_update_transfer_state(
@@ -1915,7 +1897,7 @@ public:
         "update cancelled after completing all prepared tasks");
   }
   if (auto completion = remaining_update_timeout(
-          *deadline, identifier, "completion callback");
+          deadline, identifier, "completion callback");
       !completion) {
     auto payload = std::move(completion.error());
     payload.transfer_state = completed_update_transfer_state(
@@ -2092,6 +2074,68 @@ kb_status_t start_flash_source_async(
   }
   *operation = result.release();
   return KB_OK;
+}
+
+[[nodiscard]] kairosboot::api::OperationOutcome run_prepared_public_update(
+    const std::shared_ptr<kb_context_usb_state> &usb_state,
+    kairosboot::api::DeviceSelector selector,
+    const std::filesystem::path &package_path,
+    const kb_update_options_t &options,
+    kairosboot::api::OperationState::TaskContext &task_context) {
+  const auto identifier = selector.identifier;
+  auto deadline =
+      update_deadline(UpdateClock::now(), options.timeout_ms, identifier);
+  if (!deadline) {
+    return operation_failure(std::move(deadline.error()));
+  }
+  if (task_context.cancel_requested() ||
+      !report_update_progress(options, 0U, 0U, "preflight", identifier)) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "update cancelled before package preflight");
+  }
+
+  kairosboot::image::ArtifactSourceResolver resolver;
+  auto prepared = kairosboot::fastboot::preflight_update_package(
+      resolver, package_path, options.wipe != 0,
+      kairosboot::fastboot::UpdatePackagePreflightLimits{}, *deadline,
+      task_context.cancellation_token());
+  if (!prepared) {
+    return operation_failure(kairosboot::api::normalize_public_error(
+        prepared.error(), identifier));
+  }
+  return execute_prepared_public_update(
+      usb_state, std::move(selector), std::move(*prepared), *deadline, options,
+      task_context);
+}
+
+[[nodiscard]] kairosboot::api::OperationOutcome run_public_wipe_super(
+    const std::shared_ptr<kb_context_usb_state> &usb_state,
+    kairosboot::api::DeviceSelector selector,
+    const std::filesystem::path &super_empty_image,
+    const kb_update_options_t &options,
+    kairosboot::api::OperationState::TaskContext &task_context) {
+  const auto identifier = selector.identifier;
+  auto deadline =
+      update_deadline(UpdateClock::now(), options.timeout_ms, identifier);
+  if (!deadline) {
+    return operation_failure(std::move(deadline.error()));
+  }
+  if (task_context.cancel_requested() ||
+      !report_update_progress(options, 0U, 0U, "preflight", identifier)) {
+    return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT,
+                               "wipe-super cancelled before image preflight");
+  }
+
+  kairosboot::image::ArtifactSourceResolver resolver;
+  auto prepared = kairosboot::fastboot::preflight_wipe_super(
+      resolver, super_empty_image, task_context.cancellation_token());
+  if (!prepared) {
+    return operation_failure(kairosboot::api::normalize_public_error(
+        prepared.error(), identifier));
+  }
+  return execute_prepared_public_update(
+      usb_state, std::move(selector), std::move(*prepared), *deadline, options,
+      task_context);
 }
 
 kb_status_t finish_blocking_operation(kb_operation_t *operation,
@@ -2843,6 +2887,106 @@ kb_status_t KB_CALL kb_update_package(
   const auto started = kb_update_package_async(
       context, device_selector_or_null, package_path, options_or_null,
       &operation, error);
+  if (started != KB_OK) {
+    return started;
+  }
+  return finish_blocking_operation(operation, error);
+}
+
+kb_status_t KB_CALL kb_wipe_super_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *super_empty_image_or_null,
+    const kb_update_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
+                device_selector_or_null);
+  }
+  if (!valid_update_options(options_or_null)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "wipe-super options have an incompatible size, API version, "
+                "or wipe value",
+                device_selector_or_null);
+  }
+
+  try {
+    std::string image_path;
+    if (super_empty_image_or_null == nullptr) {
+      const char *product_out = std::getenv("ANDROID_PRODUCT_OUT");
+      if (product_out == nullptr || product_out[0] == '\0') {
+        return fail(error, KB_E_INVALID_ARGUMENT,
+                    "ANDROID_PRODUCT_OUT is not set; pass an explicit "
+                    "super_empty image",
+                    device_selector_or_null);
+      }
+      image_path = product_out;
+      if (!image_path.ends_with('/') && !image_path.ends_with('\\')) {
+        image_path.push_back(std::filesystem::path::preferred_separator);
+      }
+      image_path += "super_empty.img";
+    } else {
+      image_path = super_empty_image_or_null;
+    }
+    if (image_path.empty() || !valid_utf8(image_path)) {
+      return fail(error, KB_E_INVALID_ARGUMENT,
+                  "super_empty image path must be non-empty UTF-8",
+                  device_selector_or_null);
+    }
+
+    auto selector = parse_target_selector(device_selector_or_null);
+    if (!selector) {
+      return fail(error, selector.error());
+    }
+    auto copied_options = update_options_or_default(options_or_null);
+    copied_options.wipe = 1;
+    auto native_image_path =
+        std::filesystem::absolute(utf8_path(image_path));
+    auto usb_state = context->usb_state;
+    auto task = [usb_state = std::move(usb_state),
+                 selector = std::move(*selector),
+                 image = std::move(native_image_path), copied_options](
+                    kairosboot::api::OperationState::TaskContext &task_context)
+        mutable -> kairosboot::api::OperationOutcome {
+      return run_public_wipe_super(usb_state, std::move(selector), image,
+                                   copied_options, task_context);
+    };
+    auto result = std::make_unique<kb_operation>(std::move(task));
+    if (!result->state->start()) {
+      return fail(error, KB_E_INTERNAL,
+                  "unable to start the wipe-super operation",
+                  device_selector_or_null);
+    }
+    *operation = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the wipe-super operation",
+                device_selector_or_null);
+  } catch (const std::filesystem::filesystem_error &exception) {
+    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+                exception.code().value());
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the wipe-super operation",
+                device_selector_or_null);
+  }
+}
+
+kb_status_t KB_CALL kb_wipe_super(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *super_empty_image_or_null,
+    const kb_update_options_t *options_or_null, kb_error_t **error) {
+  clear_error(error);
+  kb_operation_t *operation = nullptr;
+  const auto started = kb_wipe_super_async(
+      context, device_selector_or_null, super_empty_image_or_null,
+      options_or_null, &operation, error);
   if (started != KB_OK) {
     return started;
   }

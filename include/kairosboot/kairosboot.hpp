@@ -1806,6 +1806,62 @@ public:
     return update_package(DeviceSelector{selector}, package, options);
   }
 
+  [[nodiscard]] std::expected<Operation, Error> wipe_super_async(
+      const DeviceSelector selector,
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    auto prepared = detail::prepare_update_options(options);
+    if (!prepared) {
+      return std::unexpected(std::move(prepared.error()));
+    }
+
+    std::string selector_storage;
+    const char *selector_value = selector_pointer(selector, selector_storage);
+    std::string path_storage;
+    const char *path_value = nullptr;
+    if (super_empty_image.has_value()) {
+      const auto path_u8 = super_empty_image->u8string();
+      path_storage.assign(path_u8.begin(), path_u8.end());
+      path_value = path_storage.c_str();
+    }
+    kb_operation_t *operation = nullptr;
+    kb_error_t *error = nullptr;
+    const kb_status_t status = ::kb_wipe_super_async(
+        handle_, selector_value, path_value, &prepared->native, &operation,
+        &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    return Operation{operation, std::move(prepared->callback_state)};
+  }
+
+  [[nodiscard]] std::expected<Operation, Error> wipe_super_async(
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    return wipe_super_async(std::nullopt, super_empty_image, options);
+  }
+
+  [[nodiscard]] std::expected<void, Error> wipe_super(
+      const DeviceSelector selector,
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    auto operation = wipe_super_async(selector, super_empty_image, options);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    return operation->wait();
+  }
+
+  [[nodiscard]] std::expected<void, Error> wipe_super(
+      const std::optional<std::filesystem::path> &super_empty_image =
+          std::nullopt,
+      const UpdateOptions &options = {}) const {
+    return wipe_super(std::nullopt, super_empty_image, options);
+  }
+
   [[nodiscard]] std::expected<Operation, Error> flash_file_async(
       std::optional<std::string_view> serial, std::string_view partition,
       const std::filesystem::path &file, const FlashOptions &options) const {

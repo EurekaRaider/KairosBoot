@@ -171,6 +171,36 @@ int main(void) {
   }
 
   {
+    kb_operation_t *wipe_operation = NULL;
+    CHECK(kb_wipe_super_async(context, "tcp:127.0.0.1:1", "",
+                              &update_options, &wipe_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(wipe_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "super_empty") != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    CHECK(kb_wipe_super_async(
+              context, "unknown:device", "unused-super-empty.img",
+              &update_options, &wipe_operation, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(wipe_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "unknown scheme") != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    CHECK(kb_wipe_super(context, "tcp:127.0.0.1:1",
+                        "kairosboot-hermetic-super-empty-does-not-exist.img",
+                        &update_options, &error) == KB_E_IO);
+    CHECK(error != NULL);
+    CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
+    kb_error_release(error);
+    error = NULL;
+  }
+
+  {
     const char *missing_package =
         "kairosboot-hermetic-update-package-does-not-exist";
     struct update_progress_probe probe = {0, 0, 0};

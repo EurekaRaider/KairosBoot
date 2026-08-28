@@ -126,4 +126,12 @@ preflight_update_package(
     std::chrono::steady_clock::time_point deadline,
     std::stop_token cancellation = {});
 
+// Materializes one explicit super_empty image into the same immutable
+// update-super transaction used by package updates. The returned plan contains
+// exactly one wipe-enabled UpdateSuper task and performs no transport I/O.
+[[nodiscard]] std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_wipe_super(image::ArtifactSourceResolver& resolver,
+                     const std::filesystem::path& super_empty_image,
+                     std::stop_token cancellation = {});
+
 }  // namespace kairosboot::fastboot

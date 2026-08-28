@@ -35,6 +35,7 @@ using kairosboot::fastboot::execute_prepared_update;
 using kairosboot::fastboot::frozen_update_known_partitions;
 using kairosboot::fastboot::IPreparedDeviceTask;
 using kairosboot::fastboot::IUpdateDevice;
+using kairosboot::fastboot::preflight_wipe_super;
 using kairosboot::fastboot::PlannedSlot;
 using kairosboot::fastboot::PreparedUpdatePackage;
 using kairosboot::fastboot::UpdateDeviceError;
@@ -1326,6 +1327,48 @@ void cancellation_precedes_manifest_and_artifact_work() {
     CHECK(result.error().kind == UpdatePackagePreflightErrorKind::Cancelled);
 }
 
+void wipe_super_preflight_binds_one_immutable_wipe_transaction() {
+    TemporaryDirectory temporary;
+    const auto image = temporary.path() / "custom-empty.img";
+    const auto payload = valid_empty_sparse_image();
+    write_bytes(image, payload);
+
+    ArtifactSourceResolver resolver;
+    auto prepared = preflight_wipe_super(resolver, image);
+    CHECK(prepared);
+    CHECK(prepared->plan.requirements.empty());
+    CHECK(prepared->plan.tasks.size() == 1U);
+    CHECK(prepared->plan.tasks.front().kind == UpdateTaskKind::UpdateSuper);
+    CHECK(prepared->artifacts.empty());
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::Prepared);
+    CHECK(prepared->prepared_super_artifact);
+    CHECK(prepared->prepared_super_artifact->wants_wipe());
+    CHECK(prepared->prepared_super_artifact->resolved()->logical_name ==
+          "super_empty.img");
+    CHECK(prepared->prepared_super_artifact->resolved()->source->size() ==
+          payload.size());
+    CHECK(prepared->prepared_super_artifact->artifact()->metadata().kind ==
+          FlashArtifactKind::AndroidSparse);
+    CHECK(!prepared->requires_device_validation);
+
+    ArtifactSourceResolver missing_resolver;
+    auto missing = preflight_wipe_super(
+        missing_resolver, temporary.path() / "missing-super-empty.img");
+    CHECK(!missing);
+    CHECK(missing.error().kind == UpdatePackagePreflightErrorKind::Artifact);
+    CHECK(missing.error().artifact == "super_empty.img");
+
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    ArtifactSourceResolver cancelled_resolver;
+    auto stopped = preflight_wipe_super(
+        cancelled_resolver, image, cancelled.get_token());
+    CHECK(!stopped);
+    CHECK(stopped.error().kind ==
+          UpdatePackagePreflightErrorKind::Cancelled);
+}
+
 struct Test final {
     std::string_view name;
     void (*run)();
@@ -1371,6 +1414,8 @@ int main() {
              crc_missing_and_budget_failures_publish_no_prepared_plan},
         Test{"preflight cancellation",
              cancellation_precedes_manifest_and_artifact_work},
+        Test{"wipe-super immutable preflight",
+             wipe_super_preflight_binds_one_immutable_wipe_transaction},
     };
 
     std::size_t failures = 0;

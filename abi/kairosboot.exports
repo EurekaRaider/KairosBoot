@@ -106,3 +106,5 @@ kb_upload_file
 kb_upload_file_async
 kb_validate_job_file
 kb_version_init
+kb_wipe_super
+kb_wipe_super_async

@@ -417,6 +417,85 @@ bool PreparedSuperArtifact::wants_wipe() const noexcept {
 }
 
 std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
+preflight_wipe_super(image::ArtifactSourceResolver& resolver,
+                     const std::filesystem::path& super_empty_image,
+                     const std::stop_token cancellation) {
+    try {
+        if (cancellation.stop_requested()) {
+            return std::unexpected(failure(
+                UpdatePackagePreflightErrorKind::Cancelled,
+                "wipe-super preflight was cancelled",
+                std::string(kSuperEmptyName)));
+        }
+        auto preflight = image::preflight_flash_artifact(
+            resolver, super_empty_image, {}, cancellation);
+        if (!preflight) {
+            return std::unexpected(
+                artifact_failure(kSuperEmptyName, std::move(preflight.error())));
+        }
+        auto resolved = std::make_shared<const image::ResolvedArtifact>(
+            image::ResolvedArtifact{
+                .source = preflight->resolved->source,
+                .sha256 = preflight->resolved->sha256,
+                .origin = preflight->resolved->origin,
+                .logical_name = std::string(kSuperEmptyName),
+            });
+        if (!super_metadata_is_consistent(*resolved, preflight->artifact)) {
+            return std::unexpected(artifact_failure(
+                kSuperEmptyName,
+                image::ArtifactSourceError{
+                    .kind = image::ArtifactSourceErrorKind::InvalidImage,
+                    .message =
+                        "prepared super_empty.img metadata or source mapping "
+                        "is inconsistent",
+                }));
+        }
+
+        auto artifact = std::make_shared<const image::FlashArtifact>(
+            std::move(preflight->artifact));
+        PreparedUpdatePackage prepared{
+            .plan =
+                {
+                    .tasks =
+                        {
+                            PlannedUpdateTask{
+                                .kind = UpdateTaskKind::UpdateSuper,
+                            },
+                        },
+                },
+            .update_super_state = UpdateSuperPreparationState::Prepared,
+            .prepared_super_artifact =
+                std::make_shared<const PreparedSuperArtifact>(
+                    std::move(resolved), std::move(artifact), true),
+            .requires_device_validation = false,
+        };
+        return prepared;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(failure(
+            UpdatePackagePreflightErrorKind::Artifact,
+            "unable to allocate wipe-super preflight state",
+            std::string(kSuperEmptyName)));
+    } catch (const std::filesystem::filesystem_error& error) {
+        auto result = failure(
+            UpdatePackagePreflightErrorKind::Artifact,
+            "filesystem failure during wipe-super preflight: " +
+                std::string(error.what()),
+            std::string(kSuperEmptyName));
+        result.artifact_error = image::ArtifactSourceError{
+            .kind = image::ArtifactSourceErrorKind::Io,
+            .native_code = error.code().value(),
+            .message = result.message,
+        };
+        return std::unexpected(std::move(result));
+    } catch (...) {
+        return std::unexpected(failure(
+            UpdatePackagePreflightErrorKind::Artifact,
+            "unexpected failure during wipe-super preflight",
+            std::string(kSuperEmptyName)));
+    }
+}
+
+std::expected<PreparedUpdatePackage, UpdatePackagePreflightError>
 preflight_update_package(image::ArtifactSourceResolver& resolver,
                          const std::filesystem::path& package_directory_or_zip,
                          const bool wants_wipe,

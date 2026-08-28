@@ -297,6 +297,20 @@ KB_API kb_status_t KB_CALL kb_update_package(
     const char *package_path, const kb_update_options_t *options_or_null,
     kb_error_t **error);
 
+/* Resets dynamic partitions from an immutable super_empty image through the
+ * existing fastbootd update-super transaction. When
+ * super_empty_image_or_null is NULL, ANDROID_PRODUCT_OUT/super_empty.img is
+ * used, matching AOSP Fastboot's command-line lookup rule. */
+KB_API kb_status_t KB_CALL kb_wipe_super_async(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *super_empty_image_or_null,
+    const kb_update_options_t *options_or_null, kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_wipe_super(
+    kb_context_t *context, const char *device_selector_or_null,
+    const char *super_empty_image_or_null,
+    const kb_update_options_t *options_or_null, kb_error_t **error);
+
 /* Typed primitive selectors:
  *   NULL                         sole USB Fastboot device
  *   SERIAL                       exact legacy USB serial
