@@ -276,6 +276,11 @@ public readonly struct UpdateOptions
     /// <param name="disableFastbootInfo">
     /// Whether to use the frozen image-list plan instead of fastboot-info.txt.
     /// </param>
+    /// <param name="disableVerity">Whether vbmeta disables dm-verity.</param>
+    /// <param name="disableVerification">Whether vbmeta disables verification.</param>
+    /// <param name="slot">The global update slot, or null to preserve the package plan.</param>
+    /// <param name="setActive">Whether to issue set_active before update tasks.</param>
+    /// <param name="activeSlot">The explicit set_active target, or null to derive it.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>

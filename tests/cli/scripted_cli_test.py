@@ -1257,6 +1257,8 @@ def run(cli: pathlib.Path) -> None:
                 send_frame(connection, b"OKAYdownloaded")
                 assert receive_frame(connection) == b"flash:boot_" + slot
                 send_frame(connection, b"OKAYflashed")
+            assert receive_frame(connection) == b"reboot"
+            send_frame(connection, b"OKAYrebooting")
 
         stdout, stderr = invoke(
             cli,
