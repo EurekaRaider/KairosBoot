@@ -242,6 +242,7 @@ add_library(
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
   src/image/sparse_image.cpp
+  src/image/vendor_boot_repacker.cpp
   src/image/vbmeta_flag_source.cpp
   src/protocol/file_transfer_sink.cpp
   src/protocol/fastboot_protocol.cpp
@@ -466,6 +467,19 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_boot_image_builder_tests)
   add_test(NAME boot_image_builder COMMAND kairosboot_boot_image_builder_tests)
   set_tests_properties(boot_image_builder PROPERTIES TIMEOUT 20)
+
+  add_executable(kairosboot_vendor_boot_repacker_tests
+                 tests/image/vendor_boot_repacker_tests.cpp)
+  target_compile_features(kairosboot_vendor_boot_repacker_tests
+                          PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_vendor_boot_repacker_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_vendor_boot_repacker_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_vendor_boot_repacker_tests)
+  add_test(NAME vendor_boot_repacker
+           COMMAND kairosboot_vendor_boot_repacker_tests)
+  set_tests_properties(vendor_boot_repacker PROPERTIES TIMEOUT 20)
 
   add_executable(kairosboot_canonical_json_tests
                  tests/fleet/canonical_json_tests.cpp)
