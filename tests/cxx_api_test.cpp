@@ -41,6 +41,9 @@ static_assert(std::is_nothrow_move_assignable_v<kairosboot::CommandResult>);
 static_assert(std::is_copy_constructible_v<kairosboot::Error>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.timeout),
                              std::chrono::milliseconds>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::FlashOptions{}.sparse_limit_bytes),
+              std::uint64_t>);
 static_assert(std::is_same_v<decltype(kairosboot::FlashOptions{}.disable_verity),
                              bool>);
 static_assert(std::is_same_v<
@@ -57,6 +60,9 @@ static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(std::is_same_v<decltype(kairosboot::UpdateOptions{}.active_slot),
                              std::optional<std::string>>);
+static_assert(std::is_same_v<
+              decltype(kairosboot::UpdateOptions{}.sparse_limit_bytes),
+              std::uint64_t>);
 static_assert(std::is_same_v<decltype(kairosboot::CommandOptions{}.timeout),
                              std::chrono::milliseconds>);
 static_assert(!std::is_convertible_v<kairosboot::ProgressAction, int>);
@@ -214,13 +220,16 @@ int main() {
         kairosboot::detail::prepare_flash_options(kairosboot::FlashOptions{});
     CHECK(defaults.has_value());
     CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
+    CHECK(defaults->native.sparse_limit_bytes == 0U);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::FlashOptions finite;
     finite.timeout = 250ms;
+    finite.sparse_limit_bytes = 8U * 1024U * 1024U;
     const auto prepared = kairosboot::detail::prepare_flash_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 250U);
+    CHECK(prepared->native.sparse_limit_bytes == 8U * 1024U * 1024U);
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_flash_options(finite);
@@ -256,15 +265,18 @@ int main() {
     CHECK(defaults.has_value());
     CHECK(defaults->native.timeout_ms == KB_WAIT_INFINITE);
     CHECK(defaults->native.wipe == 0);
+    CHECK(defaults->native.sparse_limit_bytes == 0U);
     CHECK(defaults->native.progress_callback == nullptr);
 
     kairosboot::UpdateOptions finite;
     finite.timeout = 625ms;
     finite.wipe = true;
+    finite.sparse_limit_bytes = 16U * 1024U * 1024U;
     const auto prepared = kairosboot::detail::prepare_update_options(finite);
     CHECK(prepared.has_value());
     CHECK(prepared->native.timeout_ms == 625U);
     CHECK(prepared->native.wipe == 1);
+    CHECK(prepared->native.sparse_limit_bytes == 16U * 1024U * 1024U);
 
     finite.timeout = -1ms;
     const auto negative = kairosboot::detail::prepare_update_options(finite);

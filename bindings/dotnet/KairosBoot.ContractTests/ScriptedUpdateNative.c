@@ -47,6 +47,7 @@ typedef struct kb_update_options {
   const char *slot;
   int32_t set_active;
   const char *active_slot;
+  uint64_t sparse_limit_bytes;
 } kb_update_options_t;
 
 typedef struct kb_flash_options {
@@ -60,6 +61,7 @@ typedef struct kb_flash_options {
   const char *slot;
   int32_t set_active;
   const char *active_slot;
+  uint64_t sparse_limit_bytes;
 } kb_flash_options_t;
 
 typedef struct kb_legacy_boot_options {
@@ -665,7 +667,8 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
     }
     if (options->skip_reboot != 1 || options->skip_secondary != 1 ||
         options->exclude_dynamic_partitions != 1 ||
-        options->disable_fastboot_info != 1) {
+        options->disable_fastboot_info != 1 ||
+        options->sparse_limit_bytes != 8U * 1024U * 1024U) {
       record_failure(37);
       return KB_E_INVALID_ARGUMENT;
     }
@@ -683,7 +686,8 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
         options->progress_user_data != NULL || options->skip_reboot != 0 ||
         options->skip_secondary != 0 ||
         options->exclude_dynamic_partitions != 0 ||
-        options->disable_fastboot_info != 0) {
+        options->disable_fastboot_info != 0 ||
+        options->sparse_limit_bytes != 0) {
       record_failure(36);
       return KB_E_INVALID_ARGUMENT;
     }
@@ -750,6 +754,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
     if (!same_string(device_selector, "usb:serial:raw") ||
         !same_string(ramdisk_path, "ramdisk.img") ||
         second_stage_path != NULL || options->timeout_ms != 2 ||
+        options->sparse_limit_bytes != 64U * 1024U ||
         options->progress_callback == NULL) {
       record_failure(42);
       return KB_E_INVALID_ARGUMENT;

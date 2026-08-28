@@ -70,6 +70,7 @@ int main(void) {
   CHECK(flash_options.slot == NULL);
   CHECK(flash_options.set_active == 0);
   CHECK(flash_options.active_slot == NULL);
+  CHECK(flash_options.sparse_limit_bytes == 0);
 
   kb_legacy_boot_options_t legacy_boot_options;
   kb_legacy_boot_options_init(&legacy_boot_options);
@@ -93,6 +94,7 @@ int main(void) {
   CHECK(update_options.slot == NULL);
   CHECK(update_options.set_active == 0);
   CHECK(update_options.active_slot == NULL);
+  CHECK(update_options.sparse_limit_bytes == 0);
 
   kb_command_options_t command_options;
   kb_command_options_init(&command_options);
@@ -145,6 +147,28 @@ int main(void) {
   }
 
   {
+    struct legacy_flash_options_v1 {
+      uint32_t struct_size;
+      uint32_t api_version;
+      uint32_t timeout_ms;
+      kb_progress_callback_t progress_callback;
+      void *progress_user_data;
+    } legacy_flash_options = {0};
+    legacy_flash_options.struct_size = sizeof(legacy_flash_options);
+    legacy_flash_options.api_version = KB_API_VERSION;
+    legacy_flash_options.timeout_ms = KB_WAIT_INFINITE;
+    kb_operation_t *legacy_flash_operation = NULL;
+    CHECK(kb_flash_file_async(
+              context, "tcp:127.0.0.1:1", "system",
+              "kairosboot-hermetic-sparse-limit-missing.img",
+              (const kb_flash_options_t *)&legacy_flash_options,
+              &legacy_flash_operation, &error) == KB_E_IO);
+    CHECK(legacy_flash_operation == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "flash options") == NULL);
+    kb_error_release(error);
+    error = NULL;
+
     struct legacy_update_options_v1 {
       uint32_t struct_size;
       uint32_t api_version;

@@ -1087,6 +1087,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
@@ -1162,6 +1163,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
@@ -1265,6 +1267,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
@@ -1356,6 +1359,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
@@ -1423,6 +1427,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.DisableVerity = options.DisableVerity ? 1 : 0;
             nativeOptions.DisableVerification = options.DisableVerification ? 1 : 0;
             nativeOptions.ProgressCallback = progressRegistration?.CallbackPointer ?? IntPtr.Zero;
@@ -1485,6 +1490,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeUpdateOptions();
             NativeMethods.UpdateOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.Wipe = options.Wipe ? 1 : 0;
             nativeOptions.SkipReboot = options.SkipReboot ? 1 : 0;
             nativeOptions.SkipSecondary = options.SkipSecondary ? 1 : 0;
@@ -1554,6 +1560,7 @@ public sealed partial class Context : IDisposable
             var nativeOptions = new NativeUpdateOptions();
             NativeMethods.UpdateOptionsInit(ref nativeOptions);
             nativeOptions.TimeoutMilliseconds = options.NativeTimeoutMilliseconds;
+            nativeOptions.SparseLimitBytes = options.SparseLimitBytes;
             nativeOptions.Wipe = 1;
             nativeOptions.SkipReboot = options.SkipReboot ? 1 : 0;
             nativeOptions.SkipSecondary = options.SkipSecondary ? 1 : 0;

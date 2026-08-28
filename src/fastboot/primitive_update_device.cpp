@@ -1930,8 +1930,11 @@ PrimitiveUpdateDevice::prepare_task(
                 return std::unexpected(std::move(*stopped));
             }
 
+            const auto effective_maximum =
+                image::effective_sparse_download_limit(
+                    *maximum, options_.explicit_sparse_limit);
             auto plan = image::SparseFlashPlan::create(
-                *input.flash_artifact->artifact, *maximum,
+                *input.flash_artifact->artifact, effective_maximum,
                 options_.host_resparse_limit, context.cancellation);
             if (!plan) {
                 const auto kind =

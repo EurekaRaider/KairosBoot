@@ -85,7 +85,8 @@ public readonly struct FlashOptions
         bool disableVerification,
         string? slot = null,
         bool setActive = false,
-        string? activeSlot = null)
+        string? activeSlot = null,
+        ulong sparseLimitBytes = 0)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
@@ -95,6 +96,13 @@ public readonly struct FlashOptions
         Slot = slot;
         SetActive = setActive;
         ActiveSlot = activeSlot;
+        SparseLimitBytes = sparseLimitBytes;
+    }
+
+    /// <summary>Creates flash options with an AOSP -S sparse-part limit.</summary>
+    public FlashOptions(TimeSpan timeout, ulong sparseLimitBytes)
+        : this(timeout, false, false, null, false, null, sparseLimitBytes)
+    {
     }
 
     /// <summary>Creates flash options with an A/B slot policy.</summary>
@@ -102,8 +110,10 @@ public readonly struct FlashOptions
         TimeSpan timeout,
         string? slot,
         bool setActive = false,
-        string? activeSlot = null)
-        : this(timeout, false, false, slot, setActive, activeSlot)
+        string? activeSlot = null,
+        ulong sparseLimitBytes = 0)
+        : this(timeout, false, false, slot, setActive, activeSlot,
+            sparseLimitBytes)
     {
     }
 
@@ -129,6 +139,9 @@ public readonly struct FlashOptions
 
     /// <summary>Gets the explicit set_active slot, or null to derive it.</summary>
     public string? ActiveSlot { get; }
+
+    /// <summary>Gets the AOSP -S sparse-part limit in bytes; zero is automatic.</summary>
+    public ulong SparseLimitBytes { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds
@@ -281,6 +294,7 @@ public readonly struct UpdateOptions
     /// <param name="slot">The global update slot, or null to preserve the package plan.</param>
     /// <param name="setActive">Whether to issue set_active before update tasks.</param>
     /// <param name="activeSlot">The explicit set_active target, or null to derive it.</param>
+    /// <param name="sparseLimitBytes">AOSP -S sparse-part limit in bytes, or zero for automatic limits.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="timeout"/> cannot be represented by the native ABI.
     /// </exception>
@@ -295,7 +309,8 @@ public readonly struct UpdateOptions
         bool disableVerification = false,
         string? slot = null,
         bool setActive = false,
-        string? activeSlot = null)
+        string? activeSlot = null,
+        ulong sparseLimitBytes = 0)
     {
         nativeTimeoutMilliseconds = ToNativeMilliseconds(timeout);
         this.timeout = timeout;
@@ -310,6 +325,7 @@ public readonly struct UpdateOptions
         Slot = slot;
         SetActive = setActive;
         ActiveSlot = activeSlot;
+        SparseLimitBytes = sparseLimitBytes;
     }
 
     /// <summary>Gets options that use no deadline and preserve user data.</summary>
@@ -349,6 +365,9 @@ public readonly struct UpdateOptions
 
     /// <summary>Gets the explicit set_active slot, or null to derive it.</summary>
     public string? ActiveSlot { get; }
+
+    /// <summary>Gets the AOSP -S sparse-part limit in bytes; zero is automatic.</summary>
+    public ulong SparseLimitBytes { get; }
 
     internal uint NativeTimeoutMilliseconds => hasExplicitTimeout
         ? nativeTimeoutMilliseconds

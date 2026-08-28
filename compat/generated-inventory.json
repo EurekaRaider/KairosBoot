@@ -2006,16 +2006,32 @@
       "status": "implemented"
     },
     {
-      "cSymbols": [],
-      "cliCommands": [],
-      "evidence": [],
+      "cSymbols": [
+        "kb_flash_file",
+        "kb_flash_file_async",
+        "kb_update_package",
+        "kb_update_package_async"
+      ],
+      "cliCommands": [
+        "-S",
+        "flash",
+        "update",
+        "flashall"
+      ],
+      "evidence": [
+        "tests/sparse/sparse_image_tests.cpp",
+        "tests/fastboot/primitive_update_device_tests.cpp",
+        "tests/cli/scripted_cli_test.py",
+        "tests/cxx_api_test.cpp",
+        "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
+      ],
       "id": "option.sparse-limit",
       "kind": "option",
-      "note": "The locked AOSP option is not exposed by the KairosBoot CLI.",
+      "note": "-S SIZE[K|M|G] is exposed by C, C++23, .NET and CLI; explicit limits force raw-to-sparse or sparse resparse segmentation and are safely bounded by max-download-size and AOSP's 1 GiB ceiling for flash, update and flashall.",
       "officialDifferentialEvidence": [],
       "required": true,
       "spelling": "-S",
-      "status": "missing"
+      "status": "implemented"
     },
     {
       "cSymbols": [
@@ -2259,7 +2275,6 @@
     "option.help-short",
     "option.os-patch-level",
     "option.os-version",
-    "option.sparse-limit",
     "option.vendor-id",
     "option.verbose"
   ],
@@ -2297,9 +2312,9 @@
         "partial": 5
       },
       "option": {
-        "implemented": 14,
+        "implemented": 15,
         "intentional-deviation": 4,
-        "missing": 15,
+        "missing": 14,
         "partial": 0
       },
       "protocol": {
@@ -2316,9 +2331,9 @@
       }
     },
     "byStatus": {
-      "implemented": 47,
+      "implemented": 48,
       "intentional-deviation": 15,
-      "missing": 21,
+      "missing": 20,
       "partial": 36
     },
     "totalEntries": 119

@@ -167,6 +167,10 @@ typedef struct kb_flash_options {
   /* Optional explicit target for set_active. NULL uses slot when present,
    * otherwise the device's current slot. Requires set_active == 1. */
   const char *active_slot;
+  /* AOSP -S host sparse-part limit in bytes. Zero selects automatic device
+   * max-download-size behavior. Non-zero values are safely capped by both
+   * the device limit and AOSP's 1 GiB resparse ceiling. */
+  uint64_t sparse_limit_bytes;
 } kb_flash_options_t;
 
 /* Legacy Android boot header v0 layout used only when constructing an image
@@ -219,6 +223,10 @@ typedef struct kb_update_options {
   /* Optional explicit set_active target. NULL uses slot when present,
    * otherwise the device's current slot. Requires set_active == 1. */
   const char *active_slot;
+  /* AOSP -S host sparse-part limit in bytes. Zero selects automatic device
+   * max-download-size behavior. Non-zero values are safely capped by both
+   * the device limit and AOSP's 1 GiB resparse ceiling. */
+  uint64_t sparse_limit_bytes;
 } kb_update_options_t;
 
 typedef struct kb_command_options {

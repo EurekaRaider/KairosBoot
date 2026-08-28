@@ -107,7 +107,7 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, log_user_data) == 16, "kb_co
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->log_user_data) == 8, "kb_context_options_t.log_user_data size");
 KB_ABI_STATIC_ASSERT(KB_CONTEXT_OPTIONS_V1_SIZE == 24, "KB_CONTEXT_OPTIONS_V1_SIZE value");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 64, "kb_flash_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 72, "kb_flash_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_flash_options_t) == 8, "kb_flash_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, struct_size) == 0, "kb_flash_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->struct_size) == 4, "kb_flash_options_t.struct_size size");
@@ -129,7 +129,8 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, set_active) == 48, "kb_flash_o
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->set_active) == 4, "kb_flash_options_t.set_active size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, active_slot) == 56, "kb_flash_options_t.active_slot offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->active_slot) == 8, "kb_flash_options_t.active_slot size");
-KB_ABI_STATIC_ASSERT(KB_FLASH_OPTIONS_SLOT_POLICY_SIZE == 64, "KB_FLASH_OPTIONS_SLOT_POLICY_SIZE value");
+KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, sparse_limit_bytes) == 64, "kb_flash_options_t.sparse_limit_bytes offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->sparse_limit_bytes) == 8, "kb_flash_options_t.sparse_limit_bytes size");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_job_options_t) == 32, "kb_job_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_job_options_t) == 8, "kb_job_options_t alignment");
@@ -182,7 +183,7 @@ KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->stage) == 8, "kb_progress_t.st
 KB_ABI_STATIC_ASSERT(offsetof(kb_progress_t, device_identifier) == 32, "kb_progress_t.device_identifier offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_progress_t *)0)->device_identifier) == 8, "kb_progress_t.device_identifier size");
 
-KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 80, "kb_update_options_t size");
+KB_ABI_STATIC_ASSERT(sizeof(kb_update_options_t) == 88, "kb_update_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_update_options_t) == 8, "kb_update_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, struct_size) == 0, "kb_update_options_t.struct_size offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->struct_size) == 4, "kb_update_options_t.struct_size size");
@@ -214,7 +215,8 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, set_active) == 64, "kb_update
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->set_active) == 4, "kb_update_options_t.set_active size");
 KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, active_slot) == 72, "kb_update_options_t.active_slot offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->active_slot) == 8, "kb_update_options_t.active_slot size");
-KB_ABI_STATIC_ASSERT(KB_UPDATE_OPTIONS_SLOT_POLICY_SIZE == 80, "KB_UPDATE_OPTIONS_SLOT_POLICY_SIZE value");
+KB_ABI_STATIC_ASSERT(offsetof(kb_update_options_t, sparse_limit_bytes) == 80, "kb_update_options_t.sparse_limit_bytes offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_update_options_t *)0)->sparse_limit_bytes) == 8, "kb_update_options_t.sparse_limit_bytes size");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_version_t) == 32, "kb_version_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_version_t) == 8, "kb_version_t alignment");

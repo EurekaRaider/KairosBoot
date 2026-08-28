@@ -1009,6 +1009,42 @@ void multipart_flash_failure_preserves_primitive_and_task_evidence() {
     CHECK(session.state() == SessionState::Ready);
 }
 
+void explicit_sparse_limit_drives_update_flash_segmentation() {
+    constexpr std::uint64_t sparse_limit = 4200U;
+    const auto raw = three_block_raw_image();
+    auto bound = bind_artifact(
+        "system.img", std::make_shared<MemorySource>(raw));
+    auto oracle = SparseFlashPlan::create(*bound.artifact, sparse_limit);
+    if (!oracle) {
+        throw CheckFailure("explicit sparse oracle failed: " +
+                           oracle.error().message);
+    }
+    CHECK(oracle->parts().size() > 1U);
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:max-download-size");
+    script->respond("OKAY1048576");
+    for (const auto& part : oracle->parts()) {
+        CHECK(part.source->size() <= sparse_limit);
+        const auto payload = read_image_source(*part.source);
+        expect_flash(*script, "system", payload);
+    }
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService service(session);
+    PrimitiveUpdateDevice device(
+        service,
+        PrimitiveUpdateDeviceOptions{
+            .explicit_sparse_limit = sparse_limit,
+        });
+    auto token = device.prepare_task(flash_input(bound), {});
+    CHECK(token);
+    CHECK((*token)->host_to_device_data_bytes() == oracle->transfer_size());
+    CHECK((*token)->execute({}));
+    CHECK(script->complete());
+}
+
 void cancellation_and_absolute_deadline_are_fail_closed() {
     const auto payload = to_bytes("cancel-payload");
     auto bound = bind_artifact(
@@ -2400,6 +2436,8 @@ int main() {
          single_primitive_task_certainty_tracks_exact_outbound},
         {"multipart task certainty",
          multipart_flash_failure_preserves_primitive_and_task_evidence},
+        {"explicit sparse update limit",
+         explicit_sparse_limit_drives_update_flash_segmentation},
         {"cancellation and deadline",
          cancellation_and_absolute_deadline_are_fail_closed},
         {"sparse token identity",

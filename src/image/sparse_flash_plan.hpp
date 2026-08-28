@@ -17,6 +17,13 @@ namespace kairosboot::image {
 inline constexpr std::uint64_t kDefaultResparseLimitBytes =
     1ULL * 1024ULL * 1024ULL * 1024ULL;
 
+// Resolves an explicit AOSP -S limit against both the device-reported maximum
+// and AOSP's fixed resparse ceiling. A zero host limit preserves the automatic
+// device-only behavior used when -S is absent.
+[[nodiscard]] std::uint64_t effective_sparse_download_limit(
+    std::uint64_t target_max_download_size,
+    std::uint64_t explicit_host_limit) noexcept;
+
 enum class SparseFlashPlanErrorKind : std::uint8_t {
     InvalidArgument,
     Unsupported,

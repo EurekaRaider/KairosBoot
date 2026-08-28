@@ -94,6 +94,8 @@ struct FlashOptions {
   std::optional<std::string> slot;
   bool set_active{};
   std::optional<std::string> active_slot;
+  // AOSP -S sparse-part limit in bytes; zero selects automatic device limits.
+  std::uint64_t sparse_limit_bytes{};
 };
 
 struct LegacyBootOptions {
@@ -120,6 +122,8 @@ struct UpdateOptions {
   std::optional<std::string> slot;
   bool set_active{};
   std::optional<std::string> active_slot;
+  // AOSP -S sparse-part limit in bytes; zero selects automatic device limits.
+  std::uint64_t sparse_limit_bytes{};
 };
 
 struct CommandOptions {
@@ -347,6 +351,7 @@ prepare_update_options(const UpdateOptions &options) {
   result.native.disable_fastboot_info = options.disable_fastboot_info ? 1 : 0;
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
+  result.native.sparse_limit_bytes = options.sparse_limit_bytes;
   if (options.slot) {
     if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
       return std::unexpected(detail_make_error(
@@ -394,6 +399,7 @@ prepare_flash_options(const FlashOptions &options) {
   result.native.timeout_ms = *timeout;
   result.native.disable_verity = options.disable_verity ? 1 : 0;
   result.native.disable_verification = options.disable_verification ? 1 : 0;
+  result.native.sparse_limit_bytes = options.sparse_limit_bytes;
   if (options.slot) {
     if (options.slot->empty() || options.slot->find('\0') != std::string::npos) {
       return std::unexpected(detail_make_error(

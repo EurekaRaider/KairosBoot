@@ -561,6 +561,30 @@ bool valid_flash_options(const kb_flash_options_t *options) noexcept {
          options->active_slot == nullptr || options->set_active == 1;
 }
 
+[[nodiscard]] kb_flash_options_t flash_options_or_default(
+    const kb_flash_options_t *options) noexcept {
+  kb_flash_options_t result{};
+  result.struct_size = sizeof(result);
+  result.api_version = KB_API_VERSION;
+  result.timeout_ms = kDefaultTimeoutMs;
+  if (options == nullptr) {
+    return result;
+  }
+  result.timeout_ms = options->timeout_ms;
+  result.progress_callback = options->progress_callback;
+  result.progress_user_data = options->progress_user_data;
+  if (options->struct_size >= KB_FLASH_OPTIONS_AVB_FLAGS_SIZE) {
+    result.disable_verity = options->disable_verity;
+    result.disable_verification = options->disable_verification;
+  }
+  if (options->struct_size >=
+      offsetof(kb_flash_options_t, sparse_limit_bytes) +
+          sizeof(options->sparse_limit_bytes)) {
+    result.sparse_limit_bytes = options->sparse_limit_bytes;
+  }
+  return result;
+}
+
 bool valid_legacy_boot_options(
     const kb_legacy_boot_options_t *options) noexcept {
   return options == nullptr ||
@@ -770,6 +794,11 @@ update_options_or_default(const kb_update_options_t *options) {
     }
     if (options->struct_size >= KB_UPDATE_OPTIONS_SLOT_POLICY_SIZE) {
       active_slot = options->active_slot;
+    }
+    if (options->struct_size >=
+        offsetof(kb_update_options_t, sparse_limit_bytes) +
+            sizeof(options->sparse_limit_bytes)) {
+      result.native.sparse_limit_bytes = options->sparse_limit_bytes;
     }
     auto policy = copy_slot_policy(slot, set_active, active_slot);
     if (!policy) {
@@ -2306,6 +2335,7 @@ apply_update_slot_policy(
   bool callback_cancelled = false;
   kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options{
       .host_resparse_limit = kairosboot::image::kDefaultResparseLimitBytes,
+      .explicit_sparse_limit = options.sparse_limit_bytes,
       .progress = [&options, &identifier](
                       const kairosboot::fastboot::PrimitiveUpdateProgress
                           &progress) {
@@ -2521,8 +2551,11 @@ kb_status_t start_flash_source_async(
           maximum.error(), selected_identifier));
     }
 
+    const auto effective_max_download_size =
+        kairosboot::image::effective_sparse_download_limit(
+            target_max_download_size, flash_options.sparse_limit_bytes);
     auto plan = kairosboot::image::SparseFlashPlan::create(
-        *artifact, target_max_download_size,
+        *artifact, effective_max_download_size,
         kairosboot::image::kDefaultResparseLimitBytes,
         task_context.cancellation_token());
     if (!plan) {
@@ -3109,18 +3142,7 @@ kb_status_t KB_CALL kb_flash_file_async(
                              file_source.error(), requested_identifier));
     }
 
-    kb_flash_options_t flash_options;
-    kb_flash_options_init(&flash_options);
-    if (options_or_null != nullptr) {
-      flash_options.timeout_ms = options_or_null->timeout_ms;
-      flash_options.progress_callback = options_or_null->progress_callback;
-      flash_options.progress_user_data = options_or_null->progress_user_data;
-      if (options_or_null->struct_size >= KB_FLASH_OPTIONS_AVB_FLAGS_SIZE) {
-        flash_options.disable_verity = options_or_null->disable_verity;
-        flash_options.disable_verification =
-            options_or_null->disable_verification;
-      }
-    }
+    const auto flash_options = flash_options_or_default(options_or_null);
     auto slot_policy = copy_flash_slot_policy(options_or_null);
     if (!slot_policy) {
       return fail(error, KB_E_INVALID_ARGUMENT, slot_policy.error().c_str(),
@@ -3278,13 +3300,7 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
       return fail(error, image_source.error());
     }
 
-    kb_flash_options_t flash_options;
-    kb_flash_options_init(&flash_options);
-    if (options_or_null != nullptr) {
-      flash_options.timeout_ms = options_or_null->timeout_ms;
-      flash_options.progress_callback = options_or_null->progress_callback;
-      flash_options.progress_user_data = options_or_null->progress_user_data;
-    }
+    const auto flash_options = flash_options_or_default(options_or_null);
     auto slot_policy = copy_flash_slot_policy(options_or_null);
     if (!slot_policy) {
       return fail(error, KB_E_INVALID_ARGUMENT, slot_policy.error().c_str(),
@@ -3446,13 +3462,7 @@ kb_status_t KB_CALL kb_boot_raw_async(
       return fail(error, image_source.error());
     }
 
-    kb_flash_options_t boot_options;
-    kb_flash_options_init(&boot_options);
-    if (options_or_null != nullptr) {
-      boot_options.timeout_ms = options_or_null->timeout_ms;
-      boot_options.progress_callback = options_or_null->progress_callback;
-      boot_options.progress_user_data = options_or_null->progress_user_data;
-    }
+    const auto boot_options = flash_options_or_default(options_or_null);
     return start_boot_source_async(*context, requested_selector,
                                    std::move(*image_source), boot_options,
                                    operation, error);
@@ -3547,13 +3557,7 @@ kb_status_t KB_CALL kb_boot_file_async(
                              valid_size.error(), requested_identifier));
     }
 
-    kb_flash_options_t boot_options;
-    kb_flash_options_init(&boot_options);
-    if (options_or_null != nullptr) {
-      boot_options.timeout_ms = options_or_null->timeout_ms;
-      boot_options.progress_callback = options_or_null->progress_callback;
-      boot_options.progress_user_data = options_or_null->progress_user_data;
-    }
+    const auto boot_options = flash_options_or_default(options_or_null);
 
     std::shared_ptr<const kairosboot::image::IImageSource> image_source =
         std::move(*file_source);

@@ -82,6 +82,7 @@ using PrimitiveUpdateProgressObserver =
 
 struct PrimitiveUpdateDeviceOptions final {
     std::uint64_t host_resparse_limit{image::kDefaultResparseLimitBytes};
+    std::uint64_t explicit_sparse_limit{};
     PrimitiveUpdateProgressObserver progress{};
 };
 

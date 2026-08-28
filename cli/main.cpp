@@ -215,6 +215,8 @@ struct GlobalOptions {
   bool maximum_receive_bytes_set{false};
   bool disable_verity{};
   bool disable_verification{};
+  std::uint64_t sparse_limit_bytes{};
+  bool sparse_limit_set{false};
   bool legacy_boot_options_set{false};
   std::optional<std::string> slot;
   bool set_active{};
@@ -339,6 +341,7 @@ bool is_global_option(const std::string_view value) noexcept {
          value == "--timeout-ms" || value == "--max-receive-bytes" ||
          value == "--disable-verity" ||
          value == "--disable-verification" ||
+         value == "-S" ||
          value == "--base" || value == "--cmdline" ||
          value == "--page-size" || value == "--kernel-offset" ||
          value == "--ramdisk-offset" || value == "--second-offset" ||
@@ -354,6 +357,46 @@ bool parse_unsigned_decimal(const std::string_view text, Integer &value) {
   const auto [end, error] =
       std::from_chars(text.data(), text.data() + text.size(), value, 10);
   return error == std::errc{} && end == text.data() + text.size();
+}
+
+bool parse_sparse_limit(const std::string_view text,
+                        std::uint64_t &value) noexcept {
+  if (text.empty()) {
+    return false;
+  }
+  std::string_view digits = text;
+  if (digits.front() == '+') {
+    digits.remove_prefix(1U);
+  }
+  std::uint64_t multiplier = 1U;
+  if (!digits.empty()) {
+    switch (digits.back()) {
+    case 'K':
+    case 'k':
+      multiplier = 1024ULL;
+      digits.remove_suffix(1U);
+      break;
+    case 'M':
+    case 'm':
+      multiplier = 1024ULL * 1024ULL;
+      digits.remove_suffix(1U);
+      break;
+    case 'G':
+    case 'g':
+      multiplier = 1024ULL * 1024ULL * 1024ULL;
+      digits.remove_suffix(1U);
+      break;
+    default:
+      break;
+    }
+  }
+  std::uint64_t parsed{};
+  if (!parse_unsigned_decimal(digits, parsed) ||
+      parsed > std::numeric_limits<std::uint64_t>::max() / multiplier) {
+    return false;
+  }
+  value = parsed * multiplier;
+  return true;
 }
 
 bool parse_u32_auto(const std::string_view text, std::uint32_t &value) {
@@ -503,6 +546,19 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       ++index;
       continue;
     }
+    if (argument == "-S") {
+      if (result.global.sparse_limit_set) {
+        return error("option -S may only be specified once");
+      }
+      if (index + 1 >= argc ||
+          !parse_sparse_limit(argv[index + 1],
+                              result.global.sparse_limit_bytes)) {
+        return error("option -S requires SIZE[K|M|G]");
+      }
+      result.global.sparse_limit_set = true;
+      index += 2;
+      continue;
+    }
     if (argument == "--slot") {
       if (slot_seen) {
         return error("option --slot may only be specified once");
@@ -626,6 +682,11 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       command != "flashall") {
     return error("options --slot and --set-active are valid only for flash, "
                  "flash:raw, update, and flashall");
+  }
+  if (result.global.sparse_limit_set && command != "flash" &&
+      command != "flash:raw" && command != "update" &&
+      command != "flashall") {
+    return error("option -S is not valid for " + std::string{command});
   }
 
   if (command == "--version") {
@@ -1476,6 +1537,7 @@ kairosboot::FlashOptions flash_options(const GlobalOptions &options) {
   result.slot = options.slot;
   result.set_active = options.set_active;
   result.active_slot = options.active_slot;
+  result.sparse_limit_bytes = options.sparse_limit_bytes;
   return result;
 }
 
@@ -1489,6 +1551,7 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
   result.slot = options.slot;
   result.set_active = options.set_active;
   result.active_slot = options.active_slot;
+  result.sparse_limit_bytes = options.sparse_limit_bytes;
   return result;
 }
 
@@ -2621,6 +2684,7 @@ constexpr std::string_view usage_text() noexcept {
                "  --json --timeout-ms <milliseconds> "
                "--max-receive-bytes <bytes>\n"
                "  --disable-verity --disable-verification\n"
+               "  -S SIZE[K|M|G] (flash, flash:raw, update and flashall)\n"
                "  Legacy boot options (boot and flash:raw only):\n"
                "  --cmdline <text> --base <value> --page-size <value>\n"
                "  --kernel-offset <value> --ramdisk-offset <value>\n"

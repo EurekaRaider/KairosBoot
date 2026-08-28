@@ -15,9 +15,9 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 47
+    implemented: 48
     intentional-deviation: 15
-    missing: 21
+    missing: 20
     partial: 36
 officialDifferentialCoverage:
   status: "not-run"
@@ -857,9 +857,14 @@ entries:
   - id: "option.sparse-limit"
     kind: "option"
     required: true
-    status: "missing"
-    note: "The locked AOSP option is not exposed by the KairosBoot CLI."
-    evidence: []
+    status: "implemented"
+    note: "-S SIZE[K|M|G] is exposed by C, C++23, .NET and CLI; explicit limits force raw-to-sparse or sparse resparse segmentation and are safely bounded by max-download-size and AOSP's 1 GiB ceiling for flash, update and flashall."
+    evidence:
+      - "tests/sparse/sparse_image_tests.cpp"
+      - "tests/fastboot/primitive_update_device_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
+      - "tests/cxx_api_test.cpp"
+      - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
   - id: "option.tags-offset"
     kind: "option"
     required: true
@@ -990,7 +995,6 @@ requiredGaps:
   - "option.help-short"
   - "option.os-patch-level"
   - "option.os-version"
-  - "option.sparse-limit"
   - "option.vendor-id"
   - "option.verbose"
 completionRule: "claimCompatibility may become true only after every required entry is implemented or an approved intentional deviation, every required entry has official Platform-Tools 37.0.1 differential evidence, and no partial, missing, unknown, or unassessed entry remains"

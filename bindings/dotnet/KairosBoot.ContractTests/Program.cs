@@ -265,6 +265,17 @@ internal static class Program
     private static void CheckNativeLayouts()
     {
         Check(
+            Marshal.OffsetOf<NativeFlashOptions>(nameof(NativeFlashOptions.SparseLimitBytes)).ToInt32() ==
+                (IntPtr.Size == 8 ? 64 : 40),
+            "flash options sparse limit offset");
+        Check(
+            Marshal.SizeOf<NativeFlashOptions>() == (IntPtr.Size == 8 ? 72 : 48),
+            "flash options native size");
+        Check(
+            NativeMethods.FlashOptionsStructSize == Marshal.SizeOf<NativeFlashOptions>(),
+            "flash options declared size");
+
+        Check(
             Marshal.OffsetOf<NativeLegacyBootOptions>(nameof(NativeLegacyBootOptions.StructSize)).ToInt32() == 0,
             "legacy boot options struct_size offset");
         Check(
@@ -347,7 +358,11 @@ internal static class Program
                 (IntPtr.Size == 8 ? 72 : 56),
             "update options active slot offset");
         Check(
-            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 80 : 60),
+            Marshal.OffsetOf<NativeUpdateOptions>(nameof(NativeUpdateOptions.SparseLimitBytes)).ToInt32() ==
+                (IntPtr.Size == 8 ? 80 : 64),
+            "update options sparse limit offset");
+        Check(
+            Marshal.SizeOf<NativeUpdateOptions>() == (IntPtr.Size == 8 ? 88 : 72),
             "update options native size");
         Check(
             NativeMethods.UpdateOptionsStructSize == Marshal.SizeOf<NativeUpdateOptions>(),
@@ -454,6 +469,7 @@ internal static class Program
         Check(UpdateOptions.Default.Slot == null, "default update slot");
         Check(!UpdateOptions.Default.SetActive, "default update set-active");
         Check(UpdateOptions.Default.ActiveSlot == null, "default update active slot");
+        Check(UpdateOptions.Default.SparseLimitBytes == 0, "default update sparse limit");
         Check(
             default(UpdateOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct update timeout");
@@ -464,13 +480,16 @@ internal static class Program
             skipReboot: true,
             skipSecondary: true,
             excludeDynamicPartitions: true,
-            disableFastbootInfo: true);
+            disableFastbootInfo: true,
+            sparseLimitBytes: 8UL * 1024UL * 1024UL);
         Check(infiniteWipe.Timeout == Timeout.InfiniteTimeSpan, "explicit infinite update timeout");
         Check(infiniteWipe.Wipe, "explicit update wipe");
         Check(infiniteWipe.SkipReboot, "explicit update skip reboot");
         Check(infiniteWipe.SkipSecondary, "explicit update skip secondary");
         Check(infiniteWipe.ExcludeDynamicPartitions, "explicit update excludes dynamic");
         Check(infiniteWipe.DisableFastbootInfo, "explicit update disables fastboot-info");
+        Check(infiniteWipe.SparseLimitBytes == 8UL * 1024UL * 1024UL,
+            "explicit update sparse limit");
         var slotted = new UpdateOptions(
             Timeout.InfiniteTimeSpan, wipe: false, slot: "other",
             setActive: true, activeSlot: "b");
@@ -805,6 +824,7 @@ internal static class Program
         Check(FlashOptions.Default.Slot == null, "default flash slot");
         Check(!FlashOptions.Default.SetActive, "default flash set-active");
         Check(FlashOptions.Default.ActiveSlot == null, "default flash active slot");
+        Check(FlashOptions.Default.SparseLimitBytes == 0, "default flash sparse limit");
         Check(
             default(FlashOptions).Timeout == Timeout.InfiniteTimeSpan,
             "default struct flash timeout");
@@ -829,6 +849,8 @@ internal static class Program
         var maximum = TimeSpan.FromTicks(
             ((long)uint.MaxValue - 1) * TimeSpan.TicksPerMillisecond);
         Check(new FlashOptions(maximum).Timeout == maximum, "maximum finite flash timeout");
+        Check(new FlashOptions(maximum, 64UL * 1024UL).SparseLimitBytes ==
+            64UL * 1024UL, "explicit flash sparse limit");
     }
 
     private static void CheckLegacyBootOptions()
@@ -911,7 +933,8 @@ internal static class Program
                     skipReboot: true,
                     skipSecondary: true,
                     excludeDynamicPartitions: true,
-                    disableFastbootInfo: true),
+                    disableFastbootInfo: true,
+                    sparseLimitBytes: 8UL * 1024UL * 1024UL),
                 "usb:serial:device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);
@@ -960,7 +983,7 @@ internal static class Program
             await context.FlashRawAsync(
                 "boot",
                 "images/内核.bin",
-                new FlashOptions(fractional),
+                new FlashOptions(fractional, 64UL * 1024UL),
                 ramdiskPath: "ramdisk.img",
                 deviceSelector: "usb:serial:raw",
                 progress: rawProgress,

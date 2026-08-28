@@ -606,6 +606,18 @@ def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
     ):
         raise AssertionError(f"unknown command error changed: {stderr!r}")
 
+    stdout, stderr = local(["-S", "0", "flash"], 2)
+    if b"flash requires exactly <partition> and <file>" not in stderr:
+        raise AssertionError(f"zero sparse limit was not accepted: {stderr!r}")
+
+    stdout, stderr = local(["-S", "18446744073709551615G", "flash"], 2)
+    if b"option -S requires SIZE[K|M|G]" not in stderr:
+        raise AssertionError(f"sparse limit overflow was not rejected: {stderr!r}")
+
+    stdout, stderr = local(["-S", "1K", "-S", "2K", "flash"], 2)
+    if b"option -S may only be specified once" not in stderr:
+        raise AssertionError(f"duplicate sparse limit was not rejected: {stderr!r}")
+
 
 def run(cli: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="kairosboot-cli-") as raw_directory:
@@ -1075,6 +1087,43 @@ def run(cli: pathlib.Path) -> None:
             "partition": "system",
             "file": str(stage_file),
         }
+
+        sparse_limited_image = directory / "sparse-limited-raw.img"
+        sparse_limited_image.write_bytes(
+            bytes((index * 17 + 3) % 251 for index in range(3 * 4096))
+        )
+
+        def sparse_limited_flash(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-download-size"
+            send_frame(connection, b"OKAY0x00100000")
+            for _ in range(3):
+                command = receive_frame(connection)
+                assert command.startswith(b"download:")
+                encoded_size = int(command[9:], 16)
+                assert 0 < encoded_size <= 4200
+                send_frame(connection, b"DATA" + command[9:])
+                payload = receive_frame(connection)
+                assert len(payload) == encoded_size
+                assert payload[:4] == b"\x3a\xff\x26\xed"
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:system"
+                send_frame(connection, b"OKAYflashed")
+
+        stdout, stderr = invoke(
+            cli,
+            ["-S", "4200", "--json", "flash", "system",
+             str(sparse_limited_image)],
+            sparse_limited_flash,
+        )
+        document = parse_success_json(stdout, stderr)
+        assert document["command"] == "flash"
+        assert document["partition"] == "system"
 
         vbmeta_file = directory / "vbmeta.img"
         vbmeta_payload = bytearray([0x5A] * 256)
