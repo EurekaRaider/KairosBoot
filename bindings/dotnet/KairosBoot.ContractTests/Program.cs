@@ -46,6 +46,7 @@ internal static class Program
             CheckNativeBinaryCopy();
             CheckCommandOptions();
             CheckUpdateOptions();
+            CheckJobOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
             CheckFleetPublicSurface();
@@ -56,6 +57,7 @@ internal static class Program
             if (Environment.GetEnvironmentVariable("KAIROSBOOT_UPDATE_SHIM") == "1")
             {
                 await CheckScriptedUpdateShim().ConfigureAwait(false);
+                await CheckScriptedFleetShim().ConfigureAwait(false);
                 Console.WriteLine($"KairosBoot scripted update checks passed: {checks}");
                 return 0;
             }
@@ -112,15 +114,15 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 85)
+        if (uniqueEntryPoints.Count != 96)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 85 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 96 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 85, "unique entry points");
+        Check(uniqueEntryPoints.Count == 96, "unique entry points");
         Check(entryPoints.Contains("kb_update_options_init"), "update options import");
         Check(entryPoints.Contains("kb_update_package_async"), "async update import");
         Check(entryPoints.Contains("kb_update_package"), "blocking update import");
@@ -132,6 +134,17 @@ internal static class Program
         Check(entryPoints.Contains("kb_job_plan_canonical_json"), "fleet plan JSON import");
         Check(entryPoints.Contains("kb_job_plan_sha256_hex"), "fleet plan digest import");
         Check(entryPoints.Contains("kb_job_plan_release"), "fleet plan release import");
+        Check(entryPoints.Contains("kb_job_options_init"), "fleet job options import");
+        Check(entryPoints.Contains("kb_run_job_file_async"), "fleet async run import");
+        Check(entryPoints.Contains("kb_run_job_file"), "fleet blocking run import");
+        Check(entryPoints.Contains("kb_job_wait"), "fleet wait import");
+        Check(entryPoints.Contains("kb_job_cancel"), "fleet cancel import");
+        Check(entryPoints.Contains("kb_job_state"), "fleet state import");
+        Check(entryPoints.Contains("kb_job_error"), "fleet error import");
+        Check(entryPoints.Contains("kb_job_get_report"), "fleet report import");
+        Check(entryPoints.Contains("kb_job_release"), "fleet job release import");
+        Check(entryPoints.Contains("kb_job_report_json"), "fleet report JSON import");
+        Check(entryPoints.Contains("kb_job_report_release"), "fleet report release import");
         Check(entryPoints.Contains("kb_flashing_async"), "flashing import");
         Check(entryPoints.Contains("kb_gsi_async"), "GSI import");
         Check(entryPoints.Contains("kb_snapshot_update_async"), "snapshot-update import");
@@ -159,6 +172,10 @@ internal static class Program
         {
             Check(invalidPlan.IsInvalid, "invalid job plan handle is inert");
         }
+        Check(typeof(JobSafeHandle).IsSubclassOf(typeof(SafeHandle)), "job SafeHandle");
+        Check(
+            typeof(JobReportSafeHandle).IsSubclassOf(typeof(SafeHandle)),
+            "job report SafeHandle");
     }
 
     private static void CheckInteropCallingConventionAndStrings()
@@ -173,7 +190,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 85, "net48 DllImport count");
+        Check(methods.Count == 96, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -182,7 +199,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 64, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 66, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -200,7 +217,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 85, "net10 LibraryImport count");
+        Check(groups.Count == 96, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -211,7 +228,7 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 40, "net10 native UTF-8 string methods");
+        Check(stringMethods.Count == 42, "net10 native UTF-8 string methods");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -270,6 +287,26 @@ internal static class Program
         Check(
             NativeMethods.CommandOptionsStructSize == Marshal.SizeOf<NativeCommandOptions>(),
             "command options declared size");
+
+        Check(
+            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.StructSize)).ToInt32() == 0,
+            "job options struct_size offset");
+        Check(
+            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.ApiVersion)).ToInt32() == 4,
+            "job options api_version offset");
+        Check(
+            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.TimeoutMilliseconds)).ToInt32() == 8,
+            "job options timeout offset");
+        Check(
+            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.ProgressCallback)).ToInt32() ==
+                (IntPtr.Size == 8 ? 16 : 12),
+            "job options callback offset");
+        Check(
+            Marshal.SizeOf<NativeJobOptions>() == (IntPtr.Size == 8 ? 32 : 20),
+            "job options native size");
+        Check(
+            NativeMethods.JobOptionsStructSize == Marshal.SizeOf<NativeJobOptions>(),
+            "job options declared size");
     }
 
     private static void CheckNativeBinaryCopy()
@@ -362,6 +399,19 @@ internal static class Program
         Check(result.DeviceIdentifier == "设备-一", "result UTF-8 device identifier");
         Expect<InvalidOperationException>(
             () => CommandMessageKindMapping.FromNative(2, "contract test"));
+    }
+
+    private static void CheckJobOptions()
+    {
+        Check(JobOptions.Default.Timeout == Timeout.InfiniteTimeSpan, "default job timeout");
+        Check(default(JobOptions).Timeout == Timeout.InfiniteTimeSpan, "default struct job timeout");
+        var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
+        Check(new JobOptions(fractional).Timeout == fractional, "finite job timeout");
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new JobOptions(TimeSpan.FromTicks(-1)));
+        Expect<ArgumentOutOfRangeException>(
+            () => _ = new JobOptions(
+                TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
     }
 
     private static void CheckTypedPublicSurface()
@@ -661,6 +711,170 @@ internal static class Program
                 typeof(JobPlan).GetProperty("Sha256Hex")?.CanRead == true &&
                 typeof(JobPlan).GetProperty("Sha256Hex")?.CanWrite == false,
             "job plan digest property");
+        Check(typeof(JobOptions).IsValueType, "fleet job options value type");
+        Check(typeof(JobProgress).IsSealed, "fleet progress sealed");
+        Check(
+            typeof(FleetJob).IsSealed &&
+                typeof(FleetJob).GetInterfaces().Contains(typeof(IDisposable)),
+            "fleet job lifecycle owner");
+        Check(
+            typeof(JobReport).IsSealed &&
+                typeof(JobReport).GetInterfaces().Contains(typeof(IDisposable)),
+            "fleet report lifecycle owner");
+        Check(
+            typeof(FleetJob).GetProperty("State")?.PropertyType == typeof(OperationState),
+            "fleet job state property");
+        Check(
+            typeof(FleetJob).GetProperty("Error")?.PropertyType == typeof(KairosBootException),
+            "fleet job error property");
+        Check(
+            typeof(FleetJob).GetMethod("Wait", Type.EmptyTypes)?.ReturnType ==
+                typeof(JobReport),
+            "fleet blocking wait signature");
+        Check(
+            typeof(FleetJob).GetMethod("WaitAsync", new[] { typeof(CancellationToken) })?.ReturnType ==
+                typeof(Task<JobReport>),
+            "fleet async wait signature");
+        Check(
+            typeof(FleetJob).GetMethod("GetReport", Type.EmptyTypes)?.ReturnType ==
+                typeof(JobReport),
+            "fleet report extraction signature");
+        Check(
+            typeof(JobReport).GetProperty("Json")?.PropertyType == typeof(string),
+            "fleet report JSON property");
+
+        var startMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "StartJobFile")
+            .ToList();
+        Check(startMethods.Count == 2, "fleet start overloads");
+        Check(
+            startMethods.All(method => method.ReturnType == typeof(FleetJob)),
+            "fleet start returns lifecycle");
+        Check(
+            typeof(Context).GetMethod("RunJobFile")?.ReturnType == typeof(JobReport),
+            "fleet blocking run signature");
+        Check(
+            typeof(Context).GetMethod("RunJobFileAsync")?.ReturnType == typeof(Task<JobReport>),
+            "fleet async run signature");
+    }
+
+    private static async Task CheckScriptedFleetShim()
+    {
+        ScriptedUpdateNativeMethods.Reset();
+        var progressEvents = new List<JobProgress>();
+        var progress = new InlineProgress<JobProgress>(progressEvents.Add);
+
+        using (var context = Context.Create())
+        {
+            var blocking = context.RunJobFile(
+                "blocking.yaml", new JobOptions(TimeSpan.FromMilliseconds(17)));
+            Check(ContainsOrdinal(blocking.Json, "\"blocking\":true"), "blocking fleet report");
+            blocking.Dispose();
+            Expect<ObjectDisposedException>(() => { _ = blocking.Json; });
+
+            JobReport independent;
+            using (var job = context.StartJobFile(
+                "success.yaml",
+                new JobOptions(TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1)),
+                progress))
+            {
+                Check(job.State == OperationState.Running, "fleet running state");
+                Check(job.Error == null, "fleet running error absent");
+                var busy = Expect<KairosBootException>(() => job.GetReport());
+                Check(busy.Status == KairosBootStatus.Busy, "fleet early report busy");
+                independent = await job.WaitAsync().ConfigureAwait(false);
+                Check(job.State == OperationState.Succeeded, "fleet succeeded state");
+                Check(job.Error == null, "fleet success error absent");
+            }
+            Check(
+                ContainsOrdinal(independent.Json, "\"state\":\"succeeded\""),
+                "fleet report outlives job");
+            independent.Dispose();
+
+            using (var job = context.StartJobFile("failure.yaml"))
+            {
+                var failure = await ExpectAsync<KairosBootException>(
+                    () => job.WaitAsync()).ConfigureAwait(false);
+                Check(failure.Status == KairosBootStatus.Io, "fleet failure status");
+                Check(job.State == OperationState.Failed, "fleet failed state");
+                Check(job.Error?.Status == KairosBootStatus.Io, "fleet error snapshot status");
+                Check(job.Error?.NativeCode == -55, "fleet error snapshot native code");
+                using (var report = job.GetReport())
+                {
+                    Check(
+                        ContainsOrdinal(report.Json, "\"state\":\"failed\""),
+                        "fleet failure report");
+                }
+            }
+
+            using (var cancellation = new CancellationTokenSource())
+            using (var job = context.StartJobFile(
+                "cancel.yaml",
+                progress: new InlineProgress<JobProgress>(_ => cancellation.Cancel())))
+            {
+                await ExpectAsync<OperationCanceledException>(
+                    () => job.WaitAsync(cancellation.Token)).ConfigureAwait(false);
+                Check(job.State == OperationState.Cancelled, "fleet cancelled state");
+                Check(
+                    job.Error?.Status == KairosBootStatus.Cancelled,
+                    "fleet cancellation error snapshot");
+                using (var report = job.GetReport())
+                {
+                    Check(
+                        ContainsOrdinal(report.Json, "\"state\":\"cancelled\""),
+                        "fleet cancellation report");
+                }
+            }
+
+            var disposed = context.StartJobFile("dispose.yaml");
+            var disposingWait = disposed.WaitAsync();
+            disposed.Dispose();
+            disposed.Dispose();
+            var disposeCancellation = await ExpectAsync<KairosBootException>(
+                () => disposingWait).ConfigureAwait(false);
+            Check(
+                disposeCancellation.Status == KairosBootStatus.Cancelled,
+                "fleet dispose cancels and drains wait");
+            Expect<ObjectDisposedException>(() => { _ = disposed.State; });
+
+            using (var convenience = await context.RunJobFileAsync(
+                "success.yaml",
+                new JobOptions(TimeSpan.FromMilliseconds(2)),
+                progress).ConfigureAwait(false))
+            {
+                Check(
+                    ContainsOrdinal(convenience.Json, "\"state\":\"succeeded\""),
+                    "fleet async convenience report");
+            }
+
+            using (var preCancelled = new CancellationTokenSource())
+            {
+                preCancelled.Cancel();
+                await ExpectAsync<OperationCanceledException>(
+                    () => context.RunJobFileAsync(
+                        "success.yaml",
+                        new JobOptions(TimeSpan.FromMilliseconds(2)),
+                        progress,
+                        preCancelled.Token)).ConfigureAwait(false);
+            }
+        }
+
+        Check(progressEvents.Count >= 2, "fleet progress observed");
+        Check(progressEvents.All(item => item.Stage == "execute"), "fleet progress stage");
+        Check(
+            progressEvents.All(item => item.DeviceIdentifier == "SERIAL-01"),
+            "fleet progress device");
+        Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "fleet native assertions");
+        Check(ScriptedUpdateNativeMethods.JobOptionsInitCount() == 6, "fleet options init calls");
+        Check(ScriptedUpdateNativeMethods.JobAsyncStartCount() == 5, "fleet async starts");
+        Check(ScriptedUpdateNativeMethods.JobBlockingCount() == 1, "fleet blocking call");
+        Check(ScriptedUpdateNativeMethods.JobCancelCount() == 2, "fleet cancellation count");
+        Check(ScriptedUpdateNativeMethods.JobReleaseCount() == 5, "fleet job releases");
+        Check(
+            ScriptedUpdateNativeMethods.JobReportReleaseCount() == 5,
+            "fleet report releases");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 1, "fleet context release");
     }
 
     private static void CheckFleetJobValidateAndPlan()
@@ -1542,6 +1756,24 @@ internal static class Program
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_context_release_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int ContextReleaseCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_options_init_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int JobOptionsInitCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_async_start_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int JobAsyncStartCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_blocking_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int JobBlockingCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_cancel_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int JobCancelCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_release_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int JobReleaseCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_report_release_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int JobReportReleaseCount();
     }
 
     private static TException Expect<TException>(Action action)

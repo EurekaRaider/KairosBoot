@@ -23,6 +23,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void CommandOptionsInit(ref NativeCommandOptions options);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_options_init")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void JobOptionsInit(ref NativeJobOptions options);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_version_init")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void VersionInit(ref NativeVersion version);
@@ -473,6 +477,61 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_job_plan_release")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void JobPlanRelease(IntPtr plan);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_run_job_file_async", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int RunJobFileAsync(
+        ContextSafeHandle context,
+        string filePath,
+        ref NativeJobOptions options,
+        out IntPtr job,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_run_job_file", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int RunJobFile(
+        ContextSafeHandle context,
+        string filePath,
+        ref NativeJobOptions options,
+        out IntPtr report,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_wait")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int JobWait(JobSafeHandle job, uint timeoutMilliseconds);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_cancel")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int JobCancel(JobSafeHandle job);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_state")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int JobState(JobSafeHandle job);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_error")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr JobError(JobSafeHandle job);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_get_report")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int JobGetReport(
+        JobSafeHandle job,
+        out IntPtr report,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_release")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void JobRelease(IntPtr job);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_report_json")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr JobReportJson(
+        JobReportSafeHandle report,
+        out UIntPtr size);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_job_report_release")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void JobReportRelease(IntPtr report);
 
     [LibraryImport(LibraryName, EntryPoint = "kb_operation_wait")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
