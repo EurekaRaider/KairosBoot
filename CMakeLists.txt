@@ -237,6 +237,7 @@ add_library(
   src/fleet/job_report.cpp
   src/fleet/manifest.cpp
   src/image/artifact_source.cpp
+  src/image/boot_image_builder.cpp
   src/image/file_source.cpp
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
@@ -415,7 +416,7 @@ elseif(UNIX)
     kairosboot_cli PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif()
 target_compile_features(kairosboot_cli PRIVATE cxx_std_23)
-target_link_libraries(kairosboot_cli PRIVATE KairosBoot::Cxx)
+target_link_libraries(kairosboot_cli PRIVATE KairosBoot::Cxx kairosboot_internal)
 kairosboot_enable_strict_warnings(kairosboot_cli)
 
 option(KAIROSBOOT_BUILD_EXAMPLES "Build KairosBoot examples" ON)
@@ -454,6 +455,17 @@ if(KAIROSBOOT_BUILD_EXAMPLES)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(kairosboot_boot_image_builder_tests
+                 tests/image/boot_image_builder_tests.cpp)
+  target_compile_features(kairosboot_boot_image_builder_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_boot_image_builder_tests
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(kairosboot_boot_image_builder_tests
+                        PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_boot_image_builder_tests)
+  add_test(NAME boot_image_builder COMMAND kairosboot_boot_image_builder_tests)
+  set_tests_properties(boot_image_builder PROPERTIES TIMEOUT 20)
+
   add_executable(kairosboot_canonical_json_tests
                  tests/fleet/canonical_json_tests.cpp)
   target_compile_features(kairosboot_canonical_json_tests PRIVATE cxx_std_23)
@@ -1054,6 +1066,12 @@ if(BUILD_TESTING)
       "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:kairosboot_cli>"
       "-DEXPECTED_VERSION=${KAIROSBOOT_VERSION_STRING}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli.cmake")
+  add_test(
+    NAME boot_image_cli
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_image_cli_test.py"
+            --cli "$<TARGET_FILE:kairosboot_cli>")
+  set_tests_properties(boot_image_cli PROPERTIES TIMEOUT 30)
 endif()
 
 install(

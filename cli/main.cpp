@@ -11,6 +11,9 @@
 
 #include <kairosboot/kairosboot.hpp>
 
+#include "src/image/boot_image_builder.hpp"
+#include "src/image/file_source.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -222,6 +225,7 @@ enum class CommandKind : std::uint8_t {
   Flash,
   Update,
   Flashall,
+  MakeBootImage,
   Getvar,
   Erase,
   SetActive,
@@ -247,7 +251,10 @@ struct Invocation {
   CommandKind kind{CommandKind::Version};
   std::string_view first;
   std::string_view second;
+  std::string_view third;
+  std::string_view fourth;
   std::string joined;
+  kairosboot::image::LegacyBootImageOptions boot_image_options;
   kairosboot::RebootTarget reboot_target{kairosboot::RebootTarget::System};
   kairosboot::FlashingCommand flashing_command{
       kairosboot::FlashingCommand::Lock};
@@ -322,6 +329,24 @@ bool parse_unsigned_decimal(const std::string_view text, Integer &value) {
   const auto [end, error] =
       std::from_chars(text.data(), text.data() + text.size(), value, 10);
   return error == std::errc{} && end == text.data() + text.size();
+}
+
+bool parse_u32_auto(const std::string_view text, std::uint32_t &value) {
+  if (text.empty()) {
+    return false;
+  }
+  int base = 10;
+  std::string_view digits = text;
+  if (digits.starts_with("0x") || digits.starts_with("0X")) {
+    base = 16;
+    digits.remove_prefix(2U);
+  }
+  if (digits.empty()) {
+    return false;
+  }
+  const auto [end, error] = std::from_chars(
+      digits.data(), digits.data() + digits.size(), value, base);
+  return error == std::errc{} && end == digits.data() + digits.size();
 }
 
 std::string join_operands(char **argv, const int first, const int argc) {
@@ -600,6 +625,89 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
     return result;
   }
+  if (command == "make-boot-image") {
+    result.kind = CommandKind::MakeBootImage;
+    if (index + 1 >= argc) {
+      return error(
+          "make-boot-image requires <output> <kernel> [ramdisk [second]]");
+    }
+    result.first = argv[index++];
+    result.second = argv[index++];
+    if (result.first.empty() || result.second.empty()) {
+      return error("make-boot-image output and kernel must not be empty");
+    }
+    if (index < argc && !std::string_view{argv[index]}.starts_with("--")) {
+      result.third = argv[index++];
+      if (result.third.empty()) {
+        return error("make-boot-image ramdisk must not be empty");
+      }
+    }
+    if (index < argc && !std::string_view{argv[index]}.starts_with("--")) {
+      result.fourth = argv[index++];
+      if (result.fourth.empty()) {
+        return error("make-boot-image second must not be empty");
+      }
+    }
+
+    bool cmdline_seen = false;
+    bool base_seen = false;
+    bool page_size_seen = false;
+    bool kernel_offset_seen = false;
+    bool ramdisk_offset_seen = false;
+    bool second_offset_seen = false;
+    bool tags_offset_seen = false;
+    while (index < argc) {
+      const std::string_view option{argv[index++]};
+      bool *seen = nullptr;
+      std::uint32_t *number = nullptr;
+      if (option == "--cmdline") {
+        seen = &cmdline_seen;
+      } else if (option == "--base") {
+        seen = &base_seen;
+        number = &result.boot_image_options.base;
+      } else if (option == "--page-size") {
+        seen = &page_size_seen;
+        number = &result.boot_image_options.page_size;
+      } else if (option == "--kernel-offset") {
+        seen = &kernel_offset_seen;
+        number = &result.boot_image_options.kernel_offset;
+      } else if (option == "--ramdisk-offset") {
+        seen = &ramdisk_offset_seen;
+        number = &result.boot_image_options.ramdisk_offset;
+      } else if (option == "--second-offset") {
+        seen = &second_offset_seen;
+        number = &result.boot_image_options.second_offset;
+      } else if (option == "--tags-offset") {
+        seen = &tags_offset_seen;
+        number = &result.boot_image_options.tags_offset;
+      } else {
+        return error("unknown make-boot-image option " + std::string{option});
+      }
+      if (*seen) {
+        return error("make-boot-image option " + std::string{option} +
+                     " may only be specified once");
+      }
+      *seen = true;
+      if (index >= argc) {
+        return error("make-boot-image option " + std::string{option} +
+                     " requires a value");
+      }
+      const std::string_view value{argv[index++]};
+      if (number == nullptr) {
+        if (value.empty()) {
+          return error("make-boot-image cmdline must not be empty");
+        }
+        result.boot_image_options.command_line = value;
+      } else if (!parse_u32_auto(value, *number)) {
+        return error("make-boot-image option " + std::string{option} +
+                     " requires a uint32 decimal or 0x hexadecimal value");
+      }
+    }
+    if (const auto rejected = reject_non_json_globals()) {
+      return *rejected;
+    }
+    return result;
+  }
 
   const auto parse_single_operand = [&](const CommandKind kind,
                                         const std::string_view description)
@@ -848,6 +956,8 @@ std::string_view command_name(const CommandKind kind) noexcept {
     return "update";
   case CommandKind::Flashall:
     return "flashall";
+  case CommandKind::MakeBootImage:
+    return "make-boot-image";
   case CommandKind::Getvar:
     return "getvar";
   case CommandKind::Erase:
@@ -1232,6 +1342,170 @@ read_stage_file(const std::string_view file_name) {
   return data;
 }
 
+class TemporaryOutput final {
+public:
+  explicit TemporaryOutput(std::filesystem::path path)
+      : path_(std::move(path)) {}
+  ~TemporaryOutput() {
+    if (!committed_) {
+      std::error_code ignored;
+      std::filesystem::remove(path_, ignored);
+    }
+  }
+
+  TemporaryOutput(const TemporaryOutput &) = delete;
+  TemporaryOutput &operator=(const TemporaryOutput &) = delete;
+
+  [[nodiscard]] const std::filesystem::path &path() const noexcept {
+    return path_;
+  }
+  void commit() noexcept { committed_ = true; }
+
+private:
+  std::filesystem::path path_;
+  bool committed_{false};
+};
+
+template <typename Writer>
+std::expected<void, LocalRuntimeError>
+write_output_atomically_impl(const std::string_view output_name,
+                             Writer &&writer) {
+  const std::filesystem::path output = path_from_utf8(output_name);
+  std::filesystem::path directory = output.parent_path();
+  if (directory.empty()) {
+    directory = std::filesystem::path{"."};
+  }
+
+  static std::atomic<std::uint64_t> sequence{0};
+  std::filesystem::path temporary;
+  std::ofstream stream;
+  for (std::uint32_t attempt = 0; attempt < 32U; ++attempt) {
+    const std::uint64_t clock = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::uint64_t random =
+        (static_cast<std::uint64_t>(std::random_device{}()) << 32U) ^
+        static_cast<std::uint64_t>(std::random_device{}());
+    const std::uint64_t token =
+        clock ^ random ^ sequence.fetch_add(1U, std::memory_order_relaxed) ^
+        attempt;
+    std::array<char, 17> encoded{};
+    const auto [end, error] =
+        std::to_chars(encoded.data(), encoded.data() + 16, token, 16);
+    if (error != std::errc{}) {
+      return std::unexpected(LocalRuntimeError{
+          KB_E_INTERNAL, "failed to create a temporary output name"});
+    }
+    const std::string name =
+        ".kairosboot-" + std::string{encoded.data(), end} + ".tmp";
+    temporary = directory / path_from_utf8(name);
+    stream.open(temporary,
+                std::ios::binary | std::ios::out | std::ios::noreplace);
+    if (stream) {
+      break;
+    }
+
+    // `noreplace` makes creation atomic: an existing file or symlink is never
+    // opened or truncated. Retry only an actual name collision; other failures
+    // (missing directory, permissions, and unsupported paths) are actionable.
+    stream.clear();
+    std::error_code exists_error;
+    if (!std::filesystem::exists(temporary, exists_error) || exists_error) {
+      return std::unexpected(LocalRuntimeError{
+          KB_E_IO, "cannot create temporary output beside: " +
+                       std::string{output_name}});
+    }
+    temporary.clear();
+  }
+  if (temporary.empty()) {
+    return std::unexpected(LocalRuntimeError{
+        KB_E_IO, "cannot allocate a temporary output beside: " +
+                     std::string{output_name}});
+  }
+
+  TemporaryOutput cleanup{std::move(temporary)};
+  if (auto written = writer(stream); !written) {
+    return std::unexpected(std::move(written.error()));
+  }
+  stream.close();
+  if (!stream) {
+    return std::unexpected(LocalRuntimeError{
+        KB_E_IO, "failed while closing temporary output for: " +
+                     std::string{output_name}});
+  }
+
+  std::error_code rename_error;
+#if defined(_WIN32)
+  if (MoveFileExW(cleanup.path().c_str(), output.c_str(),
+                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+    rename_error = std::error_code{static_cast<int>(GetLastError()),
+                                   std::system_category()};
+  }
+#else
+  std::filesystem::rename(cleanup.path(), output, rename_error);
+#endif
+  if (rename_error) {
+    return std::unexpected(LocalRuntimeError{
+        KB_E_IO, "cannot atomically publish output " +
+                     std::string{output_name} + " (native error " +
+                     std::to_string(rename_error.value()) + ")"});
+  }
+  cleanup.commit();
+  return {};
+}
+
+std::expected<void, LocalRuntimeError>
+write_output_atomically(const std::string_view output_name,
+                        const std::span<const std::byte> data) {
+  return write_output_atomically_impl(
+      output_name, [data, output_name](std::ofstream &stream)
+                       -> std::expected<void, LocalRuntimeError> {
+        constexpr std::size_t maximum_chunk = 1024U * 1024U;
+        std::size_t offset = 0U;
+        while (offset < data.size()) {
+          const std::size_t chunk =
+              std::min(maximum_chunk, data.size() - offset);
+          stream.write(reinterpret_cast<const char *>(data.data() + offset),
+                       static_cast<std::streamsize>(chunk));
+          if (!stream) {
+            return std::unexpected(LocalRuntimeError{
+                KB_E_IO, "failed while writing temporary output for: " +
+                             std::string{output_name}});
+          }
+          offset += chunk;
+        }
+        return {};
+      });
+}
+
+std::expected<void, LocalRuntimeError> write_source_atomically(
+    const std::string_view output_name,
+    const kairosboot::image::IImageSource &source) {
+  return write_output_atomically_impl(
+      output_name, [&source, output_name](std::ofstream &stream)
+                       -> std::expected<void, LocalRuntimeError> {
+        std::array<std::byte, 1024U * 1024U> buffer{};
+        std::uint64_t offset = 0U;
+        while (offset < source.size()) {
+          const auto requested = static_cast<std::size_t>(
+              std::min<std::uint64_t>(buffer.size(), source.size() - offset));
+          auto read = source.read_at(offset, std::span(buffer).first(requested));
+          if (!read || *read == 0U || *read > requested) {
+            return std::unexpected(LocalRuntimeError{
+                KB_E_IO, "failed while reading constructed boot image"});
+          }
+          stream.write(reinterpret_cast<const char *>(buffer.data()),
+                       static_cast<std::streamsize>(*read));
+          if (!stream) {
+            return std::unexpected(LocalRuntimeError{
+                KB_E_IO, "failed while writing temporary output for: " +
+                             std::string{output_name}});
+          }
+          offset += *read;
+        }
+        return {};
+      });
+}
+
 std::expected<kairosboot::CommandResult, kairosboot::Error>
 execute_typed_command(kairosboot::Context &context,
                       const Invocation &invocation,
@@ -1282,6 +1556,7 @@ execute_typed_command(kairosboot::Context &context,
   case CommandKind::Flash:
   case CommandKind::Update:
   case CommandKind::Flashall:
+  case CommandKind::MakeBootImage:
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
@@ -1325,6 +1600,7 @@ start_management_command(kairosboot::Context &context,
   case CommandKind::Flash:
   case CommandKind::Update:
   case CommandKind::Flashall:
+  case CommandKind::MakeBootImage:
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
@@ -1429,6 +1705,73 @@ int flash_file(const Invocation &invocation) {
   } else {
     std::cout << "Flashed " << invocation.first << " from " << invocation.second
               << '\n';
+  }
+  return 0;
+}
+
+std::expected<std::shared_ptr<const kairosboot::image::IImageSource>,
+              LocalRuntimeError>
+open_boot_component(const std::string_view path, const std::string_view name) {
+  auto opened = kairosboot::image::FileImageSource::open(path_from_utf8(path));
+  if (!opened) {
+    return std::unexpected(LocalRuntimeError{
+        KB_E_IO, "cannot open boot " + std::string{name} + " file " +
+                     std::string{path} + ": " + opened.error().message});
+  }
+  return std::shared_ptr<const kairosboot::image::IImageSource>{
+      std::move(*opened)};
+}
+
+int make_boot_image(const Invocation &invocation) {
+  auto kernel = open_boot_component(invocation.second, "kernel");
+  if (!kernel) {
+    return print_local_runtime_error(kernel.error(), invocation.global.json);
+  }
+  std::shared_ptr<const kairosboot::image::IImageSource> ramdisk;
+  if (!invocation.third.empty()) {
+    auto opened = open_boot_component(invocation.third, "ramdisk");
+    if (!opened) {
+      return print_local_runtime_error(opened.error(), invocation.global.json);
+    }
+    ramdisk = std::move(*opened);
+  }
+  std::shared_ptr<const kairosboot::image::IImageSource> second;
+  if (!invocation.fourth.empty()) {
+    auto opened = open_boot_component(invocation.fourth, "second");
+    if (!opened) {
+      return print_local_runtime_error(opened.error(), invocation.global.json);
+    }
+    second = std::move(*opened);
+  }
+
+  auto built = kairosboot::image::build_legacy_boot_image(
+      std::move(*kernel), std::move(ramdisk), std::move(second),
+      invocation.boot_image_options);
+  if (!built) {
+    const bool invalid =
+        built.error().kind ==
+            kairosboot::image::BootImageBuildErrorKind::InvalidArgument ||
+        built.error().kind ==
+            kairosboot::image::BootImageBuildErrorKind::SizeOverflow;
+    return print_local_runtime_error(
+        LocalRuntimeError{invalid ? KB_E_INVALID_ARGUMENT : KB_E_IO,
+                          built.error().message},
+        invocation.global.json);
+  }
+  if (auto written = write_source_atomically(invocation.first, **built);
+      !written) {
+    return print_local_runtime_error(written.error(), invocation.global.json);
+  }
+
+  if (invocation.global.json) {
+    std::cout << "{\"ok\":true,\"command\":\"make-boot-image\","
+                 "\"output\":\""
+              << json_escape(invocation.first) << "\",\"bytes\":"
+              << (*built)->size()
+              << ",\"headerVersion\":0,\"vendorBoot\":false}\n";
+  } else {
+    std::cout << "Created legacy boot image " << invocation.first << " ("
+              << (*built)->size() << " bytes)\n";
   }
   return 0;
 }
@@ -1746,6 +2089,8 @@ constexpr std::string_view usage_text() noexcept {
                "  kairosboot [global options] flash <partition> <file>\n"
                "  kairosboot [global options] update <package> [--wipe]\n"
                "  kairosboot [global options] flashall [--wipe]\n"
+               "  kairosboot [--json] make-boot-image <output> <kernel> "
+               "[ramdisk [second]] [layout options]\n"
                "  kairosboot [global options] getvar <variable>\n"
                "  kairosboot [global options] erase <partition>\n"
                "  kairosboot [global options] set-active <slot>\n"
@@ -1863,6 +2208,8 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::Update:
   case CommandKind::Flashall:
     return update_package(*invocation);
+  case CommandKind::MakeBootImage:
+    return make_boot_image(*invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
