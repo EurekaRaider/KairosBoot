@@ -248,6 +248,42 @@ class ReleaseToolTests(unittest.TestCase):
             },
         )
 
+        main_ruleset = json.loads(
+            (ROOT / ".github" / "rulesets" / "main.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        main_rules = {entry["type"]: entry for entry in main_ruleset["rules"]}
+        self.assertTrue(
+            main_rules["pull_request"]["parameters"][
+                "require_extra_approval_for_unattributed_changes"
+            ]
+        )
+        self.assertEqual(
+            main_rules["required_status_checks"]["parameters"],
+            {
+                "strict_required_status_checks_policy": True,
+                "do_not_enforce_on_create": False,
+                "required_status_checks": [
+                    {"context": "ci-required", "integration_id": 15368},
+                    {"context": "policy", "integration_id": 15368},
+                ],
+            },
+        )
+
+        tag_ruleset = json.loads(
+            (ROOT / ".github" / "rulesets" / "release-tags.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            tag_ruleset["conditions"]["ref_name"]["include"], ["refs/tags/v*"]
+        )
+        self.assertEqual(
+            {entry["type"] for entry in tag_ruleset["rules"]},
+            {"creation", "update", "deletion", "non_fast_forward"},
+        )
+
         contract = json.loads(
             (ROOT / "release" / "expected-assets.json").read_text(encoding="utf-8")
         )

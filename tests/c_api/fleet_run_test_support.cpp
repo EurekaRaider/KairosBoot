@@ -430,6 +430,10 @@ acquire_fleet_usb_runtime(kb_context_t&) {
     });
 }
 
+std::uint16_t fleet_usb_vendor_id(const kb_context_t&) noexcept {
+    return 0U;
+}
+
 }  // namespace kairosboot::api
 
 extern "C" void kb_test_set_fleet_script(const int mode) {

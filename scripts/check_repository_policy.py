@@ -170,6 +170,74 @@ def check_release_distribution_contract() -> None:
     }:
         fail("github-release must allow deployments only from v* tags")
 
+    main_ruleset = json.loads(
+        (ROOT / ".github" / "rulesets" / "main.json").read_text(encoding="utf-8")
+    )
+    owner_bypass = [
+        {
+            "actor_id": 299445952,
+            "actor_type": "User",
+            "bypass_mode": "always",
+        }
+    ]
+    if (
+        main_ruleset.get("target") != "branch"
+        or main_ruleset.get("enforcement") != "active"
+        or main_ruleset.get("bypass_actors") != owner_bypass
+        or main_ruleset.get("conditions")
+        != {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+    ):
+        fail("main ruleset fixture must protect only main with owner-only bypass")
+    main_rules = {
+        rule.get("type"): rule for rule in main_ruleset.get("rules", [])
+    }
+    if set(main_rules) != {
+        "deletion",
+        "non_fast_forward",
+        "required_linear_history",
+        "pull_request",
+        "required_status_checks",
+    }:
+        fail("main ruleset fixture is missing a required protection rule")
+    pull_request = main_rules["pull_request"].get("parameters", {})
+    required_pull_request = {
+        "allowed_merge_methods": ["squash", "rebase"],
+        "dismiss_stale_reviews_on_push": True,
+        "require_code_owner_review": True,
+        "require_extra_approval_for_unattributed_changes": True,
+        "require_last_push_approval": True,
+        "required_approving_review_count": 1,
+        "required_review_thread_resolution": True,
+    }
+    if pull_request != required_pull_request:
+        fail("main ruleset pull-request review contract differs from policy")
+    status_checks = main_rules["required_status_checks"].get("parameters", {})
+    if status_checks != {
+        "strict_required_status_checks_policy": True,
+        "do_not_enforce_on_create": False,
+        "required_status_checks": [
+            {"context": "ci-required", "integration_id": 15368},
+            {"context": "policy", "integration_id": 15368},
+        ],
+    }:
+        fail("main ruleset must require strict ci-required and policy checks")
+
+    tag_ruleset = json.loads(
+        (ROOT / ".github" / "rulesets" / "release-tags.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if (
+        tag_ruleset.get("target") != "tag"
+        or tag_ruleset.get("enforcement") != "active"
+        or tag_ruleset.get("bypass_actors") != owner_bypass
+        or tag_ruleset.get("conditions")
+        != {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}}
+        or {rule.get("type") for rule in tag_ruleset.get("rules", [])}
+        != {"creation", "update", "deletion", "non_fast_forward"}
+    ):
+        fail("release tag ruleset fixture differs from the reviewed contract")
+
     assets = json.loads(
         (ROOT / "release" / "expected-assets.json").read_text(encoding="utf-8")
     )
