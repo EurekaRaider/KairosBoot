@@ -115,6 +115,7 @@ enum {
                              KB_FILESYSTEM_OPTION_COMPRESS))
 
 typedef struct kb_context kb_context_t;
+typedef struct kb_device kb_device_t;
 typedef struct kb_device_list kb_device_list_t;
 typedef struct kb_error kb_error_t;
 typedef struct kb_operation kb_operation_t;
@@ -421,6 +422,19 @@ KB_API kb_status_t KB_CALL kb_context_create(
     kb_error_t **error);
 KB_API void KB_CALL kb_context_release(kb_context_t *context);
 
+/* Opens one stable DUT handle. selector_or_null uses the grammar documented
+ * below; NULL requires exactly one USB Fastboot device. USB devices are bound
+ * to their physical bus/port path so later operations cannot drift to another
+ * DUT with the same or a changed serial. The returned handle owns its context
+ * resources and remains valid after kb_context_release(). */
+KB_API kb_status_t KB_CALL kb_device_open(
+    kb_context_t *context, const char *selector_or_null, kb_device_t **device,
+    kb_error_t **error);
+KB_API const char *KB_CALL kb_device_identifier(const kb_device_t *device);
+KB_API const char *KB_CALL kb_device_serial(const kb_device_t *device);
+KB_API const char *KB_CALL kb_device_usb_path(const kb_device_t *device);
+KB_API void KB_CALL kb_device_release(kb_device_t *device);
+
 KB_API kb_status_t KB_CALL kb_enumerate_devices(
     kb_context_t *context, kb_device_list_t **devices, kb_error_t **error);
 KB_API size_t KB_CALL kb_device_list_count(const kb_device_list_t *devices);
@@ -432,17 +446,13 @@ KB_API const char *KB_CALL kb_device_list_product(
     const kb_device_list_t *devices, size_t index);
 KB_API void KB_CALL kb_device_list_release(kb_device_list_t *devices);
 
-/* serial_or_null selects the sole USB device when NULL. Values beginning with
- * tcp: or udp: use the typed network selector grammar documented below; every
- * other non-NULL value retains the legacy exact USB serial behavior. */
 KB_API kb_status_t KB_CALL kb_flash_file_async(
-    kb_context_t *context, const char *serial_or_null, const char *partition,
-    const char *file_path, const kb_flash_options_t *options_or_null,
-    kb_operation_t **operation, kb_error_t **error);
-KB_API kb_status_t KB_CALL kb_flash_file(
-    kb_context_t *context, const char *serial_or_null, const char *partition,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *partition, const char *file_path,
+    const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flash_file(
+    kb_device_t *device, const char *partition, const char *file_path,
+    const kb_flash_options_t *options_or_null, kb_error_t **error);
 
 /* Implements AOSP `flash vendor_boot:RAMDISK FILE` without materializing the
  * fetched partition in memory. PARTITION must be vendor_boot, vendor_boot_a,
@@ -452,14 +462,12 @@ KB_API kb_status_t KB_CALL kb_flash_file(
  * repack. Fetch, repack, download and flash use one selected Fastboot session.
  */
 KB_API kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *ramdisk_name_or_null,
+    kb_device_t *device, const char *partition, const char *ramdisk_name_or_null,
     const char *ramdisk_path, const char *dtb_path_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *ramdisk_name_or_null,
+    kb_device_t *device, const char *partition, const char *ramdisk_name_or_null,
     const char *ramdisk_path, const char *dtb_path_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
 
@@ -468,14 +476,12 @@ KB_API kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk(
  * KERNEL is already an Android boot image, it is flashed unchanged and both
  * optional paths must be NULL. SECOND requires a non-NULL RAMDISK. */
 KB_API kb_status_t KB_CALL kb_flash_raw_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_flash_raw(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
 
@@ -483,15 +489,13 @@ KB_API kb_status_t KB_CALL kb_flash_raw(
  * when KERNEL is a raw kernel component; prebuilt Android boot images are sent
  * unchanged and reject component files. */
 KB_API kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_flash_raw_with_boot_options(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
@@ -500,15 +504,15 @@ KB_API kb_status_t KB_CALL kb_flash_raw_with_boot_options(
  * on the selected session. If KERNEL is a prebuilt Android boot image it is
  * sent unchanged and RAMDISK/SECOND must both be NULL. */
 KB_API kb_status_t KB_CALL kb_boot_raw_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *kernel_path, const char *ramdisk_path_or_null,
+    kb_device_t *device, const char *kernel_path,
+    const char *ramdisk_path_or_null,
     const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_boot_raw(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *kernel_path, const char *ramdisk_path_or_null,
+    kb_device_t *device, const char *kernel_path,
+    const char *ramdisk_path_or_null,
     const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
@@ -518,12 +522,12 @@ KB_API kb_status_t KB_CALL kb_boot_raw(
  * 32-bit download length. The blocking entry point starts the same operation
  * and waits for its terminal state. */
 KB_API kb_status_t KB_CALL kb_boot_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_flash_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_boot_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_flash_options_t *options_or_null,
     kb_error_t **error);
 
 /* Requires the AOSP-defined 256-byte signature file, streams it through
@@ -531,28 +535,27 @@ KB_API kb_status_t KB_CALL kb_boot_file(
  * selected session. This transports an already-created signature blob; it
  * does not create or mutate AVB data. */
 KB_API kb_status_t KB_CALL kb_signature_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_signature_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 
-/* Performs complete package preflight before USB enumeration or any transport
- * open. device_selector_or_null uses the typed selector grammar documented
- * below. The selected target is bound exactly once for this operation.
+/* Performs complete package preflight before any transport open. The device
+ * handle supplies the already-bound target identity.
  * USB packages may transition from bootloader Fastboot to fastbootd through a
  * fail-closed reconnect bound to the verified physical port and live device
  * identity. The blocking entry point starts the same async operation and waits
  * for its terminal state. */
 KB_API kb_status_t KB_CALL kb_update_package_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_device_t *device, const char *package_path,
+    const kb_update_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_update_package(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_device_t *device, const char *package_path,
+    const kb_update_options_t *options_or_null,
     kb_error_t **error);
 
 /* Resets dynamic partitions from an immutable super_empty image through the
@@ -560,40 +563,38 @@ KB_API kb_status_t KB_CALL kb_update_package(
  * super_empty_image_or_null is NULL, ANDROID_PRODUCT_OUT/super_empty.img is
  * used, matching AOSP Fastboot's command-line lookup rule. */
 KB_API kb_status_t KB_CALL kb_wipe_super_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *super_empty_image_or_null,
+    kb_device_t *device, const char *super_empty_image_or_null,
     const kb_update_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_wipe_super(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *super_empty_image_or_null,
+    kb_device_t *device, const char *super_empty_image_or_null,
     const kb_update_options_t *options_or_null, kb_error_t **error);
 
-/* Typed primitive selectors:
+/* kb_device_open selectors:
  *   NULL                         sole USB Fastboot device
  *   SERIAL                       exact legacy USB serial
  *   usb:serial:<percent-encoded> exact UTF-8 USB serial
  *   usb:<bus>-<port>[.<port>...] physical USB path
  *   tcp:<host>[:port]            Fastboot TCP (default port 5554)
  *   udp:<host>[:port]            Fastboot UDP (default port 5554)
- * IPv6 network hosts use brackets. Blocking calls start the matching async
+ * IPv6 network hosts use brackets. Device-scoped blocking calls start the matching async
  * operation, wait, and extract its immutable result. A successful result is
  * owned by the caller and must be released with kb_command_result_release(). */
 KB_API kb_status_t KB_CALL kb_getvar_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *variable, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *variable,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_getvar(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *variable, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *variable,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_erase_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *partition,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_erase(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *partition,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 /* Creates an empty ext4 or f2fs Android sparse image using the matching AOSP
  * host tool, then downloads and flashes it in the same device session. A NULL
@@ -602,153 +603,132 @@ KB_API kb_status_t KB_CALL kb_erase(
  * is resolved beside the process executable or on PATH. KAIROSBOOT_MKE2FS and
  * KAIROSBOOT_MAKE_F2FS may name explicit tool paths. */
 KB_API kb_status_t KB_CALL kb_format_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *filesystem_type_override_or_null,
+    kb_device_t *device, const char *partition,
+    const char *filesystem_type_override_or_null,
     uint64_t partition_size_override_or_zero,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_format_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *filesystem_type_override_or_null,
+    kb_device_t *device, const char *partition,
+    const char *filesystem_type_override_or_null,
     uint64_t partition_size_override_or_zero,
     const kb_flash_options_t *options_or_null, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_set_active_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *slot, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *slot,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_set_active(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *slot, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *slot,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_flashing_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_flashing_command_t command,
+    kb_device_t *device, kb_flashing_command_t command,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_flashing(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_flashing_command_t command,
+    kb_device_t *device, kb_flashing_command_t command,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_gsi_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_gsi_command_t command, const kb_command_options_t *options_or_null,
+    kb_device_t *device, kb_gsi_command_t command,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_gsi(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_gsi_command_t command, const kb_command_options_t *options_or_null,
+    kb_device_t *device, kb_gsi_command_t command,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_snapshot_update_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_snapshot_update_command_t command,
+    kb_device_t *device, kb_snapshot_update_command_t command,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_snapshot_update(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_snapshot_update_command_t command,
+    kb_device_t *device, kb_snapshot_update_command_t command,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_create_logical_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, uint64_t size,
+    kb_device_t *device, const char *partition_name, uint64_t size,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_create_logical_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, uint64_t size,
+    kb_device_t *device, const char *partition_name, uint64_t size,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_delete_logical_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name,
+    kb_device_t *device, const char *partition_name,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_delete_logical_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name,
+    kb_device_t *device, const char *partition_name,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_resize_logical_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, uint64_t size,
+    kb_device_t *device, const char *partition_name, uint64_t size,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_resize_logical_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, uint64_t size,
+    kb_device_t *device, const char *partition_name, uint64_t size,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_reboot_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_reboot_target_t target,
+    kb_device_t *device, kb_reboot_target_t target,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_reboot(
-    kb_context_t *context, const char *device_selector_or_null,
-    kb_reboot_target_t target,
+    kb_device_t *device, kb_reboot_target_t target,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_continue_boot_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_continue_boot(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_oem_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command_suffix,
+    kb_device_t *device, const char *command_suffix,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_oem(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command_suffix,
+    kb_device_t *device, const char *command_suffix,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_raw_command_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *command,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_raw_command(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command, const kb_command_options_t *options_or_null,
-    kb_command_result_t **result, kb_error_t **error);
-KB_API kb_status_t KB_CALL kb_boot_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null, kb_operation_t **operation,
-    kb_error_t **error);
-KB_API kb_status_t KB_CALL kb_boot(
-    kb_context_t *context, const char *device_selector_or_null,
+    kb_device_t *device, const char *command,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_boot_async(
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation,
+    kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_boot(
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_stage_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const void *data, size_t data_size,
+    kb_device_t *device, const void *data, size_t data_size,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_stage(
-    kb_context_t *context, const char *device_selector_or_null,
-    const void *data, size_t data_size,
+    kb_device_t *device, const void *data, size_t data_size,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_upload_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_upload(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_fetch_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition, uint64_t offset_or_unspecified,
     uint64_t size_or_unspecified,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_fetch(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition, uint64_t offset_or_unspecified,
     uint64_t size_or_unspecified,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
@@ -759,30 +739,28 @@ KB_API kb_status_t KB_CALL kb_fetch(
  * existing destination is preserved. output_path is UTF-8. upload-file and
  * get-staged-file intentionally use the same AOSP "upload" wire command. */
 KB_API kb_status_t KB_CALL kb_upload_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_upload_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_get_staged_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_get_staged_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_fetch_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition, uint64_t offset_or_unspecified,
     uint64_t size_or_unspecified, const char *output_path,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error);
 KB_API kb_status_t KB_CALL kb_fetch_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition, uint64_t offset_or_unspecified,
     uint64_t size_or_unspecified, const char *output_path,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);

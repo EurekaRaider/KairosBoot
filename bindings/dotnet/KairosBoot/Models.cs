@@ -65,9 +65,9 @@ public sealed class KairosBootVersion
 }
 
 /// <summary>Snapshot of a Fastboot device returned by enumeration.</summary>
-public sealed class Device
+public sealed class DeviceInfo
 {
-    internal Device(string serial, string usbPath, string product)
+    internal DeviceInfo(string serial, string usbPath, string product)
     {
         Serial = serial;
         UsbPath = usbPath;

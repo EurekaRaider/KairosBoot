@@ -117,15 +117,20 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 117)
+        if (uniqueEntryPoints.Count != 122)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 117 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 122 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 117, "unique entry points");
+        Check(uniqueEntryPoints.Count == 122, "unique entry points");
+        Check(entryPoints.Contains("kb_device_open"), "device open import");
+        Check(entryPoints.Contains("kb_device_identifier"), "device identifier import");
+        Check(entryPoints.Contains("kb_device_serial"), "device serial import");
+        Check(entryPoints.Contains("kb_device_usb_path"), "device USB path import");
+        Check(entryPoints.Contains("kb_device_release"), "device release import");
         Check(entryPoints.Contains("kb_context_options_init_sized"), "context options import");
         Check(entryPoints.Contains("kb_flash_options_init_sized"), "flash options import");
         Check(entryPoints.Contains("kb_legacy_boot_options_init_sized"), "legacy boot options import");
@@ -196,6 +201,7 @@ internal static class Program
         Check(
             typeof(CommandResultSafeHandle).IsSubclassOf(typeof(SafeHandle)),
             "command result SafeHandle");
+        Check(typeof(DeviceSafeHandle).IsSubclassOf(typeof(SafeHandle)), "device SafeHandle");
         using (var invalid = new CommandResultSafeHandle(IntPtr.Zero))
         {
             Check(invalid.IsInvalid, "invalid command result handle is inert");
@@ -225,7 +231,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 117, "net48 DllImport count");
+        Check(methods.Count == 123, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -234,7 +240,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 126, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 71, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -252,7 +258,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 117, "net10 LibraryImport count");
+        Check(groups.Count == 122, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -263,7 +269,9 @@ internal static class Program
             .Where(item => item.Method.GetParameters().Any(
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
-        Check(stringMethods.Count == 60, "net10 native UTF-8 string methods");
+        Check(
+            stringMethods.Count == 45,
+            $"net10 native UTF-8 string methods (found {stringMethods.Count})");
         Check(
             stringMethods.All(item =>
                 item.Import!.StringMarshalling == StringMarshalling.Utf8),
@@ -625,7 +633,7 @@ internal static class Program
 
     private static void CheckTypedPublicSurface()
     {
-        var bootFileMethods = typeof(Context)
+        var bootFileMethods = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "BootFileAsync")
             .ToList();
@@ -642,7 +650,7 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed boot-file cancellation");
 
-        var flashRawMethods = typeof(Context)
+        var flashRawMethods = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "FlashRawAsync")
             .ToList();
@@ -667,7 +675,7 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed flash:raw cancellation");
 
-        var vendorBootMethods = typeof(Context)
+        var vendorBootMethods = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "FlashVendorBootRamdiskAsync")
             .ToList();
@@ -689,7 +697,7 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken)),
             "managed vendor_boot cancellation");
 
-        var bootRawMethods = typeof(Context)
+        var bootRawMethods = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "BootRawAsync")
             .ToList();
@@ -714,7 +722,7 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed boot:raw cancellation");
 
-        var updateMethods = typeof(Context)
+        var updateMethods = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "UpdatePackageAsync")
             .ToList();
@@ -731,7 +739,7 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed update cancellation");
 
-        var wipeSuperMethods = typeof(Context)
+        var wipeSuperMethods = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.Name == "WipeSuperAsync")
             .ToList();
@@ -748,7 +756,7 @@ internal static class Program
                 parameter.ParameterType == typeof(CancellationToken))),
             "managed wipe-super cancellation");
 
-        var formatMethod = typeof(Context)
+        var formatMethod = typeof(Device)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Single(method => method.Name == "FormatPartitionAsync");
         Check(formatMethod.ReturnType == typeof(Task), "managed format returns Task");
@@ -788,7 +796,7 @@ internal static class Program
 
         foreach (var name in expected)
         {
-            var methods = typeof(Context)
+            var methods = typeof(Device)
                 .GetMethods(BindingFlags.Instance | BindingFlags.Public)
                 .Where(method => method.Name == name)
                 .ToList();
@@ -797,6 +805,42 @@ internal static class Program
                 methods[0].ReturnType == typeof(Task<CommandResult>),
                 $"{name} returns Task<CommandResult>");
         }
+
+        var singleDeviceMethodNames = new HashSet<string>(
+            expected.Concat(new[]
+            {
+                "FlashFileAsync",
+                "FormatPartitionAsync",
+                "FlashVendorBootRamdiskAsync",
+                "FlashRawAsync",
+                "BootRawAsync",
+                "BootFileAsync",
+                "UpdatePackageAsync",
+                "WipeSuperAsync",
+            }),
+            StringComparer.Ordinal);
+        Check(
+            !typeof(Context)
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .Any(method => singleDeviceMethodNames.Contains(method.Name)),
+            "Context exposes no single-device commands");
+        Check(
+            typeof(Device)
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .Where(method => singleDeviceMethodNames.Contains(method.Name))
+                .SelectMany(method => method.GetParameters())
+                .All(parameter => parameter.Name != "deviceSelector" &&
+                    parameter.Name != "selector" && parameter.Name != "serial"),
+            "Device commands expose no selector parameters");
+
+        var openDeviceMethods = typeof(Context)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == "OpenDevice")
+            .ToList();
+        Check(openDeviceMethods.Count == 2, "managed Device open overloads");
+        Check(
+            openDeviceMethods.All(method => method.ReturnType == typeof(Device)),
+            "managed Device open return type");
 
         Check(typeof(FlashingCommand).IsEnum, "strong flashing enum");
         Check(typeof(GsiCommand).IsEnum, "strong GSI enum");
@@ -809,16 +853,15 @@ internal static class Program
         var managementMethods = expected
             .Skip(3)
             .Take(6)
-            .Select(name => typeof(Context)
+            .Select(name => typeof(Device)
                 .GetMethods(BindingFlags.Instance | BindingFlags.Public)
                 .Single(method => method.Name == name))
             .ToList();
         Check(
-            managementMethods.All(method =>
-                method.GetParameters()
-                    .Single(parameter => parameter.Name == "deviceSelector")
-                    .DefaultValue == null),
-            "management selector defaults to null");
+            managementMethods.All(method => method.GetParameters().All(
+                parameter => parameter.Name != "deviceSelector" &&
+                    parameter.Name != "serial")),
+            "managed device methods have no selector parameter");
         Check(
             managementMethods
                 .Where(method => method.Name == "CreateLogicalPartitionAsync" ||
@@ -1015,15 +1058,14 @@ internal static class Program
             Check(context != null, "context USB vendor options");
         }
 
-        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        using (var device = new DeviceSafeHandle(new IntPtr(1)))
         {
             var nativeOptions = new NativeUpdateOptions();
             NativeMethods.UpdateOptionsInitSized(ref nativeOptions, NativeMethods.UpdateOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = 17;
             nativeOptions.Wipe = 1;
             var status = NativeMethods.UpdatePackage(
-                context,
-                "usb:serial:blocking",
+                device,
                 "blocking.zip",
                 ref nativeOptions,
                 out var rawError);
@@ -1034,8 +1076,7 @@ internal static class Program
             NativeMethods.FlashOptionsInitSized(ref nativeFlashOptions, NativeMethods.FlashOptionsStructSize);
             nativeFlashOptions.TimeoutMilliseconds = 17;
             status = NativeMethods.FlashRaw(
-                context,
-                "usb:serial:blocking-raw",
+                device,
                 "boot",
                 "blocking-kernel.bin",
                 null,
@@ -1049,11 +1090,15 @@ internal static class Program
         var reports = new List<UpdateProgress>();
         using (var context = Context.Create())
         {
-            await context.UpdatePackageAsync("default.zip").ConfigureAwait(false);
+            using var defaultDevice = context.OpenDevice();
+            using var updateDevice = context.OpenDevice("usb:serial:device");
+            using var cancelDevice = context.OpenDevice("tcp:127.0.0.1:5554");
+            using var rawDevice = context.OpenDevice("usb:serial:raw");
+            await defaultDevice.UpdatePackageAsync("default.zip").ConfigureAwait(false);
 
             var progress = new InlineProgress<UpdateProgress>(reports.Add);
             var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
-            await context.UpdatePackageAsync(
+            await updateDevice.UpdatePackageAsync(
                 "images/升级.zip",
                 new UpdateOptions(
                     fractional,
@@ -1066,7 +1111,6 @@ internal static class Program
                     force: true,
                     filesystemOptions: FilesystemOptions.Casefold | FilesystemOptions.Projid,
                     disableSuperOptimization: true),
-                "usb:serial:device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);
 
@@ -1086,9 +1130,8 @@ internal static class Program
             {
                 var cancellationProgress = new InlineProgress<UpdateProgress>(_ => source.Cancel());
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.UpdatePackageAsync(
+                    () => cancelDevice.UpdatePackageAsync(
                         "cancel.zip",
-                        deviceSelector: "tcp:127.0.0.1:5554",
                         progress: cancellationProgress,
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
@@ -1097,21 +1140,18 @@ internal static class Program
             {
                 source.Cancel();
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.UpdatePackageAsync(
+                    () => defaultDevice.UpdatePackageAsync(
                         "not-started.zip",
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
 
             await ExpectAsync<ArgumentException>(
-                () => context.UpdatePackageAsync(string.Empty)).ConfigureAwait(false);
-            await ExpectAsync<ArgumentException>(
-                () => context.UpdatePackageAsync(
-                    "update.zip",
-                    deviceSelector: string.Empty)).ConfigureAwait(false);
+                () => defaultDevice.UpdatePackageAsync(string.Empty)).ConfigureAwait(false);
+            Expect<ArgumentException>(() => context.OpenDevice(string.Empty));
 
             var rawReports = new List<FlashProgress>();
             var rawProgress = new InlineProgress<FlashProgress>(rawReports.Add);
-            await context.FlashRawAsync(
+            await rawDevice.FlashRawAsync(
                 "boot",
                 "images/内核.bin",
                 new FlashOptions(fractional, false, false,
@@ -1120,7 +1160,6 @@ internal static class Program
                     filesystemOptions: FilesystemOptions.Casefold |
                         FilesystemOptions.Projid | FilesystemOptions.Compress),
                 ramdiskPath: "ramdisk.img",
-                deviceSelector: "usb:serial:raw",
                 progress: rawProgress,
                 cancellationToken: CancellationToken.None).ConfigureAwait(false);
             Check(rawReports.Count == 3, "flash:raw progress count");
@@ -1142,10 +1181,9 @@ internal static class Program
             {
                 var cancellationProgress = new InlineProgress<FlashProgress>(_ => source.Cancel());
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.FlashRawAsync(
+                    () => cancelDevice.FlashRawAsync(
                         "boot",
                         "cancel-kernel.bin",
-                        deviceSelector: "tcp:127.0.0.1:5554",
                         progress: cancellationProgress,
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
@@ -1154,7 +1192,7 @@ internal static class Program
             {
                 source.Cancel();
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.FlashRawAsync(
+                    () => defaultDevice.FlashRawAsync(
                         "boot",
                         "not-started-kernel.bin",
                         cancellationToken: source.Token)).ConfigureAwait(false);
@@ -1176,21 +1214,21 @@ internal static class Program
             "blocking flash:raw import call");
         Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "native operation cancellation");
         Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 5, "operation release");
-        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 3, "update context release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "update context release");
+        Check(ScriptedUpdateNativeMethods.DeviceReleaseCount() == 4, "update device release");
     }
 
     private static async Task CheckScriptedBootShim()
     {
         ScriptedUpdateNativeMethods.Reset();
 
-        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        using (var device = new DeviceSafeHandle(new IntPtr(1)))
         {
             var nativeOptions = new NativeFlashOptions();
             NativeMethods.FlashOptionsInitSized(ref nativeOptions, NativeMethods.FlashOptionsStructSize);
             nativeOptions.TimeoutMilliseconds = 17;
             var status = NativeMethods.BootFile(
-                context,
-                "usb:serial:blocking-boot",
+                device,
                 "blocking-boot.img",
                 ref nativeOptions,
                 out var rawError);
@@ -1201,14 +1239,16 @@ internal static class Program
         var reports = new List<FlashProgress>();
         using (var context = Context.Create())
         {
-            await context.BootFileAsync("default-boot.img").ConfigureAwait(false);
+            using var defaultDevice = context.OpenDevice();
+            using var bootDevice = context.OpenDevice("usb:serial:boot-device");
+            using var cancelDevice = context.OpenDevice("tcp:127.0.0.1:5554");
+            await defaultDevice.BootFileAsync("default-boot.img").ConfigureAwait(false);
 
             var progress = new InlineProgress<FlashProgress>(reports.Add);
             var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
-            await context.BootFileAsync(
+            await bootDevice.BootFileAsync(
                 "images/启动.img",
                 new FlashOptions(fractional),
-                "usb:serial:boot-device",
                 progress,
                 CancellationToken.None).ConfigureAwait(false);
 
@@ -1227,9 +1267,8 @@ internal static class Program
             {
                 var cancellationProgress = new InlineProgress<FlashProgress>(_ => source.Cancel());
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.BootFileAsync(
+                    () => cancelDevice.BootFileAsync(
                         "cancel-boot.img",
-                        deviceSelector: "tcp:127.0.0.1:5554",
                         progress: cancellationProgress,
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
@@ -1238,17 +1277,13 @@ internal static class Program
             {
                 source.Cancel();
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.BootFileAsync(
+                    () => defaultDevice.BootFileAsync(
                         "not-started-boot.img",
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
 
             await ExpectAsync<ArgumentException>(
-                () => context.BootFileAsync(string.Empty)).ConfigureAwait(false);
-            await ExpectAsync<ArgumentException>(
-                () => context.BootFileAsync(
-                    "boot.img",
-                    deviceSelector: string.Empty)).ConfigureAwait(false);
+                () => defaultDevice.BootFileAsync(string.Empty)).ConfigureAwait(false);
         }
 
         Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "boot-file native assertions");
@@ -1261,14 +1296,15 @@ internal static class Program
         Check(
             ScriptedUpdateNativeMethods.OperationReleaseCount() == 3,
             "boot-file operation release");
-        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "boot-file context release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 1, "boot-file context release");
+        Check(ScriptedUpdateNativeMethods.DeviceReleaseCount() == 3, "boot-file device release");
     }
 
     private static async Task CheckScriptedLegacyBootShim()
     {
         ScriptedUpdateNativeMethods.Reset();
 
-        using (var context = new ContextSafeHandle(new IntPtr(1)))
+        using (var device = new DeviceSafeHandle(new IntPtr(1)))
         {
             var nativeLegacyOptions = new NativeLegacyBootOptions();
             NativeMethods.LegacyBootOptionsInitSized(ref nativeLegacyOptions, NativeMethods.LegacyBootOptionsStructSize);
@@ -1287,8 +1323,7 @@ internal static class Program
             NativeMethods.FlashOptionsInitSized(ref nativeFlashOptions, NativeMethods.FlashOptionsStructSize);
                 nativeFlashOptions.TimeoutMilliseconds = 17;
                 var status = NativeMethods.FlashRawWithBootOptions(
-                    context,
-                    "usb:serial:blocking-configured-raw",
+                    device,
                     "boot",
                     "blocking-configured-kernel.bin",
                     null,
@@ -1300,8 +1335,7 @@ internal static class Program
                 Check(rawError == IntPtr.Zero, "blocking configured flash:raw error ownership");
 
                 status = NativeMethods.BootRaw(
-                    context,
-                    "usb:serial:blocking-boot-raw",
+                    device,
                     "blocking-boot-raw-kernel.bin",
                     null,
                     null,
@@ -1334,15 +1368,19 @@ internal static class Program
 
         using (var context = Context.Create())
         {
+            using var configuredDevice =
+                context.OpenDevice("usb:serial:configured-raw");
+            using var bootRawDevice = context.OpenDevice("usb:serial:boot-raw");
+            using var cancelDevice = context.OpenDevice("tcp:127.0.0.1:5554");
+            using var defaultDevice = context.OpenDevice();
             var flashReports = new List<FlashProgress>();
-            await context.FlashRawAsync(
+            await configuredDevice.FlashRawAsync(
                 "boot",
                 "configured-kernel.bin",
                 custom,
                 new FlashOptions(fractional),
                 ramdiskPath: "configured-ramdisk.img",
                 secondStagePath: "configured-second.bin",
-                deviceSelector: "usb:serial:configured-raw",
                 progress: new InlineProgress<FlashProgress>(flashReports.Add),
                 cancellationToken: CancellationToken.None).ConfigureAwait(false);
             Check(flashReports.Count == 3, "configured flash:raw progress count");
@@ -1356,23 +1394,21 @@ internal static class Program
             {
                 var progress = new InlineProgress<FlashProgress>(_ => source.Cancel());
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.FlashRawAsync(
+                    () => cancelDevice.FlashRawAsync(
                         "boot",
                         "cancel-configured-kernel.bin",
                         LegacyBootOptions.Default,
-                        deviceSelector: "tcp:127.0.0.1:5554",
                         progress: progress,
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
 
             var bootReports = new List<FlashProgress>();
-            await context.BootRawAsync(
+            await bootRawDevice.BootRawAsync(
                 "boot-raw-kernel.bin",
                 custom,
                 new FlashOptions(fractional),
                 ramdiskPath: "boot-raw-ramdisk.img",
                 secondStagePath: "boot-raw-second.bin",
-                deviceSelector: "usb:serial:boot-raw",
                 progress: new InlineProgress<FlashProgress>(bootReports.Add),
                 cancellationToken: CancellationToken.None).ConfigureAwait(false);
             Check(bootReports.Count == 3, "boot:raw progress count");
@@ -1386,9 +1422,8 @@ internal static class Program
             {
                 var progress = new InlineProgress<FlashProgress>(_ => source.Cancel());
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.BootRawAsync(
+                    () => cancelDevice.BootRawAsync(
                         "cancel-boot-raw-kernel.bin",
-                        deviceSelector: "tcp:127.0.0.1:5554",
                         progress: progress,
                         cancellationToken: source.Token)).ConfigureAwait(false);
             }
@@ -1397,11 +1432,11 @@ internal static class Program
             {
                 source.Cancel();
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.BootRawAsync(
+                    () => defaultDevice.BootRawAsync(
                         "not-started-boot-raw-kernel.bin",
                         cancellationToken: source.Token)).ConfigureAwait(false);
                 await ExpectAsync<OperationCanceledException>(
-                    () => context.FlashRawAsync(
+                    () => defaultDevice.FlashRawAsync(
                         "boot",
                         "not-started-configured-kernel.bin",
                         LegacyBootOptions.Default,
@@ -1409,9 +1444,9 @@ internal static class Program
             }
 
             await ExpectAsync<ArgumentException>(
-                () => context.BootRawAsync(string.Empty)).ConfigureAwait(false);
+                () => defaultDevice.BootRawAsync(string.Empty)).ConfigureAwait(false);
             await ExpectAsync<ArgumentException>(
-                () => context.BootRawAsync(
+                () => defaultDevice.BootRawAsync(
                     "kernel.bin",
                     secondStagePath: "second.bin")).ConfigureAwait(false);
         }
@@ -1433,7 +1468,8 @@ internal static class Program
         Check(ScriptedUpdateNativeMethods.BootBlockingCount() == 1, "blocking boot:raw call");
         Check(ScriptedUpdateNativeMethods.CancelCount() == 2, "legacy boot cancellation");
         Check(ScriptedUpdateNativeMethods.OperationReleaseCount() == 4, "legacy boot operation release");
-        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 2, "legacy boot context release");
+        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 1, "legacy boot context release");
+        Check(ScriptedUpdateNativeMethods.DeviceReleaseCount() == 4, "legacy boot device release");
     }
 
     private static void CheckFleetPublicSurface()
@@ -1910,28 +1946,27 @@ internal static class Program
     {
         using (var context = Context.Create())
         {
+            using var device = context.OpenDevice("tcp:127.0.0.1:5554");
             var reports = 0;
             var progress = new Progress<FlashProgress>(_ => reports++);
             var exception = await ExpectAsync<KairosBootException>(
-                () => context.FlashFileAsync(
+                () => device.FlashFileAsync(
                     "系统",
                     "镜像.img",
                     new FlashOptions(TimeSpan.FromSeconds(30)),
-                    "设备-一",
                     progress,
                     CancellationToken.None)).ConfigureAwait(false);
 
-            Check(exception.Status == KairosBootStatus.InvalidArgument, "flash status");
+            Check(exception.Status == KairosBootStatus.Io, "flash status");
             Check(exception.TransferState == TransferState.NotSent, "transfer state");
-            Check(exception.DeviceIdentifier == "设备-一", "UTF-8 serial");
+            Check(exception.DeviceIdentifier == "tcp:127.0.0.1:5554", "device identity");
             Check(!exception.InboundExpectedBytes.HasValue, "flash inbound size unspecified");
             Check(reports == 0, "no fabricated progress");
 
             var rawException = await ExpectAsync<KairosBootException>(
-                () => context.FlashRawAsync(
+                () => device.FlashRawAsync(
                     "boot",
-                    "missing-内核.bin",
-                    deviceSelector: "tcp:127.0.0.1:5554")).ConfigureAwait(false);
+                    "missing-内核.bin")).ConfigureAwait(false);
             Check(rawException.Status == KairosBootStatus.Io, "flash:raw file status");
             Check(rawException.TransferState == TransferState.NotSent, "flash:raw transfer state");
             Check(
@@ -1945,12 +1980,13 @@ internal static class Program
         using (var context = Context.Create())
         using (var source = new CancellationTokenSource())
         {
+            using var device = context.OpenDevice("tcp:127.0.0.1:5554");
             source.Cancel();
             await ExpectAsync<OperationCanceledException>(
-                () => context.FlashFileAsync("system", "system.img", cancellationToken: source.Token))
+                () => device.FlashFileAsync("system", "system.img", cancellationToken: source.Token))
                 .ConfigureAwait(false);
             await ExpectAsync<OperationCanceledException>(
-                () => context.FlashRawAsync("boot", "kernel", cancellationToken: source.Token))
+                () => device.FlashRawAsync("boot", "kernel", cancellationToken: source.Token))
                 .ConfigureAwait(false);
         }
     }
@@ -1960,12 +1996,13 @@ internal static class Program
         using (var context = Context.Create())
         using (var source = new CancellationTokenSource())
         {
+            using var device = context.OpenDevice("tcp:127.0.0.1:5554");
             source.Cancel();
             await ExpectAsync<OperationCanceledException>(
-                () => context.GetVarAsync("product", cancellationToken: source.Token))
+                () => device.GetVarAsync("product", cancellationToken: source.Token))
                 .ConfigureAwait(false);
             await ExpectAsync<OperationCanceledException>(
-                () => context.SignatureFileAsync(
+                () => device.SignatureFileAsync(
                     "signature.bin", cancellationToken: source.Token))
                 .ConfigureAwait(false);
         }
@@ -1975,16 +2012,17 @@ internal static class Program
     {
         using (var context = Context.Create())
         {
-            Expect<ArgumentException>(() => _ = context.StageAsync(Array.Empty<byte>()));
+            using var device = context.OpenDevice("tcp:127.0.0.1:5554");
+            Expect<ArgumentException>(() => _ = device.StageAsync(Array.Empty<byte>()));
             Expect<ArgumentException>(
-                () => _ = context.CreateLogicalPartitionAsync("system\0other", 0));
+                () => _ = device.CreateLogicalPartitionAsync("system\0other", 0));
             await ExpectAsync<ArgumentException>(
-                () => context.FlashRawAsync(
+                () => device.FlashRawAsync(
                     "boot",
                     "kernel",
                     secondStagePath: "second")).ConfigureAwait(false);
             await ExpectAsync<ArgumentException>(
-                () => context.FlashRawAsync(
+                () => device.FlashRawAsync(
                     "boot",
                     "kernel",
                     ramdiskPath: string.Empty)).ConfigureAwait(false);
@@ -1997,11 +2035,10 @@ internal static class Program
         using (var server = new ScriptedTcpDevice())
         using (var context = Context.Create())
         {
+            using var device = context.OpenDevice(server.Selector);
             var options = new CommandOptions(TimeSpan.FromSeconds(5), 1024);
-            var getvar = await context.GetVarAsync(
-                "product",
-                server.Selector,
-                options).ConfigureAwait(false);
+            var getvar = await device.GetVarAsync("product", options)
+                .ConfigureAwait(false);
 
             Check(
                 getvar.TerminalPayload.SequenceEqual(new byte[]
@@ -2033,10 +2070,7 @@ internal static class Program
                 "scripted TCP success selector passthrough");
 
             var deviceFail = await ExpectAsync<KairosBootException>(
-                () => context.EraseAsync(
-                    "userdata",
-                    server.Selector,
-                    options)).ConfigureAwait(false);
+                () => device.EraseAsync("userdata", options)).ConfigureAwait(false);
             Check(deviceFail.Status == KairosBootStatus.DeviceFail, "scripted TCP FAIL status");
             Check(
                 deviceFail.DeviceMessage.SequenceEqual(
@@ -2064,9 +2098,7 @@ internal static class Program
                 "scripted TCP FAIL selector passthrough");
 
             var disconnected = await ExpectAsync<KairosBootException>(
-                () => context.UploadAsync(
-                    server.Selector,
-                    options)).ConfigureAwait(false);
+                () => device.UploadAsync(options)).ConfigureAwait(false);
             Check(disconnected.Status == KairosBootStatus.NoDevice, "scripted TCP disconnect status");
             Check(disconnected.InboundExpectedBytes == 5, "scripted TCP disconnect expected bytes");
             Check(disconnected.InboundTransferredBytes == 2, "scripted TCP disconnect committed bytes");
@@ -2081,13 +2113,13 @@ internal static class Program
                 disconnected.DeviceIdentifier == server.Selector,
                 "scripted TCP disconnect selector passthrough");
 
-            await CheckManagementNativeValidation(context, server, options)
+            await CheckManagementNativeValidation(device, server, options)
                 .ConfigureAwait(false);
-            await CheckManagementTrace(context, server, options)
+            await CheckManagementTrace(device, server, options)
                 .ConfigureAwait(false);
-            await CheckManagementFail(context, server, options)
+            await CheckManagementFail(device, server, options)
                 .ConfigureAwait(false);
-            await CheckManagementCancellation(context, server, options)
+            await CheckManagementCancellation(device, server, options)
                 .ConfigureAwait(false);
 
             server.Finish();
@@ -2119,80 +2151,71 @@ internal static class Program
     }
 
     private static async Task CheckManagementNativeValidation(
-        Context context,
+        Device device,
         ScriptedTcpDevice server,
         CommandOptions options)
     {
         var invalidFlashing = await ExpectAsync<KairosBootException>(
-            () => context.FlashingAsync(
+            () => device.FlashingAsync(
                 (FlashingCommand)int.MaxValue,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(invalidFlashing.Status == KairosBootStatus.InvalidArgument, "native flashing enum validation");
         Check(invalidFlashing.DeviceIdentifier == server.Selector, "invalid flashing selector");
 
         var invalidGsi = await ExpectAsync<KairosBootException>(
-            () => context.GsiAsync(
+            () => device.GsiAsync(
                 (GsiCommand)int.MaxValue,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(invalidGsi.Status == KairosBootStatus.InvalidArgument, "native GSI enum validation");
 
         var invalidSnapshot = await ExpectAsync<KairosBootException>(
-            () => context.SnapshotUpdateAsync(
+            () => device.SnapshotUpdateAsync(
                 (SnapshotUpdateCommand)int.MaxValue,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(invalidSnapshot.Status == KairosBootStatus.InvalidArgument, "native snapshot enum validation");
 
         var emptyName = await ExpectAsync<KairosBootException>(
-            () => context.CreateLogicalPartitionAsync(
+            () => device.CreateLogicalPartitionAsync(
                 string.Empty,
                 0,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(emptyName.Status == KairosBootStatus.InvalidArgument, "native empty logical name validation");
 
         var nullName = await ExpectAsync<KairosBootException>(
-            () => context.DeleteLogicalPartitionAsync(
+            () => device.DeleteLogicalPartitionAsync(
                 null!,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(nullName.Status == KairosBootStatus.InvalidArgument, "native null logical name validation");
 
         var injectedName = await ExpectAsync<KairosBootException>(
-            () => context.DeleteLogicalPartitionAsync(
+            () => device.DeleteLogicalPartitionAsync(
                 "system:other",
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(injectedName.Status == KairosBootStatus.InvalidArgument, "native logical name injection validation");
 
         var controlName = await ExpectAsync<KairosBootException>(
-            () => context.ResizeLogicalPartitionAsync(
+            () => device.ResizeLogicalPartitionAsync(
                 "bad\nname",
                 1,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(controlName.Status == KairosBootStatus.InvalidArgument, "native logical control validation");
 
         var overlongName = await ExpectAsync<KairosBootException>(
-            () => context.CreateLogicalPartitionAsync(
+            () => device.CreateLogicalPartitionAsync(
                 new string('x', 4096),
                 ulong.MaxValue,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(overlongName.Status == KairosBootStatus.InvalidArgument, "native logical length validation");
         Check(server.HandshakeCount == 3, "invalid management calls do not reach transport");
     }
 
     private static async Task CheckManagementTrace(
-        Context context,
+        Device device,
         ScriptedTcpDevice server,
         CommandOptions options)
     {
-        var first = await context.FlashingAsync(
+        var first = await device.FlashingAsync(
             FlashingCommand.Lock,
-            server.Selector,
             options).ConfigureAwait(false);
         Check(first.TerminalPayload.SequenceEqual(new byte[] { (byte)'m', 0, 0xfd }), "management binary OKAY");
         Check(first.Messages.Count == 2, "management binary message count");
@@ -2203,47 +2226,46 @@ internal static class Program
         Check(first.DeviceIdentifier == server.Selector, "management selector passthrough");
 
         await CheckManagementSuccess(
-            context.FlashingAsync(FlashingCommand.Unlock, server.Selector, options),
+            device.FlashingAsync(FlashingCommand.Unlock, options),
             server.Selector,
             "flashing unlock").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.FlashingAsync(FlashingCommand.LockCritical, server.Selector, options),
+            device.FlashingAsync(FlashingCommand.LockCritical, options),
             server.Selector,
             "flashing lock critical").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.FlashingAsync(FlashingCommand.UnlockCritical, server.Selector, options),
+            device.FlashingAsync(FlashingCommand.UnlockCritical, options),
             server.Selector,
             "flashing unlock critical").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.FlashingAsync(FlashingCommand.GetUnlockAbility, server.Selector, options),
+            device.FlashingAsync(FlashingCommand.GetUnlockAbility, options),
             server.Selector,
             "flashing unlock ability").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.GsiAsync(GsiCommand.Wipe, server.Selector, options),
+            device.GsiAsync(GsiCommand.Wipe, options),
             server.Selector,
             "GSI wipe").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.GsiAsync(GsiCommand.Disable, server.Selector, options),
+            device.GsiAsync(GsiCommand.Disable, options),
             server.Selector,
             "GSI disable").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.GsiAsync(GsiCommand.Status, server.Selector, options),
+            device.GsiAsync(GsiCommand.Status, options),
             server.Selector,
             "GSI status").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.SnapshotUpdateAsync(SnapshotUpdateCommand.Cancel, server.Selector, options),
+            device.SnapshotUpdateAsync(SnapshotUpdateCommand.Cancel, options),
             server.Selector,
             "snapshot cancel").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.SnapshotUpdateAsync(SnapshotUpdateCommand.Merge, server.Selector, options),
+            device.SnapshotUpdateAsync(SnapshotUpdateCommand.Merge, options),
             server.Selector,
             "snapshot merge").ConfigureAwait(false);
 
         string? temporaryName = new string("system_ext".ToCharArray());
-        var create = context.CreateLogicalPartitionAsync(
+        var create = device.CreateLogicalPartitionAsync(
             temporaryName,
             0,
-            server.Selector,
             options);
         temporaryName = null;
         GC.Collect();
@@ -2251,14 +2273,13 @@ internal static class Program
         await CheckManagementSuccess(create, server.Selector, "create logical lifetime")
             .ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.DeleteLogicalPartitionAsync("system_ext", server.Selector, options),
+            device.DeleteLogicalPartitionAsync("system_ext", options),
             server.Selector,
             "delete logical").ConfigureAwait(false);
         await CheckManagementSuccess(
-            context.ResizeLogicalPartitionAsync(
+            device.ResizeLogicalPartitionAsync(
                 "system_ext",
                 ulong.MaxValue,
-                server.Selector,
                 options),
             server.Selector,
             "resize logical UInt64").ConfigureAwait(false);
@@ -2277,14 +2298,13 @@ internal static class Program
     }
 
     private static async Task CheckManagementFail(
-        Context context,
+        Device device,
         ScriptedTcpDevice server,
         CommandOptions options)
     {
         var failure = await ExpectAsync<KairosBootException>(
-            () => context.GsiAsync(
+            () => device.GsiAsync(
                 GsiCommand.Status,
-                server.Selector,
                 options)).ConfigureAwait(false);
         Check(failure.Status == KairosBootStatus.DeviceFail, "management FAIL status");
         Check(failure.DeviceMessage.SequenceEqual(new byte[] { (byte)'e', 0, 0xfa }), "management binary FAIL");
@@ -2299,15 +2319,14 @@ internal static class Program
     }
 
     private static async Task CheckManagementCancellation(
-        Context context,
+        Device device,
         ScriptedTcpDevice server,
         CommandOptions options)
     {
         using (var cancellation = new CancellationTokenSource())
         {
-            var pending = context.SnapshotUpdateAsync(
+            var pending = device.SnapshotUpdateAsync(
                 SnapshotUpdateCommand.Merge,
-                server.Selector,
                 options,
                 cancellationToken: cancellation.Token);
             Check(
@@ -2557,6 +2576,9 @@ internal static class Program
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_context_release_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int ContextReleaseCount();
+
+        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_device_release_count", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int DeviceReleaseCount();
 
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_options_init_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int JobOptionsInitCount();

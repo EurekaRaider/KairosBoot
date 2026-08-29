@@ -40,6 +40,10 @@ typedef struct kb_context_options {
   uint64_t usb_vendor_id;
 } kb_context_options_t;
 
+typedef struct kb_device {
+  char *identifier;
+} kb_device_t;
+
 typedef struct kb_update_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -176,6 +180,7 @@ static int32_t boot_blocking_count;
 static int32_t cancel_count;
 static int32_t operation_release_count;
 static int32_t context_release_count;
+static int32_t device_release_count;
 static int32_t job_options_init_count;
 static int32_t job_async_start_count;
 static int32_t job_blocking_count;
@@ -203,6 +208,14 @@ static const char expected_unicode_command_line[] = {
 
 static int same_string(const char *actual, const char *expected) {
   return actual != NULL && strcmp(actual, expected) == 0;
+}
+
+static const char *device_identifier(const kb_device_t *device) {
+  if (device == NULL || device == (const kb_device_t *)(uintptr_t)1 ||
+      device->identifier == NULL) {
+    return "";
+  }
+  return device->identifier;
 }
 
 static size_t initialize_known_prefix(void *value,
@@ -354,6 +367,7 @@ KB_TEST_API void KB_TEST_CALL kb_test_reset(void) {
   cancel_count = 0;
   operation_release_count = 0;
   context_release_count = 0;
+  device_release_count = 0;
   job_options_init_count = 0;
   job_async_start_count = 0;
   job_blocking_count = 0;
@@ -412,6 +426,10 @@ KB_TEST_API int32_t KB_TEST_CALL kb_test_operation_release_count(void) {
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_context_release_count(void) {
   return context_release_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_test_device_release_count(void) {
+  return device_release_count;
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_job_options_init_count(void) {
@@ -491,6 +509,55 @@ KB_TEST_API void KB_TEST_CALL kb_context_release(void *context) {
     record_failure(11);
   }
   ++context_release_count;
+}
+
+KB_TEST_API int32_t KB_TEST_CALL kb_device_open(
+    void *context, const char *selector, kb_device_t **device, void **error) {
+  if (context != &context_sentinel || device == NULL || error == NULL) {
+    record_failure(12);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  kb_device_t *created = (kb_device_t *)calloc(1, sizeof(*created));
+  if (created == NULL) {
+    return KB_E_INVALID_ARGUMENT;
+  }
+  const char *identifier = selector == NULL ? "" : selector;
+  const size_t size = strlen(identifier) + 1U;
+  created->identifier = (char *)malloc(size);
+  if (created->identifier == NULL) {
+    free(created);
+    return KB_E_INVALID_ARGUMENT;
+  }
+  memcpy(created->identifier, identifier, size);
+  *device = created;
+  *error = NULL;
+  return KB_OK;
+}
+
+KB_TEST_API const char *KB_TEST_CALL kb_device_identifier(
+    const kb_device_t *device) {
+  return device_identifier(device);
+}
+
+KB_TEST_API const char *KB_TEST_CALL kb_device_serial(
+    const kb_device_t *device) {
+  (void)device;
+  return "";
+}
+
+KB_TEST_API const char *KB_TEST_CALL kb_device_usb_path(
+    const kb_device_t *device) {
+  (void)device;
+  return "";
+}
+
+KB_TEST_API void KB_TEST_CALL kb_device_release(kb_device_t *device) {
+  if (device == NULL || device == (kb_device_t *)(uintptr_t)1) {
+    return;
+  }
+  ++device_release_count;
+  free(device->identifier);
+  free(device);
 }
 
 KB_TEST_API void KB_TEST_CALL kb_update_options_init(
@@ -869,10 +936,10 @@ KB_TEST_API void KB_TEST_CALL kb_job_report_release(kb_job_report_t *report) {
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
-    void *context, const char *device_selector, const char *package_path,
+    kb_device_t *device, const char *package_path,
     const kb_update_options_t *options, kb_operation_t **operation,
     void **error) {
-  if (context != &context_sentinel || operation == NULL || error == NULL ||
+  if (device == NULL || operation == NULL || error == NULL ||
       !valid_options(options)) {
     record_failure(30);
     return KB_E_INVALID_ARGUMENT;
@@ -881,7 +948,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
   int32_t kind = 0;
   if (same_string(package_path, expected_unicode_package)) {
     kind = 1;
-    if (!same_string(device_selector, "usb:serial:device") ||
+    if (!same_string(device_identifier(device), "usb:serial:device") ||
         options->timeout_ms != 2 || options->wipe != 1) {
       record_failure(31);
       return KB_E_INVALID_ARGUMENT;
@@ -897,14 +964,15 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
     }
   } else if (same_string(package_path, "cancel.zip")) {
     kind = 2;
-    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+    if (!same_string(device_identifier(device), "tcp:127.0.0.1:5554") ||
         options->timeout_ms != UINT32_MAX || options->wipe != 0) {
       record_failure(32);
       return KB_E_INVALID_ARGUMENT;
     }
   } else if (same_string(package_path, "default.zip")) {
     kind = 3;
-    if (device_selector != NULL || options->timeout_ms != UINT32_MAX ||
+    if (device_identifier(device)[0] != '\0' ||
+        options->timeout_ms != UINT32_MAX ||
         options->wipe != 0 || options->progress_callback != NULL ||
         options->progress_user_data != NULL || options->skip_reboot != 0 ||
         options->skip_secondary != 0 ||
@@ -929,7 +997,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
   created->kind = kind;
   created->progress_callback = options->progress_callback;
   created->progress_user_data = options->progress_user_data;
-  const char *identifier = device_selector == NULL ? "" : device_selector;
+  const char *identifier = device_identifier(device);
   const size_t identifier_size = strlen(identifier) + 1;
   created->device_identifier = (char *)malloc(identifier_size);
   if (created->device_identifier == NULL) {
@@ -945,15 +1013,14 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_update_package(
-    void *context, const char *device_selector, const char *package_path,
+    kb_device_t *device, const char *package_path,
     const kb_update_options_t *options, void **error) {
-  if (context != (void *)(uintptr_t)1 || error == NULL || options == NULL ||
+  if (device != (kb_device_t *)(uintptr_t)1 || error == NULL || options == NULL ||
       options->struct_size != (uint32_t)sizeof(*options) ||
       options->api_version != 1 ||
       options->timeout_ms != 17 || options->wipe != 1 ||
       options->disable_super_optimization != 0 ||
       options->progress_callback != NULL || options->progress_user_data != NULL ||
-      !same_string(device_selector, "usb:serial:blocking") ||
       !same_string(package_path, "blocking.zip")) {
     record_failure(40);
     return KB_E_INVALID_ARGUMENT;
@@ -964,11 +1031,11 @@ KB_TEST_API int32_t KB_TEST_CALL kb_update_package(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
-    void *context, const char *device_selector, const char *partition,
+    kb_device_t *device, const char *partition,
     const char *kernel_path, const char *ramdisk_path,
     const char *second_stage_path, const kb_flash_options_t *options,
     kb_operation_t **operation, void **error) {
-  if (context != &context_sentinel || operation == NULL || error == NULL ||
+  if (device == NULL || operation == NULL || error == NULL ||
       !valid_flash_options(options) || !same_string(partition, "boot")) {
     record_failure(41);
     return KB_E_INVALID_ARGUMENT;
@@ -977,7 +1044,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
   int32_t kind = 0;
   if (same_string(kernel_path, expected_unicode_kernel)) {
     kind = 4;
-    if (!same_string(device_selector, "usb:serial:raw") ||
+    if (!same_string(device_identifier(device), "usb:serial:raw") ||
         !same_string(ramdisk_path, "ramdisk.img") ||
         second_stage_path != NULL || options->timeout_ms != 2 ||
         options->sparse_limit_bytes != 64U * 1024U ||
@@ -988,7 +1055,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
     }
   } else if (same_string(kernel_path, "cancel-kernel.bin")) {
     kind = 5;
-    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+    if (!same_string(device_identifier(device), "tcp:127.0.0.1:5554") ||
         ramdisk_path != NULL || second_stage_path != NULL ||
         options->timeout_ms != UINT32_MAX ||
         options->progress_callback == NULL) {
@@ -1008,14 +1075,14 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
   created->kind = kind;
   created->progress_callback = options->progress_callback;
   created->progress_user_data = options->progress_user_data;
-  const size_t identifier_size = strlen(device_selector) + 1;
+  const size_t identifier_size = strlen(device_identifier(device)) + 1;
   created->device_identifier = (char *)malloc(identifier_size);
   if (created->device_identifier == NULL) {
     free(created);
     record_failure(46);
     return KB_E_INVALID_ARGUMENT;
   }
-  memcpy(created->device_identifier, device_selector, identifier_size);
+  memcpy(created->device_identifier, device_identifier(device), identifier_size);
   *operation = created;
   *error = NULL;
   ++flash_raw_async_start_count;
@@ -1023,14 +1090,13 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_async(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw(
-    void *context, const char *device_selector, const char *partition,
+    kb_device_t *device, const char *partition,
     const char *kernel_path, const char *ramdisk_path,
     const char *second_stage_path, const kb_flash_options_t *options,
     void **error) {
-  if (context != (void *)(uintptr_t)1 || error == NULL ||
+  if (device != (kb_device_t *)(uintptr_t)1 || error == NULL ||
       !valid_flash_options(options) || options->timeout_ms != 17 ||
       options->progress_callback != NULL ||
-      !same_string(device_selector, "usb:serial:blocking-raw") ||
       !same_string(partition, "boot") ||
       !same_string(kernel_path, "blocking-kernel.bin") ||
       ramdisk_path != NULL || second_stage_path != NULL) {
@@ -1069,13 +1135,13 @@ static int32_t start_legacy_operation(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options_async(
-    void *context, const char *device_selector, const char *partition,
+    kb_device_t *device, const char *partition,
     const char *kernel_path, const char *ramdisk_path,
     const char *second_stage_path,
     const kb_legacy_boot_options_t *legacy_options,
     const kb_flash_options_t *options, kb_operation_t **operation,
     void **error) {
-  if (context != &context_sentinel || operation == NULL || error == NULL ||
+  if (device == NULL || operation == NULL || error == NULL ||
       !valid_flash_options(options) || !same_string(partition, "boot")) {
     record_failure(110);
     return KB_E_INVALID_ARGUMENT;
@@ -1084,7 +1150,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options_async(
   int32_t kind = 0;
   if (same_string(kernel_path, "configured-kernel.bin")) {
     kind = 4;
-    if (!same_string(device_selector, "usb:serial:configured-raw") ||
+    if (!same_string(device_identifier(device), "usb:serial:configured-raw") ||
         !same_string(ramdisk_path, "configured-ramdisk.img") ||
         !same_string(second_stage_path, "configured-second.bin") ||
         !valid_custom_legacy_boot_options(legacy_options) ||
@@ -1094,7 +1160,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options_async(
     }
   } else if (same_string(kernel_path, "cancel-configured-kernel.bin")) {
     kind = 5;
-    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+    if (!same_string(device_identifier(device), "tcp:127.0.0.1:5554") ||
         ramdisk_path != NULL || second_stage_path != NULL ||
         !valid_default_legacy_boot_options(legacy_options) ||
         options->timeout_ms != UINT32_MAX || options->progress_callback == NULL) {
@@ -1107,7 +1173,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options_async(
   }
 
   const int32_t status = start_legacy_operation(
-      device_selector, kind, options, operation, error, 114);
+      device_identifier(device), kind, options, operation, error, 114);
   if (status == KB_OK) {
     ++flash_raw_async_start_count;
   }
@@ -1115,15 +1181,14 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options_async(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options(
-    void *context, const char *device_selector, const char *partition,
+    kb_device_t *device, const char *partition,
     const char *kernel_path, const char *ramdisk_path,
     const char *second_stage_path,
     const kb_legacy_boot_options_t *legacy_options,
     const kb_flash_options_t *options, void **error) {
-  if (context != (void *)(uintptr_t)1 || error == NULL ||
+  if (device != (kb_device_t *)(uintptr_t)1 || error == NULL ||
       !valid_flash_options(options) || options->timeout_ms != 17 ||
       options->progress_callback != NULL ||
-      !same_string(device_selector, "usb:serial:blocking-configured-raw") ||
       !same_string(partition, "boot") ||
       !same_string(kernel_path, "blocking-configured-kernel.bin") ||
       ramdisk_path != NULL || second_stage_path != NULL ||
@@ -1138,12 +1203,12 @@ KB_TEST_API int32_t KB_TEST_CALL kb_flash_raw_with_boot_options(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw_async(
-    void *context, const char *device_selector, const char *kernel_path,
+    kb_device_t *device, const char *kernel_path,
     const char *ramdisk_path, const char *second_stage_path,
     const kb_legacy_boot_options_t *legacy_options,
     const kb_flash_options_t *options, kb_operation_t **operation,
     void **error) {
-  if (context != &context_sentinel || operation == NULL || error == NULL ||
+  if (device == NULL || operation == NULL || error == NULL ||
       !valid_flash_options(options)) {
     record_failure(120);
     return KB_E_INVALID_ARGUMENT;
@@ -1152,7 +1217,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw_async(
   int32_t kind = 0;
   if (same_string(kernel_path, "boot-raw-kernel.bin")) {
     kind = 1;
-    if (!same_string(device_selector, "usb:serial:boot-raw") ||
+    if (!same_string(device_identifier(device), "usb:serial:boot-raw") ||
         !same_string(ramdisk_path, "boot-raw-ramdisk.img") ||
         !same_string(second_stage_path, "boot-raw-second.bin") ||
         !valid_custom_legacy_boot_options(legacy_options) ||
@@ -1162,7 +1227,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw_async(
     }
   } else if (same_string(kernel_path, "cancel-boot-raw-kernel.bin")) {
     kind = 2;
-    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+    if (!same_string(device_identifier(device), "tcp:127.0.0.1:5554") ||
         ramdisk_path != NULL || second_stage_path != NULL ||
         !valid_default_legacy_boot_options(legacy_options) ||
         options->timeout_ms != UINT32_MAX || options->progress_callback == NULL) {
@@ -1175,7 +1240,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw_async(
   }
 
   const int32_t status = start_legacy_operation(
-      device_selector, kind, options, operation, error, 124);
+      device_identifier(device), kind, options, operation, error, 124);
   if (status == KB_OK) {
     ++boot_async_start_count;
   }
@@ -1183,14 +1248,13 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw_async(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw(
-    void *context, const char *device_selector, const char *kernel_path,
+    kb_device_t *device, const char *kernel_path,
     const char *ramdisk_path, const char *second_stage_path,
     const kb_legacy_boot_options_t *legacy_options,
     const kb_flash_options_t *options, void **error) {
-  if (context != (void *)(uintptr_t)1 || error == NULL ||
+  if (device != (kb_device_t *)(uintptr_t)1 || error == NULL ||
       !valid_flash_options(options) || options->timeout_ms != 17 ||
       options->progress_callback != NULL ||
-      !same_string(device_selector, "usb:serial:blocking-boot-raw") ||
       !same_string(kernel_path, "blocking-boot-raw-kernel.bin") ||
       ramdisk_path != NULL || second_stage_path != NULL ||
       !valid_custom_legacy_boot_layout(legacy_options) ||
@@ -1204,10 +1268,10 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_raw(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_boot_file_async(
-    void *context, const char *device_selector, const char *file_path,
+    kb_device_t *device, const char *file_path,
     const kb_flash_options_t *options, kb_operation_t **operation,
     void **error) {
-  if (context != &context_sentinel || operation == NULL || error == NULL ||
+  if (device == NULL || operation == NULL || error == NULL ||
       !valid_flash_options(options)) {
     record_failure(100);
     return KB_E_INVALID_ARGUMENT;
@@ -1216,14 +1280,14 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_file_async(
   int32_t kind = 0;
   if (same_string(file_path, expected_unicode_boot_image)) {
     kind = 1;
-    if (!same_string(device_selector, "usb:serial:boot-device") ||
+    if (!same_string(device_identifier(device), "usb:serial:boot-device") ||
         options->timeout_ms != 2 || options->progress_callback == NULL) {
       record_failure(101);
       return KB_E_INVALID_ARGUMENT;
     }
   } else if (same_string(file_path, "cancel-boot.img")) {
     kind = 2;
-    if (!same_string(device_selector, "tcp:127.0.0.1:5554") ||
+    if (!same_string(device_identifier(device), "tcp:127.0.0.1:5554") ||
         options->timeout_ms != UINT32_MAX ||
         options->progress_callback == NULL) {
       record_failure(102);
@@ -1231,7 +1295,8 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_file_async(
     }
   } else if (same_string(file_path, "default-boot.img")) {
     kind = 3;
-    if (device_selector != NULL || options->timeout_ms != UINT32_MAX ||
+    if (device_identifier(device)[0] != '\0' ||
+        options->timeout_ms != UINT32_MAX ||
         options->progress_callback != NULL ||
         options->progress_user_data != NULL) {
       record_failure(103);
@@ -1250,7 +1315,7 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_file_async(
   created->kind = kind;
   created->progress_callback = options->progress_callback;
   created->progress_user_data = options->progress_user_data;
-  const char *identifier = device_selector == NULL ? "" : device_selector;
+  const char *identifier = device_identifier(device);
   const size_t identifier_size = strlen(identifier) + 1;
   created->device_identifier = (char *)malloc(identifier_size);
   if (created->device_identifier == NULL) {
@@ -1266,13 +1331,12 @@ KB_TEST_API int32_t KB_TEST_CALL kb_boot_file_async(
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_boot_file(
-    void *context, const char *device_selector, const char *file_path,
+    kb_device_t *device, const char *file_path,
     const kb_flash_options_t *options, void **error) {
-  if (context != (void *)(uintptr_t)1 || error == NULL ||
+  if (device != (kb_device_t *)(uintptr_t)1 || error == NULL ||
       !valid_flash_options(options) || options->timeout_ms != 17 ||
       options->progress_callback != NULL ||
       options->progress_user_data != NULL ||
-      !same_string(device_selector, "usb:serial:blocking-boot") ||
       !same_string(file_path, "blocking-boot.img")) {
     record_failure(107);
     return KB_E_INVALID_ARGUMENT;

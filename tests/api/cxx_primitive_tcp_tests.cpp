@@ -169,6 +169,11 @@ private:
 
   void serve_binary_fail() {
     auto socket = accept();
+    CHECK(as_string(read_frame(*socket)) == "getvar:has-slot:userdata");
+    write_frame(*socket, "OKAYno");
+    CHECK(as_string(read_frame(*socket)) ==
+          "getvar:partition-type:userdata");
+    write_frame(*socket, "OKAYraw");
     CHECK(as_string(read_frame(*socket)) == "erase:userdata");
     write_frame(*socket, binary_payload("INFO", {'w', 0, 0xfc}));
     write_frame(*socket, binary_payload("TEXT", {'h', 0, 0xfb}));
@@ -302,10 +307,9 @@ private:
   std::exception_ptr failure_;
 };
 
-void binary_result_and_selector_passthrough(kairosboot::Context &context,
+void binary_result_and_selector_passthrough(kairosboot::Device &device,
                                             const std::string &selector_text) {
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
-  auto result = context.getvar(selector, "binary");
+  auto result = device.getvar("binary");
   CHECK(result.has_value());
   CHECK(result->device_identifier() == selector_text);
   CHECK(bytes_equal(result->terminal_payload(), {'v', 0, 0xfd}));
@@ -323,10 +327,9 @@ void binary_result_and_selector_passthrough(kairosboot::Context &context,
   CHECK(!result->message(2).has_value());
 }
 
-void device_fail_diagnostics(kairosboot::Context &context,
+void device_fail_diagnostics(kairosboot::Device &device,
                              const std::string &selector_text) {
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
-  auto result = context.erase(selector, "userdata");
+  auto result = device.erase("userdata");
   CHECK(!result.has_value());
   const auto &error = result.error();
   CHECK(error.status() == KB_E_DEVICE_FAIL);
@@ -347,12 +350,11 @@ void device_fail_diagnostics(kairosboot::Context &context,
   CHECK(!error.session_poisoned());
 }
 
-void partial_upload_diagnostics(kairosboot::Context &context,
+void partial_upload_diagnostics(kairosboot::Device &device,
                                 const std::string &selector_text) {
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
   kairosboot::CommandOptions options;
   options.maximum_receive_bytes = 5U;
-  auto result = context.upload(selector, options);
+  auto result = device.upload(options);
   CHECK(!result.has_value());
   const auto &error = result.error();
   CHECK(error.status() == KB_E_NO_DEVICE);
@@ -365,10 +367,9 @@ void partial_upload_diagnostics(kairosboot::Context &context,
 }
 
 void management_commands_match_aosp_wire_trace(
-    kairosboot::Context &context, const std::string &selector_text) {
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
+    kairosboot::Device &device, const std::string &selector_text) {
   auto operation =
-      context.flashing_async(selector, kairosboot::FlashingCommand::Lock);
+      device.flashing_async(kairosboot::FlashingCommand::Lock);
   CHECK(operation.has_value());
   auto first = operation->wait_result();
   CHECK(first.has_value());
@@ -390,35 +391,34 @@ void management_commands_match_aosp_wire_trace(
     CHECK(as_string(result->terminal_payload()) == "done");
   };
   check_success(
-      context.flashing(selector, kairosboot::FlashingCommand::Unlock));
+      device.flashing(kairosboot::FlashingCommand::Unlock));
   check_success(
-      context.flashing(selector, kairosboot::FlashingCommand::LockCritical));
+      device.flashing(kairosboot::FlashingCommand::LockCritical));
   check_success(
-      context.flashing(selector, kairosboot::FlashingCommand::UnlockCritical));
-  check_success(context.flashing(
-      selector, kairosboot::FlashingCommand::GetUnlockAbility));
-  check_success(context.gsi(selector, kairosboot::GsiCommand::Wipe));
-  check_success(context.gsi(selector, kairosboot::GsiCommand::Disable));
-  check_success(context.gsi(selector, kairosboot::GsiCommand::Status));
-  check_success(context.snapshot_update(
-      selector, kairosboot::SnapshotUpdateCommand::Cancel));
-  check_success(context.snapshot_update(
-      selector, kairosboot::SnapshotUpdateCommand::Merge));
+      device.flashing(kairosboot::FlashingCommand::UnlockCritical));
+  check_success(
+      device.flashing(kairosboot::FlashingCommand::GetUnlockAbility));
+  check_success(device.gsi(kairosboot::GsiCommand::Wipe));
+  check_success(device.gsi(kairosboot::GsiCommand::Disable));
+  check_success(device.gsi(kairosboot::GsiCommand::Status));
+  check_success(
+      device.snapshot_update(kairosboot::SnapshotUpdateCommand::Cancel));
+  check_success(
+      device.snapshot_update(kairosboot::SnapshotUpdateCommand::Merge));
   std::string logical_name{"system_ext"};
-  auto create_operation = context.create_logical_partition_async(
-      selector, std::string_view{logical_name}, 0);
+  auto create_operation = device.create_logical_partition_async(
+      std::string_view{logical_name}, 0);
   CHECK(create_operation.has_value());
   logical_name.assign("mutated-after-async-start");
   check_success(create_operation->wait_result());
-  check_success(context.delete_logical_partition(selector, "system_ext"));
+  check_success(device.delete_logical_partition("system_ext"));
   check_success(
-      context.resize_logical_partition(selector, "system_ext", UINT64_MAX));
+      device.resize_logical_partition("system_ext", UINT64_MAX));
 }
 
 void management_fail_preserves_binary_diagnostics(
-    kairosboot::Context &context, const std::string &selector_text) {
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
-  auto result = context.gsi(selector, kairosboot::GsiCommand::Status);
+    kairosboot::Device &device, const std::string &selector_text) {
+  auto result = device.gsi(kairosboot::GsiCommand::Status);
   CHECK(!result.has_value());
   const auto &error = result.error();
   CHECK(error.status() == KB_E_DEVICE_FAIL);
@@ -436,13 +436,12 @@ void management_fail_preserves_binary_diagnostics(
 }
 
 void stop_token_cancels_management_and_drains(
-    kairosboot::Context &context, ScriptedTcpDevice &device,
+    kairosboot::Device &device, ScriptedTcpDevice &scripted_device,
     const std::string &selector_text) {
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
-  auto operation = context.snapshot_update_async(
-      selector, kairosboot::SnapshotUpdateCommand::Merge);
+  auto operation =
+      device.snapshot_update_async(kairosboot::SnapshotUpdateCommand::Merge);
   CHECK(operation.has_value());
-  device.wait_for_cancel_command();
+  scripted_device.wait_for_cancel_command();
 
   std::stop_source cancellation;
   CHECK(cancellation.request_stop());
@@ -456,19 +455,22 @@ void stop_token_cancels_management_and_drains(
 }
 
 void run_contract() {
-  ScriptedTcpDevice device;
+  ScriptedTcpDevice scripted_device;
   const std::string selector_text =
-      "tcp:127.0.0.1:" + std::to_string(device.port());
+      "tcp:127.0.0.1:" + std::to_string(scripted_device.port());
   auto context = kairosboot::Context::create();
   CHECK(context.has_value());
+  auto device = context->open_device(selector_text);
+  CHECK(device.has_value());
 
-  binary_result_and_selector_passthrough(*context, selector_text);
-  device_fail_diagnostics(*context, selector_text);
-  partial_upload_diagnostics(*context, selector_text);
-  management_commands_match_aosp_wire_trace(*context, selector_text);
-  management_fail_preserves_binary_diagnostics(*context, selector_text);
-  stop_token_cancels_management_and_drains(*context, device, selector_text);
-  device.finish();
+  binary_result_and_selector_passthrough(*device, selector_text);
+  device_fail_diagnostics(*device, selector_text);
+  partial_upload_diagnostics(*device, selector_text);
+  management_commands_match_aosp_wire_trace(*device, selector_text);
+  management_fail_preserves_binary_diagnostics(*device, selector_text);
+  stop_token_cancels_management_and_drains(*device, scripted_device,
+                                           selector_text);
+  scripted_device.finish();
 }
 
 } // namespace

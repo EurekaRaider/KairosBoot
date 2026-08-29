@@ -1895,7 +1895,7 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
   return result;
 }
 
-kairosboot::DeviceSelector selector_view(const GlobalOptions &options) {
+std::optional<std::string_view> selector_view(const GlobalOptions &options) {
   if (!options.selector.has_value()) {
     return std::nullopt;
   }
@@ -2192,47 +2192,43 @@ std::expected<void, LocalRuntimeError> write_source_atomically(
 }
 
 std::expected<kairosboot::CommandResult, kairosboot::Error>
-execute_typed_command(kairosboot::Context &context,
+execute_typed_command(kairosboot::Device &device,
                       const Invocation &invocation,
                       const std::span<const std::byte> stage_data) {
-  const auto selector = selector_view(invocation.global);
   const auto options = command_options(invocation.global);
   switch (invocation.kind) {
   case CommandKind::Getvar:
-    return context.getvar(selector, invocation.first, options);
+    return device.getvar(invocation.first, options);
   case CommandKind::Erase:
-    return context.erase(selector, invocation.first, options);
+    return device.erase(invocation.first, options);
   case CommandKind::SetActive:
-    return context.set_active(selector, invocation.first, options);
+    return device.set_active(invocation.first, options);
   case CommandKind::Reboot:
-    return context.reboot(selector, invocation.reboot_target, options);
+    return device.reboot(invocation.reboot_target, options);
   case CommandKind::Continue:
-    return context.continue_boot(selector, options);
+    return device.continue_boot(options);
   case CommandKind::Oem:
-    return context.oem(selector, invocation.joined, options);
+    return device.oem(invocation.joined, options);
   case CommandKind::Raw:
-    return context.raw_command(selector, invocation.joined, options);
+    return device.raw_command(invocation.joined, options);
   case CommandKind::BootFile:
     break;
   case CommandKind::BootStaged:
-    return context.boot(selector, options);
+    return device.boot(options);
   case CommandKind::Stage: {
-    auto operation = context.stage_async(selector, stage_data, options);
+    auto operation = device.stage_async(stage_data, options);
     if (!operation) {
       return std::unexpected(std::move(operation.error()));
     }
     return operation->wait_result();
   }
   case CommandKind::Upload:
-    return context.upload_file(selector, path_from_utf8(invocation.first),
-                               options);
+    return device.upload_file(path_from_utf8(invocation.first), options);
   case CommandKind::GetStaged:
-    return context.get_staged_file(selector,
-                                   path_from_utf8(invocation.first), options);
+    return device.get_staged_file(path_from_utf8(invocation.first), options);
   case CommandKind::Fetch:
-    return context.fetch_file(selector, invocation.first,
-                              path_from_utf8(invocation.second),
-                              invocation.fetch_range, options);
+    return device.fetch_file(invocation.first, path_from_utf8(invocation.second),
+                             invocation.fetch_range, options);
   case CommandKind::Version:
   case CommandKind::Help:
   case CommandKind::Doctor:
@@ -2261,30 +2257,25 @@ execute_typed_command(kairosboot::Context &context,
 }
 
 std::expected<kairosboot::Operation, kairosboot::Error>
-start_management_command(kairosboot::Context &context,
+start_management_command(kairosboot::Device &device,
                          const Invocation &invocation) {
-  const auto selector = selector_view(invocation.global);
   const auto options = command_options(invocation.global);
   switch (invocation.kind) {
   case CommandKind::Flashing:
-    return context.flashing_async(selector, invocation.flashing_command,
-                                  options);
+    return device.flashing_async(invocation.flashing_command, options);
   case CommandKind::Gsi:
-    return context.gsi_async(selector, invocation.gsi_command, options);
+    return device.gsi_async(invocation.gsi_command, options);
   case CommandKind::SnapshotUpdate:
-    return context.snapshot_update_async(
-        selector, invocation.snapshot_update_command, options);
+    return device.snapshot_update_async(invocation.snapshot_update_command,
+                                        options);
   case CommandKind::CreateLogicalPartition:
-    return context.create_logical_partition_async(
-        selector, invocation.first, invocation.logical_partition_size,
-        options);
+    return device.create_logical_partition_async(
+        invocation.first, invocation.logical_partition_size, options);
   case CommandKind::DeleteLogicalPartition:
-    return context.delete_logical_partition_async(selector, invocation.first,
-                                                  options);
+    return device.delete_logical_partition_async(invocation.first, options);
   case CommandKind::ResizeLogicalPartition:
-    return context.resize_logical_partition_async(
-        selector, invocation.first, invocation.logical_partition_size,
-        options);
+    return device.resize_logical_partition_async(
+        invocation.first, invocation.logical_partition_size, options);
   case CommandKind::Version:
   case CommandKind::Help:
   case CommandKind::Doctor:
@@ -2391,6 +2382,13 @@ kairosboot::ContextOptions context_options(const GlobalOptions &options) {
   };
 }
 
+std::expected<kairosboot::Device, kairosboot::Error>
+open_device(kairosboot::Context &context, const GlobalOptions &options) {
+  const auto selector = selector_view(options);
+  return selector.has_value() ? context.open_device(*selector)
+                              : context.open_device();
+}
+
 int flash_file(const Invocation &invocation) {
   std::string inferred_file;
   std::string_view file = invocation.second;
@@ -2406,9 +2404,12 @@ int flash_file(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
-  const auto result = context->flash_file(
-      selector_view(invocation.global), invocation.first,
-      path_from_utf8(file), flash_options(invocation.global));
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
+  const auto result = device->flash_file(
+      invocation.first, path_from_utf8(file), flash_options(invocation.global));
   if (!result) {
     return print_runtime_error(result.error(), invocation.global.json);
   }
@@ -2431,9 +2432,13 @@ int flash_vendor_boot_ramdisk(const Invocation &invocation) {
             "vendor_boot ramdisk file must not be empty"},
         invocation.global.json);
   }
-  auto context = kairosboot::Context::create();
+  auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
+  }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
   }
   const std::optional<std::filesystem::path> dtb =
       invocation.global.dtb_path.has_value()
@@ -2441,10 +2446,9 @@ int flash_vendor_boot_ramdisk(const Invocation &invocation) {
                 path_from_utf8(*invocation.global.dtb_path)}
           : std::nullopt;
   InterruptCancellation cancellation;
-  auto operation = context->flash_vendor_boot_ramdisk_async(
-      selector_view(invocation.global), invocation.first,
-      path_from_utf8(invocation.third), invocation.second, dtb,
-      flash_options(invocation.global));
+  auto operation = device->flash_vendor_boot_ramdisk_async(
+      invocation.first, path_from_utf8(invocation.third), invocation.second,
+      dtb, flash_options(invocation.global));
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -2475,13 +2479,17 @@ int format_partition(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
   const std::optional<std::string_view> filesystem_type =
       invocation.filesystem_type.empty()
           ? std::nullopt
           : std::optional<std::string_view>{invocation.filesystem_type};
-  const auto result = context->format_partition(
-      selector_view(invocation.global), invocation.first, filesystem_type,
-      invocation.format_partition_size, flash_options(invocation.global));
+  const auto result = device->format_partition(
+      invocation.first, filesystem_type, invocation.format_partition_size,
+      flash_options(invocation.global));
   if (!result) {
     return print_runtime_error(result.error(), invocation.global.json);
   }
@@ -2507,6 +2515,10 @@ int boot_file(const Invocation &invocation) {
   auto context = kairosboot::Context::create(context_options(invocation.global));
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
+  }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
   }
   InterruptCancellation cancellation;
   auto options = flash_options(invocation.global);
@@ -2536,9 +2548,9 @@ int boot_file(const Invocation &invocation) {
       invocation.third.empty()
           ? std::nullopt
           : std::optional<std::filesystem::path>{path_from_utf8(invocation.third)};
-  auto operation = context->boot_raw_async(
-      selector_view(invocation.global), path_from_utf8(invocation.first),
-      ramdisk, second_stage, legacy, options);
+  auto operation = device->boot_raw_async(path_from_utf8(invocation.first),
+                                          ramdisk, second_stage, legacy,
+                                          options);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -2638,6 +2650,10 @@ int flash_raw(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
   const std::optional<std::filesystem::path> ramdisk =
       invocation.third.empty()
           ? std::nullopt
@@ -2648,9 +2664,8 @@ int flash_raw(const Invocation &invocation) {
           ? std::nullopt
           : std::optional<std::filesystem::path>{
                 path_from_utf8(invocation.fourth)};
-  const auto result = context->flash_raw(
-      selector_view(invocation.global), invocation.first,
-      path_from_utf8(invocation.second), ramdisk, second_stage,
+  const auto result = device->flash_raw(
+      invocation.first, path_from_utf8(invocation.second), ramdisk, second_stage,
       kairosboot::LegacyBootOptions{
           .command_line = invocation.boot_image_options.command_line,
           .base = invocation.boot_image_options.base,
@@ -2688,9 +2703,13 @@ int signature_file(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
   InterruptCancellation cancellation;
-  auto operation = context->signature_file_async(
-      selector_view(invocation.global), path_from_utf8(invocation.first),
+  auto operation = device->signature_file_async(
+      path_from_utf8(invocation.first),
       command_options(invocation.global));
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
@@ -2792,6 +2811,10 @@ int update_package(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
 
   InterruptCancellation cancellation;
   const std::string_view command = command_name(invocation.kind);
@@ -2808,8 +2831,7 @@ int update_package(const Invocation &invocation) {
   options.progress = [&progress](const kairosboot::Progress &value) {
     return progress(value);
   };
-  auto operation = context->update_package_async(
-      selector_view(invocation.global), path_from_utf8(package), options);
+  auto operation = device->update_package_async(path_from_utf8(package), options);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -2852,6 +2874,10 @@ int wipe_super(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
 
   InterruptCancellation cancellation;
   UpdateProgressReporter progress{invocation.global.json, "wipe-super"};
@@ -2863,8 +2889,7 @@ int wipe_super(const Invocation &invocation) {
   if (!invocation.first.empty()) {
     image = path_from_utf8(invocation.first);
   }
-  auto operation = context->wipe_super_async(
-      selector_view(invocation.global), image, options);
+  auto operation = device->wipe_super_async(image, options);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }
@@ -3034,7 +3059,11 @@ int run_typed_command(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
-  auto result = execute_typed_command(*context, invocation, stage_data);
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
+  auto result = execute_typed_command(*device, invocation, stage_data);
   if (!result) {
     return print_runtime_error(result.error(), invocation.global.json);
   }
@@ -3051,9 +3080,13 @@ int run_management_command(const Invocation &invocation) {
   if (!context) {
     return print_runtime_error(context.error(), invocation.global.json);
   }
+  auto device = open_device(*context, invocation.global);
+  if (!device) {
+    return print_runtime_error(device.error(), invocation.global.json);
+  }
 
   InterruptCancellation cancellation;
-  auto operation = start_management_command(*context, invocation);
+  auto operation = start_management_command(*device, invocation);
   if (!operation) {
     return print_runtime_error(operation.error(), invocation.global.json);
   }

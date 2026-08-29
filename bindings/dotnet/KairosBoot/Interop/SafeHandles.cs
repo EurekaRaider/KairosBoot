@@ -28,6 +28,20 @@ internal sealed class ContextSafeHandle : KairosBootSafeHandle
     }
 }
 
+internal sealed class DeviceSafeHandle : KairosBootSafeHandle
+{
+    internal DeviceSafeHandle(IntPtr existingHandle)
+        : base(existingHandle)
+    {
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.DeviceRelease(handle);
+        return true;
+    }
+}
+
 internal sealed class ErrorSafeHandle : KairosBootSafeHandle
 {
     internal ErrorSafeHandle(IntPtr existingHandle)

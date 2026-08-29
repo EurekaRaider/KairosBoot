@@ -60,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "6a6fe966c693c73d7f2a6cbb178c0f9d934dcaab9d8defc3cf63bdc793628fe8",
+  "headerContractSha256": "7d3a6c58c3d34b24da3c32a623f6a999a0ec48f3a8eb4eb241d36eb612c24383",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -538,11 +538,16 @@
     "kb_create_logical_partition_async",
     "kb_delete_logical_partition",
     "kb_delete_logical_partition_async",
+    "kb_device_identifier",
     "kb_device_list_count",
     "kb_device_list_product",
     "kb_device_list_release",
     "kb_device_list_serial",
     "kb_device_list_usb_path",
+    "kb_device_open",
+    "kb_device_release",
+    "kb_device_serial",
+    "kb_device_usb_path",
     "kb_enumerate_devices",
     "kb_erase",
     "kb_erase_async",

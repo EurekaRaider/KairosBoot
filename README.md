@@ -161,9 +161,9 @@ Installed CMake packages export `KairosBoot::C` and `KairosBoot::Cxx`.
 
 | Surface | Contract |
 |---|---|
-| C11 | Single public header, UTF-8 strings, fixed-width integers, opaque handles, explicit ownership, and blocking/asynchronous operation shapes |
-| C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and move-only resources; no separate C++ binary ABI |
-| .NET Framework 4.8 | Windows x64 binding using `DllImport`, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
+| C11 | Single public header, UTF-8 strings, fixed-width integers, opaque `Context`/`Device` handles, explicit ownership, and blocking/asynchronous operation shapes |
+| C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and a move-only `Device` per DUT; no separate C++ binary ABI |
+| .NET Framework 4.8 | Windows x64 binding using `DllImport`, per-DUT `Device` objects, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
 | .NET 10 | `LibraryImport` binding for `win`, `linux`, and `osx` on x64 and ARM64 |
 | CLI | C++23 consumer of the public wrapper with version, diagnostics, enumeration, and experimental single-file flash commands |
 

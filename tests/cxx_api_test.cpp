@@ -88,8 +88,31 @@ static_assert(
 static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
                                                                nullptr)));
 
+static_assert(!std::is_copy_constructible_v<kairosboot::Device>);
+static_assert(std::is_nothrow_move_constructible_v<kairosboot::Device>);
+
+template <typename T>
+concept ContextHasLegacyPrimitive = requires(T &context) {
+  context.getvar("product");
+};
+
+template <typename T>
+concept ContextHasLegacyFlash = requires(T &context,
+                                         std::filesystem::path image) {
+  context.flash_file("boot", image);
+};
+
+template <typename T>
+concept ContextHasLegacyUpdate = requires(T &context,
+                                          std::filesystem::path package) {
+  context.update_package(package);
+};
+
+static_assert(!ContextHasLegacyPrimitive<kairosboot::Context>);
+static_assert(!ContextHasLegacyFlash<kairosboot::Context>);
+static_assert(!ContextHasLegacyUpdate<kairosboot::Context>);
 static_assert(requires(kairosboot::Context &context,
-                       kairosboot::DeviceSelector selector,
+                       kairosboot::Device &device,
                        kairosboot::CommandOptions options,
                        kairosboot::FlashOptions flash_options,
                        kairosboot::LegacyBootOptions legacy_boot_options,
@@ -98,98 +121,57 @@ static_assert(requires(kairosboot::Context &context,
                        std::filesystem::path kernel,
                        std::span<const std::byte> bytes,
                        kairosboot::FetchRange range) {
-  { context.getvar_async(selector, "product", options) } ->
+  { context.open_device("tcp:127.0.0.1:5554") } ->
+      std::same_as<std::expected<kairosboot::Device, kairosboot::Error>>;
+  { device.identifier() } -> std::same_as<std::string_view>;
+  { device.serial() } -> std::same_as<std::string_view>;
+  { device.usb_path() } -> std::same_as<std::string_view>;
+  { device.getvar_async("product", options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.getvar(selector, "product", options) } ->
+  { device.getvar("product", options) } ->
       std::same_as<std::expected<kairosboot::CommandResult, kairosboot::Error>>;
-  { context.update_package_async(selector, package, update_options) } ->
+  { device.update_package_async(package, update_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.update_package(selector, package, update_options) } ->
+  { device.update_package(package, update_options) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
-  { context.flash_raw_async(selector, "boot", kernel) } ->
+  { device.flash_raw_async("boot", kernel) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.flash_raw(selector, "boot", kernel) } ->
+  { device.flash_raw("boot", kernel) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
-  { context.flash_vendor_boot_ramdisk_async(selector, "vendor_boot", package,
-                                             "default", std::nullopt,
-                                             flash_options) } ->
+  { device.flash_vendor_boot_ramdisk_async(
+        "vendor_boot", package, "default", std::nullopt, flash_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.flash_vendor_boot_ramdisk(selector, "vendor_boot", package,
-                                      "default", std::nullopt,
-                                      flash_options) } ->
+  { device.flash_vendor_boot_ramdisk(
+        "vendor_boot", package, "default", std::nullopt, flash_options) } ->
       std::same_as<std::expected<void, kairosboot::Error>>;
-  { context.flash_vendor_boot_ramdisk_async("vendor_boot", package) } ->
-      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.flash_vendor_boot_ramdisk("vendor_boot", package) } ->
-      std::same_as<std::expected<void, kairosboot::Error>>;
-  { context.flash_raw_async(selector, "boot", kernel, std::nullopt,
-                            std::nullopt, legacy_boot_options, flash_options) } ->
-      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.boot_raw_async(selector, kernel, std::nullopt, std::nullopt,
+  { device.flash_raw_async("boot", kernel, std::nullopt, std::nullopt,
                            legacy_boot_options, flash_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.boot_raw(selector, kernel, std::nullopt, std::nullopt,
-                     legacy_boot_options, flash_options) } ->
-      std::same_as<std::expected<void, kairosboot::Error>>;
-  { context.boot_file_async(selector, package, flash_options) } ->
+  { device.boot_raw_async(kernel, std::nullopt, std::nullopt,
+                          legacy_boot_options, flash_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.boot_file(selector, package, flash_options) } ->
-      std::same_as<std::expected<void, kairosboot::Error>>;
-  { context.wipe_super_async(selector, package, update_options) } ->
+  { device.boot_file_async(package, flash_options) } ->
       std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
-  { context.wipe_super(selector, package, update_options) } ->
-      std::same_as<std::expected<void, kairosboot::Error>>;
-  context.erase_async(selector, "userdata", options);
-  context.erase(selector, "userdata", options);
-  context.set_active_async(selector, "a", options);
-  context.set_active(selector, "a", options);
-  context.flashing_async(selector, kairosboot::FlashingCommand::Unlock,
-                         options);
-  context.flashing(selector, kairosboot::FlashingCommand::Lock, options);
-  context.flashing_async(kairosboot::FlashingCommand::Lock, options);
-  context.flashing(kairosboot::FlashingCommand::Unlock, options);
-  context.gsi_async(selector, kairosboot::GsiCommand::Status, options);
-  context.gsi(selector, kairosboot::GsiCommand::Wipe, options);
-  context.gsi_async(kairosboot::GsiCommand::Disable, options);
-  context.gsi(kairosboot::GsiCommand::Status, options);
-  context.snapshot_update_async(
-      selector, kairosboot::SnapshotUpdateCommand::Cancel, options);
-  context.snapshot_update(selector, kairosboot::SnapshotUpdateCommand::Merge,
-                          options);
-  context.snapshot_update_async(kairosboot::SnapshotUpdateCommand::Merge,
-                                options);
-  context.snapshot_update(kairosboot::SnapshotUpdateCommand::Cancel, options);
-  context.create_logical_partition_async(selector, "system_ext", 0, options);
-  context.create_logical_partition(selector, "system_ext", 0, options);
-  context.create_logical_partition_async("system_ext", 0, options);
-  context.create_logical_partition("system_ext", 0, options);
-  context.delete_logical_partition_async(selector, "system_ext", options);
-  context.delete_logical_partition(selector, "system_ext", options);
-  context.delete_logical_partition_async("system_ext", options);
-  context.delete_logical_partition("system_ext", options);
-  context.resize_logical_partition_async(selector, "system_ext", UINT64_MAX,
-                                         options);
-  context.resize_logical_partition(selector, "system_ext", UINT64_MAX, options);
-  context.resize_logical_partition_async("system_ext", UINT64_MAX, options);
-  context.resize_logical_partition("system_ext", UINT64_MAX, options);
-  context.reboot_async(selector, kairosboot::RebootTarget::Fastboot, options);
-  context.reboot(selector, kairosboot::RebootTarget::Recovery, options);
-  context.continue_boot_async(selector, options);
-  context.continue_boot(selector, options);
-  context.oem_async(selector, "device-info", options);
-  context.oem(selector, "device-info", options);
-  context.raw_command_async(selector, "getvar:all", options);
-  context.raw_command(selector, "getvar:all", options);
-  context.signature_file_async(selector, package, options);
-  context.signature_file(selector, package, options);
-  context.boot_async(selector, options);
-  context.boot(selector, options);
-  context.stage_async(selector, bytes, options);
-  context.stage(selector, bytes, options);
-  context.upload_async(selector, options);
-  context.upload(selector, options);
-  context.fetch_async(selector, "vendor", range, options);
-  context.fetch(selector, "vendor", range, options);
+  { device.wipe_super_async(package, update_options) } ->
+      std::same_as<std::expected<kairosboot::Operation, kairosboot::Error>>;
+  device.erase_async("userdata", options);
+  device.set_active_async("a", options);
+  device.flashing_async(kairosboot::FlashingCommand::Unlock, options);
+  device.gsi_async(kairosboot::GsiCommand::Status, options);
+  device.snapshot_update_async(kairosboot::SnapshotUpdateCommand::Cancel,
+                               options);
+  device.create_logical_partition_async("system_ext", 0, options);
+  device.delete_logical_partition_async("system_ext", options);
+  device.resize_logical_partition_async("system_ext", UINT64_MAX, options);
+  device.reboot_async(kairosboot::RebootTarget::Fastboot, options);
+  device.continue_boot_async(options);
+  device.oem_async("device-info", options);
+  device.raw_command_async("getvar:all", options);
+  device.signature_file_async(package, options);
+  device.boot_async(options);
+  device.stage_async(bytes, options);
+  device.upload_async(options);
+  device.fetch_async("vendor", range, options);
 });
 static_assert(requires(kairosboot::Operation &operation,
                        std::stop_token stop_token) {
@@ -456,33 +438,29 @@ int main() {
       kairosboot::ContextOptions{.usb_vendor_id = 0x18d1U});
   CHECK(vendor_context.has_value());
 
-  const auto invalid_selector = context->getvar_async(
-      kairosboot::DeviceSelector{"unknown:device"}, "product");
+  const auto invalid_selector = context->open_device("unknown:device");
   CHECK(!invalid_selector.has_value());
   CHECK(invalid_selector.error().status() == KB_E_INVALID_ARGUMENT);
   CHECK(invalid_selector.error().device_identifier() == "unknown:device");
 
-  const auto invalid_update_selector = context->update_package_async(
-      kairosboot::DeviceSelector{"unknown:device"},
-      std::filesystem::path{"unused-update-package"});
-  CHECK(!invalid_update_selector.has_value());
-  CHECK(invalid_update_selector.error().status() == KB_E_INVALID_ARGUMENT);
-  CHECK(invalid_update_selector.error().device_identifier() ==
-        "unknown:device");
+  auto tcp_device = context->open_device("tcp:127.0.0.1:1");
+  CHECK(tcp_device.has_value());
+  auto udp_device = context->open_device("udp:127.0.0.1:1");
+  CHECK(udp_device.has_value());
+  auto tcp_default_device = context->open_device("tcp:127.0.0.1");
+  CHECK(tcp_default_device.has_value());
+  CHECK(tcp_device->identifier() == "tcp:127.0.0.1:1");
 
   kairosboot::UpdateOptions invalid_update_timeout;
   invalid_update_timeout.timeout = -1ms;
-  const auto rejected_update_timeout = context->update_package_async(
-      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
-      std::filesystem::path{"unused-update-package"},
-      invalid_update_timeout);
+  const auto rejected_update_timeout = tcp_device->update_package_async(
+      std::filesystem::path{"unused-update-package"}, invalid_update_timeout);
   CHECK(!rejected_update_timeout.has_value());
   CHECK(rejected_update_timeout.error().status() == KB_E_INVALID_ARGUMENT);
 
   kairosboot::UpdateOptions invalid_update_slot;
   invalid_update_slot.active_slot = "b";
-  const auto rejected_update_slot = context->update_package_async(
-      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+  const auto rejected_update_slot = tcp_device->update_package_async(
       std::filesystem::path{"unused-update-package"}, invalid_update_slot);
   CHECK(!rejected_update_slot.has_value());
   CHECK(rejected_update_slot.error().status() == KB_E_INVALID_ARGUMENT);
@@ -494,49 +472,39 @@ int main() {
   CHECK(!rejected_flash_slot.has_value());
   CHECK(rejected_flash_slot.error().status() == KB_E_INVALID_ARGUMENT);
 
-  const auto invalid_wipe_selector = context->wipe_super_async(
-      kairosboot::DeviceSelector{"unknown:device"},
-      std::filesystem::path{"unused-super-empty.img"});
-  CHECK(!invalid_wipe_selector.has_value());
-  CHECK(invalid_wipe_selector.error().status() == KB_E_INVALID_ARGUMENT);
-
-  auto missing_wipe = context->wipe_super(
-      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
+  auto missing_wipe = tcp_device->wipe_super(
       std::filesystem::path{
           "kairosboot-hermetic-super-empty-does-not-exist.img"});
   CHECK(!missing_wipe.has_value());
   CHECK(missing_wipe.error().status() == KB_E_IO);
   CHECK(missing_wipe.error().transfer_state() == KB_TRANSFER_NOT_SENT);
 
-  const kairosboot::DeviceSelector invalid_target{"unknown:device"};
-  const auto invalid_flashing = context->flashing_async(
-      invalid_target, static_cast<kairosboot::FlashingCommand>(INT32_MAX));
+  const auto invalid_flashing = tcp_device->flashing_async(
+      static_cast<kairosboot::FlashingCommand>(INT32_MAX));
   CHECK(!invalid_flashing.has_value());
   CHECK(invalid_flashing.error().status() == KB_E_INVALID_ARGUMENT);
-  const auto invalid_gsi = context->gsi_async(
-      invalid_target, static_cast<kairosboot::GsiCommand>(INT32_MAX));
+  const auto invalid_gsi = tcp_device->gsi_async(
+      static_cast<kairosboot::GsiCommand>(INT32_MAX));
   CHECK(!invalid_gsi.has_value());
   CHECK(invalid_gsi.error().status() == KB_E_INVALID_ARGUMENT);
-  const auto invalid_snapshot = context->snapshot_update_async(
-      invalid_target,
+  const auto invalid_snapshot = tcp_device->snapshot_update_async(
       static_cast<kairosboot::SnapshotUpdateCommand>(INT32_MAX));
   CHECK(!invalid_snapshot.has_value());
   CHECK(invalid_snapshot.error().status() == KB_E_INVALID_ARGUMENT);
 
-  const auto empty_logical =
-      context->create_logical_partition_async(invalid_target, "", 0);
+  const auto empty_logical = tcp_device->create_logical_partition_async("", 0);
   CHECK(!empty_logical.has_value());
   CHECK(empty_logical.error().status() == KB_E_INVALID_ARGUMENT);
   const auto injected_logical =
-      context->delete_logical_partition_async(invalid_target, "system:other");
+      tcp_device->delete_logical_partition_async("system:other");
   CHECK(!injected_logical.has_value());
   CHECK(injected_logical.error().status() == KB_E_INVALID_ARGUMENT);
-  const auto control_logical = context->resize_logical_partition_async(
-      invalid_target, std::string_view{"bad\nname", 8}, 1);
+  const auto control_logical = tcp_device->resize_logical_partition_async(
+      std::string_view{"bad\nname", 8}, 1);
   CHECK(!control_logical.has_value());
   CHECK(control_logical.error().status() == KB_E_INVALID_ARGUMENT);
-  const auto oversized_logical = context->create_logical_partition_async(
-      invalid_target, std::string(4096, 'x'), UINT64_MAX);
+  const auto oversized_logical = tcp_device->create_logical_partition_async(
+      std::string(4096, 'x'), UINT64_MAX);
   CHECK(!oversized_logical.has_value());
   CHECK(oversized_logical.error().status() == KB_E_INVALID_ARGUMENT);
 
@@ -550,9 +518,7 @@ int main() {
 
   const auto missing_update_package =
       std::filesystem::path{"kairosboot-hermetic-update-package-does-not-exist"};
-  auto update_operation = context->update_package_async(
-      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
-      missing_update_package);
+  auto update_operation = tcp_device->update_package_async(missing_update_package);
   CHECK(update_operation.has_value());
   auto update_waited = update_operation->wait();
   CHECK(!update_waited.has_value());
@@ -572,9 +538,8 @@ int main() {
         update_callback_stage_valid = progress.stage == "preflight";
         return kairosboot::ProgressAction::Cancel;
       };
-  auto cancelled_update = context->update_package_async(
-      kairosboot::DeviceSelector{"udp:127.0.0.1:1"},
-      missing_update_package, cancel_update);
+  auto cancelled_update =
+      udp_device->update_package_async(missing_update_package, cancel_update);
   CHECK(cancelled_update.has_value());
   auto cancelled_wait = cancelled_update->wait(std::stop_token{});
   CHECK(!cancelled_wait.has_value());
@@ -582,37 +547,34 @@ int main() {
   CHECK(update_callback_called);
   CHECK(update_callback_stage_valid);
 
-  auto blocking_update = context->update_package(
-      kairosboot::DeviceSelector{"tcp:127.0.0.1:1"},
-      missing_update_package);
+  auto blocking_update = tcp_device->update_package(missing_update_package);
   CHECK(!blocking_update.has_value());
   CHECK(blocking_update.error().status() == KB_E_IO);
   CHECK(blocking_update.error().device_identifier() == "tcp:127.0.0.1:1");
   CHECK(blocking_update.error().message().find("update package") !=
         std::string::npos);
 
-  auto operation = context->flash_file_async(
+  auto operation = tcp_device->flash_file_async(
       "system", std::filesystem::path{"kairosboot-test-does-not-exist.img"});
   CHECK(!operation.has_value());
   CHECK(operation.error().status() == KB_E_IO);
   CHECK(operation.error().transfer_state() == KB_TRANSFER_NOT_SENT);
 
-  auto flash = context->flash_file(
-      std::optional<std::string_view>{"ABC"}, "system",
+  auto flash = tcp_default_device->flash_file(
+      "system",
       std::filesystem::path{"kairosboot-test-does-not-exist.img"});
   CHECK(!flash.has_value());
   CHECK(flash.error().status() == KB_E_IO);
-  CHECK(flash.error().device_identifier() == "ABC");
-  auto invalid_format = context->format_partition_async(
+  CHECK(flash.error().device_identifier() == "tcp:127.0.0.1");
+  auto invalid_format = tcp_device->format_partition_async(
       "system", std::optional<std::string_view>{"xfs"});
   CHECK(!invalid_format.has_value());
   CHECK(invalid_format.error().status() == KB_E_INVALID_ARGUMENT);
 
-  auto signature = context->signature_file(
-      kairosboot::DeviceSelector{"ABC"},
+  auto signature = tcp_default_device->signature_file(
       std::filesystem::path{"kairosboot-signature-missing.bin"});
   CHECK(!signature.has_value());
   CHECK(signature.error().status() == KB_E_IO);
-  CHECK(signature.error().device_identifier() == "ABC");
+  CHECK(signature.error().device_identifier() == "tcp:127.0.0.1");
   return 0;
 }

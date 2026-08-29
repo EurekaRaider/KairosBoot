@@ -72,6 +72,14 @@ struct kb_context {
   std::shared_ptr<kb_context_usb_state> usb_state;
 };
 
+struct kb_device {
+  kb_context context;
+  std::string selector;
+  std::string identifier;
+  std::string serial;
+  std::string usb_path;
+};
+
 struct kb_device_info {
   std::string serial;
   std::string usb_path;
@@ -1334,6 +1342,10 @@ const char *device_field(const kb_device_list_t *devices, size_t index,
   return (devices->devices[index].*field).c_str();
 }
 
+const char *device_error_identifier(const kb_device_t *device) noexcept {
+  return device == nullptr ? nullptr : device->identifier.c_str();
+}
+
 kb_operation_state_t public_operation_state(
     const kairosboot::api::OperationPhase phase) noexcept {
   using kairosboot::api::OperationPhase;
@@ -1609,6 +1621,110 @@ primitive_execution(
   return PrimitiveExecution{.reply = std::move(*reply), .data = {}};
 }
 
+[[nodiscard]] kairosboot::fastboot::PrimitiveError primitive_validation_error(
+    const kairosboot::fastboot::PrimitiveOperation operation,
+    std::string message) {
+  return kairosboot::fastboot::PrimitiveError{
+      .code = kairosboot::fastboot::PrimitiveErrorCode::InvalidArgument,
+      .operation = operation,
+      .phase = kairosboot::protocol::ProtocolPhase::Validation,
+      .message = std::move(message),
+  };
+}
+
+[[nodiscard]] std::expected<kairosboot::fastboot::PrimitiveReply,
+                            kairosboot::fastboot::PrimitiveError>
+aosp_erase_partition(kairosboot::fastboot::PrimitiveService &service,
+                     const std::string_view partition) {
+  const auto separator = partition.find(':');
+  const auto base = partition.substr(0U, separator);
+  std::string resolved{partition};
+
+  auto has_slot = service.getvar("has-slot:" + std::string{base});
+  if (!has_slot && has_slot.error().code !=
+                       kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+    return std::unexpected(std::move(has_slot.error()));
+  }
+  if (has_slot && has_slot->terminal.payload == "yes") {
+    auto current_slot = service.getvar("current-slot");
+    if (!current_slot) {
+      return std::unexpected(std::move(current_slot.error()));
+    }
+    auto slot = std::move(current_slot->terminal.payload);
+    if (!slot.empty() && slot.front() == '_') {
+      slot.erase(slot.begin());
+    }
+    if (slot.empty()) {
+      return std::unexpected(primitive_validation_error(
+          kairosboot::fastboot::PrimitiveOperation::Erase,
+          "device returned an empty current-slot for a slotted partition"));
+    }
+    resolved = std::string{base} + "_" + slot;
+    if (separator != std::string_view::npos) {
+      resolved.append(partition.substr(separator));
+    }
+  }
+
+  auto partition_type = service.getvar("partition-type:" + resolved);
+  if (!partition_type && partition_type.error().code !=
+                             kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+    return std::unexpected(std::move(partition_type.error()));
+  }
+  return service.erase(resolved);
+}
+
+[[nodiscard]] std::expected<kairosboot::fastboot::PrimitiveReply,
+                            kairosboot::fastboot::PrimitiveError>
+aosp_set_active(kairosboot::fastboot::PrimitiveService &service,
+                const std::string_view requested_slot) {
+  auto count_reply = service.getvar("slot-count");
+  if (!count_reply) {
+    return std::unexpected(std::move(count_reply.error()));
+  }
+  unsigned int count = 0;
+  const auto &payload = count_reply->terminal.payload;
+  const auto parsed = std::from_chars(
+      payload.data(), payload.data() + payload.size(), count, 10);
+  if (parsed.ec != std::errc{} || parsed.ptr != payload.data() + payload.size() ||
+      count == 0U || count > 26U) {
+    return std::unexpected(primitive_validation_error(
+        kairosboot::fastboot::PrimitiveOperation::SetActive,
+        "Fastboot slot-count must be a decimal integer in the range 1..26"));
+  }
+
+  std::string slot{requested_slot};
+  if (slot == "all") {
+    slot = "a";
+  } else if (slot == "other") {
+    auto current_reply = service.getvar("current-slot");
+    if (!current_reply) {
+      return std::unexpected(std::move(current_reply.error()));
+    }
+    auto current = std::move(current_reply->terminal.payload);
+    if (!current.empty() && current.front() == '_') {
+      current.erase(current.begin());
+    }
+    if (current.size() != 1U || current.front() < 'a' ||
+        static_cast<unsigned int>(current.front() - 'a') >= count) {
+      return std::unexpected(primitive_validation_error(
+          kairosboot::fastboot::PrimitiveOperation::SetActive,
+          "Fastboot current-slot is not present in the reported slot topology"));
+    }
+    slot.assign(1U, static_cast<char>(
+                        (static_cast<unsigned int>(current.front() - 'a') + 1U) %
+                            count +
+                        static_cast<unsigned int>('a')));
+  }
+
+  if (slot.size() != 1U || slot.front() < 'a' ||
+      static_cast<unsigned int>(slot.front() - 'a') >= count) {
+    return std::unexpected(primitive_validation_error(
+        kairosboot::fastboot::PrimitiveOperation::SetActive,
+        "requested Fastboot slot does not exist on the device"));
+  }
+  return service.set_active(slot);
+}
+
 using PrimitiveExecutor = std::function<std::expected<
     PrimitiveExecution, kairosboot::fastboot::PrimitiveError>(
     kairosboot::fastboot::PrimitiveService &,
@@ -1743,56 +1859,6 @@ prepare_target(kb_context_t &context, const char *selector_text) {
   }
   return bind_target(std::move(*parsed), std::move(*runtime),
                      context.usb_state->usb_vendor_id);
-}
-
-[[nodiscard]] std::expected<PreparedTarget,
-                            kairosboot::api::OperationErrorPayload>
-prepare_flash_target(
-    kb_context_t &context,
-    const std::optional<std::string_view> legacy_serial) {
-  const auto requested_identifier =
-      legacy_serial.has_value() ? std::string{*legacy_serial} : std::string{};
-  const bool network_selector =
-      legacy_serial.has_value() &&
-      (legacy_serial->starts_with("tcp:") ||
-       legacy_serial->starts_with("udp:"));
-  if (network_selector) {
-    return prepare_target(context, requested_identifier.c_str());
-  }
-
-  auto runtime = acquire_context_usb_runtime(context);
-  if (!runtime) {
-    return std::unexpected(kairosboot::api::normalize_public_error(
-        runtime.error(), requested_identifier));
-  }
-  auto enumerated = (*runtime)->enumerate(
-      fastboot_usb_filter(context.usb_state->usb_vendor_id));
-  if (!enumerated) {
-    return std::unexpected(kairosboot::api::normalize_public_error(
-        enumerated.error(), requested_identifier));
-  }
-  auto selected =
-      kairosboot::api::select_usb_device(*enumerated, legacy_serial);
-  if (!selected) {
-    return std::unexpected(kairosboot::api::normalize_public_error(
-        selected.error(), requested_identifier));
-  }
-
-  const auto selected_identifier = device_identifier(*selected);
-  return PreparedTarget{
-      .selector =
-          {
-              .kind = legacy_serial.has_value()
-                          ? kairosboot::api::DeviceSelectorKind::UsbSerial
-                          : kairosboot::api::DeviceSelectorKind::UsbUnique,
-              .value = requested_identifier,
-              .usb_bus = 0,
-              .usb_ports = {},
-              .identifier = selected_identifier,
-          },
-      .usb_runtime = std::move(*runtime),
-      .usb_device = std::move(*selected),
-  };
 }
 
 [[nodiscard]] kairosboot::api::OperationErrorPayload network_error(
@@ -2113,8 +2179,7 @@ command_result_payload(const kb_command_result_t *result) noexcept {
 }
 
 kb_status_t start_primitive_async(
-    kb_context_t *context,
-    const char *selector_text,
+    kb_device_t *device,
     const kb_command_options_t *options,
     PrimitiveExecutor executor,
     kb_operation_t **operation,
@@ -2125,9 +2190,10 @@ kb_status_t start_primitive_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null");
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
+  const auto *selector_text = device->selector.c_str();
   if (!valid_command_options(options)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "command options have an incompatible size, API version, or receive bound",
@@ -2135,7 +2201,7 @@ kb_status_t start_primitive_async(
   }
 
   try {
-    auto target = prepare_target(*context, selector_text);
+    auto target = prepare_target(device->context, selector_text);
     if (!target) {
       return fail(error, target.error());
     }
@@ -2191,7 +2257,7 @@ kb_status_t start_primitive_async(
 }
 
 kb_status_t start_file_receive_async(
-    kb_context_t *context, const char *selector_text, const char *output_path,
+    kb_device_t *device, const char *output_path,
     const kb_command_options_t *options, const char *progress_stage,
     FileReceiveExecutor executor, kb_operation_t **operation,
     kb_error_t **error) {
@@ -2201,9 +2267,10 @@ kb_status_t start_file_receive_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null");
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
+  const auto *selector_text = device->selector.c_str();
   if (output_path == nullptr || output_path[0] == '\0' ||
       !valid_utf8(output_path)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
@@ -2216,7 +2283,7 @@ kb_status_t start_file_receive_async(
   }
 
   try {
-    auto target = prepare_target(*context, selector_text);
+    auto target = prepare_target(device->context, selector_text);
     if (!target) {
       return fail(error, target.error());
     }
@@ -2996,17 +3063,15 @@ prepare_public_update_device(
 }
 
 kb_status_t start_flash_source_async(
-    kb_context_t &context,
-    const std::optional<std::string_view> requested_selector,
+    kb_device_t &device,
     const std::string_view partition,
     std::shared_ptr<const kairosboot::image::IImageSource> image_source,
     const kb_flash_options_t flash_options, SlotPolicy slot_policy,
     const bool aosp_raw_profile,
     kb_operation_t **operation,
     kb_error_t **error) {
-  const auto selector_text =
-      requested_selector.has_value() ? requested_selector->data() : nullptr;
-  auto prepared_target = prepare_flash_target(context, requested_selector);
+  const auto selector_text = device.selector.c_str();
+  auto prepared_target = prepare_target(device.context, selector_text);
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
@@ -3284,16 +3349,14 @@ kb_status_t start_flash_source_async(
 }
 
 kb_status_t start_vendor_boot_ramdisk_async(
-    kb_context_t &context,
-    const std::optional<std::string_view> requested_selector,
+    kb_device_t &device,
     const std::string_view partition, const std::string_view ramdisk_name,
     std::shared_ptr<const kairosboot::image::IImageSource> new_ramdisk,
     std::shared_ptr<const kairosboot::image::IImageSource> new_dtb,
     const kb_flash_options_t flash_options, SlotPolicy slot_policy,
     kb_operation_t **operation, kb_error_t **error) {
-  const auto selector_text =
-      requested_selector.has_value() ? requested_selector->data() : nullptr;
-  auto prepared_target = prepare_flash_target(context, requested_selector);
+  const auto selector_text = device.selector.c_str();
+  auto prepared_target = prepare_target(device.context, selector_text);
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
@@ -3723,22 +3786,18 @@ kb_status_t start_vendor_boot_ramdisk_async(
 }
 
 kb_status_t start_boot_source_async(
-    kb_context_t &context,
-    const std::optional<std::string_view> requested_selector,
+    kb_device_t &device,
     std::shared_ptr<const kairosboot::image::IImageSource> image_source,
     const kb_flash_options_t boot_options, kb_operation_t **operation,
     kb_error_t **error) {
-  const auto selector_text =
-      requested_selector.has_value() ? requested_selector->data() : nullptr;
+  const auto selector_text = device.selector.c_str();
   if (auto valid_size = kairosboot::fastboot::validate_download_size(
           image_source->size());
       !valid_size) {
     return fail(error, kairosboot::api::normalize_public_error(
-                           valid_size.error(), selector_text == nullptr
-                                                   ? std::string_view{}
-                                                   : *requested_selector));
+                           valid_size.error(), device.identifier));
   }
-  auto prepared_target = prepare_flash_target(context, requested_selector);
+  auto prepared_target = prepare_target(device.context, selector_text);
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
@@ -4032,6 +4091,66 @@ kb_status_t KB_CALL kb_context_create(const kb_context_options_t *options,
 
 void KB_CALL kb_context_release(kb_context_t *context) { delete context; }
 
+kb_status_t KB_CALL kb_device_open(kb_context_t *context,
+                                   const char *selector_or_null,
+                                   kb_device_t **device,
+                                   kb_error_t **error) {
+  clear_error(error);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "device output pointer must not be null");
+  }
+  *device = nullptr;
+  if (context == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null");
+  }
+
+  try {
+    auto target = prepare_target(*context, selector_or_null);
+    if (!target) {
+      return fail(error, target.error());
+    }
+    auto result = std::make_unique<kb_device>();
+    result->context.options = context->options;
+    result->context.usb_state = context->usb_state;
+    result->identifier = target->selector.identifier;
+    if (target->usb_device.has_value()) {
+      result->usb_path = physical_usb_path(*target->usb_device);
+      if (result->usb_path.empty()) {
+        return fail(error, KB_E_NOT_SUPPORTED,
+                    "USB device has no stable physical port path",
+                    result->identifier.c_str());
+      }
+      result->selector = result->usb_path;
+      result->serial = target->usb_device->serial_utf8;
+    } else {
+      result->selector = target->selector.identifier;
+    }
+    *device = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate a device handle", selector_or_null);
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL, "unable to open a device handle",
+                selector_or_null);
+  }
+}
+
+const char *KB_CALL kb_device_identifier(const kb_device_t *device) {
+  return device == nullptr ? nullptr : device->identifier.c_str();
+}
+
+const char *KB_CALL kb_device_serial(const kb_device_t *device) {
+  return device == nullptr ? nullptr : device->serial.c_str();
+}
+
+const char *KB_CALL kb_device_usb_path(const kb_device_t *device) {
+  return device == nullptr ? nullptr : device->usb_path.c_str();
+}
+
+void KB_CALL kb_device_release(kb_device_t *device) { delete device; }
+
 kb_status_t KB_CALL kb_enumerate_devices(kb_context_t *context,
                                          kb_device_list_t **devices,
                                          kb_error_t **error) {
@@ -4103,8 +4222,8 @@ void KB_CALL kb_device_list_release(kb_device_list_t *devices) {
 }
 
 kb_status_t KB_CALL kb_flash_file_async(
-    kb_context_t *context, const char *serial_or_null, const char *partition,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *partition, const char *file_path,
+    const kb_flash_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (operation == nullptr) {
@@ -4112,95 +4231,80 @@ kb_status_t KB_CALL kb_flash_file_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT,
-                "context must not be null");
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (partition == nullptr || partition[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
-                "partition must not be empty", serial_or_null);
+                "partition must not be empty", device_error_identifier(device));
   }
   if (file_path == nullptr || file_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
-                "file path must not be empty", serial_or_null);
+                "file path must not be empty", device_error_identifier(device));
   }
   if (!valid_flash_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash options have an incompatible size or API version",
-                serial_or_null);
+                device_error_identifier(device));
   }
 
   try {
-    const std::optional<std::string_view> requested_serial =
-        serial_or_null == nullptr
-            ? std::nullopt
-            : std::optional<std::string_view>{serial_or_null};
-    if (requested_serial.has_value() && requested_serial->empty()) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "explicit device serial must not be empty");
-    }
-    if (requested_serial.has_value() && !valid_utf8(*requested_serial)) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "device serial must be valid UTF-8");
-    }
-
     const std::string_view partition_view{partition};
     if (!valid_fastboot_parameter(partition_view,
                                   std::string_view{"flash:"}.size())) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "partition must be printable ASCII and fit the Fastboot "
                   "command limit",
-                  serial_or_null);
+                  device_error_identifier(device));
     }
 
     const std::string_view file_path_view{file_path};
     if (!valid_utf8(file_path_view)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
-                  "file path must be valid UTF-8", serial_or_null);
+                  "file path must be valid UTF-8",
+                  device_error_identifier(device));
     }
 
-    const std::string requested_identifier =
-        requested_serial.has_value() ? std::string{*requested_serial}
-                                     : std::string{};
     auto file_source =
         kairosboot::image::FileImageSource::open(utf8_path(file_path_view));
     if (!file_source) {
       return fail(error, kairosboot::api::normalize_public_error(
-                             file_source.error(), requested_identifier));
+                             file_source.error(), device->identifier));
     }
 
     const auto flash_options = flash_options_or_default(options_or_null);
     auto slot_policy = copy_flash_slot_policy(options_or_null);
     if (!slot_policy) {
       return fail(error, KB_E_INVALID_ARGUMENT, slot_policy.error().c_str(),
-                  serial_or_null);
+                  device_error_identifier(device));
     }
 
     std::shared_ptr<const kairosboot::image::IImageSource> image_source =
         std::move(*file_source);
     return start_flash_source_async(
-        *context, requested_serial, partition_view, std::move(image_source),
+        *device, partition_view, std::move(image_source),
         flash_options, std::move(*slot_policy), false, operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
-                "unable to allocate the flash operation", serial_or_null);
+                "unable to allocate the flash operation",
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), serial_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
-                "unable to create the flash operation", serial_or_null);
+                "unable to create the flash operation",
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_flash_file(
-    kb_context_t *context, const char *serial_or_null, const char *partition,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *partition, const char *file_path,
+    const kb_flash_options_t *options_or_null,
     kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const kb_status_t start = kb_flash_file_async(
-      context, serial_or_null, partition, file_path, options_or_null, &operation,
-      error);
+      device, partition, file_path, options_or_null, &operation, error);
   if (start != KB_OK) {
     return start;
   }
@@ -4208,8 +4312,8 @@ kb_status_t KB_CALL kb_flash_file(
 }
 
 kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *ramdisk_name_or_null,
+    kb_device_t *device, const char *partition,
+    const char *ramdisk_name_or_null,
     const char *ramdisk_path, const char *dtb_path_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
@@ -4219,51 +4323,38 @@ kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (partition == nullptr || partition[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "vendor_boot partition must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   const std::string_view partition_view{partition};
   if (partition_view != "vendor_boot" && partition_view != "vendor_boot_a" &&
       partition_view != "vendor_boot_b") {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "vendor_boot partition must be vendor_boot, vendor_boot_a, or vendor_boot_b",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (ramdisk_path == nullptr || ramdisk_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "vendor ramdisk path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (dtb_path_or_null != nullptr && dtb_path_or_null[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "replacement DTB path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_flash_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash options have an incompatible size or API version",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
-    const std::optional<std::string_view> requested_selector =
-        device_selector_or_null == nullptr
-            ? std::nullopt
-            : std::optional<std::string_view>{device_selector_or_null};
-    if (requested_selector.has_value() && requested_selector->empty()) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "explicit device selector must not be empty");
-    }
-    if (requested_selector.has_value() && !valid_utf8(*requested_selector)) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "device selector must be valid UTF-8");
-    }
     const std::string_view ramdisk_name =
         ramdisk_name_or_null == nullptr
             ? std::string_view{"default"}
@@ -4273,23 +4364,21 @@ kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk_async(
         ramdisk_name.find(':') != std::string_view::npos) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "vendor ramdisk name must be 1..32 printable ASCII bytes without ':'",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     const std::string_view ramdisk_path_view{ramdisk_path};
     if (!valid_utf8(ramdisk_path_view)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "vendor ramdisk path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     if (dtb_path_or_null != nullptr &&
         !valid_utf8(std::string_view{dtb_path_or_null})) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "replacement DTB path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
-    const std::string identifier = requested_selector.has_value()
-                                       ? std::string{*requested_selector}
-                                       : std::string{};
+    const std::string &identifier = device->identifier;
     auto ramdisk = open_raw_boot_part(
         ramdisk_path_view, "vendor ramdisk", true, identifier);
     if (!ramdisk) {
@@ -4310,35 +4399,35 @@ kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk_async(
     auto slot_policy = copy_flash_slot_policy(options_or_null);
     if (!slot_policy) {
       return fail(error, KB_E_INVALID_ARGUMENT, slot_policy.error().c_str(),
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     return start_vendor_boot_ramdisk_async(
-        *context, requested_selector, partition_view, ramdisk_name,
+        *device, partition_view, ramdisk_name,
         std::move(*ramdisk), std::move(dtb), flash_options,
         std::move(*slot_policy), operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the vendor_boot repack operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the vendor_boot repack operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *ramdisk_name_or_null,
+    kb_device_t *device, const char *partition,
+    const char *ramdisk_name_or_null,
     const char *ramdisk_path, const char *dtb_path_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const auto started = kb_flash_vendor_boot_ramdisk_async(
-      context, device_selector_or_null, partition, ramdisk_name_or_null,
-      ramdisk_path, dtb_path_or_null, options_or_null, &operation, error);
+      device, partition, ramdisk_name_or_null, ramdisk_path, dtb_path_or_null,
+      options_or_null, &operation, error);
   if (started != KB_OK) {
     return started;
   }
@@ -4346,8 +4435,7 @@ kb_status_t KB_CALL kb_flash_vendor_boot_ramdisk(
 }
 
 kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
@@ -4358,95 +4446,78 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (partition == nullptr || partition[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT, "partition must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (kernel_path == nullptr || kernel_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash:raw kernel path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (ramdisk_path_or_null != nullptr && ramdisk_path_or_null[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash:raw ramdisk path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (second_stage_path_or_null != nullptr &&
       second_stage_path_or_null[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash:raw second-stage path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (second_stage_path_or_null != nullptr && ramdisk_path_or_null == nullptr) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash:raw second-stage file requires a ramdisk file",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_flash_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "flash options have an incompatible size or API version",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_legacy_boot_options(legacy_options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "legacy boot options have an incompatible size or API version",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_legacy_boot_option_strings(legacy_options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot construction option strings must be valid UTF-8",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
-    const std::optional<std::string_view> requested_selector =
-        device_selector_or_null == nullptr
-            ? std::nullopt
-            : std::optional<std::string_view>{device_selector_or_null};
-    if (requested_selector.has_value() && requested_selector->empty()) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "explicit device selector must not be empty");
-    }
-    if (requested_selector.has_value() && !valid_utf8(*requested_selector)) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "device selector must be valid UTF-8");
-    }
-
     const std::string_view partition_view{partition};
     if (!valid_fastboot_parameter(partition_view,
                                   std::string_view{"flash:"}.size())) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "partition must be printable ASCII and fit the Fastboot "
                   "command limit",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
 
     if (!valid_utf8(kernel_path)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "flash:raw kernel path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     if (ramdisk_path_or_null != nullptr &&
         !valid_utf8(ramdisk_path_or_null)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "flash:raw ramdisk path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     if (second_stage_path_or_null != nullptr &&
         !valid_utf8(second_stage_path_or_null)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "flash:raw second-stage path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
 
-    const std::string requested_identifier =
-        requested_selector.has_value() ? std::string{*requested_selector}
-                                       : std::string{};
     const auto ramdisk_path =
         ramdisk_path_or_null == nullptr
             ? std::nullopt
@@ -4458,7 +4529,7 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
     auto image_source = make_flash_raw_source(
         kernel_path, ramdisk_path, second_stage_path,
         legacy_boot_options_or_default(legacy_options_or_null),
-        "flash:raw", requested_identifier);
+        "flash:raw", device->identifier);
     if (!image_source) {
       return fail(error, image_source.error());
     }
@@ -4467,47 +4538,45 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options_async(
     auto slot_policy = copy_flash_slot_policy(options_or_null);
     if (!slot_policy) {
       return fail(error, KB_E_INVALID_ARGUMENT, slot_policy.error().c_str(),
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     return start_flash_source_async(
-        *context, requested_selector, partition_view, std::move(*image_source),
+        *device, partition_view, std::move(*image_source),
         flash_options, std::move(*slot_policy), true, operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the flash:raw operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the flash:raw operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_flash_raw_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   return kb_flash_raw_with_boot_options_async(
-      context, device_selector_or_null, partition, kernel_path,
-      ramdisk_path_or_null, second_stage_path_or_null, nullptr,
+      device, partition, kernel_path, ramdisk_path_or_null,
+      second_stage_path_or_null, nullptr,
       options_or_null, operation, error);
 }
 
 kb_status_t KB_CALL kb_flash_raw_with_boot_options(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const auto start = kb_flash_raw_with_boot_options_async(
-      context, device_selector_or_null, partition, kernel_path,
-      ramdisk_path_or_null, second_stage_path_or_null,
+      device, partition, kernel_path, ramdisk_path_or_null,
+      second_stage_path_or_null,
       legacy_options_or_null, options_or_null, &operation, error);
   if (start != KB_OK) {
     return start;
@@ -4516,14 +4585,13 @@ kb_status_t KB_CALL kb_flash_raw_with_boot_options(
 }
 
 kb_status_t KB_CALL kb_flash_raw(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *kernel_path,
+    kb_device_t *device, const char *partition, const char *kernel_path,
     const char *ramdisk_path_or_null, const char *second_stage_path_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const auto start = kb_flash_raw_async(
-      context, device_selector_or_null, partition, kernel_path,
-      ramdisk_path_or_null, second_stage_path_or_null, options_or_null,
+      device, partition, kernel_path, ramdisk_path_or_null,
+      second_stage_path_or_null, options_or_null,
       &operation, error);
   if (start != KB_OK) {
     return start;
@@ -4532,8 +4600,8 @@ kb_status_t KB_CALL kb_flash_raw(
 }
 
 kb_status_t KB_CALL kb_boot_raw_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *kernel_path, const char *ramdisk_path_or_null,
+    kb_device_t *device, const char *kernel_path,
+    const char *ramdisk_path_or_null,
     const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
@@ -4544,56 +4612,43 @@ kb_status_t KB_CALL kb_boot_raw_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (kernel_path == nullptr || kernel_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot kernel path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (ramdisk_path_or_null != nullptr && ramdisk_path_or_null[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot ramdisk path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (second_stage_path_or_null != nullptr &&
       second_stage_path_or_null[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot second-stage path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (second_stage_path_or_null != nullptr && ramdisk_path_or_null == nullptr) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot second-stage file requires a ramdisk file",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_flash_options(options_or_null) ||
       !valid_legacy_boot_options(legacy_options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot options have an incompatible size or API version",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_legacy_boot_option_strings(legacy_options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot construction option strings must be valid UTF-8",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
-    const std::optional<std::string_view> requested_selector =
-        device_selector_or_null == nullptr
-            ? std::nullopt
-            : std::optional<std::string_view>{device_selector_or_null};
-    if (requested_selector.has_value() && requested_selector->empty()) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "explicit device selector must not be empty");
-    }
-    if (requested_selector.has_value() && !valid_utf8(*requested_selector)) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "device selector must be valid UTF-8");
-    }
     if (!valid_utf8(kernel_path) ||
         (ramdisk_path_or_null != nullptr &&
          !valid_utf8(ramdisk_path_or_null)) ||
@@ -4601,12 +4656,9 @@ kb_status_t KB_CALL kb_boot_raw_async(
          !valid_utf8(second_stage_path_or_null))) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "boot component paths must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
 
-    const std::string requested_identifier =
-        requested_selector.has_value() ? std::string{*requested_selector}
-                                       : std::string{};
     const auto ramdisk_path =
         ramdisk_path_or_null == nullptr
             ? std::nullopt
@@ -4618,39 +4670,38 @@ kb_status_t KB_CALL kb_boot_raw_async(
     auto image_source = make_flash_raw_source(
         kernel_path, ramdisk_path, second_stage_path,
         legacy_boot_options_or_default(legacy_options_or_null), "boot",
-        requested_identifier);
+        device->identifier);
     if (!image_source) {
       return fail(error, image_source.error());
     }
 
     const auto boot_options = flash_options_or_default(options_or_null);
-    return start_boot_source_async(*context, requested_selector,
-                                   std::move(*image_source), boot_options,
+    return start_boot_source_async(*device, std::move(*image_source), boot_options,
                                    operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the boot operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the boot operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_boot_raw(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *kernel_path, const char *ramdisk_path_or_null,
+    kb_device_t *device, const char *kernel_path,
+    const char *ramdisk_path_or_null,
     const char *second_stage_path_or_null,
     const kb_legacy_boot_options_t *legacy_options_or_null,
     const kb_flash_options_t *options_or_null, kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const kb_status_t start = kb_boot_raw_async(
-      context, device_selector_or_null, kernel_path, ramdisk_path_or_null,
-      second_stage_path_or_null, legacy_options_or_null, options_or_null,
+      device, kernel_path, ramdisk_path_or_null, second_stage_path_or_null,
+      legacy_options_or_null, options_or_null,
       &operation, error);
   if (start != KB_OK) {
     return start;
@@ -4659,8 +4710,8 @@ kb_status_t KB_CALL kb_boot_raw(
 }
 
 kb_status_t KB_CALL kb_boot_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_flash_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (operation == nullptr) {
@@ -4668,85 +4719,68 @@ kb_status_t KB_CALL kb_boot_file_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (file_path == nullptr || file_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
-                "boot file path must not be empty", device_selector_or_null);
+                "boot file path must not be empty",
+                device_error_identifier(device));
   }
   if (!valid_flash_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "boot options have an incompatible size or API version",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
-    const std::optional<std::string_view> requested_selector =
-        device_selector_or_null == nullptr
-            ? std::nullopt
-            : std::optional<std::string_view>{device_selector_or_null};
-    if (requested_selector.has_value() && requested_selector->empty()) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "explicit device selector must not be empty");
-    }
-    if (requested_selector.has_value() && !valid_utf8(*requested_selector)) {
-      return fail(error, KB_E_INVALID_ARGUMENT,
-                  "device selector must be valid UTF-8");
-    }
     const std::string_view file_path_view{file_path};
     if (!valid_utf8(file_path_view)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "boot file path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
 
-    const std::string requested_identifier =
-        requested_selector.has_value() ? std::string{*requested_selector}
-                                       : std::string{};
     auto file_source =
         kairosboot::image::FileImageSource::open(utf8_path(file_path_view));
     if (!file_source) {
       return fail(error, kairosboot::api::normalize_public_error(
-                             file_source.error(), requested_identifier));
+                             file_source.error(), device->identifier));
     }
     if (auto valid_size = kairosboot::fastboot::validate_download_size(
             (*file_source)->size());
         !valid_size) {
       return fail(error, kairosboot::api::normalize_public_error(
-                             valid_size.error(), requested_identifier));
+                             valid_size.error(), device->identifier));
     }
 
     const auto boot_options = flash_options_or_default(options_or_null);
 
     std::shared_ptr<const kairosboot::image::IImageSource> image_source =
         std::move(*file_source);
-    return start_boot_source_async(*context, requested_selector,
-                                   std::move(image_source), boot_options,
+    return start_boot_source_async(*device, std::move(image_source), boot_options,
                                    operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the boot operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the boot operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_boot_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_flash_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_flash_options_t *options_or_null,
     kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const kb_status_t start = kb_boot_file_async(
-      context, device_selector_or_null, file_path, options_or_null, &operation,
-      error);
+      device, file_path, options_or_null, &operation, error);
   if (start != KB_OK) {
     return start;
   }
@@ -4754,8 +4788,8 @@ kb_status_t KB_CALL kb_boot_file(
 }
 
 kb_status_t KB_CALL kb_signature_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (operation == nullptr) {
@@ -4763,19 +4797,18 @@ kb_status_t KB_CALL kb_signature_file_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (file_path == nullptr || file_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "signature file path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_command_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "command options have an incompatible size, API version, or receive bound",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
@@ -4783,21 +4816,18 @@ kb_status_t KB_CALL kb_signature_file_async(
     if (!valid_utf8(file_path_view)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "signature file path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     auto file_source =
         kairosboot::image::FileImageSource::open(utf8_path(file_path_view));
     if (!file_source) {
       return fail(error, kairosboot::api::normalize_public_error(
-                             file_source.error(),
-                             device_selector_or_null == nullptr
-                                 ? std::string_view{}
-                                 : std::string_view{device_selector_or_null}));
+                             file_source.error(), device->identifier));
     }
     if ((*file_source)->size() != 256U) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "signature file must be exactly 256 bytes",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     std::shared_ptr<const kairosboot::image::IImageSource> image_source =
         std::move(*file_source);
@@ -4806,16 +4836,13 @@ kb_status_t KB_CALL kb_signature_file_async(
             std::move(image_source));
     if (!transfer_source) {
       return fail(error, kairosboot::api::normalize_public_error(
-                             transfer_source.error(),
-                             device_selector_or_null == nullptr
-                                 ? std::string_view{}
-                                 : std::string_view{device_selector_or_null}));
+                             transfer_source.error(), device->identifier));
     }
 
     std::shared_ptr<kairosboot::protocol::ITransferSource> source =
         std::move(*transfer_source);
     return start_primitive_async(
-        context, device_selector_or_null, options_or_null,
+        device, options_or_null,
         [source = std::move(source)](
             kairosboot::fastboot::PrimitiveService &service,
             kairosboot::api::OperationState::TaskContext &task_context,
@@ -4844,29 +4871,29 @@ kb_status_t KB_CALL kb_signature_file_async(
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the signature operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the signature operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_signature_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *file_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *file_path,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_signature_file_async, result, error, context,
-      device_selector_or_null, file_path, options_or_null);
+      kb_signature_file_async, result, error, device, file_path,
+      options_or_null);
 }
 
 kb_status_t KB_CALL kb_update_package_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_device_t *device, const char *package_path,
+    const kb_update_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (operation == nullptr) {
@@ -4874,20 +4901,19 @@ kb_status_t KB_CALL kb_update_package_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (package_path == nullptr || package_path[0] == '\0') {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "update package path must not be empty",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_update_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "update options have an incompatible size, API version, or "
                 "boolean policy value",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
@@ -4895,9 +4921,9 @@ kb_status_t KB_CALL kb_update_package_async(
     if (!valid_utf8(package_path_view)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "update package path must be valid UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
-    auto selector = parse_target_selector(device_selector_or_null);
+    auto selector = parse_target_selector(device->selector.c_str());
     if (!selector) {
       return fail(error, selector.error());
     }
@@ -4905,11 +4931,11 @@ kb_status_t KB_CALL kb_update_package_async(
     auto copied_options = update_options_or_default(options_or_null);
     if (!copied_options) {
       return fail(error, KB_E_INVALID_ARGUMENT, copied_options.error().c_str(),
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     auto native_package_path =
         std::filesystem::absolute(utf8_path(package_path_view));
-    auto usb_state = context->usb_state;
+    auto usb_state = device->context.usb_state;
     auto task = [usb_state = std::move(usb_state),
                  selector = std::move(*selector),
                  package = std::move(native_package_path),
@@ -4924,33 +4950,32 @@ kb_status_t KB_CALL kb_update_package_async(
     if (!result->state->start()) {
       return fail(error, KB_E_INTERNAL,
                   "unable to start the update package operation",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     *operation = result.release();
     return KB_OK;
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the update package operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the update package operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_update_package(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *package_path, const kb_update_options_t *options_or_null,
+    kb_device_t *device, const char *package_path,
+    const kb_update_options_t *options_or_null,
     kb_error_t **error) {
   clear_error(error);
   kb_operation_t *operation = nullptr;
   const auto started = kb_update_package_async(
-      context, device_selector_or_null, package_path, options_or_null,
-      &operation, error);
+      device, package_path, options_or_null, &operation, error);
   if (started != KB_OK) {
     return started;
   }
@@ -4958,8 +4983,7 @@ kb_status_t KB_CALL kb_update_package(
 }
 
 kb_status_t KB_CALL kb_wipe_super_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *super_empty_image_or_null,
+    kb_device_t *device, const char *super_empty_image_or_null,
     const kb_update_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -4968,15 +4992,14 @@ kb_status_t KB_CALL kb_wipe_super_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (!valid_update_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "wipe-super options have an incompatible size, API version, "
                 "or wipe value",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
@@ -4988,7 +5011,7 @@ kb_status_t KB_CALL kb_wipe_super_async(
         return fail(error, KB_E_INVALID_ARGUMENT,
                     "ANDROID_PRODUCT_OUT is not set; pass an explicit "
                     "super_empty image",
-                    device_selector_or_null);
+                    device_error_identifier(device));
       }
       image_path = *product_out;
       if (!image_path.ends_with('/') && !image_path.ends_with('\\')) {
@@ -5001,22 +5024,22 @@ kb_status_t KB_CALL kb_wipe_super_async(
     if (image_path.empty() || !valid_utf8(image_path)) {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "super_empty image path must be non-empty UTF-8",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
 
-    auto selector = parse_target_selector(device_selector_or_null);
+    auto selector = parse_target_selector(device->selector.c_str());
     if (!selector) {
       return fail(error, selector.error());
     }
     auto copied_options = update_options_or_default(options_or_null);
     if (!copied_options) {
       return fail(error, KB_E_INVALID_ARGUMENT, copied_options.error().c_str(),
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     copied_options->native.wipe = 1;
     auto native_image_path =
         std::filesystem::absolute(utf8_path(image_path));
-    auto usb_state = context->usb_state;
+    auto usb_state = device->context.usb_state;
     auto task = [usb_state = std::move(usb_state),
                  selector = std::move(*selector),
                  image = std::move(native_image_path),
@@ -5030,33 +5053,31 @@ kb_status_t KB_CALL kb_wipe_super_async(
     if (!result->state->start()) {
       return fail(error, KB_E_INTERNAL,
                   "unable to start the wipe-super operation",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     *operation = result.release();
     return KB_OK;
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the wipe-super operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the wipe-super operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_wipe_super(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *super_empty_image_or_null,
+    kb_device_t *device, const char *super_empty_image_or_null,
     const kb_update_options_t *options_or_null, kb_error_t **error) {
   clear_error(error);
   kb_operation_t *operation = nullptr;
   const auto started = kb_wipe_super_async(
-      context, device_selector_or_null, super_empty_image_or_null,
-      options_or_null, &operation, error);
+      device, super_empty_image_or_null, options_or_null, &operation, error);
   if (started != KB_OK) {
     return started;
   }
@@ -5064,19 +5085,19 @@ kb_status_t KB_CALL kb_wipe_super(
 }
 
 kb_status_t KB_CALL kb_getvar_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *variable, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *variable,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (variable == nullptr ||
       !valid_fastboot_parameter(variable, std::string_view{"getvar:"}.size())) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "getvar name must be printable ASCII and fit the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   std::string variable_copy{variable};
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [variable_copy = std::move(variable_copy)](
           kairosboot::fastboot::PrimitiveService &service,
           kairosboot::api::OperationState::TaskContext &,
@@ -5093,35 +5114,34 @@ kb_status_t KB_CALL kb_getvar_async(
 }
 
 kb_status_t KB_CALL kb_getvar(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *variable, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *variable,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_getvar_async, result, error, context, device_selector_or_null,
-      variable, options_or_null);
+      kb_getvar_async, result, error, device, variable, options_or_null);
 }
 
 kb_status_t KB_CALL kb_erase_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *partition,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (partition == nullptr ||
       !valid_fastboot_parameter(partition, std::string_view{"erase:"}.size())) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "erase partition must be printable ASCII and fit the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   std::string partition_copy{partition};
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [partition_copy = std::move(partition_copy)](
           kairosboot::fastboot::PrimitiveService &service,
           kairosboot::api::OperationState::TaskContext &,
           const kb_command_options_t &, const std::string &)
           -> std::expected<PrimitiveExecution,
                            kairosboot::fastboot::PrimitiveError> {
-        auto reply = service.erase(partition_copy);
+        auto reply = aosp_erase_partition(service, partition_copy);
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
@@ -5131,17 +5151,16 @@ kb_status_t KB_CALL kb_erase_async(
 }
 
 kb_status_t KB_CALL kb_erase(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *partition,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_erase_async, result, error, context, device_selector_or_null,
-      partition, options_or_null);
+      kb_erase_async, result, error, device, partition, options_or_null);
 }
 
 kb_status_t KB_CALL kb_format_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *filesystem_type_override_or_null,
+    kb_device_t *device, const char *partition,
+    const char *filesystem_type_override_or_null,
     const uint64_t partition_size_override_or_zero,
     const kb_flash_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
@@ -5151,21 +5170,20 @@ kb_status_t KB_CALL kb_format_partition_async(
                 "operation output pointer must not be null");
   }
   *operation = nullptr;
-  if (context == nullptr) {
-    return fail(error, KB_E_INVALID_ARGUMENT, "context must not be null",
-                device_selector_or_null);
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
   }
   if (partition == nullptr ||
       !valid_fastboot_parameter(
           partition, std::string_view{"getvar:partition-type:"}.size())) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "format partition must be printable ASCII and fit the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (!valid_flash_options(options_or_null)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "format options have an incompatible size or API version",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   std::optional<std::string> type_override;
   if (filesystem_type_override_or_null != nullptr) {
@@ -5173,7 +5191,7 @@ kb_status_t KB_CALL kb_format_partition_async(
     if (type != "ext4" && type != "f2fs") {
       return fail(error, KB_E_INVALID_ARGUMENT,
                   "format filesystem type must be ext4 or f2fs",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     type_override = std::string{type};
   }
@@ -5181,15 +5199,12 @@ kb_status_t KB_CALL kb_format_partition_async(
       static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "format partition size must fit a signed 64-bit byte count",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 
   try {
-    const std::optional<std::string_view> requested_selector =
-        device_selector_or_null == nullptr
-            ? std::nullopt
-            : std::optional<std::string_view>{device_selector_or_null};
-    auto prepared_target = prepare_flash_target(*context, requested_selector);
+    auto prepared_target =
+        prepare_target(device->context, device->selector.c_str());
     if (!prepared_target) {
       return fail(error, prepared_target.error());
     }
@@ -5443,33 +5458,33 @@ kb_status_t KB_CALL kb_format_partition_async(
     if (!result->state->start()) {
       return fail(error, KB_E_INTERNAL,
                   "unable to start the format operation",
-                  device_selector_or_null);
+                  device_error_identifier(device));
     }
     *operation = result.release();
     return KB_OK;
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the format operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (const std::filesystem::filesystem_error &exception) {
-    return fail(error, KB_E_IO, exception.what(), device_selector_or_null,
+    return fail(error, KB_E_IO, exception.what(), device_error_identifier(device),
                 exception.code().value());
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the format operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_format_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const char *filesystem_type_override_or_null,
+    kb_device_t *device, const char *partition,
+    const char *filesystem_type_override_or_null,
     const uint64_t partition_size_override_or_zero,
     const kb_flash_options_t *options_or_null, kb_error_t **error) {
   kb_operation_t *operation = nullptr;
   const kb_status_t start = kb_format_partition_async(
-      context, device_selector_or_null, partition,
-      filesystem_type_override_or_null, partition_size_override_or_zero,
+      device, partition, filesystem_type_override_or_null,
+      partition_size_override_or_zero,
       options_or_null, &operation, error);
   if (start != KB_OK) {
     return start;
@@ -5478,26 +5493,26 @@ kb_status_t KB_CALL kb_format_partition(
 }
 
 kb_status_t KB_CALL kb_set_active_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *slot, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *slot,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (slot == nullptr ||
       !valid_fastboot_parameter(slot, std::string_view{"set_active:"}.size())) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "slot must be printable ASCII and fit the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   std::string slot_copy{slot};
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [slot_copy = std::move(slot_copy)](
           kairosboot::fastboot::PrimitiveService &service,
           kairosboot::api::OperationState::TaskContext &,
           const kb_command_options_t &, const std::string &)
           -> std::expected<PrimitiveExecution,
                            kairosboot::fastboot::PrimitiveError> {
-        auto reply = service.set_active(slot_copy);
+        auto reply = aosp_set_active(service, slot_copy);
         if (!reply) {
           return std::unexpected(std::move(reply.error()));
         }
@@ -5507,17 +5522,15 @@ kb_status_t KB_CALL kb_set_active_async(
 }
 
 kb_status_t KB_CALL kb_set_active(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *slot, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *slot,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_set_active_async, result, error, context, device_selector_or_null,
-      slot, options_or_null);
+      kb_set_active_async, result, error, device, slot, options_or_null);
 }
 
 kb_status_t KB_CALL kb_flashing_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_flashing_command_t command,
+    kb_device_t *device, const kb_flashing_command_t command,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5540,10 +5553,10 @@ kb_status_t KB_CALL kb_flashing_async(
     break;
   default:
     return fail(error, KB_E_INVALID_ARGUMENT,
-                "flashing command is invalid", device_selector_or_null);
+                "flashing command is invalid", device_error_identifier(device));
   }
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [native_command](kairosboot::fastboot::PrimitiveService &service,
                        kairosboot::api::OperationState::TaskContext &,
                        const kb_command_options_t &, const std::string &)
@@ -5555,18 +5568,15 @@ kb_status_t KB_CALL kb_flashing_async(
 }
 
 kb_status_t KB_CALL kb_flashing(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_flashing_command_t command,
+    kb_device_t *device, const kb_flashing_command_t command,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_flashing_async, result, error, context, device_selector_or_null,
-      command, options_or_null);
+      kb_flashing_async, result, error, device, command, options_or_null);
 }
 
 kb_status_t KB_CALL kb_gsi_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_gsi_command_t command,
+    kb_device_t *device, const kb_gsi_command_t command,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5583,10 +5593,10 @@ kb_status_t KB_CALL kb_gsi_async(
     break;
   default:
     return fail(error, KB_E_INVALID_ARGUMENT, "GSI command is invalid",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [native_command](kairosboot::fastboot::PrimitiveService &service,
                        kairosboot::api::OperationState::TaskContext &,
                        const kb_command_options_t &, const std::string &)
@@ -5598,18 +5608,15 @@ kb_status_t KB_CALL kb_gsi_async(
 }
 
 kb_status_t KB_CALL kb_gsi(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_gsi_command_t command,
+    kb_device_t *device, const kb_gsi_command_t command,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_gsi_async, result, error, context, device_selector_or_null, command,
-      options_or_null);
+      kb_gsi_async, result, error, device, command, options_or_null);
 }
 
 kb_status_t KB_CALL kb_snapshot_update_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_snapshot_update_command_t command,
+    kb_device_t *device, const kb_snapshot_update_command_t command,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5624,10 +5631,10 @@ kb_status_t KB_CALL kb_snapshot_update_async(
   default:
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "snapshot-update command is invalid",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [native_command](kairosboot::fastboot::PrimitiveService &service,
                        kairosboot::api::OperationState::TaskContext &,
                        const kb_command_options_t &, const std::string &)
@@ -5639,18 +5646,16 @@ kb_status_t KB_CALL kb_snapshot_update_async(
 }
 
 kb_status_t KB_CALL kb_snapshot_update(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_snapshot_update_command_t command,
+    kb_device_t *device, const kb_snapshot_update_command_t command,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_snapshot_update_async, result, error, context,
-      device_selector_or_null, command, options_or_null);
+      kb_snapshot_update_async, result, error, device, command,
+      options_or_null);
 }
 
 kb_status_t KB_CALL kb_create_logical_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, const uint64_t size,
+    kb_device_t *device, const char *partition_name, const uint64_t size,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5658,14 +5663,14 @@ kb_status_t KB_CALL kb_create_logical_partition_async(
       std::string_view{"create-logical-partition:"}.size() + 1U +
       decimal_digit_count(size);
   if (const auto valid = validate_logical_partition_name(
-          partition_name, overhead, device_selector_or_null, error);
+          partition_name, overhead, device_error_identifier(device), error);
       valid != KB_OK) {
     return valid;
   }
   try {
     std::string name_copy{partition_name};
     return start_primitive_async(
-        context, device_selector_or_null, options_or_null,
+        device, options_or_null,
         [name_copy = std::move(name_copy), size](
             kairosboot::fastboot::PrimitiveService &service,
             kairosboot::api::OperationState::TaskContext &,
@@ -5679,41 +5684,39 @@ kb_status_t KB_CALL kb_create_logical_partition_async(
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the create-logical-partition operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the create-logical-partition operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_create_logical_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, const uint64_t size,
+    kb_device_t *device, const char *partition_name, const uint64_t size,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_create_logical_partition_async, result, error, context,
-      device_selector_or_null, partition_name, size, options_or_null);
+      kb_create_logical_partition_async, result, error, device,
+      partition_name, size, options_or_null);
 }
 
 kb_status_t KB_CALL kb_delete_logical_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name,
+    kb_device_t *device, const char *partition_name,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
   const auto overhead =
       std::string_view{"delete-logical-partition:"}.size();
   if (const auto valid = validate_logical_partition_name(
-          partition_name, overhead, device_selector_or_null, error);
+          partition_name, overhead, device_error_identifier(device), error);
       valid != KB_OK) {
     return valid;
   }
   try {
     std::string name_copy{partition_name};
     return start_primitive_async(
-        context, device_selector_or_null, options_or_null,
+        device, options_or_null,
         [name_copy = std::move(name_copy)](
             kairosboot::fastboot::PrimitiveService &service,
             kairosboot::api::OperationState::TaskContext &,
@@ -5727,27 +5730,25 @@ kb_status_t KB_CALL kb_delete_logical_partition_async(
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the delete-logical-partition operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the delete-logical-partition operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_delete_logical_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name,
+    kb_device_t *device, const char *partition_name,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_delete_logical_partition_async, result, error, context,
-      device_selector_or_null, partition_name, options_or_null);
+      kb_delete_logical_partition_async, result, error, device,
+      partition_name, options_or_null);
 }
 
 kb_status_t KB_CALL kb_resize_logical_partition_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, const uint64_t size,
+    kb_device_t *device, const char *partition_name, const uint64_t size,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5755,14 +5756,14 @@ kb_status_t KB_CALL kb_resize_logical_partition_async(
       std::string_view{"resize-logical-partition:"}.size() + 1U +
       decimal_digit_count(size);
   if (const auto valid = validate_logical_partition_name(
-          partition_name, overhead, device_selector_or_null, error);
+          partition_name, overhead, device_error_identifier(device), error);
       valid != KB_OK) {
     return valid;
   }
   try {
     std::string name_copy{partition_name};
     return start_primitive_async(
-        context, device_selector_or_null, options_or_null,
+        device, options_or_null,
         [name_copy = std::move(name_copy), size](
             kairosboot::fastboot::PrimitiveService &service,
             kairosboot::api::OperationState::TaskContext &,
@@ -5776,27 +5777,25 @@ kb_status_t KB_CALL kb_resize_logical_partition_async(
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY,
                 "unable to allocate the resize-logical-partition operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   } catch (...) {
     return fail(error, KB_E_INTERNAL,
                 "unable to create the resize-logical-partition operation",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_resize_logical_partition(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition_name, const uint64_t size,
+    kb_device_t *device, const char *partition_name, const uint64_t size,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_resize_logical_partition_async, result, error, context,
-      device_selector_or_null, partition_name, size, options_or_null);
+      kb_resize_logical_partition_async, result, error, device,
+      partition_name, size, options_or_null);
 }
 
 kb_status_t KB_CALL kb_reboot_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_reboot_target_t target,
+    kb_device_t *device, const kb_reboot_target_t target,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5816,10 +5815,10 @@ kb_status_t KB_CALL kb_reboot_async(
     break;
   default:
     return fail(error, KB_E_INVALID_ARGUMENT, "reboot target is invalid",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [native_target](kairosboot::fastboot::PrimitiveService &service,
                       kairosboot::api::OperationState::TaskContext &,
                       const kb_command_options_t &, const std::string &)
@@ -5835,21 +5834,19 @@ kb_status_t KB_CALL kb_reboot_async(
 }
 
 kb_status_t KB_CALL kb_reboot(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_reboot_target_t target,
+    kb_device_t *device, const kb_reboot_target_t target,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_reboot_async, result, error, context, device_selector_or_null, target,
-      options_or_null);
+      kb_reboot_async, result, error, device, target, options_or_null);
 }
 
 kb_status_t KB_CALL kb_continue_boot_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation,
     kb_error_t **error) {
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [](kairosboot::fastboot::PrimitiveService &service,
          kairosboot::api::OperationState::TaskContext &,
          const kb_command_options_t &, const std::string &)
@@ -5865,17 +5862,14 @@ kb_status_t KB_CALL kb_continue_boot_async(
 }
 
 kb_status_t KB_CALL kb_continue_boot(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_continue_boot_async, result, error, context, device_selector_or_null,
-      options_or_null);
+      kb_continue_boot_async, result, error, device, options_or_null);
 }
 
 kb_status_t KB_CALL kb_oem_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command_suffix,
+    kb_device_t *device, const char *command_suffix,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5883,11 +5877,11 @@ kb_status_t KB_CALL kb_oem_async(
       !valid_fastboot_parameter(command_suffix, std::string_view{"oem "}.size())) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "OEM suffix must be printable ASCII and fit the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   std::string suffix_copy{command_suffix};
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [suffix_copy = std::move(suffix_copy)](
           kairosboot::fastboot::PrimitiveService &service,
           kairosboot::api::OperationState::TaskContext &,
@@ -5904,28 +5898,26 @@ kb_status_t KB_CALL kb_oem_async(
 }
 
 kb_status_t KB_CALL kb_oem(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command_suffix,
+    kb_device_t *device, const char *command_suffix,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_oem_async, result, error, context, device_selector_or_null,
-      command_suffix, options_or_null);
+      kb_oem_async, result, error, device, command_suffix, options_or_null);
 }
 
 kb_status_t KB_CALL kb_raw_command_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *command,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   clear_error(error);
   if (command == nullptr || !valid_fastboot_parameter(command, 0)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "raw command must be printable ASCII and fit the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   std::string command_copy{command};
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [command_copy = std::move(command_copy)](
           kairosboot::fastboot::PrimitiveService &service,
           kairosboot::api::OperationState::TaskContext &,
@@ -5942,20 +5934,19 @@ kb_status_t KB_CALL kb_raw_command_async(
 }
 
 kb_status_t KB_CALL kb_raw_command(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *command, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *command,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_raw_command_async, result, error, context, device_selector_or_null,
-      command, options_or_null);
+      kb_raw_command_async, result, error, device, command, options_or_null);
 }
 
 kb_status_t KB_CALL kb_boot_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation,
     kb_error_t **error) {
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [](kairosboot::fastboot::PrimitiveService &service,
          kairosboot::api::OperationState::TaskContext &,
          const kb_command_options_t &, const std::string &)
@@ -5971,17 +5962,14 @@ kb_status_t KB_CALL kb_boot_async(
 }
 
 kb_status_t KB_CALL kb_boot(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_boot_async, result, error, context, device_selector_or_null,
-      options_or_null);
+      kb_boot_async, result, error, device, options_or_null);
 }
 
 kb_status_t KB_CALL kb_stage_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const void *data, const size_t data_size,
+    kb_device_t *device, const void *data, const size_t data_size,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
   clear_error(error);
@@ -5989,13 +5977,13 @@ kb_status_t KB_CALL kb_stage_async(
       data_size > std::numeric_limits<std::uint32_t>::max()) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "stage data must be non-empty and fit the Fastboot 32-bit length",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   try {
     const auto *first = static_cast<const std::byte *>(data);
     std::vector<std::byte> copied(first, first + data_size);
     return start_primitive_async(
-        context, device_selector_or_null, options_or_null,
+        device, options_or_null,
         [copied = std::move(copied)](
             kairosboot::fastboot::PrimitiveService &service,
             kairosboot::api::OperationState::TaskContext &task_context,
@@ -6024,26 +6012,24 @@ kb_status_t KB_CALL kb_stage_async(
         operation, error);
   } catch (const std::bad_alloc &) {
     return fail(error, KB_E_OUT_OF_MEMORY, "unable to copy stage data",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
 }
 
 kb_status_t KB_CALL kb_stage(
-    kb_context_t *context, const char *device_selector_or_null,
-    const void *data, const size_t data_size,
+    kb_device_t *device, const void *data, const size_t data_size,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_stage_async, result, error, context, device_selector_or_null, data,
-      data_size, options_or_null);
+      kb_stage_async, result, error, device, data, data_size, options_or_null);
 }
 
 kb_status_t KB_CALL kb_upload_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null, kb_operation_t **operation,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
+    kb_operation_t **operation,
     kb_error_t **error) {
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [](kairosboot::fastboot::PrimitiveService &service,
          kairosboot::api::OperationState::TaskContext &task_context,
          const kb_command_options_t &options, const std::string &identifier)
@@ -6072,17 +6058,15 @@ kb_status_t KB_CALL kb_upload_async(
 }
 
 kb_status_t KB_CALL kb_upload(
-    kb_context_t *context, const char *device_selector_or_null,
-    const kb_command_options_t *options_or_null,
+    kb_device_t *device, const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_upload_async, result, error, context, device_selector_or_null,
-      options_or_null);
+      kb_upload_async, result, error, device, options_or_null);
 }
 
 kb_status_t KB_CALL kb_fetch_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition,
+    const uint64_t offset_or_unspecified,
     const uint64_t size_or_unspecified,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
@@ -6092,13 +6076,13 @@ kb_status_t KB_CALL kb_fetch_async(
   if (partition == nullptr || !valid_fetch_partition(partition)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch partition must use letters, digits, '_', '-', or '.'",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (size_or_unspecified != KB_FETCH_UNSPECIFIED &&
       offset_or_unspecified == KB_FETCH_UNSPECIFIED) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch size requires an explicit offset",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if ((offset_or_unspecified != KB_FETCH_UNSPECIFIED &&
        offset_or_unspecified > maximum_range) ||
@@ -6106,7 +6090,7 @@ kb_status_t KB_CALL kb_fetch_async(
        size_or_unspecified > maximum_range)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch offset and size must fit signed 64-bit values",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   size_t command_size = std::string_view{"fetch:"}.size() +
                         std::string_view{partition}.size();
@@ -6119,7 +6103,7 @@ kb_status_t KB_CALL kb_fetch_async(
   if (command_size > kairosboot::protocol::kDefaultMaxCommandBytes) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch command exceeds the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   kairosboot::fastboot::FetchRange range;
   if (offset_or_unspecified != KB_FETCH_UNSPECIFIED) {
@@ -6130,7 +6114,7 @@ kb_status_t KB_CALL kb_fetch_async(
   }
   std::string partition_copy{partition};
   return start_primitive_async(
-      context, device_selector_or_null, options_or_null,
+      device, options_or_null,
       [partition_copy = std::move(partition_copy), range](
           kairosboot::fastboot::PrimitiveService &service,
           kairosboot::api::OperationState::TaskContext &task_context,
@@ -6161,22 +6145,22 @@ kb_status_t KB_CALL kb_fetch_async(
 }
 
 kb_status_t KB_CALL kb_fetch(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition,
+    const uint64_t offset_or_unspecified,
     const uint64_t size_or_unspecified,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_fetch_async, result, error, context, device_selector_or_null,
-      partition, offset_or_unspecified, size_or_unspecified, options_or_null);
+      kb_fetch_async, result, error, device, partition, offset_or_unspecified,
+      size_or_unspecified, options_or_null);
 }
 
 kb_status_t KB_CALL kb_upload_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   return start_file_receive_async(
-      context, device_selector_or_null, output_path, options_or_null, "upload",
+      device, output_path, options_or_null, "upload",
       [](kairosboot::fastboot::FileReceiveService &files,
          const std::filesystem::path &destination,
          const std::uint64_t maximum_bytes,
@@ -6187,21 +6171,20 @@ kb_status_t KB_CALL kb_upload_file_async(
 }
 
 kb_status_t KB_CALL kb_upload_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_upload_file_async, result, error, context, device_selector_or_null,
-      output_path, options_or_null);
+      kb_upload_file_async, result, error, device, output_path,
+      options_or_null);
 }
 
 kb_status_t KB_CALL kb_get_staged_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_operation_t **operation, kb_error_t **error) {
   return start_file_receive_async(
-      context, device_selector_or_null, output_path, options_or_null,
-      "get-staged",
+      device, output_path, options_or_null, "get-staged",
       [](kairosboot::fastboot::FileReceiveService &files,
          const std::filesystem::path &destination,
          const std::uint64_t maximum_bytes,
@@ -6212,17 +6195,17 @@ kb_status_t KB_CALL kb_get_staged_file_async(
 }
 
 kb_status_t KB_CALL kb_get_staged_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *output_path, const kb_command_options_t *options_or_null,
+    kb_device_t *device, const char *output_path,
+    const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_get_staged_file_async, result, error, context,
-      device_selector_or_null, output_path, options_or_null);
+      kb_get_staged_file_async, result, error, device, output_path,
+      options_or_null);
 }
 
 kb_status_t KB_CALL kb_fetch_file_async(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition,
+    const uint64_t offset_or_unspecified,
     const uint64_t size_or_unspecified, const char *output_path,
     const kb_command_options_t *options_or_null, kb_operation_t **operation,
     kb_error_t **error) {
@@ -6232,13 +6215,13 @@ kb_status_t KB_CALL kb_fetch_file_async(
   if (partition == nullptr || !valid_fetch_partition(partition)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch partition must use letters, digits, '_', '-', or '.'",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if (size_or_unspecified != KB_FETCH_UNSPECIFIED &&
       offset_or_unspecified == KB_FETCH_UNSPECIFIED) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch size requires an explicit offset",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   if ((offset_or_unspecified != KB_FETCH_UNSPECIFIED &&
        offset_or_unspecified > maximum_range) ||
@@ -6246,7 +6229,7 @@ kb_status_t KB_CALL kb_fetch_file_async(
        size_or_unspecified > maximum_range)) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch offset and size must fit signed 64-bit values",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   size_t command_size = std::string_view{"fetch:"}.size() +
                         std::string_view{partition}.size();
@@ -6259,7 +6242,7 @@ kb_status_t KB_CALL kb_fetch_file_async(
   if (command_size > kairosboot::protocol::kDefaultMaxCommandBytes) {
     return fail(error, KB_E_INVALID_ARGUMENT,
                 "fetch command exceeds the Fastboot command limit",
-                device_selector_or_null);
+                device_error_identifier(device));
   }
   kairosboot::fastboot::FetchRange range;
   if (offset_or_unspecified != KB_FETCH_UNSPECIFIED) {
@@ -6270,7 +6253,7 @@ kb_status_t KB_CALL kb_fetch_file_async(
   }
   std::string partition_copy{partition};
   return start_file_receive_async(
-      context, device_selector_or_null, output_path, options_or_null, "fetch",
+      device, output_path, options_or_null, "fetch",
       [partition_copy = std::move(partition_copy), range](
           kairosboot::fastboot::FileReceiveService &files,
           const std::filesystem::path &destination,
@@ -6283,14 +6266,14 @@ kb_status_t KB_CALL kb_fetch_file_async(
 }
 
 kb_status_t KB_CALL kb_fetch_file(
-    kb_context_t *context, const char *device_selector_or_null,
-    const char *partition, const uint64_t offset_or_unspecified,
+    kb_device_t *device, const char *partition,
+    const uint64_t offset_or_unspecified,
     const uint64_t size_or_unspecified, const char *output_path,
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error) {
   return run_blocking_command(
-      kb_fetch_file_async, result, error, context, device_selector_or_null,
-      partition, offset_or_unspecified, size_or_unspecified, output_path,
+      kb_fetch_file_async, result, error, device, partition,
+      offset_or_unspecified, size_or_unspecified, output_path,
       options_or_null);
 }
 

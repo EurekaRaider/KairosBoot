@@ -2004,6 +2004,10 @@ def run(cli: pathlib.Path) -> None:
         assert_no_temporary_outputs(directory)
 
         def binary_failure(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:has-slot:userdata"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:partition-type:userdata"
+            send_frame(connection, b"OKAYraw")
             assert receive_frame(connection) == b"erase:userdata"
             send_frame(connection, b"INFOw\x00\xff")
             send_frame(connection, b"FAILe\x00\xff")

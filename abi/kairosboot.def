@@ -26,11 +26,16 @@ EXPORTS
     kb_create_logical_partition_async
     kb_delete_logical_partition
     kb_delete_logical_partition_async
+    kb_device_identifier
     kb_device_list_count
     kb_device_list_product
     kb_device_list_release
     kb_device_list_serial
     kb_device_list_usb_path
+    kb_device_open
+    kb_device_release
+    kb_device_serial
+    kb_device_usb_path
     kb_enumerate_devices
     kb_erase
     kb_erase_async

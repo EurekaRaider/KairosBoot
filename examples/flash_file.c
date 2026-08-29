@@ -18,6 +18,7 @@ int main(int argc, char **argv) {
 
   const char *serial = argc == 4 ? argv[3] : NULL;
   kb_context_t *context = NULL;
+  kb_device_t *device = NULL;
   kb_error_t *error = NULL;
   kb_status_t status = kb_context_create(NULL, &context, &error);
   int exit_code = 1;
@@ -27,7 +28,13 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
 
-  status = kb_flash_file(context, serial, argv[1], argv[2], NULL, &error);
+  status = kb_device_open(context, serial, &device, &error);
+  if (status != KB_OK) {
+    print_error(status, error);
+    goto cleanup;
+  }
+
+  status = kb_flash_file(device, argv[1], argv[2], NULL, &error);
   if (status != KB_OK) {
     print_error(status, error);
     goto cleanup;
@@ -40,6 +47,7 @@ cleanup:
   if (error != NULL) {
     kb_error_release(error);
   }
+  kb_device_release(device);
   if (context != NULL) {
     kb_context_release(context);
   }
