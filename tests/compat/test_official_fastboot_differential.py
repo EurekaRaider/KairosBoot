@@ -193,6 +193,9 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         }
         self.assertEqual(len(scenarios), 31)
         self.assertTrue(expected.issubset(by_id))
+        self.assertTrue(
+            by_id["official-tcp-reboot-fastboot"].aosp_reconnect_after_terminal
+        )
         self.assertEqual(
             self.runner._aosp_command(
                 pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]
