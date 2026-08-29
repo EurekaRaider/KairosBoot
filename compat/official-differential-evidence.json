@@ -1,6 +1,8 @@
 {
   "captures": [
-    "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json"
+    "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json",
+    "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json",
+    "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json"
   ],
   "documentType": "kairosboot.official-fastboot-differential-index",
   "platformToolsVersion": "37.0.1",

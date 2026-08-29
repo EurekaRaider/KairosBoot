@@ -1,7 +1,7 @@
 {
   "aospFastboot": {
-    "platform": "darwin",
-    "sha256": "c97aa28970ba9a46023a8ca52a78dd6547c2c1c4133f9715d4fe551e1dfae152",
+    "platform": "linux",
+    "sha256": "a686e2c7e8dc9cf4cba0cb8a2eef05f7b2bd682c925abd032fe203215d80b618",
     "versionOutput": "fastboot version 37.0.1-15733141"
   },
   "baseline": {
@@ -20,8 +20,8 @@
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "5ad6d63c4130d145118ce2d01897eac23104c6ebef4ef9a8a958e261b0dd27f8",
-    "sha256": "5ad6d63c4130d145118ce2d01897eac23104c6ebef4ef9a8a958e261b0dd27f8",
+    "releaseArtifactSha256": "e04ec4213a26fd757029bef679eead58951e5da84d014ea6bb73a8f36f587b68",
+    "sha256": "e04ec4213a26fd757029bef679eead58951e5da84d014ea6bb73a8f36f587b68",
     "sourceCommit": "3b7f68dd7b0febafdec1093ad43446992282db38"
   },
   "result": "matched",
