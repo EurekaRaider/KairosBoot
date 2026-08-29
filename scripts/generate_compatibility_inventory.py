@@ -145,6 +145,12 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["reboot", "bootloader"], "getvars": [],
         "commands": ["reboot-bootloader"], "data": [],
     },
+    "official-tcp-reboot-fastboot": {
+        "transport": "tcp", "coverageIds": ["command.reboot-fastboot"],
+        "argv": ["reboot", "fastboot"],
+        "getvars": ["is-userspace", "is-userspace"],
+        "commands": ["reboot-fastboot"], "data": [],
+    },
     "official-tcp-reboot-recovery": {
         "transport": "tcp", "coverageIds": ["command.reboot-recovery"],
         "argv": ["reboot-recovery"], "getvars": [],
