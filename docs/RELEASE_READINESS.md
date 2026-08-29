@@ -23,11 +23,11 @@ or USB hardware. It does not declare KairosBoot v1.0.0 ready.
 
 These gates must remain blocking; none can be inferred from local tests.
 
-1. The capability inventory has no missing entries. The 25 formerly partial
-   optional image entries now have per-entry execution coverage, but
+1. The capability inventory has no missing or partial entries, but
    `claimCompatibility` must remain false until official differential evidence
-   covers the required-entry set (the current frozen capture covers 22 of 87
-   required entries and leaves 8 candidate scenarios uncovered).
+   covers the required-entry set. The current exact-head Darwin capture matches
+   37 official Platform-Tools 37.0.1 host/TCP/UDP scenarios, covers 51 of 86
+   required entries, and leaves 10 candidate scenarios uncovered.
 2. The repository and managed package versions remain `0.1.0-dev`. Change them
    to the final identical version only after functionality and ABI are frozen;
    the release workflow rejects any tag/version mismatch.
