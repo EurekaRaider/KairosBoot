@@ -22,7 +22,7 @@
   "kairosboot": {
     "releaseArtifactSha256": "6c5f42d801f42b2faf43497b777d005e817de1c35fe0063d3fbd0d7d6a700ce5",
     "sha256": "6c5f42d801f42b2faf43497b777d005e817de1c35fe0063d3fbd0d7d6a700ce5",
-    "sourceCommit": "34e6b3b83f80b8c17e5dd691b256ac12e531f7b0"
+    "sourceCommit": "cc01324322978bdc0ed1ffc98a3874c23b9ddc8b"
   },
   "result": "matched",
   "scenarios": [
