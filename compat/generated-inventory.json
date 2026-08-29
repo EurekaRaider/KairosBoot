@@ -81,7 +81,11 @@
       "note": "The bounded shared builder emits Android boot headers v0-v4 through C11, C++23, .NET and CLI, and its frozen v0 construction matches Platform-Tools 37.0.1 exact bytes including the zero identity field and raw v0/v1 DTB address template field.",
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-boot-raw",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-raw",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-boot-raw",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-raw"
       ],
       "required": true,
       "status": "implemented"
@@ -175,7 +179,13 @@
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-default-file"
       ],
       "required": true,
       "status": "implemented"
@@ -302,7 +312,9 @@
       "kind": "command",
       "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI; the frozen Platform-Tools 37.0.1 raw boot scenario matches exact DATA bytes, wire events and device state.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-boot-raw",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-boot-raw"
       ],
       "required": true,
       "spelling": "boot",
@@ -324,7 +336,9 @@
       "kind": "command",
       "note": "Continue is exposed on every language surface.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-continue",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-continue"
       ],
       "required": true,
       "spelling": "continue",
@@ -349,7 +363,9 @@
       "kind": "command",
       "note": "Logical partition management is implemented.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-create-logical-partition",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-create-logical-partition"
       ],
       "required": true,
       "spelling": "create-logical-partition",
@@ -374,7 +390,9 @@
       "kind": "command",
       "note": "Logical partition management is implemented.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-delete-logical-partition",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-delete-logical-partition"
       ],
       "required": true,
       "spelling": "delete-logical-partition",
@@ -461,7 +479,13 @@
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-default-file"
       ],
       "required": true,
       "spelling": "flash",
@@ -491,7 +515,9 @@
       "kind": "command",
       "note": "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-raw",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-raw"
       ],
       "required": true,
       "spelling": "flash:raw",
@@ -537,7 +563,9 @@
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
       ],
       "required": true,
       "spelling": "flashing get_unlock_ability",
@@ -689,7 +717,11 @@
       "note": "Typed getvar is available synchronously and asynchronously.",
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-getvar",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-getvar",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-getvar",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-getvar"
       ],
       "required": true,
       "spelling": "getvar",
@@ -751,7 +783,9 @@
       "kind": "command",
       "note": "GSI wipe, disable, and status are typed operations.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-gsi-wipe",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-gsi-wipe"
       ],
       "required": true,
       "spelling": "gsi wipe",
@@ -773,7 +807,9 @@
       "kind": "command",
       "note": "OEM passthrough is implemented with a separate raw-command escape hatch.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-oem",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-oem"
       ],
       "required": true,
       "spelling": "oem",
@@ -795,7 +831,9 @@
       "kind": "command",
       "note": "System reboot uses the same spelling and wire command.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-reboot",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-reboot"
       ],
       "required": true,
       "spelling": "reboot",
@@ -817,7 +855,9 @@
       "kind": "command",
       "note": "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-reboot-bootloader",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-reboot-bootloader"
       ],
       "required": true,
       "spelling": "reboot-bootloader",
@@ -932,7 +972,11 @@
       "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-signature",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-signature",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-signature",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-signature",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-signature"
       ],
       "required": true,
       "spelling": "signature",
@@ -954,7 +998,9 @@
       "kind": "command",
       "note": "Snapshot cancel and merge are typed operations.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-snapshot-cancel",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-snapshot-cancel"
       ],
       "required": true,
       "spelling": "snapshot-update cancel",
@@ -996,7 +1042,9 @@
       "kind": "command",
       "note": "Stage download is implemented.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-stage",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-stage"
       ],
       "required": true,
       "spelling": "stage",
@@ -1504,7 +1552,13 @@
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-default-file"
       ],
       "partition": "system",
       "required": true,
@@ -2611,7 +2665,13 @@
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-default-file"
       ],
       "required": true,
       "status": "implemented"
@@ -2629,7 +2689,13 @@
       "officialDifferentialEvidence": [
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
         "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-flash-default-file",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-flash-default-file"
       ],
       "required": true,
       "status": "implemented"
@@ -2678,7 +2744,9 @@
       "kind": "transport",
       "note": "Boost.Asio TCP transport is covered through the public C API.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-tcp-getvar",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-tcp-getvar"
       ],
       "required": true,
       "status": "implemented"
@@ -2694,7 +2762,9 @@
       "kind": "transport",
       "note": "Boost.Asio UDP v1 transport is implemented.",
       "officialDifferentialEvidence": [
-        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar",
+        "compat/evidence/official-differential-37.0.1-linux/official-capture-metadata.json#official-udp-getvar",
+        "compat/evidence/official-differential-37.0.1-windows/official-capture-metadata.json#official-udp-getvar"
       ],
       "required": true,
       "status": "implemented"
@@ -2722,11 +2792,11 @@
   },
   "inventoryStatus": "generated-known-gaps",
   "officialDifferentialCoverage": {
-    "matchedScenarios": 19,
+    "matchedScenarios": 57,
     "requiredEntries": 87,
     "requiredEntriesWithEvidence": 22,
     "status": "partial",
-    "uncoveredCandidateScenarios": 8
+    "uncoveredCandidateScenarios": 24
   },
   "requiredGaps": [],
   "schemaVersion": 2,
