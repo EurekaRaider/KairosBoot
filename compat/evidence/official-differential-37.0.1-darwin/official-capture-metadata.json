@@ -11,18 +11,18 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "e1e1463a0f7a590aa1f0a0e1ad4f0fe357e76c93aa61674dbacbb2788080b880"
+      "sha256": "65ab3ea58751a1a26ec2b65836f780e03b1ea3b4a09630be38531544e5e1e47a"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "e1e1463a0f7a590aa1f0a0e1ad4f0fe357e76c93aa61674dbacbb2788080b880"
+      "sha256": "65ab3ea58751a1a26ec2b65836f780e03b1ea3b4a09630be38531544e5e1e47a"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
     "releaseArtifactSha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
     "sha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
-    "sourceCommit": "ce8e7b64d1835bf376dddea59a1f5d1e70634ac0"
+    "sourceCommit": "e4765c4ea1dd1b6c6e3ff431b4a0517865704072"
   },
   "result": "matched",
   "scenarios": [
@@ -114,6 +114,14 @@
     },
     {
       "coverageIds": [
+        "option.force"
+      ],
+      "id": "official-tcp-flash-force",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
         "command.signature"
       ],
       "id": "official-tcp-signature",
@@ -165,6 +173,14 @@
         "command.oem"
       ],
       "id": "official-tcp-oem",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "protocol.responses"
+      ],
+      "id": "official-tcp-informational-responses",
       "result": "matched",
       "transport": "tcp"
     },
@@ -360,6 +376,7 @@
     {
       "coverageIds": [
         "command.set-active",
+        "option.a",
         "option.slot",
         "option.set-active",
         "capability.a-b-slots"
