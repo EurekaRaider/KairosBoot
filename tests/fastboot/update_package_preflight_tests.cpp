@@ -663,6 +663,59 @@ void zip_fallback_requirements_hashes_slots_and_executor_form_one_trace() {
               }) == 1);
 }
 
+void every_selected_fallback_image_executes_in_frozen_aosp_order() {
+    TemporaryDirectory temporary;
+    const auto archive = write_zip(
+        temporary,
+        hardcoded_zip_entries("require product=atlas\n", true, false),
+        "all-selected-fallback-images.zip");
+
+    ArtifactSourceResolver resolver;
+    auto prepared = preflight_update_package(resolver, archive, false);
+    CHECK(prepared);
+    CHECK(prepared->update_super_state ==
+          UpdateSuperPreparationState::SkippedNotFound);
+    CHECK(!prepared->prepared_super_artifact);
+
+    ZipFallbackUpdateDevice device;
+    device.variables = {{"product", "atlas"}};
+    UpdateExecutorOptions options;
+    options.known_partitions = frozen_update_known_partitions();
+    auto executed = execute_prepared_update(*prepared, device, options);
+    CHECK(executed);
+
+    std::vector<const kairosboot::test::aosp_37_0_1::Image*> expected;
+    for (const auto phase : {
+             kairosboot::test::aosp_37_0_1::ImageType::BootCritical,
+             kairosboot::test::aosp_37_0_1::ImageType::Normal,
+         }) {
+        for (const auto& image : kairosboot::test::aosp_37_0_1::kImages) {
+            if (image.type == phase && selected_hardcoded_image(image, true)) {
+                expected.push_back(&image);
+            }
+        }
+    }
+
+    CHECK(expected.size() == 22U);
+    CHECK(executed->validated_requirements == 1U);
+    CHECK(executed->completed_tasks == expected.size());
+    CHECK(device.getvar_calls == std::vector<std::string>({"product"}));
+    CHECK(device.prepared.size() == expected.size());
+    CHECK(device.executed.size() == expected.size());
+    for (std::size_t index = 0U; index < expected.size(); ++index) {
+        const auto& image = *expected[index];
+        const auto payload = hardcoded_payload(image.image_name);
+        CHECK(device.prepared[index].partition == image.partition);
+        CHECK(device.prepared[index].artifact == image.image_name);
+        CHECK(device.prepared[index].slot ==
+              (image.nickname.empty() ? PlannedSlot::Other
+                                      : PlannedSlot::Default));
+        CHECK(device.prepared[index].bytes == payload.size());
+        CHECK(device.prepared[index].sha256.size() == 64U);
+        CHECK(device.executed[index] == image.image_name);
+    }
+}
+
 void update_super_three_state_contract_and_unique_mapping() {
     TemporaryDirectory temporary;
 
@@ -1436,6 +1489,8 @@ int main() {
              hardcoded_required_optional_and_bounds_fail_closed},
         Test{"ZIP fallback end-to-end execution trace",
              zip_fallback_requirements_hashes_slots_and_executor_form_one_trace},
+        Test{"all selected fallback images execute",
+             every_selected_fallback_image_executes_in_frozen_aosp_order},
         Test{"update-super three-state artifact contract",
              update_super_three_state_contract_and_unique_mapping},
         Test{"super optimization candidate waits for device validation",
