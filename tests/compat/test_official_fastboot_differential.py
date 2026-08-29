@@ -198,12 +198,19 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-verbose",
             "official-tcp-get-staged",
             "official-tcp-fetch-chunking",
+            "official-tcp-resize-logical-partition",
             "official-tcp-boot-raw-options",
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 44)
+        self.assertEqual(len(scenarios), 45)
         self.assertTrue(expected.issubset(by_id))
+        super_metadata = self.runner._synthetic_super_metadata()
+        self.assertEqual(len(super_metadata), 65_536)
+        self.assertEqual(
+            hashlib.sha256(super_metadata).hexdigest(),
+            "5e1cfe4fe46f85e773d23a339a4e766e24108b6ea8e347a367f459396c7dbd7f",
+        )
         self.assertEqual(
             self.runner._aosp_command(
                 pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]

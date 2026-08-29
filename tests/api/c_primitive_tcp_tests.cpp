@@ -338,7 +338,7 @@ private:
         CHECK(as_string(read_frame(socket)) == "upload");
         write_frame(socket, "DATA00000020");
       }
-      constexpr std::array<const char*, 13> management_commands{
+      constexpr std::array<const char*, 12> management_commands{
           "flashing lock",
           "flashing unlock",
           "flashing lock_critical",
@@ -351,7 +351,6 @@ private:
           "snapshot-update:merge",
           "create-logical-partition:system_ext:0",
           "delete-logical-partition:system_ext",
-          "resize-logical-partition:system_ext:18446744073709551615",
       };
       for (std::size_t index = 0; index < management_commands.size(); ++index) {
         auto socket = accept();
@@ -363,6 +362,18 @@ private:
         } else {
           write_frame(socket, "OKAYdone");
         }
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+        write_frame(socket, "OKAYyes");
+        CHECK(as_string(read_frame(socket)) == "getvar:has-slot:system_ext");
+        write_frame(socket, "OKAYno");
+        CHECK(as_string(read_frame(socket)) == "getvar:is-logical:system_ext");
+        write_frame(socket, "OKAYyes");
+        CHECK(as_string(read_frame(socket)) ==
+              "resize-logical-partition:system_ext:18446744073709551615");
+        write_frame(socket, "OKAYdone");
       }
       constexpr std::array<const char*, 4> rejected_commands{
           "flashing unlock",

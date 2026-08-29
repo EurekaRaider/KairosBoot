@@ -23,6 +23,7 @@
 #include "src/image/flash_artifact.hpp"
 #include "src/image/sparse_flash_plan.hpp"
 #include "src/image/sha256.hpp"
+#include "src/image/super_metadata.hpp"
 #include "src/image/vendor_boot_repacker.hpp"
 #include "src/image/vbmeta_flag_source.hpp"
 #include "src/kairosboot_internal.hpp"
@@ -1851,6 +1852,147 @@ aosp_set_active(kairosboot::fastboot::PrimitiveService &service,
         "requested Fastboot slot does not exist on the device"));
   }
   return service.set_active(slot);
+}
+
+[[nodiscard]] kairosboot::fastboot::PrimitiveError super_metadata_error(
+    const kairosboot::image::SuperMetadataError &metadata_error) {
+  using kairosboot::fastboot::PrimitiveErrorCode;
+  using kairosboot::image::SuperMetadataErrorKind;
+  auto code = PrimitiveErrorCode::InvalidArgument;
+  switch (metadata_error.kind) {
+  case SuperMetadataErrorKind::Malformed:
+    code = PrimitiveErrorCode::ProtocolViolation;
+    break;
+  case SuperMetadataErrorKind::Unsupported:
+    code = PrimitiveErrorCode::Unsupported;
+    break;
+  case SuperMetadataErrorKind::PartitionNotFound:
+  case SuperMetadataErrorKind::NoSpace:
+  case SuperMetadataErrorKind::Overflow:
+    break;
+  }
+  return kairosboot::fastboot::PrimitiveError{
+      .code = code,
+      .operation =
+          kairosboot::fastboot::PrimitiveOperation::ResizeLogicalPartition,
+      .phase = kairosboot::protocol::ProtocolPhase::Validation,
+      .message = metadata_error.message,
+  };
+}
+
+[[nodiscard]] bool report_command_progress(
+    const kb_command_options_t &options, std::uint64_t completed,
+    std::uint64_t total, const char *stage,
+    const std::string &identifier) noexcept;
+
+[[nodiscard]] std::expected<PrimitiveExecution,
+                            kairosboot::fastboot::PrimitiveError>
+aosp_resize_logical_partition(
+    kairosboot::fastboot::PrimitiveService &service,
+    kairosboot::api::OperationState::TaskContext &task_context,
+    const kb_command_options_t &options, const std::string &identifier,
+    const std::string_view partition, const std::uint64_t size) {
+  auto userspace = service.getvar("is-userspace");
+  if (!userspace && userspace.error().code !=
+                        kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+    return std::unexpected(std::move(userspace.error()));
+  }
+  const bool in_fastbootd =
+      userspace && userspace->terminal.payload == "yes";
+
+  std::shared_ptr<MemorySink> fetched_super;
+  if (!in_fastbootd) {
+    try {
+      fetched_super = std::make_shared<MemorySink>();
+    } catch (const std::bad_alloc &) {
+      return std::unexpected(primitive_validation_error(
+          kairosboot::fastboot::PrimitiveOperation::ResizeLogicalPartition,
+          "unable to allocate the fetched super metadata buffer"));
+    }
+    constexpr std::uint64_t kSuperFetchBytes = 1024U * 1024U;
+    const kairosboot::protocol::TransferProgressObserver fetch_observer =
+        [&task_context, &options,
+         &identifier](const std::uint64_t completed,
+                      const std::uint64_t total) {
+          return task_context.cancel_requested() ||
+                         !report_command_progress(options, completed, total,
+                                                  "fetch", identifier)
+                     ? kairosboot::protocol::TransferProgressAction::cancel
+                     : kairosboot::protocol::TransferProgressAction::
+                           continue_transfer;
+        };
+    auto fetched = service.fetch_to_sink(
+        "super",
+        kairosboot::fastboot::FetchRange{.offset = 0U,
+                                         .size = kSuperFetchBytes},
+        fetched_super, kSuperFetchBytes, fetch_observer);
+    if (!fetched) {
+      return std::unexpected(std::move(fetched.error()));
+    }
+  }
+
+  std::string resolved{partition};
+  auto has_slot = service.getvar("has-slot:" + std::string{partition});
+  if (!has_slot && has_slot.error().code !=
+                        kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+    return std::unexpected(std::move(has_slot.error()));
+  }
+  if (has_slot && has_slot->terminal.payload == "yes") {
+    auto current_slot = service.getvar("current-slot");
+    if (!current_slot) {
+      return std::unexpected(std::move(current_slot.error()));
+    }
+    auto slot = std::move(current_slot->terminal.payload);
+    if (!slot.empty() && slot.front() == '_') {
+      slot.erase(slot.begin());
+    }
+    if (slot.empty()) {
+      return std::unexpected(primitive_validation_error(
+          kairosboot::fastboot::PrimitiveOperation::ResizeLogicalPartition,
+          "device returned an empty current-slot for a slotted partition"));
+    }
+    resolved += "_" + slot;
+  }
+
+  if (in_fastbootd) {
+    auto logical = service.getvar("is-logical:" + resolved);
+    if (!logical) {
+      return std::unexpected(std::move(logical.error()));
+    }
+    if (logical->terminal.payload != "yes") {
+      return PrimitiveExecution{.reply = std::move(*logical), .data = {}};
+    }
+    return primitive_execution(service.resize_logical_partition(resolved, size));
+  }
+
+  auto sparse = kairosboot::image::resize_fetched_super_metadata(
+      fetched_super->take(), resolved, size);
+  if (!sparse) {
+    return std::unexpected(super_metadata_error(sparse.error()));
+  }
+  std::shared_ptr<kairosboot::protocol::ITransferSource> source;
+  try {
+    source = std::make_shared<MemorySource>(std::move(*sparse));
+  } catch (const std::bad_alloc &) {
+    return std::unexpected(primitive_validation_error(
+        kairosboot::fastboot::PrimitiveOperation::ResizeLogicalPartition,
+        "unable to allocate the resized super metadata transfer source"));
+  }
+  const kairosboot::protocol::TransferProgressObserver download_observer =
+      [&task_context, &options,
+       &identifier](const std::uint64_t completed, const std::uint64_t total) {
+        return task_context.cancel_requested() ||
+                       !report_command_progress(options, completed, total,
+                                                "download", identifier)
+                   ? kairosboot::protocol::TransferProgressAction::cancel
+                   : kairosboot::protocol::TransferProgressAction::
+                         continue_transfer;
+      };
+  auto downloaded = service.download_source(source, download_observer);
+  if (!downloaded) {
+    return std::unexpected(std::move(downloaded.error()));
+  }
+  return primitive_execution(service.flash_downloaded("super"));
 }
 
 using PrimitiveExecutor = std::function<std::expected<
@@ -6400,12 +6542,13 @@ kb_status_t KB_CALL kb_resize_logical_partition_async(
         device, options_or_null,
         [name_copy = std::move(name_copy), size](
             kairosboot::fastboot::PrimitiveService &service,
-            kairosboot::api::OperationState::TaskContext &,
-            const kb_command_options_t &, const std::string &)
+            kairosboot::api::OperationState::TaskContext &task_context,
+            const kb_command_options_t &options,
+            const std::string &identifier)
             -> std::expected<PrimitiveExecution,
                              kairosboot::fastboot::PrimitiveError> {
-          return primitive_execution(
-              service.resize_logical_partition(name_copy, size));
+          return aosp_resize_logical_partition(
+              service, task_context, options, identifier, name_copy, size);
         },
         operation, error);
   } catch (const std::bad_alloc &) {

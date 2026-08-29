@@ -85,6 +85,70 @@ def _load_json(path: pathlib.Path) -> dict[str, Any]:
     return value
 
 
+def _write_le(buffer: bytearray, offset: int, value: int, size: int) -> None:
+    buffer[offset : offset + size] = value.to_bytes(size, "little")
+
+
+def _set_sha256_checksum(buffer: bytearray, offset: int) -> None:
+    buffer[offset : offset + 32] = bytes(32)
+    buffer[offset : offset + 32] = hashlib.sha256(buffer).digest()
+
+
+def _synthetic_super_metadata() -> bytes:
+    """Build an independent minimal liblp image for resize differential tests."""
+    tables = bytearray(188)
+    tables[0:8] = b"system_a"
+    _write_le(tables, 36, 1, 4)
+    _write_le(tables, 40, 0, 4)
+    _write_le(tables, 44, 1, 4)
+    _write_le(tables, 48, 0, 4)
+    _write_le(tables, 52, 16, 8)
+    _write_le(tables, 60, 0, 4)
+    _write_le(tables, 64, 96, 8)
+    _write_le(tables, 72, 0, 4)
+    tables[76:83] = b"default"
+    _write_le(tables, 124, 96, 8)
+    _write_le(tables, 132, 16_384, 4)
+    _write_le(tables, 136, 0, 4)
+    _write_le(tables, 140, 65_536, 8)
+    tables[148:153] = b"super"
+
+    header = bytearray(128)
+    _write_le(header, 0, 0x414C5030, 4)
+    _write_le(header, 4, 10, 2)
+    _write_le(header, 6, 0, 2)
+    _write_le(header, 8, len(header), 4)
+    _write_le(header, 44, len(tables), 4)
+    header[48:80] = hashlib.sha256(tables).digest()
+    for index, descriptor in enumerate(
+        ((0, 1, 52), (52, 1, 24), (76, 1, 48), (124, 1, 64))
+    ):
+        offset = 80 + index * 12
+        for field, value in enumerate(descriptor):
+            _write_le(header, offset + field * 4, value, 4)
+    _set_sha256_checksum(header, 12)
+
+    metadata = bytearray(4096)
+    metadata[0 : len(header)] = header
+    metadata[len(header) : len(header) + len(tables)] = tables
+
+    geometry = bytearray(52)
+    _write_le(geometry, 0, 0x616C4467, 4)
+    _write_le(geometry, 4, len(geometry), 4)
+    _write_le(geometry, 40, 4096, 4)
+    _write_le(geometry, 44, 3, 4)
+    _write_le(geometry, 48, 4096, 4)
+    _set_sha256_checksum(geometry, 8)
+
+    image = bytearray(65_536)
+    image[4096 : 4096 + len(geometry)] = geometry
+    image[8192 : 8192 + len(geometry)] = geometry
+    for copy in range(6):
+        offset = 12_288 + copy * 4096
+        image[offset : offset + len(metadata)] = metadata
+    return bytes(image)
+
+
 def _platform_key() -> str:
     system = platform.system()
     mapping = {"Darwin": "darwin", "Linux": "linux", "Windows": "windows"}
@@ -773,6 +837,7 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     sparse_input_path.write_bytes(
         bytes((index * 17 + 3) % 251 for index in range(8192))
     )
+    super_metadata = _synthetic_super_metadata()
     receive_payload = b"kairosboot-receive\x00\xff"
     staged_output = output_dir / "staged-output.bin"
     fetch_output = output_dir / "fetch-output.bin"
@@ -1005,6 +1070,14 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             coverage_ids=("command.delete-logical-partition",),
         ),
         Scenario(
+            "official-tcp-resize-logical-partition", "tcp",
+            ("resize-logical-partition", "system_a", "4096"),
+            "flash:super",
+            coverage_ids=("command.resize-logical-partition",),
+            variable_values=(("has-slot:system_a", "no"),),
+            receive_payload=super_metadata,
+        ),
+        Scenario(
             "official-tcp-reboot-fastboot", "tcp",
             ("reboot", "fastboot"), "getvar:is-userspace",
             coverage_ids=("command.reboot-fastboot",),
@@ -1147,15 +1220,6 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
             "update and flashall may reboot between bootloader and fastbootd and reopen "
             "the device; the single-session TCP/UDP scripted transport cannot model "
             "that lifecycle without turning the device plan into a fixture oracle"
-        ),
-    },
-    {
-        "id": "official-scripted-resize-logical-partition",
-        "coverageIds": ["command.resize-logical-partition"],
-        "reason": (
-            "official Fastboot fetches and parses device-specific super metadata before "
-            "resizing; a transport-only scripted device cannot synthesize that metadata "
-            "without becoming a fixture oracle"
         ),
     },
 )

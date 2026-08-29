@@ -298,6 +298,17 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["delete-logical-partition", "differential"], "getvars": [],
         "commands": ["delete-logical-partition:differential"], "data": [],
     },
+    "official-tcp-resize-logical-partition": {
+        "transport": "tcp", "coverageIds": ["command.resize-logical-partition"],
+        "argv": ["resize-logical-partition", "system_a", "4096"],
+        "getvars": ["is-userspace", "has-slot:system_a"],
+        "commands": [
+            "fetch:super:0x00000000:0x00100000",
+            "download:00001034",
+            "flash:super",
+        ],
+        "data": [["device-to-host", 65536], ["host-to-device", 4148]],
+    },
     "official-tcp-gsi-wipe": {
         "transport": "tcp", "coverageIds": ["command.gsi-wipe"],
         "argv": ["gsi", "wipe"], "getvars": [], "commands": ["gsi:wipe"],

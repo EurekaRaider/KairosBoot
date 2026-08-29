@@ -194,6 +194,15 @@ internal sealed class ScriptedTcpDevice : IDisposable
             using (var client = Accept())
             using (var stream = client.GetStream())
             {
+                if (index == expected.Length - 1)
+                {
+                    ExpectCommand(stream, "getvar:is-userspace");
+                    WriteResponse(stream, "OKAY", Encoding.ASCII.GetBytes("yes"));
+                    ExpectCommand(stream, "getvar:has-slot:system_ext");
+                    WriteResponse(stream, "OKAY", Encoding.ASCII.GetBytes("no"));
+                    ExpectCommand(stream, "getvar:is-logical:system_ext");
+                    WriteResponse(stream, "OKAY", Encoding.ASCII.GetBytes("yes"));
+                }
                 ExpectCommand(stream, expected[index]);
                 if (index == 0)
                 {

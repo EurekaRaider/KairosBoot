@@ -197,6 +197,7 @@ add_library(
   src/image/sha256.cpp
   src/image/sparse_flash_plan.cpp
   src/image/sparse_image.cpp
+  src/image/super_metadata.cpp
   src/image/vendor_boot_repacker.cpp
   src/image/vbmeta_flag_source.cpp
   src/protocol/file_transfer_sink.cpp
@@ -772,6 +773,15 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_sha256_tests PRIVATE kairosboot_internal)
   kairosboot_enable_strict_warnings(kairosboot_sha256_tests)
   add_test(NAME sha256 COMMAND kairosboot_sha256_tests)
+
+  add_executable(kairosboot_super_metadata_tests
+                 tests/image/super_metadata_tests.cpp)
+  target_compile_features(kairosboot_super_metadata_tests PRIVATE cxx_std_23)
+  target_include_directories(kairosboot_super_metadata_tests
+                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(kairosboot_super_metadata_tests PRIVATE kairosboot_internal)
+  kairosboot_enable_strict_warnings(kairosboot_super_metadata_tests)
+  add_test(NAME super_metadata COMMAND kairosboot_super_metadata_tests)
   set_tests_properties(sha256 PROPERTIES TIMEOUT 15)
 
   add_executable(kairosboot_tcp_tests tests/tcp/tcp_fastboot_tests.cpp

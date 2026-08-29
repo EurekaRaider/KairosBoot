@@ -557,7 +557,15 @@ def run(cli: pathlib.Path) -> None:
                 connection: socket.socket,
                 expected: bytes = wire_command,
                 binary_result: bool = command_index == 0,
+                resize: bool = arguments[0] == "resize-logical-partition",
             ) -> None:
+                if resize:
+                    assert receive_frame(connection) == b"getvar:is-userspace"
+                    send_frame(connection, b"OKAYyes")
+                    assert receive_frame(connection) == b"getvar:has-slot:system_ext"
+                    send_frame(connection, b"OKAYno")
+                    assert receive_frame(connection) == b"getvar:is-logical:system_ext"
+                    send_frame(connection, b"OKAYyes")
                 assert receive_frame(connection) == expected
                 if binary_result:
                     send_frame(connection, b"INFOi\x00\xff")
