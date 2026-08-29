@@ -1195,8 +1195,10 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:is-logical:system"
             send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:max-download-size"
-            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:partition-size:system"
+            send_frame(connection, b"OKAY0x3000")
             for _ in range(3):
                 command = receive_frame(connection)
                 assert command.startswith(b"download:")

@@ -187,6 +187,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-set-active",
             "official-tcp-slot-options",
             "official-tcp-avb-flags",
+            "official-tcp-sparse-limit",
             "official-tcp-flashing-lock",
             "official-tcp-flashing-unlock",
             "official-tcp-flashing-lock-critical",
@@ -201,7 +202,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 41)
+        self.assertEqual(len(scenarios), 42)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -312,6 +313,32 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             {"size": 4, "sha256": hashlib.sha256(b"sig\x00").hexdigest()},
         )
 
+    def test_fragmented_download_and_repeated_terminal_are_normalized(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-multipart",
+            "tcp",
+            ("flash", "system", "fixture.img"),
+            "flash:system",
+            terminal_occurrences=2,
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        for payload in (b"abcd", b"efgh"):
+            self.assertEqual(recorder.handle(b"download:00000004"), b"DATA00000004")
+            self.assertIsNone(recorder.handle(payload[:2]))
+            self.assertEqual(recorder.handle(payload[2:]), b"OKAYdownloaded")
+            self.assertEqual(recorder.handle(b"flash:system"), b"OKAYflashed")
+        capture = recorder.capture(0)
+        self.assertEqual(
+            [event["size"] for event in capture["events"] if event["kind"] == "DATA"],
+            [4, 4],
+        )
+        self.assertEqual(
+            [event["command"] for event in capture["events"]
+             if event["kind"] == "COMMAND"],
+            ["download:00000004", "flash:system",
+             "download:00000004", "flash:system"],
+        )
+
     def test_committed_capture_is_schema_valid_real_matched_evidence(self) -> None:
         schema = json.loads(
             (
@@ -386,6 +413,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-set-active",
                 "official-tcp-slot-options",
                 "official-tcp-avb-flags",
+                "official-tcp-sparse-limit",
             }.issubset(scenario_ids)
         )
         cli_arguments = [
@@ -397,7 +425,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         uncovered = {item["id"] for item in metadata["uncoveredScenarios"]}
         self.assertTrue(
             {
-                "official-scripted-sparse-limit",
                 "official-scripted-format",
                 "official-scripted-wipe-super",
                 "official-scripted-update-flashall",
@@ -407,6 +434,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         self.assertNotIn("official-scripted-erase", uncovered)
         self.assertNotIn("official-scripted-slot-options", uncovered)
         self.assertNotIn("official-scripted-avb-flags", uncovered)
+        self.assertNotIn("official-scripted-sparse-limit", uncovered)
 
     def test_committed_evidence_index_covers_every_locked_platform(self) -> None:
         index = json.loads(

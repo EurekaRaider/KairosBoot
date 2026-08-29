@@ -194,6 +194,21 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "commands": ["download:00000100", "flash:vbmeta"],
         "data": [["host-to-device", 256]],
     },
+    "official-tcp-sparse-limit": {
+        "transport": "tcp",
+        "coverageIds": ["option.sparse-limit", "capability.android-sparse"],
+        "argv": ["-S", "4200", "flash", "system",
+                 "<ARTIFACT>/sparse-input.img"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "is-logical:system", "partition-size:system",
+        ],
+        "commands": [
+            "download:00001034", "flash:system",
+            "download:00001034", "flash:system",
+        ],
+        "data": [["host-to-device", 4148], ["host-to-device", 4148]],
+    },
     "official-tcp-oem": {
         "transport": "tcp", "coverageIds": ["command.oem"],
         "argv": ["oem", "differential"], "getvars": [],

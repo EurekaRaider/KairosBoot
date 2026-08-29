@@ -59,6 +59,7 @@ class Scenario:
     output_event_path: Optional[str] = None
     host_output_kind: Optional[str] = None
     informational_responses: tuple[tuple[str, str], ...] = ()
+    terminal_occurrences: int = 1
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -256,31 +257,39 @@ class WireRecorder:
         ]
         self.expected_data_size: Optional[int] = None
         self.downloaded: Optional[bytes] = None
+        self.download_buffer = bytearray()
         self.pending_responses: list[bytes] = []
         self.finished = False
+        self.terminal_seen = 0
         self.device_state: dict[str, Any] = {"product": "product_a"}
 
     def _finish_command(self, command: str) -> None:
         if command == self.scenario.terminal_command:
-            self.finished = True
+            self.terminal_seen += 1
+            if self.terminal_seen >= self.scenario.terminal_occurrences:
+                self.finished = True
 
-    def handle(self, payload: bytes) -> bytes:
+    def handle(self, payload: bytes) -> Optional[bytes]:
         if self.finished:
             raise CaptureGateError("Fastboot client sent bytes after terminal response")
         if self.expected_data_size is not None:
             expected = self.expected_data_size
-            self.expected_data_size = None
-            if len(payload) != expected:
+            self.download_buffer.extend(payload)
+            if len(self.download_buffer) > expected:
                 raise CaptureGateError(
-                    f"download payload is {len(payload)} bytes, expected {expected}"
+                    f"download payload is {len(self.download_buffer)} bytes, expected {expected}"
                 )
-            self.downloaded = payload
+            if len(self.download_buffer) < expected:
+                return None
+            self.expected_data_size = None
+            self.downloaded = bytes(self.download_buffer)
+            self.download_buffer.clear()
             self.events.append(
                 {
                     "kind": "DATA",
                     "direction": "host-to-device",
-                    "size": len(payload),
-                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size": len(self.downloaded),
+                    "sha256": hashlib.sha256(self.downloaded).hexdigest(),
                 }
             )
             self.events.append({"kind": "OKAY", "message": "downloaded"})
@@ -339,6 +348,7 @@ class WireRecorder:
             if re.fullmatch(r"[0-9a-fA-F]{8}", encoded_size) is None:
                 raise CaptureGateError(f"invalid download command: {command!r}")
             self.expected_data_size = int(encoded_size, 16)
+            self.download_buffer.clear()
             return b"DATA" + encoded_size.lower().encode("ascii")
         if command.startswith("flash:"):
             if self.downloaded is None:
@@ -521,7 +531,8 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
                 connection.sendall(hello)
                 while not recorder.finished:
                     response = recorder.handle(_receive_frame(connection))
-                    _send_frame(connection, response)
+                    if response is not None:
+                        _send_frame(connection, response)
                     for pending in recorder.take_pending_responses():
                         _send_frame(connection, pending)
         except socket.timeout as error:
@@ -594,6 +605,10 @@ def _capture_udp(command: Sequence[str], scenario: Scenario, label: str) -> dict
                 if observed_peer != peer or request[:4] != _udp_packet(3, sequence):
                     raise CaptureGateError(f"unexpected Fastboot UDP request: {request!r}")
                 response = recorder.handle(request[4:])
+                if response is None:
+                    raise CaptureGateError(
+                        "fragmented Fastboot DATA is unsupported by the UDP fixture"
+                    )
                 server.sendto(_udp_packet(3, sequence), peer)
                 sequence += 1
 
@@ -722,6 +737,10 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     vbmeta_payload[0:4] = b"AVB0"
     vbmeta_payload[123] = 0x40
     vbmeta_path.write_bytes(vbmeta_payload)
+    sparse_input_path = output_dir / "differential-sparse-input.img"
+    sparse_input_path.write_bytes(
+        bytes((index * 17 + 3) % 251 for index in range(8192))
+    )
     receive_payload = b"kairosboot-receive\x00\xff"
     staged_output = output_dir / "staged-output.bin"
     default_system_path = output_dir / "system.img"
@@ -852,6 +871,21 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             variable_values=(("has-slot:vbmeta", "no"),
                              ("is-logical:vbmeta", "no"),
                              ("partition-size:vbmeta", "0x1000")),
+        ),
+        Scenario(
+            "official-tcp-sparse-limit", "tcp",
+            ("-S", "4200", "flash", "system",
+             "<ARTIFACT>/sparse-input.img"),
+            "flash:system", sparse_input_path,
+            ("option.sparse-limit", "capability.android-sparse"),
+            aosp_arguments=("-S", "4200", "flash", "system",
+                            str(sparse_input_path)),
+            kairosboot_arguments=("-S", "4200", "flash", "system",
+                                  str(sparse_input_path)),
+            variable_values=(("has-slot:system", "no"),
+                             ("is-logical:system", "no"),
+                             ("partition-size:system", "0x2000")),
+            terminal_occurrences=2,
         ),
         Scenario(
             "official-tcp-oem", "tcp", ("oem", "differential"),
@@ -1049,14 +1083,6 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
             "official Fastboot reconnects after reboot-fastboot and verifies "
             "getvar:is-userspace, while the current KairosBoot reboot API retires "
             "the session after the terminal response"
-        ),
-    },
-    {
-        "id": "official-scripted-sparse-limit",
-        "coverageIds": ["option.sparse-limit", "capability.android-sparse"],
-        "reason": (
-            "official Fastboot performs additional partition probes before sparse "
-            "download, so the strict normalized wire event sequence differs"
         ),
     },
     {

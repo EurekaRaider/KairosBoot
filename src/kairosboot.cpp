@@ -3337,8 +3337,11 @@ kb_status_t start_flash_source_async(
       }
     }
 
-    if (flags.any() &&
-        kairosboot::image::is_vbmeta_partition(partition_copy)) {
+    const bool needs_aosp_partition_size_probe =
+        flash_options.sparse_limit_bytes != 0U ||
+        (flags.any() &&
+         kairosboot::image::is_vbmeta_partition(partition_copy));
+    if (needs_aosp_partition_size_probe) {
       if (auto queried = query_optional(
               "is-logical:" + partitions.front());
           !queried) {
@@ -3352,7 +3355,7 @@ kb_status_t start_flash_source_async(
     }
 
     std::uint64_t target_max_download_size = 0;
-    if (!aosp_raw_profile) {
+    if (!aosp_raw_profile && flash_options.sparse_limit_bytes == 0U) {
       auto maximum = service.getvar("max-download-size");
       if (maximum) {
         target_max_download_size =
