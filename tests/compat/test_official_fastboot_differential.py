@@ -193,10 +193,9 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-serial-selector",
             "official-tcp-verbose",
             "official-tcp-get-staged",
-            "official-tcp-fetch",
             "official-tcp-boot-raw-options",
         }
-        self.assertEqual(len(scenarios), 36)
+        self.assertEqual(len(scenarios), 35)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -357,7 +356,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-host-help-short",
                 "official-host-version",
                 "official-tcp-get-staged",
-                "official-tcp-fetch",
                 "official-tcp-boot-raw-options",
             }.issubset(scenario_ids)
         )

@@ -161,11 +161,6 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["get_staged", "<OUTPUT>/stage.bin"], "getvars": [],
         "commands": ["upload"], "data": [["device-to-host", 20]],
     },
-    "official-tcp-fetch": {
-        "transport": "tcp", "coverageIds": ["command.fetch"],
-        "argv": ["fetch", "vendor", "<OUTPUT>/vendor.img"], "getvars": [],
-        "commands": ["fetch:vendor"], "data": [["device-to-host", 20]],
-    },
     "official-tcp-flashing-get-unlock-ability": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-get-unlock-ability"],
@@ -281,6 +276,7 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
+    "official-scripted-fetch-chunking": ["command.fetch"],
     "official-scripted-reboot-fastboot": ["command.reboot-fastboot"],
     "official-scripted-erase": ["command.erase"],
     # Retain the old mapping so a stale pre-fix capture remains structurally

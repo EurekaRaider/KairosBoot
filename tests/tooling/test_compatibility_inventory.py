@@ -49,10 +49,10 @@ class CompatibilityInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
-            50,
+            49,
         )
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["matchedScenarios"], 36
+            inventory["officialDifferentialCoverage"]["matchedScenarios"], 35
         )
         for identifier in expected_required_gaps:
             self.assertIn(f'  - "{identifier}"\n', yaml_text)
@@ -307,13 +307,13 @@ class CompatibilityInventoryTests(unittest.TestCase):
             ):
                 current, _ = GENERATOR.generate(root)
             self.assertEqual(
-                current["officialDifferentialCoverage"]["matchedScenarios"], 36
+                current["officialDifferentialCoverage"]["matchedScenarios"], 35
             )
             self.assertEqual(
                 current["officialDifferentialCoverage"][
                     "requiredEntriesWithEvidence"
                 ],
-                50,
+                49,
             )
             self.assertFalse(current["claimCompatibility"])
 

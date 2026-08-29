@@ -708,7 +708,6 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     dtb_path.write_bytes(bytes(range(64)))
     receive_payload = b"kairosboot-receive\x00\xff"
     staged_output = output_dir / "staged-output.bin"
-    fetch_output = output_dir / "vendor-output.img"
     default_system_path = output_dir / "system.img"
     default_system_path.write_bytes(bytes(range(32)))
     return [
@@ -812,16 +811,6 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             receive_payload=receive_payload,
             output_path=staged_output,
             output_event_path="<OUTPUT>/stage.bin",
-        ),
-        Scenario(
-            "official-tcp-fetch", "tcp",
-            ("fetch", "vendor", "<OUTPUT>/vendor.img"), "fetch:vendor",
-            coverage_ids=("command.fetch",),
-            aosp_arguments=("fetch", "vendor", str(fetch_output)),
-            kairosboot_arguments=("fetch", "vendor", str(fetch_output)),
-            receive_payload=receive_payload,
-            output_path=fetch_output,
-            output_event_path="<OUTPUT>/vendor.img",
         ),
         Scenario(
             "official-tcp-flashing-get-unlock-ability", "tcp",
@@ -977,6 +966,15 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
 
 
 UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "official-scripted-fetch-chunking",
+        "coverageIds": ["command.fetch"],
+        "reason": (
+            "official Fastboot probes has-slot and max-fetch-size and performs "
+            "ranged chunked fetches, while the current no-range KairosBoot CLI "
+            "sends one direct fetch:partition receive command"
+        ),
+    },
     {
         "id": "official-scripted-reboot-fastboot",
         "coverageIds": ["command.reboot-fastboot"],
