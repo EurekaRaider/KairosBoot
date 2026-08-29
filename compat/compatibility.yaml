@@ -15,10 +15,10 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 79
+    implemented: 104
     intentional-deviation: 15
     missing: 0
-    partial: 25
+    partial: 0
 officialDifferentialCoverage:
   status: "partial"
   requiredEntries: 87
@@ -602,119 +602,132 @@ entries:
   - id: "image.boot-other"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.bootloader"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.cache"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.dtbo"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.dts"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.init-boot"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.odm"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.odm-dlkm"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.product"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.pvmfw"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.radio"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.recovery"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.super"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.system"
     kind: "image"
@@ -734,110 +747,122 @@ entries:
   - id: "image.system-dlkm"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.system-ext"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.system-other"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.userdata"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vbmeta"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vbmeta-system"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vbmeta-vendor"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vendor"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vendor-boot"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vendor-dlkm"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vendor-kernel-boot"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "image.vendor-other"
     kind: "image"
     required: false
-    status: "partial"
-    note: "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+    status: "implemented"
+    note: "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     evidence:
       - "tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp"
       - "tests/fastboot/update_package_preflight_tests.cpp"
+      - "tests/cli/scripted_cli_test.py"
     officialDifferentialEvidence: []
   - id: "option.a"
     kind: "option"
