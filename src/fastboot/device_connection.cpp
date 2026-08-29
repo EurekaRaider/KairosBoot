@@ -509,6 +509,8 @@ FastbootDevicePreflightProbe::probe(
     } catch (const std::bad_alloc&) {
         return std::unexpected(DevicePreflightProbeError{
             .code = DevicePreflightProbeErrorCode::ResourceExhausted,
+            .message = {},
+            .native_code = 0,
             .outbound_certainty = in_flight
                 ? protocol::TransferCertainty::PartialOrUnknown
                 : certainty,
@@ -516,6 +518,8 @@ FastbootDevicePreflightProbe::probe(
     } catch (...) {
         return std::unexpected(DevicePreflightProbeError{
             .code = DevicePreflightProbeErrorCode::UnexpectedFailure,
+            .message = {},
+            .native_code = 0,
             .outbound_certainty = in_flight
                 ? protocol::TransferCertainty::PartialOrUnknown
                 : certainty,
