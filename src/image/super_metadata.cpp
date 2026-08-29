@@ -323,6 +323,10 @@ bool write_le(const std::span<std::byte> bytes, const std::size_t offset,
         .extent_descriptor = *extent_descriptor,
         .group_descriptor = *group_descriptor,
         .block_device_descriptor = *device_descriptor,
+        .partitions = {},
+        .extents = {},
+        .groups = {},
+        .block_devices = {},
     };
     result.extents.reserve(extent_descriptor->count);
     for (std::uint32_t index = 0; index < extent_descriptor->count; ++index) {
@@ -422,6 +426,7 @@ bool write_le(const std::span<std::byte> bytes, const std::size_t offset,
             .name = std::move(*name),
             .attributes = *attributes,
             .group_index = *group,
+            .extent_indices = {},
         };
         parsed.extent_indices.reserve(*count);
         for (std::uint32_t extent = 0; extent < *count; ++extent) {
