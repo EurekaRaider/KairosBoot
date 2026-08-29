@@ -185,6 +185,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-reboot-recovery",
             "official-tcp-erase",
             "official-tcp-set-active",
+            "official-tcp-slot-options",
+            "official-tcp-avb-flags",
             "official-tcp-flashing-lock",
             "official-tcp-flashing-unlock",
             "official-tcp-flashing-lock-critical",
@@ -199,7 +201,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 39)
+        self.assertEqual(len(scenarios), 41)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -219,10 +221,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             ),
             [
                 "kairosboot",
-                "--device",
+                "-s",
                 "{endpoint}",
-                "--timeout-ms",
-                "5000",
                 "--verbose",
                 "getvar",
                 "product",
@@ -384,6 +384,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-informational-responses",
                 "official-tcp-erase",
                 "official-tcp-set-active",
+                "official-tcp-slot-options",
+                "official-tcp-avb-flags",
             }.issubset(scenario_ids)
         )
         cli_arguments = [
@@ -395,8 +397,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         uncovered = {item["id"] for item in metadata["uncoveredScenarios"]}
         self.assertTrue(
             {
-                "official-scripted-slot-options",
-                "official-scripted-avb-flags",
                 "official-scripted-sparse-limit",
                 "official-scripted-format",
                 "official-scripted-wipe-super",
@@ -405,6 +405,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         )
         self.assertNotIn("official-scripted-boot-flash-raw", uncovered)
         self.assertNotIn("official-scripted-erase", uncovered)
+        self.assertNotIn("official-scripted-slot-options", uncovered)
+        self.assertNotIn("official-scripted-avb-flags", uncovered)
 
     def test_committed_evidence_index_covers_every_locked_platform(self) -> None:
         index = json.loads(

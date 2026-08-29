@@ -3202,48 +3202,107 @@ kb_status_t start_flash_source_async(
     auto cancellation = task_context.register_cancellation_hook(
         [&service] { service.request_cancel(); });
 
-    std::optional<std::string> is_userspace;
-    std::optional<std::string> has_slot;
-    std::optional<std::string> is_logical;
-    const std::vector<std::pair<std::string, std::optional<std::string> *>>
-        aosp_flash_preflight = aosp_raw_profile
-            ? std::vector<std::pair<
-                  std::string, std::optional<std::string> *>>{{
-                  {"has-slot:" + partition_copy, &has_slot},
-              }}
-            : std::vector<std::pair<
-                  std::string, std::optional<std::string> *>>{{
-                  {"is-userspace", &is_userspace},
-                  {"has-slot:" + partition_copy, &has_slot},
-                  {"is-logical:" + partition_copy, &is_logical},
-              }};
-    for (const auto &[variable, captured] : aosp_flash_preflight) {
-      auto value = service.getvar(variable);
-      if (!value && value.error().code !=
-                        kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
-        return operation_failure(kairosboot::api::normalize_public_error(
-            value.error(), selected_identifier));
-      }
-      if (value && captured != nullptr) {
-        *captured = value->terminal.payload;
-      }
-    }
-    if (!aosp_raw_profile && is_logical == "yes" && is_userspace != "yes" &&
-        flash_options.force == 0) {
-      return operation_failure(update_error(
-          KB_E_NOT_SUPPORTED,
-          "logical partition must be flashed through fastbootd; set force only "
-          "when intentionally overwriting a fixed bootloader partition",
-          selected_identifier));
-    }
-
-    std::vector<std::string> partitions{partition_copy};
     kairosboot::fastboot::SlotPlanner slot_planner(service);
     const kairosboot::fastboot::UpdateOperationContext slot_context{
         .cancellation = task_context.cancellation_token(),
         .deadline = std::nullopt,
     };
-    if (aosp_raw_profile && !slot_policy.slot && has_slot == "yes") {
+    std::vector<std::string> requested_slots;
+    if (slot_policy.slot) {
+      if (*slot_policy.slot == "all") {
+        auto topology = slot_planner.query_topology(slot_context);
+        if (!topology) {
+          return operation_failure(
+              slot_error(topology.error(), selected_identifier));
+        }
+        requested_slots = std::move(topology->slots);
+      } else {
+        auto resolved = slot_planner.resolve_active_slot(
+            *slot_policy.slot, slot_context);
+        if (!resolved) {
+          return operation_failure(
+              slot_error(resolved.error(), selected_identifier));
+        }
+        requested_slots.push_back(std::move(*resolved));
+      }
+    }
+
+    std::optional<std::string> active_after_flash;
+    if (slot_policy.set_active) {
+      const std::string_view requested_active = slot_policy.active_slot
+          ? std::string_view{*slot_policy.active_slot}
+          : slot_policy.slot ? std::string_view{*slot_policy.slot}
+                             : std::string_view{};
+      if (requested_active == "all") {
+        auto topology = slot_planner.query_topology(slot_context);
+        if (!topology) {
+          return operation_failure(
+              slot_error(topology.error(), selected_identifier));
+        }
+        active_after_flash = topology->slots.front();
+      } else {
+        auto resolved = slot_planner.resolve_active_slot(
+            requested_active, slot_context);
+        if (!resolved) {
+          return operation_failure(
+              slot_error(resolved.error(), selected_identifier));
+        }
+        active_after_flash = std::move(*resolved);
+      }
+    }
+
+    std::optional<std::string> is_userspace;
+    std::optional<std::string> has_slot;
+    std::optional<std::string> is_logical;
+    const auto query_optional =
+        [&service, &selected_identifier](
+            const std::string &variable,
+            std::optional<std::string> *captured = nullptr)
+        -> std::expected<void, kairosboot::api::OperationErrorPayload> {
+      auto value = service.getvar(variable);
+      if (!value && value.error().code !=
+                        kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+        return std::unexpected(kairosboot::api::normalize_public_error(
+            value.error(), selected_identifier));
+      }
+      if (value && captured != nullptr) {
+        *captured = value->terminal.payload;
+      }
+      return {};
+    };
+    if (!aosp_raw_profile) {
+      if (auto queried = query_optional("is-userspace", &is_userspace);
+          !queried) {
+        return operation_failure(std::move(queried.error()));
+      }
+    }
+    if (auto queried = query_optional(
+            "has-slot:" + partition_copy, &has_slot);
+        !queried) {
+      return operation_failure(std::move(queried.error()));
+    }
+
+    std::vector<std::string> partitions{partition_copy};
+    if (!requested_slots.empty()) {
+      if (has_slot != "yes") {
+        return operation_failure(update_error(
+            KB_E_NOT_SUPPORTED,
+            "an explicit Fastboot slot was requested for a non-slotted partition",
+            selected_identifier));
+      }
+      partitions.clear();
+      partitions.reserve(requested_slots.size());
+      const auto separator = partition_copy.find(':');
+      const auto base = partition_copy.substr(0U, separator);
+      const auto suffix = separator == std::string::npos
+          ? std::string_view{}
+          : std::string_view{partition_copy}.substr(separator);
+      for (const auto &slot : requested_slots) {
+        auto resolved = base + "_" + slot;
+        resolved.append(suffix);
+        partitions.push_back(std::move(resolved));
+      }
+    } else if (aosp_raw_profile && has_slot == "yes") {
       auto current_slot = service.getvar("current-slot");
       if (!current_slot) {
         return operation_failure(kairosboot::api::normalize_public_error(
@@ -3260,42 +3319,35 @@ kb_status_t start_flash_source_async(
             selected_identifier));
       }
       partitions.front() += "_" + slot;
-    } else if (slot_policy.slot) {
-      auto resolved = plan_partition_slots(
-          slot_planner, partition_copy, *slot_policy.slot, slot_context);
-      if (!resolved) {
-        return operation_failure(slot_error(
-            resolved.error(), selected_identifier));
-      }
-      partitions = std::move(resolved->partition_names);
     }
 
-    if (slot_policy.set_active) {
-      const std::string_view requested_active = slot_policy.active_slot
-          ? std::string_view{*slot_policy.active_slot}
-          : slot_policy.slot ? std::string_view{*slot_policy.slot}
-                             : std::string_view{};
-      std::expected<std::string, kairosboot::fastboot::SlotError>
-          active = std::unexpected(kairosboot::fastboot::SlotError{});
-      if (requested_active == "all") {
-        auto topology = slot_planner.query_topology(slot_context);
-        if (!topology) {
-          return operation_failure(slot_error(
-              topology.error(), selected_identifier));
-        }
-        active = topology->slots.front();
-      } else {
-        active = slot_planner.resolve_active_slot(
-            requested_active, slot_context);
+    if (!aosp_raw_profile) {
+      if (auto queried = query_optional(
+              "is-logical:" + partitions.front(), &is_logical);
+          !queried) {
+        return operation_failure(std::move(queried.error()));
       }
-      if (!active) {
-        return operation_failure(slot_error(active.error(),
-                                            selected_identifier));
+      if (is_logical == "yes" && is_userspace != "yes" &&
+          flash_options.force == 0) {
+        return operation_failure(update_error(
+            KB_E_NOT_SUPPORTED,
+            "logical partition must be flashed through fastbootd; set force only "
+            "when intentionally overwriting a fixed bootloader partition",
+            selected_identifier));
       }
-      auto activated = service.set_active(*active);
-      if (!activated) {
-        return operation_failure(kairosboot::api::normalize_public_error(
-            activated.error(), selected_identifier));
+    }
+
+    if (flags.any() &&
+        kairosboot::image::is_vbmeta_partition(partition_copy)) {
+      if (auto queried = query_optional(
+              "is-logical:" + partitions.front());
+          !queried) {
+        return operation_failure(std::move(queried.error()));
+      }
+      if (auto queried = query_optional(
+              "partition-size:" + partitions.front());
+          !queried) {
+        return operation_failure(std::move(queried.error()));
       }
     }
 
@@ -3390,6 +3442,19 @@ kb_status_t start_flash_source_async(
           return operation_failure(std::move(payload));
         }
         completed_before_source += source->size();
+      }
+    }
+
+    if (task_context.cancel_requested()) {
+      return cancelled_operation(
+          selected_identifier, KB_TRANSFER_FULLY_TRANSFERRED,
+          "operation cancelled after the flash completed");
+    }
+    if (active_after_flash) {
+      auto activated = service.set_active(*active_after_flash);
+      if (!activated) {
+        return operation_failure(kairosboot::api::normalize_public_error(
+            activated.error(), selected_identifier));
       }
     }
 

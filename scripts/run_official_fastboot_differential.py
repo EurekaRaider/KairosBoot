@@ -717,6 +717,11 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     ramdisk_path.write_bytes(b"differential-ramdisk")
     dtb_path = output_dir / "differential-dtb.bin"
     dtb_path.write_bytes(bytes(range(64)))
+    vbmeta_path = output_dir / "differential-vbmeta.img"
+    vbmeta_payload = bytearray([0x5A] * 256)
+    vbmeta_payload[0:4] = b"AVB0"
+    vbmeta_payload[123] = 0x40
+    vbmeta_path.write_bytes(vbmeta_payload)
     receive_payload = b"kairosboot-receive\x00\xff"
     staged_output = output_dir / "staged-output.bin"
     default_system_path = output_dir / "system.img"
@@ -818,6 +823,35 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             "set_active:b",
             coverage_ids=("command.set-active", "capability.a-b-slots"),
             variable_values=(("slot-count", "2"),),
+        ),
+        Scenario(
+            "official-tcp-slot-options", "tcp",
+            ("--slot", "b", "--set-active", "flash", "system",
+             "<ARTIFACT>/system.img"),
+            "set_active:b", image_path,
+            ("option.slot", "option.set-active"),
+            aosp_arguments=("--slot", "b", "--set-active", "flash", "system",
+                            str(image_path)),
+            kairosboot_arguments=("--slot", "b", "--set-active", "flash",
+                                  "system", str(image_path)),
+            variable_values=(("slot-count", "2"),
+                             ("has-slot:system", "yes"),
+                             ("is-logical:system_b", "no")),
+        ),
+        Scenario(
+            "official-tcp-avb-flags", "tcp",
+            ("--disable-verity", "--disable-verification", "flash", "vbmeta",
+             "<ARTIFACT>/vbmeta.img"),
+            "flash:vbmeta", vbmeta_path,
+            ("option.disable-verity", "option.disable-verification",
+             "capability.vbmeta-avb-mutation"),
+            aosp_arguments=("--disable-verity", "--disable-verification",
+                            "flash", "vbmeta", str(vbmeta_path)),
+            kairosboot_arguments=("--disable-verity", "--disable-verification",
+                                  "flash", "vbmeta", str(vbmeta_path)),
+            variable_values=(("has-slot:vbmeta", "no"),
+                             ("is-logical:vbmeta", "no"),
+                             ("partition-size:vbmeta", "0x1000")),
         ),
         Scenario(
             "official-tcp-oem", "tcp", ("oem", "differential"),
@@ -1015,24 +1049,6 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
             "official Fastboot reconnects after reboot-fastboot and verifies "
             "getvar:is-userspace, while the current KairosBoot reboot API retires "
             "the session after the terminal response"
-        ),
-    },
-    {
-        "id": "official-scripted-slot-options",
-        "coverageIds": ["option.slot", "option.set-active"],
-        "reason": (
-            "the direct set_active command is covered, but flash/update slot-selection "
-            "options require a multi-step device plan beyond this transport scenario"
-        ),
-    },
-    {
-        "id": "official-scripted-avb-flags",
-        "coverageIds": ["option.disable-verity", "option.disable-verification",
-                        "capability.vbmeta-avb-mutation"],
-        "reason": (
-            "the mutated DATA hash matches in a real capture, but official Fastboot "
-            "performs additional is-logical and partition-size probes; strict wire "
-            "event parity therefore does not pass"
         ),
     },
     {

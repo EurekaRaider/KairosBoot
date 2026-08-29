@@ -167,6 +167,33 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["set_active", "b"], "getvars": ["slot-count"],
         "commands": ["set_active:b"], "data": [],
     },
+    "official-tcp-slot-options": {
+        "transport": "tcp",
+        "coverageIds": ["option.slot", "option.set-active"],
+        "argv": ["--slot", "b", "--set-active", "flash", "system",
+                 "<ARTIFACT>/system.img"],
+        "getvars": [
+            "slot-count", "slot-count", "is-userspace", "has-slot:system",
+            "is-logical:system_b", "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system_b", "set_active:b"],
+        "data": [["host-to-device", 32]],
+    },
+    "official-tcp-avb-flags": {
+        "transport": "tcp",
+        "coverageIds": [
+            "option.disable-verity", "option.disable-verification",
+            "capability.vbmeta-avb-mutation",
+        ],
+        "argv": ["--disable-verity", "--disable-verification", "flash",
+                 "vbmeta", "<ARTIFACT>/vbmeta.img"],
+        "getvars": [
+            "is-userspace", "has-slot:vbmeta", "is-logical:vbmeta",
+            "is-logical:vbmeta", "partition-size:vbmeta", "max-download-size",
+        ],
+        "commands": ["download:00000100", "flash:vbmeta"],
+        "data": [["host-to-device", 256]],
+    },
     "official-tcp-oem": {
         "transport": "tcp", "coverageIds": ["command.oem"],
         "argv": ["oem", "differential"], "getvars": [],
@@ -324,7 +351,6 @@ UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
     "official-scripted-slot-policy": [
         "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
     ],
-    "official-scripted-slot-options": ["option.slot", "option.set-active"],
     "official-scripted-avb-flags": [
         "option.disable-verity", "option.disable-verification",
         "capability.vbmeta-avb-mutation",
