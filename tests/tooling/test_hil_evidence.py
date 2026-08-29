@@ -17,6 +17,12 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC is not None and SPEC.loader is not None
 VALIDATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VALIDATOR)
+USB_SPEC = importlib.util.spec_from_file_location(
+    "validate_usb_hil_evidence", ROOT / "scripts" / "validate_usb_hil_evidence.py"
+)
+assert USB_SPEC is not None and USB_SPEC.loader is not None
+USB_VALIDATOR = importlib.util.module_from_spec(USB_SPEC)
+USB_SPEC.loader.exec_module(USB_VALIDATOR)
 SOAK_SPEC = importlib.util.spec_from_file_location(
     "run_soak_harness", ROOT / "scripts" / "run_soak_harness.py"
 )
@@ -25,6 +31,42 @@ SOAK_HARNESS = importlib.util.module_from_spec(SOAK_SPEC)
 SOAK_SPEC.loader.exec_module(SOAK_HARNESS)
 COMMIT = "a" * 40
 RUN_ID = "12345678-1234-4123-8123-123456789abc"
+
+
+def valid_usb_evidence(host_os: str = "linux") -> dict[str, object]:
+    device_id = hashlib.sha256(f"{host_os}-device".encode()).hexdigest()
+    return {
+        "schemaVersion": 1,
+        "evidenceKind": "hardware",
+        "commit": COMMIT,
+        "runId": RUN_ID,
+        "recordedAt": "2026-08-28T00:00:00Z",
+        "harness": {
+            "name": "kairosboot-usb-hil-test-fixture",
+            "version": "1",
+            "sourceSha256": "b" * 64,
+        },
+        "lab": {"id": f"{host_os}-test-lab", "operatorIdHash": "c" * 64},
+        "host": {"os": host_os, "arch": "x64", "machineIdHash": "d" * 64},
+        "devices": [
+            {
+                "idHash": device_id,
+                "product": "test_product",
+                "usbPath": "1-1",
+                "controllerId": "xhci-0",
+            }
+        ],
+        "scenarios": [
+            {
+                "id": scenario,
+                "attempts": 3,
+                "successes": 3,
+                "deviceIds": [device_id],
+                "evidenceSha256": hashlib.sha256(scenario.encode()).hexdigest(),
+            }
+            for scenario in sorted(USB_VALIDATOR.REQUIRED_SCENARIOS)
+        ],
+    }
 
 
 def valid_evidence() -> dict[str, object]:
@@ -219,6 +261,60 @@ class HilEvidenceTests(unittest.TestCase):
         self.assert_rejected(evidence)
         evidence = valid_evidence()
         evidence["inventedPass"] = True
+        self.assert_rejected(evidence)
+
+
+class UsbHilEvidenceTests(unittest.TestCase):
+    def assert_rejected(
+        self, evidence: dict[str, object], expected_os: str = "linux"
+    ) -> None:
+        with self.assertRaises(SystemExit):
+            USB_VALIDATOR.validate(evidence, COMMIT, expected_os)
+
+    def test_accepts_complete_evidence_for_each_supported_host(self) -> None:
+        for host_os in ("linux", "macos", "windows"):
+            with self.subTest(host_os=host_os):
+                USB_VALIDATOR.validate(valid_usb_evidence(host_os), COMMIT, host_os)
+
+    def test_rejects_wrong_commit_host_kind_or_extra_field(self) -> None:
+        evidence = valid_usb_evidence()
+        evidence["commit"] = "f" * 40
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["host"]["os"] = "windows"
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["evidenceKind"] = "synthetic"
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["inventedPass"] = True
+        self.assert_rejected(evidence)
+
+    def test_rejects_missing_duplicate_failed_or_unknown_scenarios(self) -> None:
+        evidence = valid_usb_evidence()
+        evidence["scenarios"].pop()
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["scenarios"].append(copy.deepcopy(evidence["scenarios"][0]))
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["scenarios"][0]["successes"] = 2
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["scenarios"][0]["id"] = "invented-pass"
+        self.assert_rejected(evidence)
+
+    def test_rejects_invalid_device_references_and_inventory(self) -> None:
+        evidence = valid_usb_evidence()
+        evidence["scenarios"][0]["deviceIds"] = ["e" * 64]
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        evidence["devices"] = []
+        self.assert_rejected(evidence)
+        evidence = valid_usb_evidence()
+        duplicate = copy.deepcopy(evidence["devices"][0])
+        duplicate["idHash"] = "e" * 64
+        evidence["devices"].append(duplicate)
         self.assert_rejected(evidence)
 
 

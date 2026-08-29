@@ -13,12 +13,127 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  usb-hil:
-    name: usb-hil-32-device-soak
+  usb-hil-linux:
+    name: usb-hil-linux
     if: vars.KAIROSBOOT_HIL_ENABLED == 'true'
     runs-on:
       - self-hosted
       - kairosboot-hil
+      - linux
+    timeout-minutes: 180
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Run Linux real-USB and fault-injection harness
+        run: >-
+          /opt/kairosboot-hil/run platform
+          --source "${GITHUB_WORKSPACE}"
+          --output "${RUNNER_TEMP}/usb-hil-evidence.json"
+          --os linux
+
+      - name: Enforce Linux USB HIL gates
+        run: >-
+          python3 scripts/validate_usb_hil_evidence.py
+          "${RUNNER_TEMP}/usb-hil-evidence.json"
+          --commit "${GITHUB_SHA}"
+          --os linux
+
+      - name: Upload Linux USB HIL evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: usb-hil-linux-${{ github.sha }}
+          path: ${{ runner.temp }}/usb-hil-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  usb-hil-macos:
+    name: usb-hil-macos
+    if: vars.KAIROSBOOT_HIL_ENABLED == 'true'
+    runs-on:
+      - self-hosted
+      - kairosboot-hil
+      - macos
+    timeout-minutes: 180
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Run macOS real-USB and fault-injection harness
+        run: >-
+          /opt/kairosboot-hil/run platform
+          --source "${GITHUB_WORKSPACE}"
+          --output "${RUNNER_TEMP}/usb-hil-evidence.json"
+          --os macos
+
+      - name: Enforce macOS USB HIL gates
+        run: >-
+          python3 scripts/validate_usb_hil_evidence.py
+          "${RUNNER_TEMP}/usb-hil-evidence.json"
+          --commit "${GITHUB_SHA}"
+          --os macos
+
+      - name: Upload macOS USB HIL evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: usb-hil-macos-${{ github.sha }}
+          path: ${{ runner.temp }}/usb-hil-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  usb-hil-windows:
+    name: usb-hil-windows
+    if: vars.KAIROSBOOT_HIL_ENABLED == 'true'
+    runs-on:
+      - self-hosted
+      - kairosboot-hil
+      - windows
+    timeout-minutes: 180
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Run Windows real-USB and fault-injection harness
+        shell: pwsh
+        run: >-
+          & 'C:\KairosBoot-HIL\run.ps1' platform
+          --source "$env:GITHUB_WORKSPACE"
+          --output "$env:RUNNER_TEMP\usb-hil-evidence.json"
+          --os windows
+
+      - name: Enforce Windows USB HIL gates
+        shell: pwsh
+        run: >-
+          python scripts/validate_usb_hil_evidence.py
+          "$env:RUNNER_TEMP\usb-hil-evidence.json"
+          --commit "$env:GITHUB_SHA"
+          --os windows
+
+      - name: Upload Windows USB HIL evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: usb-hil-windows-${{ github.sha }}
+          path: ${{ runner.temp }}\usb-hil-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  qualification-hil:
+    name: qualification-hil-32-device-soak
+    if: vars.KAIROSBOOT_HIL_ENABLED == 'true'
+    runs-on:
+      - self-hosted
+      - kairosboot-hil
+      - kairosboot-qualification
+      - linux
     timeout-minutes: 2160
     steps:
       - name: Check out protected source
@@ -27,38 +142,58 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Run isolated hardware lab harness
+      - name: Run 32-device performance and soak harness
         run: >-
-          /opt/kairosboot-hil/run
+          /opt/kairosboot-hil/run qualification
           --source "${GITHUB_WORKSPACE}"
-          --output "${RUNNER_TEMP}/hil-evidence.json"
+          --output "${RUNNER_TEMP}/qualification-evidence.json"
 
-      - name: Enforce release HIL gates
+      - name: Enforce performance and 24-hour soak gates
         run: >-
           python3 scripts/validate_hil_evidence.py
-          "${RUNNER_TEMP}/hil-evidence.json"
+          "${RUNNER_TEMP}/qualification-evidence.json"
           --commit "${GITHUB_SHA}"
 
-      - name: Upload HIL evidence
+      - name: Upload qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: hil-evidence-${{ github.sha }}
-          path: ${{ runner.temp }}/hil-evidence.json
+          name: qualification-hil-${{ github.sha }}
+          path: ${{ runner.temp }}/qualification-evidence.json
           if-no-files-found: error
           retention-days: 30
 
   hil-required:
     name: hil-required
     if: always()
-    needs: usb-hil
+    needs:
+      - usb-hil-linux
+      - usb-hil-macos
+      - usb-hil-windows
+      - qualification-hil
     runs-on: ubuntu-24.04
     steps:
-      - name: Require configured hardware evidence
+      - name: Require all hardware evidence
         env:
-          HIL_RESULT: ${{ needs.usb-hil.result }}
+          LINUX_RESULT: ${{ needs.usb-hil-linux.result }}
+          MACOS_RESULT: ${{ needs.usb-hil-macos.result }}
+          WINDOWS_RESULT: ${{ needs.usb-hil-windows.result }}
+          QUALIFICATION_RESULT: ${{ needs.qualification-hil.result }}
         run: |
-          if [ "$HIL_RESULT" != "success" ]; then
-            echo "HIL result: $HIL_RESULT"
-            echo "Configure KAIROSBOOT_HIL_ENABLED and the protected self-hosted lab before release."
+          failed=0
+          for result in \
+            "$LINUX_RESULT" \
+            "$MACOS_RESULT" \
+            "$WINDOWS_RESULT" \
+            "$QUALIFICATION_RESULT"; do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "Linux USB HIL: $LINUX_RESULT"
+            echo "macOS USB HIL: $MACOS_RESULT"
+            echo "Windows USB HIL: $WINDOWS_RESULT"
+            echo "32-device qualification HIL: $QUALIFICATION_RESULT"
+            echo "Configure the protected labs and KAIROSBOOT_HIL_ENABLED before release."
             exit 1
           fi

@@ -335,6 +335,25 @@ class ReleaseToolTests(unittest.TestCase):
             self.assertIn(marker, workflow)
         self.assertNotIn("dotnet nuget push", workflow.lower())
 
+        hil_workflow = (ROOT / ".github" / "workflows" / "hil.yml").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "  usb-hil-linux:",
+            "  usb-hil-macos:",
+            "  usb-hil-windows:",
+            "  qualification-hil:",
+            "      - kairosboot-qualification",
+            "scripts/validate_usb_hil_evidence.py",
+            "scripts/validate_hil_evidence.py",
+            "      - usb-hil-linux",
+            "      - usb-hil-macos",
+            "      - usb-hil-windows",
+            "      - qualification-hil",
+        ):
+            self.assertIn(marker, hil_workflow)
+        self.assertNotIn("pull_request:", hil_workflow)
+
     def test_native_archives_have_expected_shape_and_modes(self) -> None:
         install = self.create_install_tree()
         # The archive contract must not depend on Unix mode bits being available

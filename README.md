@@ -68,8 +68,8 @@ hardware-dependent release claim explicitly blocked.
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
 | Fastboot operations | C, C++23, .NET, and CLI cover getvar/download/upload, flash/erase/boot/reboot, update/flashall, format, fetch/stage, slots, logical/super, fastbootd, AVB, boot/vendor_boot, snapshot, GSI, flashing, and OEM/raw passthrough |
 | Device batches | C/C++23/.NET APIs accept explicit opened devices; CLI repeats `-s` and runs up to 32 selected devices concurrently |
-| AOSP differential | The current Darwin Release artifact matches locked Platform-Tools 37.0.1 across 46 normalized host/TCP/UDP scenarios; final exact-head Linux and Windows captures remain CI work |
-| Performance and HIL | Acceptance goals are defined; 32-device, throughput, fairness, and soak claims have not been demonstrated yet |
+| AOSP differential | The last merged baseline passed locked Platform-Tools 37.0.1 differentials on Darwin, Linux, and Windows across 46 normalized host/TCP/UDP scenarios; the final exact head must repeat them |
+| Performance and HIL | Fail-closed three-platform USB/fault and 32-device qualification gates are implemented; no real-hardware throughput, fairness, or soak claim has been demonstrated yet |
 
 ### Target platforms
 
@@ -280,7 +280,9 @@ coverage includes:
 
 Passing these tests does not establish production flash safety, USB ceiling
 performance, or real-device behavior. Those require the later HIL and soak
-gates in the roadmap.
+gates in the roadmap. Lab operators should follow the
+[hardware qualification contract](docs/HARDWARE_LAB.md); the workflow refuses
+synthetic or incomplete evidence.
 
 ## Roadmap
 
@@ -305,6 +307,7 @@ bindings/dotnet/     .NET Framework 4.8 and .NET 10 binding/package
 compat/              pinned AOSP compatibility inventory
 tests/               native, managed, transport, packaging, and tooling tests
 scripts/             dependency preparation and release packaging tools
+docs/                bilingual API/CLI guide and hardware qualification contract
 ```
 
 ## Contributing
