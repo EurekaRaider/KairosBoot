@@ -15,16 +15,16 @@ statusVocabulary:
 summary:
   totalEntries: 119
   byStatus:
-    implemented: 103
-    intentional-deviation: 16
+    implemented: 110
+    intentional-deviation: 9
     missing: 0
     partial: 0
 officialDifferentialCoverage:
-  status: "partial"
+  status: "not-run"
   requiredEntries: 86
-  requiredEntriesWithEvidence: 51
-  matchedScenarios: 37
-  uncoveredCandidateScenarios: 10
+  requiredEntriesWithEvidence: 0
+  matchedScenarios: 0
+  uncoveredCandidateScenarios: 0
 entries:
   - id: "capability.a-b-slots"
     kind: "image-plan"
@@ -55,15 +55,13 @@ entries:
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+    officialDifferentialEvidence: []
   - id: "capability.dynamic-partitions"
     kind: "image-plan"
     required: true
@@ -111,10 +109,7 @@ entries:
     note: "Raw image download and flash are implemented."
     evidence:
       - "tests/fastboot/primitive_service_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+    officialDifferentialEvidence: []
   - id: "capability.super-image-optimization"
     kind: "image-plan"
     required: true
@@ -173,15 +168,13 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/boot_file_cli_test.py"
-      - "tests/cli/boot_image_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
+    officialDifferentialEvidence: []
   - id: "command.continue"
     kind: "command"
     required: true
@@ -190,8 +183,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue"
+    officialDifferentialEvidence: []
   - id: "command.create-logical-partition"
     kind: "command"
     required: true
@@ -200,8 +192,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition"
+    officialDifferentialEvidence: []
   - id: "command.delete-logical-partition"
     kind: "command"
     required: true
@@ -210,8 +201,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition"
+    officialDifferentialEvidence: []
   - id: "command.devices"
     kind: "command"
     required: true
@@ -220,8 +210,7 @@ entries:
     evidence:
       - "tests/c_api_test.c"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-devices"
+    officialDifferentialEvidence: []
   - id: "command.erase"
     kind: "command"
     required: true
@@ -250,10 +239,7 @@ entries:
       - "tests/sparse/sparse_image_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+    officialDifferentialEvidence: []
   - id: "command.flash-raw"
     kind: "command"
     required: true
@@ -261,15 +247,13 @@ entries:
     note: "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+    officialDifferentialEvidence: []
   - id: "command.flashall"
     kind: "command"
     required: true
@@ -291,8 +275,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
+    officialDifferentialEvidence: []
   - id: "command.flashing-lock"
     kind: "command"
     required: true
@@ -301,8 +284,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-lock"
+    officialDifferentialEvidence: []
   - id: "command.flashing-lock-critical"
     kind: "command"
     required: true
@@ -311,8 +293,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-lock-critical"
+    officialDifferentialEvidence: []
   - id: "command.flashing-unlock"
     kind: "command"
     required: true
@@ -321,8 +302,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-unlock"
+    officialDifferentialEvidence: []
   - id: "command.flashing-unlock-critical"
     kind: "command"
     required: true
@@ -331,8 +311,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-unlock-critical"
+    officialDifferentialEvidence: []
   - id: "command.format"
     kind: "command"
     required: true
@@ -353,8 +332,7 @@ entries:
     evidence:
       - "tests/fastboot/file_receive_service_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
+    officialDifferentialEvidence: []
   - id: "command.getvar"
     kind: "command"
     required: true
@@ -363,9 +341,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+    officialDifferentialEvidence: []
   - id: "command.gsi-disable"
     kind: "command"
     required: true
@@ -374,8 +350,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-disable"
+    officialDifferentialEvidence: []
   - id: "command.gsi-status"
     kind: "command"
     required: true
@@ -384,8 +359,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-status"
+    officialDifferentialEvidence: []
   - id: "command.gsi-wipe"
     kind: "command"
     required: true
@@ -394,8 +368,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe"
+    officialDifferentialEvidence: []
   - id: "command.oem"
     kind: "command"
     required: true
@@ -404,8 +377,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem"
+    officialDifferentialEvidence: []
   - id: "command.reboot"
     kind: "command"
     required: true
@@ -414,23 +386,21 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot"
+    officialDifferentialEvidence: []
   - id: "command.reboot-bootloader"
     kind: "command"
     required: true
-    status: "intentional-deviation"
-    note: "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands."
+    status: "implemented"
+    note: "The CLI accepts the frozen AOSP top-level reboot spellings; `reboot bootloader` is also accepted as shown by Platform-Tools help."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader"
+    officialDifferentialEvidence: []
   - id: "command.reboot-fastboot"
     kind: "command"
     required: true
-    status: "intentional-deviation"
-    note: "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands."
+    status: "implemented"
+    note: "The CLI accepts the frozen AOSP top-level reboot spellings; `reboot bootloader` is also accepted as shown by Platform-Tools help."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
@@ -438,13 +408,12 @@ entries:
   - id: "command.reboot-recovery"
     kind: "command"
     required: true
-    status: "intentional-deviation"
-    note: "KairosBoot uses `reboot <target>` instead of separate hyphenated top-level commands."
+    status: "implemented"
+    note: "The CLI accepts the frozen AOSP top-level reboot spellings; `reboot bootloader` is also accepted as shown by Platform-Tools help."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-recovery"
+    officialDifferentialEvidence: []
   - id: "command.resize-logical-partition"
     kind: "command"
     required: true
@@ -457,8 +426,8 @@ entries:
   - id: "command.set-active"
     kind: "command"
     required: true
-    status: "intentional-deviation"
-    note: "KairosBoot uses the hyphenated `set-active` spelling while preserving the protocol behavior."
+    status: "implemented"
+    note: "The CLI uses the frozen AOSP `set_active` spelling."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
@@ -474,9 +443,7 @@ entries:
       - "tests/cli/scripted_cli_test.py"
       - "tests/fastboot/primitive_service_tests.cpp"
       - "tests/fastboot/primitive_update_device_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-signature"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature"
+    officialDifferentialEvidence: []
   - id: "command.snapshot-cancel"
     kind: "command"
     required: true
@@ -485,8 +452,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel"
+    officialDifferentialEvidence: []
   - id: "command.snapshot-merge"
     kind: "command"
     required: true
@@ -495,8 +461,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-merge"
+    officialDifferentialEvidence: []
   - id: "command.stage"
     kind: "command"
     required: true
@@ -505,8 +470,7 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage"
+    officialDifferentialEvidence: []
   - id: "command.update"
     kind: "command"
     required: true
@@ -762,10 +726,7 @@ entries:
       - "tests/fastboot/update_executor_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+    officialDifferentialEvidence: []
   - id: "image.system-dlkm"
     kind: "image"
     required: false
@@ -898,29 +859,27 @@ entries:
     kind: "option"
     required: true
     status: "implemented"
-    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw."
     evidence:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.cmdline"
     kind: "option"
     required: true
     status: "implemented"
-    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw."
     evidence:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.device-path"
     kind: "option"
     required: true
-    status: "intentional-deviation"
-    note: "One `--device` selector accepts serial, USB path, TCP, or UDP endpoint instead of separate -s/-l options."
+    status: "implemented"
+    note: "The CLI uses Fastboot-compatible `-s` selection and `devices -l` long listing for USB paths."
     evidence:
       - "tests/cli/scripted_cli_test.py"
       - "tests/api/device_selector_tests.cpp"
@@ -983,14 +942,13 @@ entries:
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/vendor_boot_repacker_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.dtb-offset"
     kind: "option"
     required: true
@@ -999,14 +957,13 @@ entries:
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/vendor_boot_repacker_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.exclude-dynamic-partitions"
     kind: "option"
     required: true
@@ -1031,8 +988,7 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-force"
+    officialDifferentialEvidence: []
   - id: "option.fs-options"
     kind: "option"
     required: true
@@ -1055,14 +1011,13 @@ entries:
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/vendor_boot_repacker_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.help"
     kind: "option"
     required: true
@@ -1070,8 +1025,7 @@ entries:
     note: "Long help and version options are implemented."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help"
+    officialDifferentialEvidence: []
   - id: "option.help-short"
     kind: "option"
     required: true
@@ -1079,19 +1033,17 @@ entries:
     note: "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help-short"
+    officialDifferentialEvidence: []
   - id: "option.kernel-offset"
     kind: "option"
     required: true
     status: "implemented"
-    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw."
     evidence:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.os-patch-level"
     kind: "option"
     required: true
@@ -1100,14 +1052,13 @@ entries:
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/vendor_boot_repacker_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.os-version"
     kind: "option"
     required: true
@@ -1116,46 +1067,42 @@ entries:
     evidence:
       - "tests/image/boot_image_builder_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-      - "tests/cli/boot_image_cli_test.py"
+      - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/vendor_boot_repacker_tests.cpp"
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.page-size"
     kind: "option"
     required: true
     status: "implemented"
-    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw."
     evidence:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.ramdisk-offset"
     kind: "option"
     required: true
     status: "implemented"
-    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw."
     evidence:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.serial"
     kind: "option"
     required: true
-    status: "intentional-deviation"
-    note: "One `--device` selector accepts serial, USB path, TCP, or UDP endpoint instead of separate -s/-l options."
+    status: "implemented"
+    note: "The CLI uses Fastboot-compatible `-s` selection and `devices -l` long listing for USB paths."
     evidence:
       - "tests/cli/scripted_cli_test.py"
       - "tests/api/device_selector_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-serial-selector"
+    officialDifferentialEvidence: []
   - id: "option.set-active"
     kind: "option"
     required: true
@@ -1218,18 +1165,17 @@ entries:
     kind: "option"
     required: true
     status: "implemented"
-    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component."
+    note: "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw."
     evidence:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+    officialDifferentialEvidence: []
   - id: "option.unbuffered"
     kind: "option"
     required: true
     status: "intentional-deviation"
-    note: "KairosBoot always streams through bounded buffers and does not expose an unbuffered mode switch."
+    note: "The Fastboot-compatible option is accepted; KairosBoot's bounded streaming data path does not switch stdio buffering modes."
     evidence:
       - "tests/image/file_source_tests.cpp"
       - "tests/performance/test_main.cpp"
@@ -1241,8 +1187,7 @@ entries:
     note: "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-verbose"
+    officialDifferentialEvidence: []
   - id: "option.version"
     kind: "option"
     required: true
@@ -1250,13 +1195,12 @@ entries:
     note: "Long help and version options are implemented."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-version"
+    officialDifferentialEvidence: []
   - id: "option.wipe"
     kind: "option"
     required: true
-    status: "intentional-deviation"
-    note: "Wipe is an update-local `--wipe` option instead of global `-w`."
+    status: "implemented"
+    note: "The global Fastboot-compatible `-w` option enables update/flashall wipe planning."
     evidence:
       - "tests/cli/scripted_cli_test.py"
       - "tests/fastboot/update_executor_tests.cpp"
@@ -1269,10 +1213,7 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+    officialDifferentialEvidence: []
   - id: "protocol.download"
     kind: "protocol"
     required: true
@@ -1281,10 +1222,7 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+    officialDifferentialEvidence: []
   - id: "protocol.responses"
     kind: "protocol"
     required: true
@@ -1293,18 +1231,16 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-informational-responses"
+    officialDifferentialEvidence: []
   - id: "protocol.upload"
     kind: "protocol"
     required: true
     status: "implemented"
-    note: "Bounded upload is exposed by C/C++/.NET and CLI."
+    note: "Bounded upload is exposed by the C, C++ and .NET APIs; the Fastboot-compatible CLI exposes it only through the official get_staged and fetch commands."
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
+    officialDifferentialEvidence: []
   - id: "transport.tcp"
     kind: "transport"
     required: true
@@ -1313,8 +1249,7 @@ entries:
     evidence:
       - "tests/tcp/tcp_fastboot_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
+    officialDifferentialEvidence: []
   - id: "transport.udp"
     kind: "transport"
     required: true
@@ -1323,8 +1258,7 @@ entries:
     evidence:
       - "tests/udp/udp_fastboot_tests.cpp"
       - "tests/udp/udp_loopback_smoke.cpp"
-    officialDifferentialEvidence:
-      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+    officialDifferentialEvidence: []
   - id: "transport.usb"
     kind: "transport"
     required: true
