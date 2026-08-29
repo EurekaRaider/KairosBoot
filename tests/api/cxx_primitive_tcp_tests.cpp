@@ -194,7 +194,7 @@ private:
   }
 
   void serve_management_commands() {
-    constexpr std::array<std::string_view, 13> commands{
+    constexpr std::array<std::string_view, 12> commands{
         "flashing lock",
         "flashing unlock",
         "flashing lock_critical",
@@ -207,7 +207,6 @@ private:
         "snapshot-update:merge",
         "create-logical-partition:system_ext:0",
         "delete-logical-partition:system_ext",
-        "resize-logical-partition:system_ext:18446744073709551615",
     };
     for (std::size_t index = 0; index < commands.size(); ++index) {
       auto socket = accept();
@@ -219,6 +218,19 @@ private:
       } else {
         write_frame(*socket, "OKAYdone");
       }
+      clear_active();
+    }
+    {
+      auto socket = accept();
+      CHECK(as_string(read_frame(*socket)) == "getvar:is-userspace");
+      write_frame(*socket, "OKAYyes");
+      CHECK(as_string(read_frame(*socket)) == "getvar:has-slot:system_ext");
+      write_frame(*socket, "OKAYno");
+      CHECK(as_string(read_frame(*socket)) == "getvar:is-logical:system_ext");
+      write_frame(*socket, "OKAYyes");
+      CHECK(as_string(read_frame(*socket)) ==
+            "resize-logical-partition:system_ext:18446744073709551615");
+      write_frame(*socket, "OKAYdone");
       clear_active();
     }
   }
