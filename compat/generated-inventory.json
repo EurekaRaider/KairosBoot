@@ -2137,7 +2137,9 @@
       "id": "option.force",
       "kind": "option",
       "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-force"
+      ],
       "required": true,
       "spelling": "--force",
       "status": "implemented"
@@ -2691,7 +2693,9 @@
       "id": "protocol.responses",
       "kind": "protocol",
       "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-informational-responses"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2771,9 +2775,9 @@
   },
   "inventoryStatus": "generated-known-gaps",
   "officialDifferentialCoverage": {
-    "matchedScenarios": 35,
+    "matchedScenarios": 37,
     "requiredEntries": 86,
-    "requiredEntriesWithEvidence": 49,
+    "requiredEntriesWithEvidence": 51,
     "status": "partial",
     "uncoveredCandidateScenarios": 10
   },

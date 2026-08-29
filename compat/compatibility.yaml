@@ -22,8 +22,8 @@ summary:
 officialDifferentialCoverage:
   status: "partial"
   requiredEntries: 86
-  requiredEntriesWithEvidence: 49
-  matchedScenarios: 35
+  requiredEntriesWithEvidence: 51
+  matchedScenarios: 37
   uncoveredCandidateScenarios: 10
 entries:
   - id: "capability.a-b-slots"
@@ -1031,7 +1031,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-force"
   - id: "option.fs-options"
     kind: "option"
     required: true
@@ -1292,7 +1293,8 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-informational-responses"
   - id: "protocol.upload"
     kind: "protocol"
     required: true
