@@ -1078,6 +1078,15 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             receive_payload=super_metadata,
         ),
         Scenario(
+            "official-tcp-resize-logical-partition-fastbootd", "tcp",
+            ("resize-logical-partition", "differential", "8192"),
+            "resize-logical-partition:differential:8192",
+            coverage_ids=("command.resize-logical-partition",),
+            variable_values=(("is-userspace", "yes"),
+                             ("has-slot:differential", "no"),
+                             ("is-logical:differential", "yes")),
+        ),
+        Scenario(
             "official-tcp-reboot-fastboot", "tcp",
             ("reboot", "fastboot"), "getvar:is-userspace",
             coverage_ids=("command.reboot-fastboot",),

@@ -199,11 +199,12 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-get-staged",
             "official-tcp-fetch-chunking",
             "official-tcp-resize-logical-partition",
+            "official-tcp-resize-logical-partition-fastbootd",
             "official-tcp-boot-raw-options",
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 45)
+        self.assertEqual(len(scenarios), 46)
         self.assertTrue(expected.issubset(by_id))
         super_metadata = self.runner._synthetic_super_metadata()
         self.assertEqual(len(super_metadata), 65_536)
