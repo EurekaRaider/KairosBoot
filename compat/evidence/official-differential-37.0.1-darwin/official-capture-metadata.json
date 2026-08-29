@@ -20,9 +20,9 @@
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "6c5f42d801f42b2faf43497b777d005e817de1c35fe0063d3fbd0d7d6a700ce5",
-    "sha256": "6c5f42d801f42b2faf43497b777d005e817de1c35fe0063d3fbd0d7d6a700ce5",
-    "sourceCommit": "cc01324322978bdc0ed1ffc98a3874c23b9ddc8b"
+    "releaseArtifactSha256": "3afc35782ea089fcacefa4ccf89e3b2be9acd6ac2cc6b17de4fa2a2021bc847d",
+    "sha256": "3afc35782ea089fcacefa4ccf89e3b2be9acd6ac2cc6b17de4fa2a2021bc847d",
+    "sourceCommit": "937f49b057199d4426deedb317edf7bc58ef784b"
   },
   "result": "matched",
   "scenarios": [
