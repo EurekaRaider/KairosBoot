@@ -454,6 +454,37 @@
     {
       "deviceState": {
         "commands": [
+          "reboot-recovery"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "reboot",
+            "recovery"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "reboot-recovery",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-reboot-recovery"
+    },
+    {
+      "deviceState": {
+        "commands": [
           "continue"
         ],
         "product": "product_a"
@@ -580,6 +611,130 @@
     {
       "deviceState": {
         "commands": [
+          "flashing lock"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flashing",
+            "lock"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "flashing lock",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flashing-lock"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "flashing unlock"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flashing",
+            "unlock"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "flashing unlock",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flashing-unlock"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "flashing lock_critical"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flashing",
+            "lock-critical"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "flashing lock_critical",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flashing-lock-critical"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "flashing unlock_critical"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "flashing",
+            "unlock-critical"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "flashing unlock_critical",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-flashing-unlock-critical"
+    },
+    {
+      "deviceState": {
+        "commands": [
           "create-logical-partition:differential:4096"
         ],
         "product": "product_a"
@@ -674,6 +829,68 @@
     {
       "deviceState": {
         "commands": [
+          "gsi:disable"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "gsi",
+            "disable"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "gsi:disable",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-gsi-disable"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "gsi:status"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "gsi",
+            "status"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "gsi:status",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-gsi-status"
+    },
+    {
+      "deviceState": {
+        "commands": [
           "snapshot-update:cancel"
         ],
         "product": "product_a"
@@ -701,6 +918,96 @@
         }
       ],
       "id": "official-tcp-snapshot-cancel"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "snapshot-update:merge"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "snapshot-update",
+            "merge"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "snapshot-update:merge",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-snapshot-merge"
+    },
+    {
+      "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "--device",
+            "<ENDPOINT>",
+            "getvar",
+            "product"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "product"
+        },
+        {
+          "kind": "OKAY",
+          "message": "product_a"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-serial-selector"
+    },
+    {
+      "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "--verbose",
+            "getvar",
+            "product"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "product"
+        },
+        {
+          "kind": "OKAY",
+          "message": "product_a"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-verbose"
     },
     {
       "deviceState": {

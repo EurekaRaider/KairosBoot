@@ -11,18 +11,18 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
+      "sha256": "57a9b7b7e1bb15edd81e088b1115f7a83a4d22126b864c2ceb8497f58bde4adf"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
+      "sha256": "57a9b7b7e1bb15edd81e088b1115f7a83a4d22126b864c2ceb8497f58bde4adf"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "5ad6d63c4130d145118ce2d01897eac23104c6ebef4ef9a8a958e261b0dd27f8",
-    "sha256": "5ad6d63c4130d145118ce2d01897eac23104c6ebef4ef9a8a958e261b0dd27f8",
-    "sourceCommit": "3b7f68dd7b0febafdec1093ad43446992282db38"
+    "releaseArtifactSha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
+    "sha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
+    "sourceCommit": "ea6a106b03b5f2346afe215783d8ee0fc894d997"
   },
   "result": "matched",
   "scenarios": [
@@ -114,6 +114,14 @@
     },
     {
       "coverageIds": [
+        "command.reboot-recovery"
+      ],
+      "id": "official-tcp-reboot-recovery",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
         "command.continue"
       ],
       "id": "official-tcp-continue",
@@ -146,6 +154,38 @@
     },
     {
       "coverageIds": [
+        "command.flashing-lock"
+      ],
+      "id": "official-tcp-flashing-lock",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flashing-unlock"
+      ],
+      "id": "official-tcp-flashing-unlock",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flashing-lock-critical"
+      ],
+      "id": "official-tcp-flashing-lock-critical",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.flashing-unlock-critical"
+      ],
+      "id": "official-tcp-flashing-unlock-critical",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
         "command.create-logical-partition"
       ],
       "id": "official-tcp-create-logical-partition",
@@ -170,9 +210,49 @@
     },
     {
       "coverageIds": [
+        "command.gsi-disable"
+      ],
+      "id": "official-tcp-gsi-disable",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.gsi-status"
+      ],
+      "id": "official-tcp-gsi-status",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
         "command.snapshot-cancel"
       ],
       "id": "official-tcp-snapshot-cancel",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.snapshot-merge"
+      ],
+      "id": "official-tcp-snapshot-merge",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "option.serial"
+      ],
+      "id": "official-tcp-serial-selector",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "option.verbose"
+      ],
+      "id": "official-tcp-verbose",
       "result": "matched",
       "transport": "tcp"
     },
@@ -197,6 +277,13 @@
   ],
   "schemaVersion": 1,
   "uncoveredScenarios": [
+    {
+      "coverageIds": [
+        "command.reboot-fastboot"
+      ],
+      "id": "official-scripted-reboot-fastboot",
+      "reason": "official Fastboot reconnects after reboot-fastboot and verifies getvar:is-userspace, while the current KairosBoot reboot API retires the session after the terminal response"
+    },
     {
       "coverageIds": [
         "command.erase"
