@@ -149,6 +149,10 @@ internal sealed class ScriptedTcpDevice : IDisposable
         using (var client = Accept())
         using (var stream = client.GetStream())
         {
+            ExpectCommand(stream, "getvar:has-slot:userdata");
+            WriteResponse(stream, "OKAY", Encoding.ASCII.GetBytes("no"));
+            ExpectCommand(stream, "getvar:partition-type:userdata");
+            WriteResponse(stream, "OKAY", Encoding.ASCII.GetBytes("raw"));
             ExpectCommand(stream, "erase:userdata");
             WriteResponse(stream, "INFO", Encoding.ASCII.GetBytes("warning"));
             WriteResponse(stream, "FAIL", Encoding.ASCII.GetBytes("partition locked"));

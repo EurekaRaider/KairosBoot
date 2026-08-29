@@ -1,7 +1,7 @@
 {
   "aospFastboot": {
-    "platform": "darwin",
-    "sha256": "c97aa28970ba9a46023a8ca52a78dd6547c2c1c4133f9715d4fe551e1dfae152",
+    "platform": "linux",
+    "sha256": "a686e2c7e8dc9cf4cba0cb8a2eef05f7b2bd682c925abd032fe203215d80b618",
     "versionOutput": "fastboot version 37.0.1-15733141"
   },
   "baseline": {
@@ -11,53 +11,21 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "3acedf936870fcd5fa5fb608211eb37dc11c3740921d521fef03f8f889579fb3"
+      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "3acedf936870fcd5fa5fb608211eb37dc11c3740921d521fef03f8f889579fb3"
+      "sha256": "0e53cb4161f296246506ba402d4bf103bfb912796d211bc190036445cf7f4be2"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "47f6504696dc51935e16e4bdcf9de70118d15b21c325c7fc8cf6f13aa96f3590",
-    "sha256": "47f6504696dc51935e16e4bdcf9de70118d15b21c325c7fc8cf6f13aa96f3590",
-    "sourceCommit": "1e1174be759d5763773b7839fce7c7c4bd2a452f"
+    "releaseArtifactSha256": "e04ec4213a26fd757029bef679eead58951e5da84d014ea6bb73a8f36f587b68",
+    "sha256": "e04ec4213a26fd757029bef679eead58951e5da84d014ea6bb73a8f36f587b68",
+    "sourceCommit": "3b7f68dd7b0febafdec1093ad43446992282db38"
   },
   "result": "matched",
   "scenarios": [
-    {
-      "coverageIds": [
-        "command.devices"
-      ],
-      "id": "official-host-devices",
-      "result": "matched",
-      "transport": "host"
-    },
-    {
-      "coverageIds": [
-        "option.help"
-      ],
-      "id": "official-host-help",
-      "result": "matched",
-      "transport": "host"
-    },
-    {
-      "coverageIds": [
-        "option.help-short"
-      ],
-      "id": "official-host-help-short",
-      "result": "matched",
-      "transport": "host"
-    },
-    {
-      "coverageIds": [
-        "option.version"
-      ],
-      "id": "official-host-version",
-      "result": "matched",
-      "transport": "host"
-    },
     {
       "coverageIds": [
         "command.getvar",
@@ -114,14 +82,6 @@
     },
     {
       "coverageIds": [
-        "option.force"
-      ],
-      "id": "official-tcp-flash-force",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
         "command.signature"
       ],
       "id": "official-tcp-signature",
@@ -154,14 +114,6 @@
     },
     {
       "coverageIds": [
-        "command.reboot-recovery"
-      ],
-      "id": "official-tcp-reboot-recovery",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
         "command.continue"
       ],
       "id": "official-tcp-continue",
@@ -178,14 +130,6 @@
     },
     {
       "coverageIds": [
-        "protocol.responses"
-      ],
-      "id": "official-tcp-informational-responses",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
         "command.stage"
       ],
       "id": "official-tcp-stage",
@@ -194,50 +138,9 @@
     },
     {
       "coverageIds": [
-        "command.get-staged",
-        "protocol.upload"
-      ],
-      "id": "official-tcp-get-staged",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
         "command.flashing-get-unlock-ability"
       ],
       "id": "official-tcp-flashing-get-unlock-ability",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "command.flashing-lock"
-      ],
-      "id": "official-tcp-flashing-lock",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "command.flashing-unlock"
-      ],
-      "id": "official-tcp-flashing-unlock",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "command.flashing-lock-critical"
-      ],
-      "id": "official-tcp-flashing-lock-critical",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "command.flashing-unlock-critical"
-      ],
-      "id": "official-tcp-flashing-unlock-critical",
       "result": "matched",
       "transport": "tcp"
     },
@@ -267,49 +170,9 @@
     },
     {
       "coverageIds": [
-        "command.gsi-disable"
-      ],
-      "id": "official-tcp-gsi-disable",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "command.gsi-status"
-      ],
-      "id": "official-tcp-gsi-status",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
         "command.snapshot-cancel"
       ],
       "id": "official-tcp-snapshot-cancel",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "command.snapshot-merge"
-      ],
-      "id": "official-tcp-snapshot-merge",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "option.serial"
-      ],
-      "id": "official-tcp-serial-selector",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "option.verbose"
-      ],
-      "id": "official-tcp-verbose",
       "result": "matched",
       "transport": "tcp"
     },
@@ -319,24 +182,6 @@
         "capability.boot-image-construction"
       ],
       "id": "official-tcp-boot-raw",
-      "result": "matched",
-      "transport": "tcp"
-    },
-    {
-      "coverageIds": [
-        "option.base",
-        "option.kernel-offset",
-        "option.ramdisk-offset",
-        "option.tags-offset",
-        "option.page-size",
-        "option.header-version",
-        "option.os-version",
-        "option.os-patch-level",
-        "option.cmdline",
-        "option.dtb",
-        "option.dtb-offset"
-      ],
-      "id": "official-tcp-boot-raw-options",
       "result": "matched",
       "transport": "tcp"
     },
@@ -352,20 +197,6 @@
   ],
   "schemaVersion": 1,
   "uncoveredScenarios": [
-    {
-      "coverageIds": [
-        "command.fetch"
-      ],
-      "id": "official-scripted-fetch-chunking",
-      "reason": "official Fastboot probes has-slot and max-fetch-size and performs ranged chunked fetches, while the current no-range KairosBoot CLI sends one direct fetch:partition receive command"
-    },
-    {
-      "coverageIds": [
-        "command.reboot-fastboot"
-      ],
-      "id": "official-scripted-reboot-fastboot",
-      "reason": "official Fastboot reconnects after reboot-fastboot and verifies getvar:is-userspace, while the current KairosBoot reboot API retires the session after the terminal response"
-    },
     {
       "coverageIds": [
         "command.erase"

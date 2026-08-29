@@ -58,6 +58,30 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial void ContextRelease(IntPtr context);
 
+    [LibraryImport(LibraryName, EntryPoint = "kb_device_open", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DeviceOpen(
+        ContextSafeHandle context,
+        string? selector,
+        out IntPtr device,
+        out IntPtr error);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_device_identifier")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr DeviceIdentifier(DeviceSafeHandle device);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_device_serial")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr DeviceSerial(DeviceSafeHandle device);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_device_usb_path")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial IntPtr DeviceUsbPath(DeviceSafeHandle device);
+
+    [LibraryImport(LibraryName, EntryPoint = "kb_device_release")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void DeviceRelease(IntPtr device);
+
     [LibraryImport(LibraryName, EntryPoint = "kb_enumerate_devices")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int EnumerateDevices(
@@ -88,8 +112,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashFileAsync(
-        ContextSafeHandle context,
-        string? serial,
+        DeviceSafeHandle device,
         string partition,
         string filePath,
         ref NativeFlashOptions options,
@@ -99,8 +122,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_file", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashFile(
-        ContextSafeHandle context,
-        string? serial,
+        DeviceSafeHandle device,
         string partition,
         string filePath,
         ref NativeFlashOptions options,
@@ -109,8 +131,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_vendor_boot_ramdisk_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashVendorBootRamdiskAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string partition,
         string? ramdiskName,
         string ramdiskPath,
@@ -122,8 +143,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_vendor_boot_ramdisk", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashVendorBootRamdisk(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string partition,
         string? ramdiskName,
         string ramdiskPath,
@@ -134,8 +154,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashRawAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string partition,
         string kernelPath,
         string? ramdiskPath,
@@ -147,8 +166,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashRaw(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string partition,
         string kernelPath,
         string? ramdiskPath,
@@ -159,8 +177,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw_with_boot_options_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashRawWithBootOptionsAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string partition,
         string kernelPath,
         string? ramdiskPath,
@@ -173,8 +190,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flash_raw_with_boot_options", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashRawWithBootOptions(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string partition,
         string kernelPath,
         string? ramdiskPath,
@@ -186,8 +202,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_boot_raw_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int BootRawAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string kernelPath,
         string? ramdiskPath,
         string? secondStagePath,
@@ -199,8 +214,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_boot_raw", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int BootRaw(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string kernelPath,
         string? ramdiskPath,
         string? secondStagePath,
@@ -211,8 +225,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_boot_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int BootFileAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string filePath,
         ref NativeFlashOptions options,
         out IntPtr operation,
@@ -221,8 +234,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_boot_file", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int BootFile(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string filePath,
         ref NativeFlashOptions options,
         out IntPtr error);
@@ -230,8 +242,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_signature_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SignatureFileAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string filePath,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -240,8 +251,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_signature_file", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SignatureFile(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string filePath,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -250,8 +260,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_update_package_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int UpdatePackageAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string packagePath,
         ref NativeUpdateOptions options,
         out IntPtr operation,
@@ -260,8 +269,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_update_package", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int UpdatePackage(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string packagePath,
         ref NativeUpdateOptions options,
         out IntPtr error);
@@ -269,8 +277,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_wipe_super_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int WipeSuperAsync(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string? superEmptyImage,
         ref NativeUpdateOptions options,
         out IntPtr operation,
@@ -279,8 +286,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_wipe_super", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int WipeSuper(
-        ContextSafeHandle context,
-        string? deviceSelector,
+        DeviceSafeHandle device,
         string? superEmptyImage,
         ref NativeUpdateOptions options,
         out IntPtr error);
@@ -288,8 +294,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_getvar_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int GetVarAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string variable,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -298,8 +303,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_getvar", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int GetVar(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string variable,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -308,8 +312,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_erase_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int EraseAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partition,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -318,8 +321,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_erase", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Erase(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partition,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -328,8 +330,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_format_partition_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FormatPartitionAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partition,
         string? filesystemType,
         ulong partitionSize,
@@ -340,8 +341,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_set_active_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SetActiveAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string slot,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -350,8 +350,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_set_active", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SetActive(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string slot,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -360,8 +359,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flashing_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FlashingAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int command,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -370,8 +368,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_flashing", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Flashing(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int command,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -380,8 +377,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_gsi_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int GsiAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int command,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -390,8 +386,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_gsi", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Gsi(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int command,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -400,8 +395,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_snapshot_update_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SnapshotUpdateAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int command,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -410,8 +404,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_snapshot_update", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int SnapshotUpdate(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int command,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -420,8 +413,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_create_logical_partition_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int CreateLogicalPartitionAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partitionName,
         ulong size,
         ref NativeCommandOptions options,
@@ -431,8 +423,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_create_logical_partition", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int CreateLogicalPartition(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partitionName,
         ulong size,
         ref NativeCommandOptions options,
@@ -442,8 +433,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_delete_logical_partition_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int DeleteLogicalPartitionAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partitionName,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -452,8 +442,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_delete_logical_partition", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int DeleteLogicalPartition(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partitionName,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -462,8 +451,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_resize_logical_partition_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ResizeLogicalPartitionAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partitionName,
         ulong size,
         ref NativeCommandOptions options,
@@ -473,8 +461,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_resize_logical_partition", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ResizeLogicalPartition(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partitionName,
         ulong size,
         ref NativeCommandOptions options,
@@ -484,8 +471,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_reboot_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int RebootAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int target,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -494,8 +480,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_reboot", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Reboot(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         int target,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -504,8 +489,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_continue_boot_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ContinueBootAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         ref NativeCommandOptions options,
         out IntPtr operation,
         out IntPtr error);
@@ -513,8 +497,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_continue_boot", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ContinueBoot(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         ref NativeCommandOptions options,
         out IntPtr result,
         out IntPtr error);
@@ -522,8 +505,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_oem_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int OemAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string commandSuffix,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -532,8 +514,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_oem", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Oem(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string commandSuffix,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -542,8 +523,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_raw_command_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int RawCommandAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string command,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -552,8 +532,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_raw_command", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int RawCommand(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string command,
         ref NativeCommandOptions options,
         out IntPtr result,
@@ -562,8 +541,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_boot_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int BootAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         ref NativeCommandOptions options,
         out IntPtr operation,
         out IntPtr error);
@@ -571,8 +549,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_boot", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Boot(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         ref NativeCommandOptions options,
         out IntPtr result,
         out IntPtr error);
@@ -580,8 +557,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_stage_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int StageAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         IntPtr data,
         UIntPtr dataSize,
         ref NativeCommandOptions options,
@@ -591,8 +567,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_stage", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Stage(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         IntPtr data,
         UIntPtr dataSize,
         ref NativeCommandOptions options,
@@ -602,8 +577,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_upload_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int UploadAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         ref NativeCommandOptions options,
         out IntPtr operation,
         out IntPtr error);
@@ -611,8 +585,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_upload", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Upload(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         ref NativeCommandOptions options,
         out IntPtr result,
         out IntPtr error);
@@ -620,8 +593,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_fetch_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FetchAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partition,
         ulong offset,
         ulong size,
@@ -632,8 +604,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_fetch", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Fetch(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partition,
         ulong offset,
         ulong size,
@@ -644,8 +615,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_upload_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int UploadFileAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string outputPath,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -654,8 +624,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_get_staged_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int GetStagedFileAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string outputPath,
         ref NativeCommandOptions options,
         out IntPtr operation,
@@ -664,8 +633,7 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName, EntryPoint = "kb_fetch_file_async", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int FetchFileAsync(
-        ContextSafeHandle context,
-        string? selector,
+        DeviceSafeHandle device,
         string partition,
         ulong offset,
         ulong size,

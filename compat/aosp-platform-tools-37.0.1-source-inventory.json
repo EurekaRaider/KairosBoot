@@ -57,7 +57,6 @@
     {"id": "option.device-path", "kind": "option", "spelling": "-l", "required": true},
     {"id": "option.serial", "kind": "option", "spelling": "-s", "required": true},
     {"id": "option.sparse-limit", "kind": "option", "spelling": "-S", "required": true},
-    {"id": "option.vendor-id", "kind": "option", "spelling": "-v", "required": true},
     {"id": "option.wipe", "kind": "option", "spelling": "-w", "required": true},
     {"id": "option.base", "kind": "option", "spelling": "--base", "required": true},
     {"id": "option.cmdline", "kind": "option", "spelling": "--cmdline", "required": true},

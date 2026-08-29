@@ -62,7 +62,7 @@ still under development.
 | C11 SDK | Versioned opaque-handle API for version, context, errors, USB device lists, and operation-shaped flash entry points |
 | C++23 SDK | Header-only, move-only RAII wrapper over the C ABI using `std::expected` |
 | .NET SDK | Thin `net48;net10.0` binding with `SafeHandle`, UTF-8 marshalling, tasks, cancellation, and native error propagation |
-| CLI | `--version`, `doctor --json`, `devices`, and single-file `flash`, with text or JSON output where applicable |
+| CLI | Fastboot-compatible command names and options for USB/TCP/UDP flashing, device management, boot images, dynamic partitions, staging, and update/flashall |
 | USB discovery | Public enumeration of Fastboot USB interfaces through the locked libusb runtime |
 | Transport core | Fastboot response state machine plus asynchronous USB and Boost.Asio-based TCP v1 / reliable UDP v1 internals tested independently |
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
@@ -83,21 +83,24 @@ hardware-in-the-loop acceptance is complete on every target.
 
 ## Quick Start
 
-### Inspect the current runtime
+### Use the Fastboot-compatible CLI
 
-After building, the CLI exposes diagnostics plus the experimental flash path:
+The `kairosboot` executable follows the frozen Platform-Tools Fastboot command
+syntax; it does not add KairosBoot-specific top-level commands:
 
 ```sh
 ./build/kairosboot --version
-./build/kairosboot --version --json
-./build/kairosboot doctor --json
 ./build/kairosboot devices
-./build/kairosboot devices --json
-./build/kairosboot --serial SERIAL flash system images/system.img
+./build/kairosboot devices -l
+./build/kairosboot -s SERIAL getvar product
+./build/kairosboot -s SERIAL flash system images/system.img
+./build/kairosboot -s SERIAL set_active b
+./build/kairosboot -s SERIAL get_staged staged.bin
 ```
 
-`doctor --json` checks whether the native runtime and libusb dependency are
-usable. `devices` returns the currently visible Fastboot USB interfaces.
+Use `-s tcp:HOST[:PORT]` or `-s udp:HOST[:PORT]` for network Fastboot. Fleet
+validation, planning, reports, and execution remain available through the C,
+C++23, and .NET APIs rather than non-standard Fastboot CLI commands.
 
 ### Use the C11 API
 
@@ -161,9 +164,9 @@ Installed CMake packages export `KairosBoot::C` and `KairosBoot::Cxx`.
 
 | Surface | Contract |
 |---|---|
-| C11 | Single public header, UTF-8 strings, fixed-width integers, opaque handles, explicit ownership, and blocking/asynchronous operation shapes |
-| C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and move-only resources; no separate C++ binary ABI |
-| .NET Framework 4.8 | Windows x64 binding using `DllImport`, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
+| C11 | Single public header, UTF-8 strings, fixed-width integers, opaque `Context`/`Device` handles, explicit ownership, and blocking/asynchronous operation shapes |
+| C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and a move-only `Device` per DUT; no separate C++ binary ABI |
+| .NET Framework 4.8 | Windows x64 binding using `DllImport`, per-DUT `Device` objects, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
 | .NET 10 | `LibraryImport` binding for `win`, `linux`, and `osx` on x64 and ARM64 |
 | CLI | C++23 consumer of the public wrapper with version, diagnostics, enumeration, and experimental single-file flash commands |
 

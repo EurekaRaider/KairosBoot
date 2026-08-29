@@ -14,20 +14,24 @@ AnyCPU/x86 builds fail with the actionable `KB.NET48.X64` error.
 All native resources are owned by `SafeHandle` implementations. Managed error
 objects copy UTF-8 strings before releasing their native owner.
 
+`Context` owns process-wide discovery and Fleet resources. Open one `Device`
+per DUT with `Context.OpenDevice(...)`, then invoke every single-device command
+on that object; command methods do not accept serial numbers or selectors.
+
 Flash operations expose a type-safe per-I/O timeout, `IProgress<T>`, and
 cooperative cancellation on both target frameworks:
 
 ```csharp
 using var context = Context.Create();
+using var device = context.OpenDevice();
 var options = new FlashOptions(TimeSpan.FromSeconds(30));
 var progress = new Progress<FlashProgress>(value =>
     Console.WriteLine($"{value.Stage}: {value.BytesCompleted}/{value.BytesTotal}"));
 
-await context.FlashFileAsync(
+await device.FlashFileAsync(
     "system",
     "images/system.img",
     options,
-    serial: null,
     progress: progress,
     cancellationToken: cancellationToken);
 ```
@@ -51,7 +55,8 @@ var legacy = new LegacyBootOptions(
     secondOffset: 0x00f00000,
     tagsOffset: 0x00000100);
 
-await context.BootRawAsync(
+using var device = context.OpenDevice("usb:serial:DEVICE123");
+await device.BootRawAsync(
     "images/kernel",
     legacy,
     new FlashOptions(TimeSpan.FromSeconds(30)),
@@ -69,20 +74,20 @@ blocking export remains imported and ABI-tested for parity with the C SDK:
 
 ```csharp
 using var context = Context.Create();
+using var device = context.OpenDevice("usb:serial:DEVICE123");
 var options = new UpdateOptions(TimeSpan.FromMinutes(10), wipe: false);
 var progress = new Progress<UpdateProgress>(value =>
     Console.WriteLine($"{value.Stage}: {value.BytesCompleted}/{value.BytesTotal}"));
 
-await context.UpdatePackageAsync(
+await device.UpdatePackageAsync(
     "factory/update.zip",
     options,
-    deviceSelector: "usb:serial:DEVICE123",
     progress: progress,
     cancellationToken: cancellationToken);
 ```
 
-`UpdateOptions.Timeout` bounds package preflight, device selection/open,
-validation, and every update task. `UpdateOptions.Default` uses no deadline and
+`UpdateOptions.Timeout` bounds package preflight, validation, and every update
+task after the `Device` is open. `UpdateOptions.Default` uses no deadline and
 preserves user data. Set `wipe: true` only when wipe-conditioned package tasks
 may erase user data. Cancellation requests `kb_operation_cancel` and continues
 polling until the native operation and its callbacks have drained.
@@ -93,15 +98,15 @@ The same API exposes typed asynchronous primitives for `getvar`, `erase`,
 
 ```csharp
 using var context = Context.Create();
+using var device = context.OpenDevice("tcp:192.0.2.10:5554");
 var options = new CommandOptions(
     TimeSpan.FromSeconds(30),
     maximumReceiveBytes: 128UL * 1024UL * 1024UL);
 
-var result = await context.FetchAsync(
+var result = await device.FetchAsync(
     "vendor_boot",
     offset: 0,
     size: 4UL * 1024UL * 1024UL,
-    deviceSelector: "tcp:192.0.2.10:5554",
     options: options,
     cancellationToken: cancellationToken);
 

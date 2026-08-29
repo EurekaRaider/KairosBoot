@@ -78,7 +78,7 @@ jobs:
           cmake --build consumer-build --parallel
           ./consumer-build/c_consumer
           ./consumer-build/cxx_consumer
-          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version
           project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
           library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.so.${project_version}"
           readelf -d "$library" | grep -F 'libusb-1.0.so.0'
@@ -192,7 +192,7 @@ jobs:
           $env:PATH = "$env:RUNNER_TEMP/kairosboot-install/bin;$env:PATH"
           & ./consumer-build/Release/c_consumer.exe
           & ./consumer-build/Release/cxx_consumer.exe
-          & "$env:RUNNER_TEMP/kairosboot-install/bin/kairosboot.exe" --version --json
+          & "$env:RUNNER_TEMP/kairosboot-install/bin/kairosboot.exe" --version
           if (-not (Test-Path "$env:RUNNER_TEMP/kairosboot-install/bin/libusb-1.0.dll")) {
             throw "installed Windows runtime is missing libusb-1.0.dll"
           }
@@ -239,7 +239,7 @@ jobs:
           cmake --build consumer-build --parallel
           ./consumer-build/c_consumer
           ./consumer-build/cxx_consumer
-          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version
           project_version=$(python3 -c 'import json; print(json.load(open("version.json", encoding="utf-8"))["version"].split("-", 1)[0])')
           library="${RUNNER_TEMP}/kairosboot-install/lib/libkairosboot.${project_version}.dylib"
           otool -L "$library" | grep -F '@rpath/libusb-1.0.0.dylib'
@@ -300,7 +300,7 @@ jobs:
           ./consumer-build/c_consumer
           ./consumer-build/cxx_consumer
           chmod +x "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot"
-          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version --json
+          "${RUNNER_TEMP}/kairosboot-install/bin/kairosboot" --version
 
   managed-package:
     name: managed-package-contract

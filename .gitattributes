@@ -7,6 +7,7 @@ compat/compatibility.yaml text eol=lf
 compat/generated-inventory.json text eol=lf
 compat/kairosboot-capability-evidence.json text eol=lf
 compat/official-differential-evidence.json text eol=lf
+compat/evidence/**/*.json text eol=lf
 compat/evidence/official-differential-37.0.1-darwin/aosp-fastboot-normalized-trace.json text eol=lf
 compat/evidence/official-differential-37.0.1-darwin/kairosboot-normalized-trace.json text eol=lf
 compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json text eol=lf

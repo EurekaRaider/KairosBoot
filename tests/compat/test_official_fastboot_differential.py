@@ -173,6 +173,126 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             ],
         )
 
+    def test_expanded_catalog_covers_simple_commands_and_global_options(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            scenarios = self.runner._scenario_catalog(pathlib.Path(raw_directory))
+        by_id = {scenario.identifier: scenario for scenario in scenarios}
+        expected = {
+            "official-host-devices",
+            "official-host-help",
+            "official-host-help-short",
+            "official-host-version",
+            "official-tcp-reboot-recovery",
+            "official-tcp-flashing-lock",
+            "official-tcp-flashing-unlock",
+            "official-tcp-flashing-lock-critical",
+            "official-tcp-flashing-unlock-critical",
+            "official-tcp-gsi-disable",
+            "official-tcp-gsi-status",
+            "official-tcp-snapshot-merge",
+            "official-tcp-serial-selector",
+            "official-tcp-verbose",
+            "official-tcp-get-staged",
+            "official-tcp-boot-raw-options",
+            "official-tcp-flash-force",
+            "official-tcp-informational-responses",
+        }
+        self.assertEqual(len(scenarios), 37)
+        self.assertTrue(expected.issubset(by_id))
+        self.assertEqual(
+            self.runner._aosp_command(
+                pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]
+            ),
+            ["fastboot", "-s", "{endpoint}", "getvar", "product"],
+        )
+        self.assertEqual(
+            self.runner._aosp_command(
+                pathlib.Path("fastboot"), by_id["official-host-version"]
+            ),
+            ["fastboot", "--version"],
+        )
+        self.assertEqual(
+            self.runner._kairosboot_command(
+                pathlib.Path("kairosboot"), by_id["official-tcp-verbose"]
+            ),
+            [
+                "kairosboot",
+                "--device",
+                "{endpoint}",
+                "--timeout-ms",
+                "5000",
+                "--verbose",
+                "getvar",
+                "product",
+            ],
+        )
+
+    def test_device_to_host_capture_records_exact_payload_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            output = pathlib.Path(raw_directory) / "received.bin"
+            scenario = self.runner.Scenario(
+                "fixture-receive",
+                "tcp",
+                ("get_staged", "<OUTPUT>/received.bin"),
+                "upload",
+                receive_payload=b"a\x00b",
+                output_path=output,
+                output_event_path="<OUTPUT>/received.bin",
+            )
+            recorder = self.runner.WireRecorder(scenario)
+            self.assertEqual(recorder.handle(b"upload"), b"DATA00000003")
+            self.assertEqual(
+                recorder.take_pending_responses(), [b"a\x00b", b"OKAYuploaded"]
+            )
+            output.write_bytes(b"a\x00b")
+            capture = recorder.capture(0)
+        self.assertEqual(
+            [event["kind"] for event in capture["events"]],
+            ["CLI_PARSE", "COMMAND", "DATA", "OKAY", "FILE", "EXIT"],
+        )
+        self.assertEqual(capture["events"][2]["direction"], "device-to-host")
+
+    def test_host_capture_validates_and_normalizes_version_output(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-version",
+            "host",
+            ("--version",),
+            "host",
+            host_output_kind="version",
+        )
+        capture = self.runner._capture_host(
+            [sys.executable, "-c", "print('fixture 1.2.3')"],
+            scenario,
+            "fixture",
+        )
+        self.assertEqual(
+            capture["events"],
+            [
+                {"kind": "CLI_PARSE", "argv": ["--version"], "result": "ok"},
+                {"kind": "TEXT", "message": "version"},
+                {"kind": "EXIT", "code": 0},
+            ],
+        )
+
+    def test_informational_response_chain_preserves_info_text_and_okay(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-responses",
+            "tcp",
+            ("oem", "differential-info"),
+            "oem differential-info",
+            informational_responses=(("INFO", "one"), ("TEXT", "two")),
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        self.assertEqual(recorder.handle(b"oem differential-info"), b"INFOone")
+        self.assertEqual(
+            recorder.take_pending_responses(), [b"TEXTtwo", b"OKAYaccepted"]
+        )
+        capture = recorder.capture(0)
+        self.assertEqual(
+            [event["kind"] for event in capture["events"]],
+            ["CLI_PARSE", "COMMAND", "INFO", "TEXT", "OKAY", "EXIT"],
+        )
+
     def test_signature_requires_download_and_records_exact_blob(self) -> None:
         scenario = self.runner.Scenario(
             "fixture-signature",
@@ -209,7 +329,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         check_schema(schema)
         validate(metadata, schema)
         self.assertEqual(metadata["result"], "matched")
-        self.assertEqual(len(metadata["scenarios"]), 19)
+        self.assertGreaterEqual(len(metadata["scenarios"]), 19)
         self.assertEqual(
             metadata["aospFastboot"]["sha256"],
             json.loads((self.root / "compat/aosp.lock.json").read_text())[
@@ -242,6 +362,24 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-flash-default-file",
                 "official-tcp-boot-raw",
                 "official-tcp-flash-raw",
+                "official-tcp-reboot-recovery",
+                "official-tcp-flashing-lock",
+                "official-tcp-flashing-unlock",
+                "official-tcp-flashing-lock-critical",
+                "official-tcp-flashing-unlock-critical",
+                "official-tcp-gsi-disable",
+                "official-tcp-gsi-status",
+                "official-tcp-snapshot-merge",
+                "official-tcp-serial-selector",
+                "official-tcp-verbose",
+                "official-host-devices",
+                "official-host-help",
+                "official-host-help-short",
+                "official-host-version",
+                "official-tcp-get-staged",
+                "official-tcp-boot-raw-options",
+                "official-tcp-flash-force",
+                "official-tcp-informational-responses",
             }.issubset(scenario_ids)
         )
         cli_arguments = [
@@ -262,6 +400,31 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             }.issubset(uncovered)
         )
         self.assertNotIn("official-scripted-boot-flash-raw", uncovered)
+
+    def test_committed_evidence_index_covers_every_locked_platform(self) -> None:
+        index = json.loads(
+            (self.root / "compat/official-differential-evidence.json").read_text()
+        )
+        metadata_paths = index["captures"]
+        self.assertEqual(len(metadata_paths), 3)
+        observed_platforms = set()
+        for relative in metadata_paths:
+            metadata_path = self.root / relative
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            platform_key = metadata["aospFastboot"]["platform"]
+            observed_platforms.add(platform_key)
+            evidence_root = metadata_path.parent
+            captures = []
+            for label in ("aosp", "kairosboot"):
+                descriptor = metadata["captureFiles"][label]
+                capture_path = evidence_root / descriptor["path"]
+                self.assertEqual(
+                    hashlib.sha256(capture_path.read_bytes()).hexdigest(),
+                    descriptor["sha256"],
+                )
+                captures.append(json.loads(capture_path.read_text(encoding="utf-8")))
+            self.assertEqual(captures[0], captures[1])
+        self.assertEqual(observed_platforms, {"darwin", "linux", "windows"})
 
 
 if __name__ == "__main__":

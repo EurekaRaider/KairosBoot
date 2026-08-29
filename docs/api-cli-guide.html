@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="zh-CN" data-ui-lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="KairosBoot C11, C++23, .NET API and CLI bilingual usage guide / 中英双语使用手册">
+  <title>KairosBoot API 与 CLI 使用手册</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f3f5f7;
+      --surface: #ffffff;
+      --surface-soft: #f7f9fb;
+      --ink: #17202a;
+      --muted: #5b6775;
+      --line: #dce2e8;
+      --brand: #075985;
+      --brand-strong: #0c4a6e;
+      --accent: #06b6d4;
+      --warn-bg: #fff8e7;
+      --warn-line: #e7b54a;
+      --danger-bg: #fff0f0;
+      --danger-line: #e06b6b;
+      --code: #0b1220;
+      --code-ink: #dce9f7;
+      --shadow: 0 18px 48px rgba(15, 23, 42, .08);
+      --radius: 16px;
+      --content: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+    a { color: var(--brand); text-underline-offset: 3px; }
+    a:hover { color: var(--brand-strong); }
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-variant-ligatures: none;
+    }
+    :not(pre) > code {
+      padding: .12rem .36rem;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-soft);
+      color: var(--brand-strong);
+      font-size: .92em;
+    }
+    [data-lang="en"] { display: none; }
+    html[data-ui-lang="en"] [data-lang="zh"] { display: none; }
+    html[data-ui-lang="en"] [data-lang="en"] { display: revert; }
+
+    .skip-link {
+      position: fixed;
+      top: -60px;
+      left: 16px;
+      z-index: 100;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: var(--brand-strong);
+      color: white;
+    }
+    .skip-link:focus { top: 12px; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      border-bottom: 1px solid rgba(220, 226, 232, .9);
+      background: rgba(255, 255, 255, .92);
+      backdrop-filter: blur(16px);
+    }
+    .topbar-inner {
+      width: min(calc(100% - 32px), var(--content));
+      height: 64px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .wordmark {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink);
+      font-weight: 750;
+      text-decoration: none;
+      letter-spacing: -.02em;
+    }
+    .mark {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: linear-gradient(145deg, var(--brand-strong), var(--accent));
+      color: white;
+      font-size: 13px;
+      box-shadow: 0 6px 16px rgba(7, 89, 133, .24);
+    }
+    .top-actions { display: flex; align-items: center; gap: 12px; }
+    .version-pill {
+      padding: 3px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      background: var(--surface-soft);
+    }
+    .lang-switch {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-soft);
+    }
+    .lang-switch button {
+      min-width: 42px;
+      padding: 5px 9px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .lang-switch button[aria-pressed="true"] {
+      background: var(--surface);
+      color: var(--brand-strong);
+      box-shadow: 0 1px 4px rgba(15, 23, 42, .12);
+      font-weight: 700;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 80% 20%, rgba(6, 182, 212, .15), transparent 28%),
+        linear-gradient(135deg, #f7fbfd 0%, #ffffff 58%, #f0f9ff 100%);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: linear-gradient(rgba(7, 89, 133, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(7, 89, 133, .045) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: linear-gradient(to bottom, black, transparent 85%);
+    }
+    .hero-inner {
+      position: relative;
+      width: min(calc(100% - 32px), var(--content));
+      margin: 0 auto;
+      padding: 80px 0 66px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 24px;
+      height: 2px;
+      background: var(--accent);
+    }
+    h1 {
+      max-width: 820px;
+      margin: 0;
+      font-size: clamp(38px, 6vw, 68px);
+      line-height: 1.04;
+      letter-spacing: -.045em;
+    }
+    .hero p {
+      max-width: 760px;
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: clamp(17px, 2vw, 21px);
+    }
+    .badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+    .badge {
+      padding: 6px 10px;
+      border: 1px solid rgba(7, 89, 133, .18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .72);
+      color: var(--brand-strong);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .layout {
+      width: min(calc(100% - 32px), var(--content));
+      margin: 34px auto 90px;
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 32px;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 90px;
+      max-height: calc(100vh - 112px);
+      overflow: auto;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .86);
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+    }
+    .toc-title {
+      margin: 0 0 9px;
+      padding: 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .toc a {
+      display: block;
+      margin: 2px 0;
+      padding: 7px 8px;
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      text-decoration: none;
+      line-height: 1.3;
+    }
+    .toc a:hover, .toc a.active { background: #eaf6fa; color: var(--brand-strong); }
+
+    main { min-width: 0; }
+    section {
+      margin-bottom: 26px;
+      padding: clamp(22px, 4vw, 40px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    h2 {
+      margin: 0 0 22px;
+      font-size: clamp(26px, 4vw, 36px);
+      line-height: 1.18;
+      letter-spacing: -.03em;
+    }
+    h3 {
+      margin: 32px 0 12px;
+      font-size: 21px;
+      line-height: 1.3;
+      letter-spacing: -.015em;
+    }
+    h3:first-child { margin-top: 0; }
+    h4 { margin: 24px 0 10px; font-size: 16px; }
+    p { margin: 0 0 16px; }
+    ul, ol { padding-left: 1.35rem; }
+    li + li { margin-top: .42rem; }
+    .lead { color: var(--muted); font-size: 17px; }
+    .muted { color: var(--muted); }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .mini-card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface-soft);
+    }
+    .mini-card h3 { margin: 0 0 8px; font-size: 17px; }
+    .mini-card p:last-child { margin-bottom: 0; }
+    .callout {
+      margin: 20px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--brand);
+      border-radius: 8px;
+      background: #edf8fc;
+    }
+    .callout.warn { border-color: var(--warn-line); background: var(--warn-bg); }
+    .callout.danger { border-color: var(--danger-line); background: var(--danger-bg); }
+    .callout p:last-child { margin-bottom: 0; }
+
+    .code-wrap { position: relative; margin: 16px 0 22px; }
+    pre {
+      margin: 0;
+      padding: 20px;
+      overflow: auto;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      background: var(--code);
+      color: var(--code-ink);
+      font-size: 13px;
+      line-height: 1.65;
+      tab-size: 2;
+    }
+    .copy-button {
+      position: absolute;
+      top: 9px;
+      right: 9px;
+      padding: 5px 9px;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      background: #152033;
+      color: #b8c6d8;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .copy-button:hover { color: white; border-color: #64748b; }
+
+    .table-scroll { margin: 16px 0 22px; overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      font-size: 14px;
+    }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--surface-soft); color: var(--muted); font-size: 12px; letter-spacing: .025em; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #fbfdfe; }
+    td:first-child code { white-space: nowrap; }
+    .api-list code { white-space: normal; overflow-wrap: anywhere; }
+    .status-ok { color: #047857; font-weight: 700; }
+    .status-warn { color: #a16207; font-weight: 700; }
+    .footer {
+      padding: 30px 16px 44px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+      background: var(--surface);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --page: #0b1118;
+        --surface: #111923;
+        --surface-soft: #17212c;
+        --ink: #edf4f8;
+        --muted: #a6b4c2;
+        --line: #2a3744;
+        --brand: #67d4ea;
+        --brand-strong: #a5e8f4;
+        --warn-bg: #292315;
+        --warn-line: #c99831;
+        --danger-bg: #2a181a;
+        --danger-line: #c85a64;
+        --shadow: 0 18px 48px rgba(0, 0, 0, .2);
+      }
+      .topbar { background: rgba(17, 25, 35, .92); }
+      .hero { background: radial-gradient(circle at 80% 20%, rgba(6, 182, 212, .13), transparent 28%), linear-gradient(135deg, #0f1a22, #111923 62%, #0d2029); }
+      .toc { background: rgba(17, 25, 35, .9); }
+      .toc a:hover, .toc a.active, .callout { background: #102b36; }
+      tbody tr:hover { background: #15202a; }
+    }
+
+    @media (max-width: 880px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: static; max-height: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toc-title { grid-column: 1 / -1; }
+    }
+    @media (max-width: 620px) {
+      .version-pill { display: none; }
+      .hero-inner { padding: 58px 0 48px; }
+      .grid-2, .toc { grid-template-columns: 1fr; }
+      section { border-radius: 12px; }
+      th, td { padding: 10px; }
+    }
+    @media print {
+      .topbar, .toc, .copy-button, .skip-link { display: none !important; }
+      body { background: white; color: black; font-size: 10pt; }
+      .hero { background: white; }
+      .hero-inner { padding: 24px 0; }
+      .layout { display: block; width: 100%; margin: 0; }
+      section { break-inside: avoid; box-shadow: none; border-color: #bbb; }
+      pre { white-space: pre-wrap; color: black; background: #f5f5f5; border-color: #bbb; }
+      a { color: black; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main"><span data-lang="zh">跳到正文</span><span data-lang="en">Skip to content</span></a>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="wordmark" href="#top"><span class="mark" aria-hidden="true">KB</span>KairosBoot</a>
+      <div class="top-actions">
+        <span class="version-pill">0.1.0-dev · API v1</span>
+        <div class="lang-switch" role="group" aria-label="Language / 语言">
+          <button type="button" data-set-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-set-lang="en" aria-pressed="false">EN</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="hero" id="top">
+    <div class="hero-inner">
+      <div class="eyebrow">Host-side Fastboot SDK</div>
+      <h1 data-lang="zh">API 与 CLI 使用手册</h1>
+      <h1 data-lang="en">API &amp; CLI Usage Guide</h1>
+      <p data-lang="zh">面向 Windows、Linux 与 macOS 的 KairosBoot 开发者手册，覆盖 C11、C++23、.NET Framework 4.8、.NET 10 以及命令行工具。</p>
+      <p data-lang="en">The developer guide for KairosBoot on Windows, Linux, and macOS, covering C11, C++23, .NET Framework 4.8, .NET 10, and the command-line tool.</p>
+      <div class="badge-row" aria-label="Supported platforms and APIs">
+        <span class="badge">Windows x64 / ARM64</span>
+        <span class="badge">Linux x64 / ARM64</span>
+        <span class="badge">macOS x64 / ARM64</span>
+        <span class="badge">C11</span>
+        <span class="badge">C++23</span>
+        <span class="badge">.NET 4.8 / 10</span>
+        <span class="badge">USB / TCP / UDP</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Table of contents">
+      <div class="toc-title"><span data-lang="zh">目录</span><span data-lang="en">Contents</span></div>
+      <a href="#status"><span data-lang="zh">文档范围与安全提示</span><span data-lang="en">Scope &amp; safety</span></a>
+      <a href="#quickstart"><span data-lang="zh">构建与快速开始</span><span data-lang="en">Build &amp; quick start</span></a>
+      <a href="#selectors"><span data-lang="zh">设备选择与传输</span><span data-lang="en">Selectors &amp; transports</span></a>
+      <a href="#cli"><span data-lang="zh">CLI 使用</span><span data-lang="en">CLI usage</span></a>
+      <a href="#cli-reference"><span data-lang="zh">CLI 命令速查</span><span data-lang="en">CLI command reference</span></a>
+      <a href="#c-api"><span data-lang="zh">C11 API</span><span data-lang="en">C11 API</span></a>
+      <a href="#cpp-api"><span data-lang="zh">C++23 API</span><span data-lang="en">C++23 API</span></a>
+      <a href="#dotnet-api"><span data-lang="zh">C# / .NET API</span><span data-lang="en">C# / .NET API</span></a>
+      <a href="#fleet"><span data-lang="zh">多设备 Fleet</span><span data-lang="en">Multi-device Fleet</span></a>
+      <a href="#errors"><span data-lang="zh">进度、取消与错误</span><span data-lang="en">Progress, cancellation &amp; errors</span></a>
+      <a href="#reference"><span data-lang="zh">API 能力索引</span><span data-lang="en">API capability index</span></a>
+    </nav>
+
+    <main id="main">
+      <section id="status">
+        <h2 data-lang="zh">文档范围与安全提示</h2>
+        <h2 data-lang="en">Scope and safety</h2>
+        <p class="lead" data-lang="zh">本文档依据仓库当前 <code>0.1.0-dev</code>、稳定 C ABI <code>API v1</code>、公开头文件和 CLI 实际帮助输出编写。</p>
+        <p class="lead" data-lang="en">This guide reflects the repository's current <code>0.1.0-dev</code> build, stable C ABI <code>API v1</code>, public headers, and actual CLI help output.</p>
+
+        <div class="callout danger">
+          <p data-lang="zh"><strong>刷机是破坏性操作。</strong>在执行 <code>flash</code>、<code>erase</code>、<code>format</code>、<code>update</code>、锁定或解锁前，请确认设备、分区、产品和镜像哈希。断电或传输状态不确定时，KairosBoot 不会猜测偏移量并自动续传。</p>
+          <p data-lang="en"><strong>Flashing is destructive.</strong> Before <code>flash</code>, <code>erase</code>, <code>format</code>, <code>update</code>, lock, or unlock, verify the device, partition, product, and image hash. KairosBoot does not guess an offset or auto-resume after power loss or an uncertain transfer.</p>
+        </div>
+        <div class="callout warn">
+          <p data-lang="zh">项目仍处于 1.0 前开发阶段。完整 Fastboot 兼容性、真实硬件性能与 32 台设备验收仍需以仓库门禁和目标硬件实测为准；不要仅凭模拟测试把当前开发版本用于生产。</p>
+          <p data-lang="en">The project is still pre-1.0. Full Fastboot compatibility, hardware performance, and 32-device acceptance remain subject to repository gates and real target hardware; do not treat simulation-only results as production qualification.</p>
+        </div>
+        <div class="grid-2">
+          <div class="mini-card">
+            <h3 data-lang="zh">公开接口</h3><h3 data-lang="en">Public surfaces</h3>
+            <p data-lang="zh">C11 单头文件、C++23 RAII 包装、C# 异步 API 与 <code>kairosboot</code> CLI。C++ 和 C# 最终调用相同的稳定 C ABI。</p>
+            <p data-lang="en">A single-header C11 SDK, C++23 RAII wrapper, asynchronous C# API, and the <code>kairosboot</code> CLI. C++ and C# ultimately use the same stable C ABI.</p>
+          </div>
+          <div class="mini-card">
+            <h3 data-lang="zh">设备端要求</h3><h3 data-lang="en">Device requirement</h3>
+            <p data-lang="zh">KairosBoot 是纯 Host 侧实现，连接支持标准 Fastboot 协议的 bootloader 或 fastbootd，不要求修改设备端。</p>
+            <p data-lang="en">KairosBoot is host-only. It connects to a bootloader or fastbootd that implements the standard Fastboot protocol and requires no device-side changes.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickstart">
+        <h2 data-lang="zh">构建与快速开始</h2>
+        <h2 data-lang="en">Build and quick start</h2>
+        <h3 data-lang="zh">从源码构建</h3><h3 data-lang="en">Build from source</h3>
+        <p data-lang="zh">性能测试与发布产物必须使用 <strong>Release</strong> 配置。多配置生成器仍应在 build/install 阶段显式传入 <code>--config Release</code>。</p>
+        <p data-lang="en">Performance measurements and release artifacts must use the <strong>Release</strong> configuration. With a multi-config generator, pass <code>--config Release</code> explicitly to build and install.</p>
+        <div class="code-wrap"><pre><code>cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+cmake --build build --config Release
+ctest --test-dir build --build-config Release --output-on-failure
+cmake --install build --config Release --prefix &lt;install-prefix&gt;</code></pre></div>
+        <p data-lang="zh">KairosBoot 动态链接 libusb。Windows 设备需已安装兼容的 WinUSB 驱动；库只提供诊断信息，不会替换驱动。网络传输由 Boost.Asio 实现，对使用者不暴露 Winsock API。</p>
+        <p data-lang="en">KairosBoot dynamically links libusb. Windows devices need a compatible WinUSB driver; the library reports diagnostics but never replaces the driver. Network transports use Boost.Asio and do not expose Winsock APIs to consumers.</p>
+
+        <h3 data-lang="zh">先做只读检查</h3><h3 data-lang="en">Start with read-only checks</h3>
+        <div class="code-wrap"><pre><code>kairosboot --version
+kairosboot devices
+kairosboot devices -l
+kairosboot -s ABC123 getvar product
+kairosboot -s usb:1-2.3 getvar current-slot</code></pre></div>
+
+        <h3 data-lang="zh">在 CMake consumer 中链接</h3><h3 data-lang="en">Link from a CMake consumer</h3>
+        <div class="code-wrap"><pre><code>find_package(KairosBoot CONFIG REQUIRED)
+
+# Stable C ABI
+target_link_libraries(my_c_app PRIVATE KairosBoot::C)
+
+# Header-only C++23 wrapper over the same C ABI
+target_compile_features(my_cpp_app PRIVATE cxx_std_23)
+target_link_libraries(my_cpp_app PRIVATE KairosBoot::Cxx)</code></pre></div>
+
+        <h3 data-lang="zh">.NET 包</h3><h3 data-lang="en">.NET package</h3>
+        <p data-lang="zh">同一 <code>KairosBoot</code> 包面向 <code>net48</code> 与 <code>net10.0</code>。<code>net48</code> 仅支持 Windows x64；<code>net10.0</code> 支持 <code>win/linux/osx × x64/arm64</code>。开发包可能要求把 native SDK 和 libusb 放入系统原生库搜索路径；Release 包携带经验证的 RID runtime assets。</p>
+        <p data-lang="en">The same <code>KairosBoot</code> package targets <code>net48</code> and <code>net10.0</code>. <code>net48</code> is Windows x64 only; <code>net10.0</code> supports <code>win/linux/osx × x64/arm64</code>. Development packages may require staging the native SDK and libusb on the native library search path; release packages carry validated RID runtime assets.</p>
+        <div class="code-wrap"><pre><code>dotnet add package KairosBoot --version &lt;version&gt;</code></pre></div>
+      </section>
+
+      <section id="selectors">
+        <h2 data-lang="zh">设备选择与传输</h2>
+        <h2 data-lang="en">Device selectors and transports</h2>
+        <p data-lang="zh">CLI 与 Fastboot 一致，使用 <code>-s SERIAL</code> 或 <code>-s tcp|udp:HOST[:PORT]</code>。API 只在打开 <code>Device</code> 对象时接收 selector：C 使用 <code>kb_device_open</code>，C++ 使用 <code>Context::open_device</code>，C# 使用 <code>Context.OpenDevice</code>；之后所有单设备操作都直接调用该对象，不再重复传 selector。无参打开只在当前恰好有一台 USB Fastboot 设备时自动选择，否则返回 no-device 或 ambiguous-device。</p>
+        <p data-lang="en">Like Fastboot, the CLI uses <code>-s SERIAL</code> or <code>-s tcp|udp:HOST[:PORT]</code>. APIs accept a selector only while opening a <code>Device</code>: <code>kb_device_open</code> in C, <code>Context::open_device</code> in C++, and <code>Context.OpenDevice</code> in C#. Every subsequent single-device operation is invoked on that object without repeating a selector. The parameterless form auto-selects only when exactly one USB Fastboot device is present; otherwise it returns no-device or ambiguous-device.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th><span data-lang="zh">形式</span><span data-lang="en">Form</span></th><th><span data-lang="zh">含义</span><span data-lang="en">Meaning</span></th><th><span data-lang="zh">示例</span><span data-lang="en">Example</span></th></tr></thead>
+          <tbody>
+            <tr><td><code>SERIAL</code></td><td><span data-lang="zh">打开设备时使用的精确 USB serial 简写</span><span data-lang="en">Exact USB serial shorthand used while opening a device</span></td><td><code>ABC123</code></td></tr>
+            <tr><td><code>usb:serial:&lt;encoded&gt;</code></td><td><span data-lang="zh">百分号编码的 UTF-8 USB serial</span><span data-lang="en">Percent-encoded UTF-8 USB serial</span></td><td><code>usb:serial:ABC123</code></td></tr>
+            <tr><td><code>usb:&lt;path&gt;</code></td><td><span data-lang="zh">物理总线/Hub/端口路径</span><span data-lang="en">Physical bus/hub/port path</span></td><td><code>usb:1-2.3</code></td></tr>
+            <tr><td><code>tcp:&lt;host&gt;[:port]</code></td><td><span data-lang="zh">Fastboot TCP；默认端口 5554</span><span data-lang="en">Fastboot TCP; default port 5554</span></td><td><code>tcp:192.0.2.10:5554</code></td></tr>
+            <tr><td><code>udp:&lt;host&gt;[:port]</code></td><td><span data-lang="zh">Fastboot UDP；默认端口 5554</span><span data-lang="en">Fastboot UDP; default port 5554</span></td><td><code>udp:[2001:db8::10]:5554</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout">
+          <p data-lang="zh"><code>ContextOptions.usb_vendor_id</code> 是 SDK 的 USB 枚举过滤能力，仅影响 USB；Fastboot 兼容 CLI 不增加 vendor-id 选项。多设备生产作业优先使用物理 USB path 绑定重连，再用 serial/product 二次验证。</p>
+          <p data-lang="en"><code>ContextOptions.usb_vendor_id</code> is an SDK USB-enumeration filter and affects USB only; the Fastboot-compatible CLI adds no vendor-id option. For production fleets, prefer physical USB-path reconnect binding with serial/product as secondary verification.</p>
+        </div>
+      </section>
+
+      <section id="cli">
+        <h2 data-lang="zh">CLI 使用</h2>
+        <h2 data-lang="en">CLI usage</h2>
+        <h3 data-lang="zh">常用刷写流程</h3><h3 data-lang="en">Common flashing workflow</h3>
+        <div class="code-wrap"><pre><code># Read-only identity checks
+kairosboot -s ABC123 getvar product
+kairosboot -s ABC123 getvar current-slot
+
+# Flash one image; choose an explicit device in multi-device environments
+kairosboot -s ABC123 flash boot images/boot.img
+
+# Flash a package; preserves userdata by default
+kairosboot -s ABC123 update image-product.zip
+
+# Apply package wipe tasks and skip final reboot
+kairosboot -s ABC123 -w --skip-reboot update image-product.zip
+
+# Use a slot and activate it before prepared flash tasks
+kairosboot -s ABC123 --slot b --set-active=b flash boot images/boot.img
+
+# Reboot explicitly
+kairosboot -s ABC123 reboot</code></pre></div>
+
+        <h3 data-lang="zh">镜像、动态分区与接收</h3><h3 data-lang="en">Images, dynamic partitions, and receive</h3>
+        <div class="code-wrap"><pre><code># Build and boot an Android boot image from components
+kairosboot -s ABC123 --header-version 2 --dtb board.dtb \
+  boot kernel.bin ramdisk.img
+
+# Replace a named vendor_boot v4 ramdisk and optional DTB
+kairosboot -s ABC123 --dtb board.dtb \
+  flash vendor_boot:default vendor-ramdisk.img
+
+# Create or resize a logical partition
+kairosboot -s ABC123 create-logical-partition scratch 1073741824
+kairosboot -s ABC123 resize-logical-partition scratch 2147483648
+
+# Fetch a partition atomically to a file
+kairosboot -s ABC123 fetch vendor_boot vendor_boot.img
+
+# Stage and retrieve data
+kairosboot -s ABC123 stage metadata.bin
+kairosboot -s ABC123 get_staged staged-output.bin</code></pre></div>
+
+        <h3 data-lang="zh">输出与退出码</h3><h3 data-lang="en">Output and exit codes</h3>
+        <p data-lang="zh">CLI 保持 Fastboot 风格的文本输出，不增加 <code>--json</code>。需要结构化结果、进度和报告的自动化应使用 C、C++23 或 .NET API，并始终检查状态码。</p>
+        <p data-lang="en">The CLI keeps Fastboot-style text output and does not add <code>--json</code>. Automation that needs structured results, progress, or reports should use the C, C++23, or .NET API and always check status codes.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th><span data-lang="zh">退出码</span><span data-lang="en">Exit code</span></th><th><span data-lang="zh">含义</span><span data-lang="en">Meaning</span></th></tr></thead>
+          <tbody>
+            <tr><td><code>0</code></td><td><span data-lang="zh">成功</span><span data-lang="en">Success</span></td></tr>
+            <tr><td><code>2</code></td><td><span data-lang="zh">命令行用法错误</span><span data-lang="en">CLI usage error</span></td></tr>
+            <tr><td><code>4</code></td><td><span data-lang="zh">运行时失败或已取消</span><span data-lang="en">Runtime failure or cancellation</span></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="cli-reference">
+        <h2 data-lang="zh">CLI 命令速查</h2>
+        <h2 data-lang="en">CLI command reference</h2>
+        <p data-lang="zh">以下语法与当前 <code>kairosboot --help</code> 一致。方括号表示可选参数；破坏性命令仍应配合显式设备选择与前置检查。</p>
+        <p data-lang="en">The syntax below matches the current <code>kairosboot --help</code>. Square brackets indicate optional arguments; destructive commands should still use explicit device selection and preflight checks.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th><span data-lang="zh">类别</span><span data-lang="en">Group</span></th><th><span data-lang="zh">命令</span><span data-lang="en">Command</span></th><th><span data-lang="zh">用途</span><span data-lang="en">Purpose</span></th></tr></thead>
+          <tbody>
+            <tr><td><span data-lang="zh">基础</span><span data-lang="en">Basics</span></td><td><code>--version</code><br><code>-h | --help</code></td><td><span data-lang="zh">版本与帮助</span><span data-lang="en">Version and help</span></td></tr>
+            <tr><td><span data-lang="zh">基础</span><span data-lang="en">Basics</span></td><td><code>devices [-l]</code><br><code>getvar &lt;variable&gt;</code></td><td><span data-lang="zh">枚举设备与读取变量</span><span data-lang="en">Enumerate devices and read a variable</span></td></tr>
+            <tr><td><span data-lang="zh">刷写</span><span data-lang="en">Flash</span></td><td><code>flash &lt;partition&gt; [file]</code><br><code>flash vendor_boot:RAMDISK &lt;file&gt;</code><br><code>flash:raw &lt;partition&gt; &lt;kernel&gt; [ramdisk [second]]</code></td><td><span data-lang="zh">刷单镜像、替换 vendor_boot ramdisk、构建并刷 boot 镜像</span><span data-lang="en">Flash an image, replace a vendor_boot ramdisk, or build and flash a boot image</span></td></tr>
+            <tr><td><span data-lang="zh">整包</span><span data-lang="en">Package</span></td><td><code>update &lt;package&gt; [options]</code><br><code>flashall [options]</code><br><code>wipe-super [super_empty.img]</code></td><td><span data-lang="zh">执行 update.zip/flash-all 任务或重置动态分区</span><span data-lang="en">Run update.zip/flash-all tasks or reset dynamic partitions</span></td></tr>
+            <tr><td><span data-lang="zh">启动镜像</span><span data-lang="en">Boot image</span></td><td><code>boot &lt;kernel&gt; [ramdisk [second]]</code><br><code>flash:raw &lt;partition&gt; &lt;kernel&gt; [ramdisk [second]]</code></td><td><span data-lang="zh">构建并临时启动或刷写 Android boot image</span><span data-lang="en">Build and boot or flash an Android boot image</span></td></tr>
+            <tr><td><span data-lang="zh">分区</span><span data-lang="en">Partition</span></td><td><code>erase &lt;partition&gt;</code><br><code>format[:type[:size]] &lt;partition&gt;</code><br><code>set_active &lt;slot&gt;</code></td><td><span data-lang="zh">擦除、格式化与槽位切换</span><span data-lang="en">Erase, format, and switch slots</span></td></tr>
+            <tr><td><span data-lang="zh">接收/暂存</span><span data-lang="en">Receive/stage</span></td><td><code>stage &lt;file&gt;</code><br><code>get_staged &lt;output&gt;</code><br><code>fetch &lt;partition&gt; &lt;output&gt;</code></td><td><span data-lang="zh">向设备暂存或把设备数据原子写入 Host 文件</span><span data-lang="en">Stage to the device or atomically publish device data to a host file</span></td></tr>
+            <tr><td><span data-lang="zh">重启</span><span data-lang="en">Reboot</span></td><td><code>reboot [bootloader]</code><br><code>reboot-bootloader</code><br><code>reboot-recovery</code><br><code>reboot-fastboot</code><br><code>continue</code></td><td><span data-lang="zh">使用 AOSP Fastboot 拼写重启或继续启动</span><span data-lang="en">Reboot or continue boot using AOSP Fastboot spellings</span></td></tr>
+            <tr><td><span data-lang="zh">安全状态</span><span data-lang="en">Security state</span></td><td><code>flashing &lt;lock|unlock|lock_critical|unlock_critical|get_unlock_ability&gt;</code></td><td><span data-lang="zh">设备锁定状态操作；可能清除数据</span><span data-lang="en">Device lock-state operations; may wipe data</span></td></tr>
+            <tr><td><span data-lang="zh">动态系统</span><span data-lang="en">Dynamic system</span></td><td><code>gsi &lt;wipe|disable|status&gt;</code><br><code>snapshot-update &lt;cancel|merge&gt;</code></td><td><span data-lang="zh">GSI 与 snapshot update 管理</span><span data-lang="en">Manage GSI and snapshot updates</span></td></tr>
+            <tr><td><span data-lang="zh">逻辑分区</span><span data-lang="en">Logical partition</span></td><td><code>create-logical-partition &lt;partition&gt; &lt;size-bytes&gt;</code><br><code>delete-logical-partition &lt;partition&gt;</code><br><code>resize-logical-partition &lt;partition&gt; &lt;size-bytes&gt;</code></td><td><span data-lang="zh">创建、删除与调整逻辑分区</span><span data-lang="en">Create, delete, and resize logical partitions</span></td></tr>
+            <tr><td><span data-lang="zh">高级</span><span data-lang="en">Advanced</span></td><td><code>signature &lt;file&gt;</code><br><code>oem [command...]</code></td><td><span data-lang="zh">AOSP 签名数据与 OEM passthrough</span><span data-lang="en">AOSP signature data and OEM passthrough</span></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 data-lang="zh">全局与任务选项</h3><h3 data-lang="en">Global and task options</h3>
+        <div class="table-scroll"><table>
+          <thead><tr><th><span data-lang="zh">选项</span><span data-lang="en">Option</span></th><th><span data-lang="zh">说明</span><span data-lang="en">Description</span></th></tr></thead>
+          <tbody>
+            <tr><td><code>-s SERIAL</code>, <code>-s tcp|udp:HOST[:PORT]</code></td><td><span data-lang="zh">按 Fastboot 语法选择 USB/TCP/UDP 目标</span><span data-lang="en">Select a USB/TCP/UDP target using Fastboot syntax</span></td></tr>
+            <tr><td><code>-l</code></td><td><span data-lang="zh">配合 devices 输出设备路径</span><span data-lang="en">Include device paths with devices</span></td></tr>
+            <tr><td><code>-v</code>, <code>--verbose</code></td><td><span data-lang="zh">详细诊断输出</span><span data-lang="en">Verbose diagnostics</span></td></tr>
+            <tr><td><code>--slot &lt;a|b|other|all&gt;</code>, <code>-a</code>, <code>--set-active[=...]</code></td><td><span data-lang="zh">A/B 任务展开与激活策略</span><span data-lang="en">A/B task expansion and activation policy</span></td></tr>
+            <tr><td><code>--unbuffered</code></td><td><span data-lang="zh">接受 Fastboot 兼容选项；SDK 数据面始终采用有界流式缓冲</span><span data-lang="en">Accept the Fastboot-compatible option; the SDK data path always uses bounded streaming buffers</span></td></tr>
+            <tr><td><code>--disable-verity</code>, <code>--disable-verification</code></td><td><span data-lang="zh">修改匹配 vbmeta 分区的 AVB 标志</span><span data-lang="en">Modify AVB flags on matching vbmeta partitions</span></td></tr>
+            <tr><td><code>-S SIZE[K|M|G]</code></td><td><span data-lang="zh">flash/flash:raw/update/flashall 的 sparse 分片上限</span><span data-lang="en">Sparse split limit for flash/flash:raw/update/flashall</span></td></tr>
+            <tr><td><code>--force</code></td><td><span data-lang="zh">允许特定不安全路径继续；不绕过结构和 I/O 完整性错误</span><span data-lang="en">Allow selected unsafe paths; does not bypass structural or I/O integrity failures</span></td></tr>
+            <tr><td><code>--fs-options=casefold,projid,compress</code></td><td><span data-lang="zh">仅用于 format 的文件系统特性</span><span data-lang="en">Filesystem features for format only</span></td></tr>
+            <tr><td><code>-w</code>, <code>--skip-reboot</code>, <code>--skip-secondary</code></td><td><span data-lang="zh">update/flashall 数据清除、重启与副槽策略</span><span data-lang="en">Update/flashall wipe, reboot, and secondary-slot policy</span></td></tr>
+            <tr><td><code>--exclude-dynamic-partitions</code>, <code>--disable-fastboot-info</code>, <code>--disable-super-optimization</code></td><td><span data-lang="zh">控制 package planner 的动态分区和 super 路径</span><span data-lang="en">Control dynamic-partition and super paths in the package planner</span></td></tr>
+            <tr><td><code>--cmdline</code>, <code>--base</code>, <code>--page-size</code>, documented offsets, <code>--header-version</code>, OS fields, <code>--dtb</code></td><td><span data-lang="zh">boot/flash:raw 的 Android boot image 布局</span><span data-lang="en">Android boot-image layout for boot/flash:raw</span></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="c-api">
+        <h2 data-lang="zh">C11 API</h2>
+        <h2 data-lang="en">C11 API</h2>
+        <p data-lang="zh">包含单一公共头文件 <a href="../include/kairosboot/kairosboot.h"><code>kairosboot/kairosboot.h</code></a>。接口使用 UTF-8、固定宽度整数与 opaque handle；库创建的 handle、error、result 和 report 必须由对应的 <code>kb_*_release()</code> 释放。</p>
+        <p data-lang="en">Include the single public header <a href="../include/kairosboot/kairosboot.h"><code>kairosboot/kairosboot.h</code></a>. The API uses UTF-8, fixed-width integers, and opaque handles. Handles, errors, results, and reports created by the library must be freed with their matching <code>kb_*_release()</code>.</p>
+
+        <h3 data-lang="zh">最小阻塞式刷写</h3><h3 data-lang="en">Minimal blocking flash</h3>
+        <div class="code-wrap"><pre><code>#include &lt;kairosboot/kairosboot.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void) {
+  kb_context_t *context = NULL;
+  kb_device_t *device = NULL;
+  kb_error_t *error = NULL;
+  kb_status_t status = kb_context_create(NULL, &amp;context, &amp;error);
+  if (status == KB_OK) {
+    /* NULL auto-selects only when exactly one USB device is present. */
+    status = kb_device_open(context, NULL, &amp;device, &amp;error);
+  }
+  if (status == KB_OK) {
+    status = kb_flash_file(device, "boot", "boot.img", NULL, &amp;error);
+  }
+
+  if (status != KB_OK) {
+    fprintf(stderr, "KairosBoot: %s\n",
+            error != NULL ? kb_error_message(error) : kb_status_string(status));
+  }
+  kb_error_release(error);
+  kb_device_release(device);
+  kb_context_release(context);
+  return status == KB_OK ? 0 : 1;
+}</code></pre></div>
+
+        <h3 data-lang="zh">枚举与 getvar</h3><h3 data-lang="en">Enumerate and getvar</h3>
+        <div class="code-wrap"><pre><code>kb_device_list_t *devices = NULL;
+kb_device_t *device = NULL;
+kb_command_result_t *result = NULL;
+
+if (kb_enumerate_devices(context, &amp;devices, &amp;error) == KB_OK) {
+  for (size_t i = 0; i &lt; kb_device_list_count(devices); ++i) {
+    printf("%s  %s  %s\n",
+           kb_device_list_serial(devices, i),
+           kb_device_list_usb_path(devices, i),
+           kb_device_list_product(devices, i));
+  }
+}
+kb_device_list_release(devices);
+
+if (kb_device_open(context, "usb:1-2.3", &amp;device, &amp;error) == KB_OK &amp;&amp;
+    kb_getvar(device, "product", NULL, &amp;result, &amp;error) == KB_OK) {
+  size_t size = 0;
+  const uint8_t *payload = kb_command_result_terminal_payload(result, &amp;size);
+  fwrite(payload, 1, size, stdout);
+  fputc('\n', stdout);
+}
+kb_command_result_release(result);
+kb_device_release(device);</code></pre></div>
+
+        <h3 data-lang="zh">异步、进度与取消</h3><h3 data-lang="en">Async, progress, and cancellation</h3>
+        <div class="code-wrap"><pre><code>static kb_progress_action_t KB_CALL on_progress(
+    const kb_progress_t *p, void *user_data) {
+  int *cancel_requested = (int *)user_data;
+  fprintf(stderr, "%s: %llu/%llu\n", p-&gt;stage,
+          (unsigned long long)p-&gt;bytes_completed,
+          (unsigned long long)p-&gt;bytes_total);
+  return *cancel_requested ? KB_PROGRESS_CANCEL : KB_PROGRESS_CONTINUE;
+}
+
+int cancel_requested = 0;
+kb_flash_options_t options;
+kb_flash_options_init(&amp;options);
+options.timeout_ms = 30000;
+options.progress_callback = on_progress;
+options.progress_user_data = &amp;cancel_requested;
+
+kb_device_t *device = NULL;
+kb_operation_t *operation = NULL;
+kb_status_t status = kb_device_open(context, "ABC123", &amp;device, &amp;error);
+if (status == KB_OK) {
+  status = kb_flash_file_async(
+      device, "boot", "boot.img", &amp;options, &amp;operation, &amp;error);
+}
+if (status == KB_OK) {
+  /* Another thread may call kb_operation_cancel(operation). */
+  status = kb_operation_wait(operation, KB_WAIT_INFINITE);
+  if (status != KB_OK) {
+    const kb_error_t *borrowed = kb_operation_error(operation);
+    fprintf(stderr, "%s\n", borrowed != NULL
+        ? kb_error_message(borrowed) : kb_status_string(status));
+  }
+}
+kb_operation_release(operation);
+kb_device_release(device);
+kb_error_release(error);</code></pre></div>
+        <div class="callout">
+          <p data-lang="zh">每个 operation 的回调串行执行，且不在 libusb event thread 上运行。<code>progress_user_data</code> 必须保持有效直到 operation 释放；不要在自己的回调里释放同一个 operation。<code>kb_operation_error()</code> 返回借用指针，不要单独释放。</p>
+          <p data-lang="en">Callbacks are serialized per operation and never run on the libusb event thread. <code>progress_user_data</code> must remain valid until the operation is released; do not release that operation from its own callback. <code>kb_operation_error()</code> returns a borrowed pointer and must not be released separately.</p>
+        </div>
+
+        <h3 data-lang="zh">options 与 ABI 前向兼容</h3><h3 data-lang="en">Options and ABI forward compatibility</h3>
+        <p data-lang="zh">始终调用对应初始化函数，再修改所需字段。NULL options 采用安全默认值；当前头文件的初始化宏会把调用路由到 sized initializer，并正确设置 <code>struct_size</code> 与 <code>api_version</code>。</p>
+        <p data-lang="en">Always call the matching initializer before changing fields. NULL options use safe defaults. The current header routes initializer calls to sized initializers, setting <code>struct_size</code> and <code>api_version</code> correctly.</p>
+        <div class="code-wrap"><pre><code>kb_update_options_t options;
+kb_update_options_init(&amp;options);
+options.wipe = 0;
+options.skip_reboot = 1;
+options.slot = "b";
+options.set_active = 1;
+options.active_slot = "b";
+
+kb_device_t *device = NULL;
+kb_status_t status = kb_device_open(
+    context, "tcp:192.0.2.10:5554", &amp;device, &amp;error);
+if (status == KB_OK) {
+  status = kb_update_package(
+      device, "image-product.zip", &amp;options, &amp;error);
+}
+kb_device_release(device);</code></pre></div>
+      </section>
+
+      <section id="cpp-api">
+        <h2 data-lang="zh">C++23 API</h2>
+        <h2 data-lang="en">C++23 API</h2>
+        <p data-lang="zh"><a href="../include/kairosboot/kairosboot.hpp"><code>kairosboot/kairosboot.hpp</code></a> 是 stable C ABI 之上的 header-only、move-only RAII 包装，使用 <code>std::expected</code>、<code>std::filesystem</code>、<code>std::chrono</code> 与 <code>std::stop_token</code>。</p>
+        <p data-lang="en"><a href="../include/kairosboot/kairosboot.hpp"><code>kairosboot/kairosboot.hpp</code></a> is a header-only, move-only RAII wrapper over the stable C ABI, using <code>std::expected</code>, <code>std::filesystem</code>, <code>std::chrono</code>, and <code>std::stop_token</code>.</p>
+
+        <h3 data-lang="zh">阻塞式刷写</h3><h3 data-lang="en">Blocking flash</h3>
+        <div class="code-wrap"><pre><code>#include &lt;kairosboot/kairosboot.hpp&gt;
+#include &lt;filesystem&gt;
+#include &lt;iostream&gt;
+
+int main() {
+  auto context = kairosboot::Context::create();
+  if (!context) {
+    std::cerr &lt;&lt; context.error().message() &lt;&lt; '\n';
+    return 1;
+  }
+
+  auto device = context-&gt;open_device("ABC123");
+  if (!device) {
+    std::cerr &lt;&lt; device.error().message() &lt;&lt; '\n';
+    return 1;
+  }
+
+  kairosboot::FlashOptions options;
+  options.timeout = std::chrono::seconds{30};
+  options.progress = [](const kairosboot::Progress &amp;p) {
+    std::cerr &lt;&lt; p.stage &lt;&lt; ": " &lt;&lt; p.bytes_completed
+              &lt;&lt; '/' &lt;&lt; p.bytes_total &lt;&lt; '\n';
+    return kairosboot::ProgressAction::Continue;
+  };
+
+  auto flashed = device-&gt;flash_file(
+      "boot", std::filesystem::path{"boot.img"}, options);
+  if (!flashed) {
+    std::cerr &lt;&lt; flashed.error().message() &lt;&lt; '\n';
+    return 1;
+  }
+}</code></pre></div>
+
+        <h3 data-lang="zh">异步 operation 与 stop token</h3><h3 data-lang="en">Async operation and stop token</h3>
+        <div class="code-wrap"><pre><code>std::stop_source stop;
+auto device = context-&gt;open_device("tcp:192.0.2.10:5554");
+if (!device) {
+  std::cerr &lt;&lt; device.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+auto operation = device-&gt;getvar_async("product");
+if (!operation) {
+  std::cerr &lt;&lt; operation.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+
+/* A stop request asks native code to cancel, then wait drains callbacks. */
+auto result = operation-&gt;wait_result(stop.get_token(), std::chrono::seconds{30});
+if (!result) {
+  std::cerr &lt;&lt; result.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+
+auto payload = result-&gt;terminal_payload();
+/* payload is a borrowed span valid while CommandResult lives. */</code></pre></div>
+
+        <h3 data-lang="zh">Fleet 计划与执行</h3><h3 data-lang="en">Fleet planning and execution</h3>
+        <div class="code-wrap"><pre><code>auto plan = kairosboot::plan_job_file("fleet-job.yaml");
+if (!plan) {
+  std::cerr &lt;&lt; plan.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+
+std::cout &lt;&lt; plan-&gt;sha256_hex() &lt;&lt; '\n';
+std::cout &lt;&lt; plan-&gt;canonical_json() &lt;&lt; '\n';
+
+auto job = context-&gt;run_job_file_async("fleet-job.yaml");
+if (!job) {
+  std::cerr &lt;&lt; job.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+if (auto waited = job-&gt;wait(); !waited) {
+  std::cerr &lt;&lt; waited.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+
+auto final_report = job-&gt;report();
+if (!final_report) {
+  std::cerr &lt;&lt; final_report.error().message() &lt;&lt; '\\n';
+  return 1;
+}
+std::cout &lt;&lt; final_report-&gt;json() &lt;&lt; '\n';</code></pre></div>
+      </section>
+
+      <section id="dotnet-api">
+        <h2 data-lang="zh">C# / .NET API</h2>
+        <h2 data-lang="en">C# / .NET API</h2>
+        <p data-lang="zh">managed API 使用 <code>SafeHandle</code> 管理 native 生命周期，以 <code>Task</code>、<code>CancellationToken</code> 和 <code>IProgress&lt;T&gt;</code> 映射 C operation/job。完整平台说明见 <a href="../bindings/dotnet/KairosBoot/PACKAGE.md">KairosBoot for .NET</a>。</p>
+        <p data-lang="en">The managed API uses <code>SafeHandle</code> for native lifetimes and maps C operations/jobs to <code>Task</code>, <code>CancellationToken</code>, and <code>IProgress&lt;T&gt;</code>. See <a href="../bindings/dotnet/KairosBoot/PACKAGE.md">KairosBoot for .NET</a> for the full platform notes.</p>
+
+        <h3 data-lang="zh">枚举、getvar 与刷写</h3><h3 data-lang="en">Enumerate, getvar, and flash</h3>
+        <div class="code-wrap"><pre><code>using KairosBoot;
+
+using var context = Context.Create();
+foreach (var info in context.Devices)
+{
+    Console.WriteLine($"{info.Serial}  {info.UsbPath}  {info.Product}");
+}
+
+using var device = context.OpenDevice("ABC123");
+
+using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+var progress = new Progress&lt;FlashProgress&gt;(p =&gt;
+    Console.WriteLine($"{p.Stage}: {p.BytesCompleted}/{p.BytesTotal}"));
+
+await device.FlashFileAsync(
+    partition: "boot",
+    filePath: "boot.img",
+    options: new FlashOptions(TimeSpan.FromSeconds(30)),
+    progress: progress,
+    cancellationToken: cancellation.Token);
+
+CommandResult product = await device.GetVarAsync("product");
+Console.WriteLine(System.Text.Encoding.UTF8.GetString(product.TerminalPayload));</code></pre></div>
+
+        <h3 data-lang="zh">update 与异常详情</h3><h3 data-lang="en">Update and exception detail</h3>
+        <div class="code-wrap"><pre><code>try
+{
+    using var device = context.OpenDevice("usb:1-2.3");
+    await device.UpdatePackageAsync(
+        packagePath: "image-product.zip",
+        options: UpdateOptions.Default,
+        cancellationToken: cancellation.Token);
+}
+catch (KairosBootException ex)
+{
+    Console.Error.WriteLine($"{ex.Status}: {ex.Message}");
+    Console.Error.WriteLine($"device={ex.DeviceIdentifier}");
+    Console.Error.WriteLine($"transfer={ex.TransferState}");
+    Console.Error.WriteLine($"sessionPoisoned={ex.SessionPoisoned}");
+}</code></pre></div>
+
+        <h3 data-lang="zh">Fleet</h3><h3 data-lang="en">Fleet</h3>
+        <div class="code-wrap"><pre><code>Fleet.ValidateJobFile("fleet-job.yaml");
+using (JobPlan plan = Fleet.PlanJobFile("fleet-job.yaml"))
+{
+    Console.WriteLine(plan.Sha256Hex);
+    Console.WriteLine(plan.CanonicalJson);
+}
+
+var jobProgress = new Progress&lt;JobProgress&gt;(p =&gt;
+    Console.WriteLine($"{p.DeviceIdentifier}: {p.Stage}"));
+using JobReport report = await context.RunJobFileAsync(
+    "fleet-job.yaml",
+    JobOptions.Default,
+    jobProgress,
+    cancellation.Token);
+Console.WriteLine(report.Json);</code></pre></div>
+        <p class="muted" data-lang="zh">异步取消会先请求 native cancellation，然后继续 drain operation/job 与回调，再释放 SafeHandle；因此取消令牌触发不代表设备 I/O 已在同一瞬间停止。</p>
+        <p class="muted" data-lang="en">Asynchronous cancellation first requests native cancellation, then drains the operation/job and callbacks before releasing its SafeHandle. A token firing therefore does not mean device I/O stopped at that exact instant.</p>
+      </section>
+
+      <section id="fleet">
+        <h2 data-lang="zh">多设备 Fleet</h2>
+        <h2 data-lang="en">Multi-device Fleet</h2>
+        <p data-lang="zh"><code>kairosboot.io/v1</code> manifest 把 artifact、设备选择、产品约束、步骤与并行策略绑定在一个可验证文件中。Fleet 是 KairosBoot SDK 能力，不伪装成 Fastboot CLI 命令：使用 <code>kb_validate_job_file</code>、<code>kb_plan_job_file</code> 与 <code>kb_run_job_file</code>，或对应的 C++23/.NET API。</p>
+        <p data-lang="en">A <code>kairosboot.io/v1</code> manifest binds artifacts, device selectors, product constraints, steps, and concurrency policy in one verifiable file. Fleet is a KairosBoot SDK capability and is not disguised as a Fastboot CLI command: use <code>kb_validate_job_file</code>, <code>kb_plan_job_file</code>, and <code>kb_run_job_file</code>, or their C++23/.NET equivalents.</p>
+        <div class="code-wrap"><pre><code>apiVersion: kairosboot.io/v1
+kind: FlashJob
+artifacts:
+  - id: system
+    path: images/system.img
+    sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+targets:
+  - name: product-a
+    selector:
+      serials: [ABC123, ABC124]
+      usbPaths: ["1-2.3", "1-2.4"]
+    expectedProduct: product_a
+    steps:
+      - flash:
+          partition: system
+          artifact: system
+policy:
+  onDeviceFailure: continue
+  maxParallelDevices: 32
+  memoryBudget: auto</code></pre></div>
+        <div class="code-wrap"><pre><code>/* C11: offline validation, deterministic planning, then execution. */
+kb_validate_job_file("fleet-job.yaml", &amp;error);
+kb_plan_job_file("fleet-job.yaml", &amp;plan, &amp;error);
+kb_run_job_file(context, "fleet-job.yaml", &amp;options, &amp;report, &amp;error);</code></pre></div>
+        <ul>
+          <li data-lang="zh">每台设备必须且只能匹配一个 target；跨 target 重复 selector 会使验证失败。</li>
+          <li data-lang="en">Every device must match exactly one target; duplicate selectors across targets fail validation.</li>
+          <li data-lang="zh">破坏性步骤开始前，run 会检查设备唯一性、<code>expectedProduct</code> 与 artifact SHA-256。</li>
+          <li data-lang="en">Before destructive steps, run checks device uniqueness, <code>expectedProduct</code>, and artifact SHA-256.</li>
+          <li data-lang="zh"><code>onDeviceFailure: continue</code> 隔离单设备失败；计划或 artifact 完整性错误会阻止尚未开始的破坏性操作。</li>
+          <li data-lang="en"><code>onDeviceFailure: continue</code> isolates one-device failures; plan or artifact-integrity errors prevent destructive work that has not started.</li>
+          <li data-lang="zh">同一设备内的 Fastboot 命令严格串行；并发发生在设备之间与 DATA transfer pipeline 内。</li>
+          <li data-lang="en">Fastboot commands remain strictly serial per device; concurrency occurs across devices and inside the DATA transfer pipeline.</li>
+        </ul>
+        <p data-lang="zh">可直接从 <a href="../examples/fleet-job.yaml">示例 manifest</a> 开始，并参考 <a href="fleet-json-contract.md">Fleet JSON contract</a> 理解 plan/report 的 canonical JSON 与状态语义。</p>
+        <p data-lang="en">Start from the <a href="../examples/fleet-job.yaml">example manifest</a> and consult the <a href="fleet-json-contract.md">Fleet JSON contract</a> for canonical plan/report JSON and state semantics.</p>
+      </section>
+
+      <section id="errors">
+        <h2 data-lang="zh">进度、取消与错误</h2>
+        <h2 data-lang="en">Progress, cancellation, and errors</h2>
+        <div class="grid-2">
+          <div class="mini-card"><h3 data-lang="zh">超时</h3><h3 data-lang="en">Timeouts</h3><p data-lang="zh">flash/command options 是每次 I/O deadline；update/job options 是整个操作 deadline。初始化后的默认值为无限，不代表系统不会因断连或协议错误失败。</p><p data-lang="en">Flash/command options use per-I/O deadlines; update/job options use whole-operation deadlines. The initialized default is infinite, but disconnects and protocol errors still fail.</p></div>
+          <div class="mini-card"><h3 data-lang="zh">取消</h3><h3 data-lang="en">Cancellation</h3><p data-lang="zh">取消是请求，不是线程强杀。释放 operation/job 前等待 transport 与回调 drain，避免 use-after-free 和跨设备串线。</p><p data-lang="en">Cancellation is a request, not a thread kill. Transport and callbacks drain before operation/job release to avoid use-after-free and cross-device mix-ups.</p></div>
+          <div class="mini-card"><h3 data-lang="zh">传输确定性</h3><h3 data-lang="en">Transfer certainty</h3><p data-lang="zh"><code>NotSent</code>、<code>PartialOrUnknown</code>、<code>FullyTransferred</code> 描述失败时 Host 能确认的数据状态；状态不确定时必须重新建立可信会话。</p><p data-lang="en"><code>NotSent</code>, <code>PartialOrUnknown</code>, and <code>FullyTransferred</code> describe what the host knows after a failure. An uncertain state requires a newly trusted session.</p></div>
+          <div class="mini-card"><h3 data-lang="zh">接收文件</h3><h3 data-lang="en">Received files</h3><p data-lang="zh">upload/get-staged/fetch 的 SDK file API 先写临时文件，只有收到精确 DATA 和终态 OKAY 后才原子替换目标；Fastboot CLI 只公开官方 <code>get_staged</code> 与 <code>fetch</code> 命令。</p><p data-lang="en">The upload/get-staged/fetch SDK file APIs write a temporary file and atomically replace the destination only after exact DATA and terminal OKAY; the Fastboot CLI exposes only the official <code>get_staged</code> and <code>fetch</code> commands.</p></div>
+        </div>
+
+        <h3 data-lang="zh">稳定 C 状态码</h3><h3 data-lang="en">Stable C status codes</h3>
+        <div class="table-scroll"><table>
+          <thead><tr><th><span data-lang="zh">状态</span><span data-lang="en">Status</span></th><th><span data-lang="zh">处理建议</span><span data-lang="en">Recommended handling</span></th></tr></thead>
+          <tbody>
+            <tr><td><code>KB_OK</code></td><td><span data-lang="zh">成功</span><span data-lang="en">Success</span></td></tr>
+            <tr><td><code>KB_E_INVALID_ARGUMENT</code></td><td><span data-lang="zh">修正调用参数、options 结构或 manifest</span><span data-lang="en">Fix call arguments, options layout, or manifest</span></td></tr>
+            <tr><td><code>KB_E_OUT_OF_MEMORY</code></td><td><span data-lang="zh">降低并发/内存预算并停止当前批次</span><span data-lang="en">Reduce concurrency/memory budget and stop the current batch</span></td></tr>
+            <tr><td><code>KB_E_NOT_SUPPORTED</code></td><td><span data-lang="zh">检查平台、设备能力或当前开发版本支持范围</span><span data-lang="en">Check platform, device capability, or current development-version scope</span></td></tr>
+            <tr><td><code>KB_E_NO_DEVICE</code></td><td><span data-lang="zh">检查连接、驱动和 selector</span><span data-lang="en">Check connection, driver, and selector</span></td></tr>
+            <tr><td><code>KB_E_AMBIGUOUS_DEVICE</code></td><td><span data-lang="zh">提供明确 selector</span><span data-lang="en">Provide an explicit selector</span></td></tr>
+            <tr><td><code>KB_E_BUSY</code></td><td><span data-lang="zh">等待同一 session 的当前协议操作结束</span><span data-lang="en">Wait for the current protocol operation on that session</span></td></tr>
+            <tr><td><code>KB_E_TIMEOUT</code></td><td><span data-lang="zh">读取 transfer state；不要假设设备未收到数据</span><span data-lang="en">Read transfer state; do not assume the device received nothing</span></td></tr>
+            <tr><td><code>KB_E_CANCELLED</code></td><td><span data-lang="zh">等待 drain 完成并读取最终 report</span><span data-lang="en">Wait for drain and inspect the final report</span></td></tr>
+            <tr><td><code>KB_E_IO</code></td><td><span data-lang="zh">检查 native/libusb code、连接与 session poisoned</span><span data-lang="en">Inspect native/libusb code, connection, and session-poisoned state</span></td></tr>
+            <tr><td><code>KB_E_PROTOCOL</code></td><td><span data-lang="zh">保存 INFO/TEXT/设备消息，重新建立可信连接</span><span data-lang="en">Preserve INFO/TEXT/device messages and establish a trusted connection</span></td></tr>
+            <tr><td><code>KB_E_DEVICE_FAIL</code></td><td><span data-lang="zh">读取设备 FAIL payload 与有序消息</span><span data-lang="en">Read device FAIL payload and ordered messages</span></td></tr>
+            <tr><td><code>KB_E_INTERNAL</code></td><td><span data-lang="zh">保存诊断、版本与可复现步骤后报告问题</span><span data-lang="en">Capture diagnostics, version, and reproduction steps before reporting</span></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="reference">
+        <h2 data-lang="zh">API 能力索引</h2>
+        <h2 data-lang="en">API capability index</h2>
+        <p data-lang="zh">每个 C 同步调用与其 <code>_async</code> 形式共享行为；阻塞调用内部启动异步 operation/job 并等待。C++ 与 C# 以同一能力分组映射到稳定 C ABI。</p>
+        <p data-lang="en">Each blocking C call shares behavior with its <code>_async</code> form; blocking calls start and wait for an asynchronous operation/job internally. C++ and C# map the same capability groups to the stable C ABI.</p>
+        <div class="table-scroll api-list"><table>
+          <thead><tr><th><span data-lang="zh">能力</span><span data-lang="en">Capability</span></th><th>C API</th><th>C++23 / C#</th></tr></thead>
+          <tbody>
+            <tr><td><span data-lang="zh">版本/上下文/设备</span><span data-lang="en">Version/context/device</span></td><td><code>kb_get_version</code>, <code>kb_context_create</code>, <code>kb_enumerate_devices</code>, <code>kb_device_open</code></td><td><code>version</code>, <code>Context::create/devices/open_device</code><br><code>Context.Version/Create/Devices/OpenDevice</code></td></tr>
+            <tr><td><span data-lang="zh">刷写/格式化</span><span data-lang="en">Flash/format</span></td><td><code>kb_flash_file[_async]</code>, <code>kb_flash_raw*</code>, <code>kb_flash_vendor_boot_ramdisk*</code>, <code>kb_format_partition*</code></td><td><code>flash_file</code>, <code>flash_raw</code>, <code>flash_vendor_boot_ramdisk</code>, <code>format_partition</code><br><code>FlashFileAsync</code>, <code>FlashRawAsync</code>, <code>FlashVendorBootRamdiskAsync</code>, <code>FormatPartitionAsync</code></td></tr>
+            <tr><td><span data-lang="zh">整包/动态分区</span><span data-lang="en">Package/dynamic partitions</span></td><td><code>kb_update_package*</code>, <code>kb_wipe_super*</code>, <code>kb_create_logical_partition*</code>, <code>kb_delete_logical_partition*</code>, <code>kb_resize_logical_partition*</code></td><td><code>update_package</code>, <code>wipe_super</code>, logical-partition methods<br><code>UpdatePackageAsync</code>, <code>WipeSuperAsync</code>, logical-partition async methods</td></tr>
+            <tr><td><span data-lang="zh">启动/签名</span><span data-lang="en">Boot/signature</span></td><td><code>kb_boot*</code>, <code>kb_boot_file*</code>, <code>kb_boot_raw*</code>, <code>kb_signature_file*</code></td><td><code>boot</code>, <code>boot_file</code>, <code>boot_raw</code>, <code>signature_file</code><br><code>BootAsync</code>, <code>BootFileAsync</code>, <code>BootRawAsync</code>, <code>SignatureFileAsync</code></td></tr>
+            <tr><td><span data-lang="zh">基本命令</span><span data-lang="en">Primitive commands</span></td><td><code>kb_getvar*</code>, <code>kb_erase*</code>, <code>kb_set_active*</code>, <code>kb_reboot*</code>, <code>kb_continue_boot*</code></td><td><code>getvar</code>, <code>erase</code>, <code>set_active</code>, <code>reboot</code>, <code>continue_boot</code><br>matching <code>*Async</code> methods</td></tr>
+            <tr><td><span data-lang="zh">设备管理</span><span data-lang="en">Device management</span></td><td><code>kb_flashing*</code>, <code>kb_gsi*</code>, <code>kb_snapshot_update*</code>, <code>kb_oem*</code>, <code>kb_raw_command*</code></td><td>typed enums and matching <code>Device</code> methods</td></tr>
+            <tr><td><span data-lang="zh">暂存/接收</span><span data-lang="en">Stage/receive</span></td><td><code>kb_stage*</code>, <code>kb_upload*</code>, <code>kb_upload_file*</code>, <code>kb_get_staged_file*</code>, <code>kb_fetch*</code>, <code>kb_fetch_file*</code></td><td><code>stage</code>, <code>upload</code>, <code>upload_file</code>, <code>get_staged_file</code>, <code>fetch</code>, <code>fetch_file</code><br>matching <code>*Async</code> methods</td></tr>
+            <tr><td><span data-lang="zh">Fleet</span><span data-lang="en">Fleet</span></td><td><code>kb_validate_job_file</code>, <code>kb_plan_job_file</code>, <code>kb_run_job_file[_async]</code>, <code>kb_job_*</code></td><td><code>validate_job_file</code>, <code>plan_job_file</code>, <code>Context::run_job_file[_async]</code><br><code>Fleet.ValidateJobFile/PlanJobFile</code>, <code>Context.RunJobFileAsync</code></td></tr>
+            <tr><td><span data-lang="zh">生命周期/错误</span><span data-lang="en">Lifecycle/errors</span></td><td><code>kb_operation_*</code>, <code>kb_command_result_*</code>, <code>kb_error_*</code>, all <code>kb_*_release</code></td><td>move-only RAII + <code>std::expected&lt;T, Error&gt;</code><br><code>SafeHandle</code> + <code>KairosBootException</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 data-lang="zh">源码级参考</h3><h3 data-lang="en">Source-level reference</h3>
+        <ul>
+          <li><a href="../include/kairosboot/kairosboot.h">C11 public header — <code>kairosboot.h</code></a></li>
+          <li><a href="../include/kairosboot/kairosboot.hpp">C++23 public wrapper — <code>kairosboot.hpp</code></a></li>
+          <li><a href="../bindings/dotnet/KairosBoot/">C# managed API source</a></li>
+          <li><a href="../examples/">C/C++ and Fleet examples</a></li>
+          <li><a href="../README.md">Project README</a> · <a href="../SECURITY.md">Security policy</a></li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <footer class="footer">
+    <span data-lang="zh">KairosBoot 开发文档 · 对应 0.1.0-dev / API v1 · 更新于 2026-08-29</span>
+    <span data-lang="en">KairosBoot developer documentation · 0.1.0-dev / API v1 · Updated 2026-08-29</span>
+  </footer>
+
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const titles = {
+        zh: "KairosBoot API 与 CLI 使用手册",
+        en: "KairosBoot API & CLI Usage Guide"
+      };
+      const copyText = {
+        zh: ["复制", "已复制"],
+        en: ["Copy", "Copied"]
+      };
+
+      function setLanguage(lang) {
+        const next = lang === "en" ? "en" : "zh";
+        root.dataset.uiLang = next;
+        root.lang = next === "zh" ? "zh-CN" : "en";
+        document.title = titles[next];
+        document.querySelectorAll("[data-set-lang]").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.setLang === next));
+        });
+        document.querySelectorAll(".copy-button").forEach((button) => {
+          button.textContent = copyText[next][0];
+        });
+        try { localStorage.setItem("kairosboot-doc-lang", next); } catch (_) {}
+      }
+
+      document.querySelectorAll("[data-set-lang]").forEach((button) => {
+        button.addEventListener("click", () => setLanguage(button.dataset.setLang));
+      });
+
+      document.querySelectorAll("pre").forEach((pre) => {
+        const wrapper = pre.parentElement;
+        if (!wrapper || !wrapper.classList.contains("code-wrap")) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "copy-button";
+        button.textContent = copyText[root.dataset.uiLang][0];
+        button.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(pre.innerText);
+            button.textContent = copyText[root.dataset.uiLang][1];
+            window.setTimeout(() => {
+              button.textContent = copyText[root.dataset.uiLang][0];
+            }, 1200);
+          } catch (_) {
+            button.textContent = copyText[root.dataset.uiLang][0];
+          }
+        });
+        wrapper.appendChild(button);
+      });
+
+      const links = [...document.querySelectorAll(".toc a")];
+      const targets = links.map((link) => document.querySelector(link.hash)).filter(Boolean);
+      if ("IntersectionObserver" in window) {
+        const observer = new IntersectionObserver((entries) => {
+          const visible = entries.filter((entry) => entry.isIntersecting)
+            .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+          if (!visible) return;
+          links.forEach((link) => link.classList.toggle("active", link.hash === `#${visible.target.id}`));
+        }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+        targets.forEach((target) => observer.observe(target));
+      }
+
+      let saved = "zh";
+      try { saved = localStorage.getItem("kairosboot-doc-lang") || "zh"; } catch (_) {}
+      setLanguage(saved);
+    })();
+  </script>
+</body>
+</html>

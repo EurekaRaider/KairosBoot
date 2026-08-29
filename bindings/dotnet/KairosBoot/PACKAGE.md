@@ -57,10 +57,12 @@ blocking native import for ABI parity with the C SDK.
 Typed `GetVarAsync`, `EraseAsync`, `SetActiveAsync`, `RebootAsync`,
 `ContinueBootAsync`, `OemAsync`, `RawCommandAsync`, `BootAsync`, `StageAsync`,
 `UploadAsync`, and `FetchAsync` methods return `Task<CommandResult>`. They use
-the same stable C ABI on both target frameworks and accept USB, TCP, or UDP
-device selectors. Binary terminal payloads, ordered INFO/TEXT messages, and
-upload/fetch data are copied into owned `byte[]` values before the native
-result is released.
+the same stable C ABI on both target frameworks and are methods of an opened
+`Device`. Call `Context.OpenDevice()` for unambiguous single-device USB
+selection, or pass a USB, TCP, or UDP selector to `Context.OpenDevice(string)`
+once; subsequent operations never repeat the selector. Binary terminal
+payloads, ordered INFO/TEXT messages, and upload/fetch data are copied into
+owned `byte[]` values before the native result is released.
 
 `CommandOptions.Default` applies an infinite per-I/O timeout and a 64 MiB hard
 receive bound. Cancellation requests the native operation to stop and then

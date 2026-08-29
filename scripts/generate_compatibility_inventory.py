@@ -37,6 +37,22 @@ CLI_SOURCE = Path("cli/main.cpp")
 
 
 MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
+    "official-host-devices": {
+        "transport": "host", "coverageIds": ["command.devices"],
+        "argv": ["devices"], "getvars": [], "commands": [], "data": [],
+    },
+    "official-host-help": {
+        "transport": "host", "coverageIds": ["option.help"],
+        "argv": ["--help"], "getvars": [], "commands": [], "data": [],
+    },
+    "official-host-help-short": {
+        "transport": "host", "coverageIds": ["option.help-short"],
+        "argv": ["-h"], "getvars": [], "commands": [], "data": [],
+    },
+    "official-host-version": {
+        "transport": "host", "coverageIds": ["option.version"],
+        "argv": ["--version"], "getvars": [], "commands": [], "data": [],
+    },
     "official-tcp-getvar": {
         "transport": "tcp",
         "coverageIds": ["command.getvar", "transport.tcp"],
@@ -95,6 +111,16 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "commands": ["download:00000020", "flash:system"],
         "data": [["host-to-device", 32]],
     },
+    "official-tcp-flash-force": {
+        "transport": "tcp", "coverageIds": ["option.force"],
+        "argv": ["--force", "flash", "system", "<ARTIFACT>/system.img"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system"],
+        "data": [["host-to-device", 32]],
+    },
     "official-tcp-signature": {
         "transport": "tcp",
         "coverageIds": ["command.signature"],
@@ -120,6 +146,12 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["reboot", "bootloader"], "getvars": [],
         "commands": ["reboot-bootloader"], "data": [],
     },
+    "official-tcp-reboot-recovery": {
+        "transport": "tcp", "coverageIds": ["command.reboot-recovery"],
+        "argv": ["reboot-recovery"], "getvars": [],
+        "legacyArgv": [["reboot", "recovery"]],
+        "commands": ["reboot-recovery"], "data": [],
+    },
     "official-tcp-continue": {
         "transport": "tcp", "coverageIds": ["command.continue"],
         "argv": ["continue"], "getvars": [], "commands": ["continue"], "data": [],
@@ -129,16 +161,56 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["oem", "differential"], "getvars": [],
         "commands": ["oem differential"], "data": [],
     },
+    "official-tcp-informational-responses": {
+        "transport": "tcp", "coverageIds": ["protocol.responses"],
+        "argv": ["oem", "differential-info"], "getvars": [],
+        "commands": ["oem differential-info"], "data": [],
+        "responses": [
+            ["INFO", "phase one"], ["TEXT", "phase two"],
+            ["OKAY", "accepted"],
+        ],
+    },
     "official-tcp-stage": {
         "transport": "tcp", "coverageIds": ["command.stage"],
         "argv": ["stage", "<ARTIFACT>/stage.bin"], "getvars": [],
         "commands": ["download:00000020"], "data": [["host-to-device", 32]],
     },
+    "official-tcp-get-staged": {
+        "transport": "tcp",
+        "coverageIds": ["command.get-staged", "protocol.upload"],
+        "argv": ["get_staged", "<OUTPUT>/stage.bin"], "getvars": [],
+        "commands": ["upload"], "data": [["device-to-host", 20]],
+    },
     "official-tcp-flashing-get-unlock-ability": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-get-unlock-ability"],
-        "argv": ["flashing", "get-unlock-ability"], "getvars": [],
+        "argv": ["flashing", "get_unlock_ability"], "getvars": [],
+        "legacyArgv": [["flashing", "get-unlock-ability"]],
         "commands": ["flashing get_unlock_ability"], "data": [],
+    },
+    "official-tcp-flashing-lock": {
+        "transport": "tcp", "coverageIds": ["command.flashing-lock"],
+        "argv": ["flashing", "lock"], "getvars": [],
+        "commands": ["flashing lock"], "data": [],
+    },
+    "official-tcp-flashing-unlock": {
+        "transport": "tcp", "coverageIds": ["command.flashing-unlock"],
+        "argv": ["flashing", "unlock"], "getvars": [],
+        "commands": ["flashing unlock"], "data": [],
+    },
+    "official-tcp-flashing-lock-critical": {
+        "transport": "tcp",
+        "coverageIds": ["command.flashing-lock-critical"],
+        "argv": ["flashing", "lock_critical"], "getvars": [],
+        "legacyArgv": [["flashing", "lock-critical"]],
+        "commands": ["flashing lock_critical"], "data": [],
+    },
+    "official-tcp-flashing-unlock-critical": {
+        "transport": "tcp",
+        "coverageIds": ["command.flashing-unlock-critical"],
+        "argv": ["flashing", "unlock_critical"], "getvars": [],
+        "legacyArgv": [["flashing", "unlock-critical"]],
+        "commands": ["flashing unlock_critical"], "data": [],
     },
     "official-tcp-create-logical-partition": {
         "transport": "tcp", "coverageIds": ["command.create-logical-partition"],
@@ -156,10 +228,36 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["gsi", "wipe"], "getvars": [], "commands": ["gsi:wipe"],
         "data": [],
     },
+    "official-tcp-gsi-disable": {
+        "transport": "tcp", "coverageIds": ["command.gsi-disable"],
+        "argv": ["gsi", "disable"], "getvars": [],
+        "commands": ["gsi:disable"], "data": [],
+    },
+    "official-tcp-gsi-status": {
+        "transport": "tcp", "coverageIds": ["command.gsi-status"],
+        "argv": ["gsi", "status"], "getvars": [],
+        "commands": ["gsi:status"], "data": [],
+    },
     "official-tcp-snapshot-cancel": {
         "transport": "tcp", "coverageIds": ["command.snapshot-cancel"],
         "argv": ["snapshot-update", "cancel"], "getvars": [],
         "commands": ["snapshot-update:cancel"], "data": [],
+    },
+    "official-tcp-snapshot-merge": {
+        "transport": "tcp", "coverageIds": ["command.snapshot-merge"],
+        "argv": ["snapshot-update", "merge"], "getvars": [],
+        "commands": ["snapshot-update:merge"], "data": [],
+    },
+    "official-tcp-serial-selector": {
+        "transport": "tcp", "coverageIds": ["option.serial"],
+        "argv": ["-s", "<ENDPOINT>", "getvar", "product"],
+        "legacyArgv": [["--device", "<ENDPOINT>", "getvar", "product"]],
+        "getvars": ["product"], "commands": [], "data": [],
+    },
+    "official-tcp-verbose": {
+        "transport": "tcp", "coverageIds": ["option.verbose"],
+        "argv": ["--verbose", "getvar", "product"],
+        "getvars": ["product"], "commands": [], "data": [],
     },
     "official-tcp-boot-raw": {
         "transport": "tcp",
@@ -168,6 +266,26 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "getvars": [],
         "commands": ["download:00001800", "boot"],
         "data": [["host-to-device", 6144]],
+    },
+    "official-tcp-boot-raw-options": {
+        "transport": "tcp",
+        "coverageIds": [
+            "option.base", "option.kernel-offset", "option.ramdisk-offset",
+            "option.tags-offset", "option.page-size", "option.header-version",
+            "option.os-version", "option.os-patch-level", "option.cmdline",
+            "option.dtb", "option.dtb-offset",
+        ],
+        "argv": [
+            "--base", "0x10000000", "--kernel-offset", "0x00008000",
+            "--ramdisk-offset", "0x01000000", "--tags-offset", "0x00000100",
+            "--page-size", "4096", "--header-version", "2",
+            "--os-version", "13.0.0", "--os-patch-level", "2024-01-05",
+            "--cmdline", "console=ttyS0 differential",
+            "--dtb", "<ARTIFACT>/dtb.bin", "--dtb-offset", "0x01100000",
+            "boot", "<ARTIFACT>/kernel.bin", "<ARTIFACT>/ramdisk.bin",
+        ],
+        "getvars": [], "commands": ["download:00004000", "boot"],
+        "data": [["host-to-device", 16384]],
     },
     "official-tcp-flash-raw": {
         "transport": "tcp",
@@ -182,6 +300,8 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
+    "official-scripted-fetch-chunking": ["command.fetch"],
+    "official-scripted-reboot-fastboot": ["command.reboot-fastboot"],
     "official-scripted-erase": ["command.erase"],
     # Retain the old mapping so a stale pre-fix capture remains structurally
     # auditable; current evidence is accepted only from the matched scenarios.
@@ -369,7 +489,8 @@ def _validate_scenario_semantics(
         isinstance(cli_parse, dict)
         and cli_parse.get("kind") == "CLI_PARSE"
         and cli_parse.get("result") == "ok"
-        and cli_parse.get("argv") == contract["argv"],
+        and cli_parse.get("argv")
+        in [contract["argv"], *contract.get("legacyArgv", [])],
         f"{metadata_path}#{identifier}: CLI command semantics differ from the whitelist",
     )
     _require(
@@ -393,10 +514,19 @@ def _validate_scenario_semantics(
         for event in events
         if isinstance(event, dict) and event.get("kind") == "DATA"
     ]
+    responses = [
+        [event.get("kind"), event.get("message")]
+        for event in events
+        if isinstance(event, dict)
+        and event.get("kind") in {"INFO", "TEXT", "OKAY", "FAIL"}
+    ]
     _require(
         getvars == contract["getvars"]
         and commands == contract["commands"]
-        and data == contract["data"],
+        and data == contract["data"]
+        and (
+            "responses" not in contract or responses == contract["responses"]
+        ),
         f"{metadata_path}#{identifier}: protocol event semantics differ from the whitelist",
     )
 

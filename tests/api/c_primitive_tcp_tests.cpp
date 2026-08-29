@@ -297,6 +297,11 @@ private:
       }
       {
         auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:has-slot:userdata");
+        write_frame(socket, "OKAYno");
+        CHECK(as_string(read_frame(socket)) ==
+              "getvar:partition-type:userdata");
+        write_frame(socket, "OKAYraw");
         CHECK(as_string(read_frame(socket)) == "erase:userdata");
         write_frame(socket, "INFOwarning");
         write_frame(socket, "FAILpartition locked");
@@ -641,6 +646,11 @@ private:
       }
       {
         auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:has-slot:userdata");
+        write_frame(socket, "OKAYno");
+        CHECK(as_string(read_frame(socket)) ==
+              "getvar:partition-type:userdata");
+        write_frame(socket, "OKAYraw");
         CHECK(as_string(read_frame(socket)) == "erase:userdata");
         write_frame(socket, binary_frame("INFO", {'w', 0, 0xff}));
         write_frame(socket, binary_frame("FAIL", {'e', 0, 0xff}));
@@ -655,6 +665,11 @@ private:
           condition_.wait(lock, [this] { return release_delayed_; });
         }
         write_frame(socket, "OKAYready");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:binary");
+        write_frame(socket, binary_frame("OKAY", {'v', 0, 0xff}));
       }
       {
         auto socket = accept();
@@ -966,9 +981,12 @@ void run_contract() {
   CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
   CHECK(context != nullptr);
   CHECK(error == nullptr);
+  kb_device_t* device = nullptr;
+  CHECK(kb_device_open(context, selector.c_str(), &device, &error) == KB_OK);
+  CHECK(device != nullptr);
 
   kb_command_result_t* result = nullptr;
-  CHECK(kb_getvar(context, selector.c_str(), "product", nullptr, &result,
+  CHECK(kb_getvar(device, "product", nullptr, &result,
                   &error) == KB_OK);
   CHECK(result != nullptr);
   CHECK(error == nullptr);
@@ -987,7 +1005,7 @@ void run_contract() {
   kb_command_result_release(result);
 
   result = nullptr;
-  CHECK(kb_erase(context, selector.c_str(), "userdata", nullptr, &result,
+  CHECK(kb_erase(device, "userdata", nullptr, &result,
                  &error) == KB_E_DEVICE_FAIL);
   CHECK(result == nullptr);
   CHECK(error != nullptr);
@@ -1011,7 +1029,7 @@ void run_contract() {
   kb_command_options_init_sized(&options, sizeof(options));
   options.progress_callback = record_progress;
   options.progress_user_data = &watermarks;
-  CHECK(kb_stage(context, selector.c_str(), stage_data.data(), stage_data.size(),
+  CHECK(kb_stage(device, stage_data.data(), stage_data.size(),
                  &options, &result, &error) == KB_OK);
   CHECK(result != nullptr);
   CHECK(error == nullptr);
@@ -1019,7 +1037,7 @@ void run_contract() {
   kb_command_result_release(result);
 
   result = nullptr;
-  CHECK(kb_upload(context, selector.c_str(), nullptr, &result, &error) == KB_OK);
+  CHECK(kb_upload(device, nullptr, &result, &error) == KB_OK);
   CHECK(result != nullptr);
   const auto* upload = kb_command_result_data(result, &size);
   CHECK(size == 5U);
@@ -1030,7 +1048,7 @@ void run_contract() {
   kb_command_result_release(result);
 
   result = nullptr;
-  CHECK(kb_fetch(context, selector.c_str(), "vendor", 2, 3, nullptr, &result,
+  CHECK(kb_fetch(device, "vendor", 2, 3, nullptr, &result,
                  &error) == KB_OK);
   CHECK(result != nullptr);
   const auto* fetched = kb_command_result_data(result, &size);
@@ -1041,7 +1059,7 @@ void run_contract() {
 
   options.maximum_receive_bytes = 16;
   result = nullptr;
-  CHECK(kb_upload(context, selector.c_str(), &options, &result, &error) ==
+  CHECK(kb_upload(device, &options, &result, &error) ==
         KB_E_PROTOCOL);
   CHECK(result == nullptr);
   CHECK(error != nullptr);
@@ -1054,7 +1072,7 @@ void run_contract() {
   error = nullptr;
 
   kb_operation_t* management_operation = nullptr;
-  CHECK(kb_flashing_async(context, selector.c_str(), KB_FLASHING_LOCK,
+  CHECK(kb_flashing_async(device, KB_FLASHING_LOCK,
                           nullptr, &management_operation, &error) == KB_OK);
   CHECK(management_operation != nullptr);
   CHECK(error == nullptr);
@@ -1085,34 +1103,34 @@ void run_contract() {
     result = nullptr;
   };
   check_management_success(kb_flashing(
-      context, selector.c_str(), KB_FLASHING_UNLOCK, nullptr, &result, &error));
+      device, KB_FLASHING_UNLOCK, nullptr, &result, &error));
   check_management_success(kb_flashing(
-      context, selector.c_str(), KB_FLASHING_LOCK_CRITICAL, nullptr, &result,
+      device, KB_FLASHING_LOCK_CRITICAL, nullptr, &result,
       &error));
   check_management_success(kb_flashing(
-      context, selector.c_str(), KB_FLASHING_UNLOCK_CRITICAL, nullptr, &result,
+      device, KB_FLASHING_UNLOCK_CRITICAL, nullptr, &result,
       &error));
   check_management_success(kb_flashing(
-      context, selector.c_str(), KB_FLASHING_GET_UNLOCK_ABILITY, nullptr,
+      device, KB_FLASHING_GET_UNLOCK_ABILITY, nullptr,
       &result, &error));
   check_management_success(kb_gsi(
-      context, selector.c_str(), KB_GSI_WIPE, nullptr, &result, &error));
+      device, KB_GSI_WIPE, nullptr, &result, &error));
   check_management_success(kb_gsi(
-      context, selector.c_str(), KB_GSI_DISABLE, nullptr, &result, &error));
+      device, KB_GSI_DISABLE, nullptr, &result, &error));
   check_management_success(kb_gsi(
-      context, selector.c_str(), KB_GSI_STATUS, nullptr, &result, &error));
+      device, KB_GSI_STATUS, nullptr, &result, &error));
   check_management_success(kb_snapshot_update(
-      context, selector.c_str(), KB_SNAPSHOT_UPDATE_CANCEL, nullptr, &result,
+      device, KB_SNAPSHOT_UPDATE_CANCEL, nullptr, &result,
       &error));
   check_management_success(kb_snapshot_update(
-      context, selector.c_str(), KB_SNAPSHOT_UPDATE_MERGE, nullptr, &result,
+      device, KB_SNAPSHOT_UPDATE_MERGE, nullptr, &result,
       &error));
   check_management_success(kb_create_logical_partition(
-      context, selector.c_str(), "system_ext", 0, nullptr, &result, &error));
+      device, "system_ext", 0, nullptr, &result, &error));
   check_management_success(kb_delete_logical_partition(
-      context, selector.c_str(), "system_ext", nullptr, &result, &error));
+      device, "system_ext", nullptr, &result, &error));
   check_management_success(kb_resize_logical_partition(
-      context, selector.c_str(), "system_ext", UINT64_MAX, nullptr, &result,
+      device, "system_ext", UINT64_MAX, nullptr, &result,
       &error));
 
   const auto check_management_failure = [&](const kb_status_t status) {
@@ -1130,14 +1148,14 @@ void run_contract() {
     error = nullptr;
   };
   check_management_failure(kb_flashing(
-      context, selector.c_str(), KB_FLASHING_UNLOCK, nullptr, &result, &error));
+      device, KB_FLASHING_UNLOCK, nullptr, &result, &error));
   check_management_failure(kb_gsi(
-      context, selector.c_str(), KB_GSI_STATUS, nullptr, &result, &error));
+      device, KB_GSI_STATUS, nullptr, &result, &error));
   check_management_failure(kb_snapshot_update(
-      context, selector.c_str(), KB_SNAPSHOT_UPDATE_MERGE, nullptr, &result,
+      device, KB_SNAPSHOT_UPDATE_MERGE, nullptr, &result,
       &error));
   check_management_failure(kb_delete_logical_partition(
-      context, selector.c_str(), "system_ext", nullptr, &result, &error));
+      device, "system_ext", nullptr, &result, &error));
 
   std::array<std::byte, 16> update_image{};
   for (std::size_t index = 0; index < update_image.size(); ++index) {
@@ -1158,7 +1176,7 @@ void run_contract() {
 
   kb_operation_t* signature_operation = nullptr;
   CHECK(kb_signature_file_async(
-            context, selector.c_str(), image_path.c_str(), nullptr,
+            device, image_path.c_str(), nullptr,
             &signature_operation, &error) == KB_E_INVALID_ARGUMENT);
   CHECK(signature_operation == nullptr);
   CHECK(error != nullptr);
@@ -1171,7 +1189,7 @@ void run_contract() {
   options.progress_callback = record_progress;
   options.progress_user_data = &watermarks;
   result = nullptr;
-  CHECK(kb_signature_file(context, selector.c_str(), signature_path.c_str(),
+  CHECK(kb_signature_file(device, signature_path.c_str(),
                           &options, &result, &error) == KB_OK);
   CHECK(result != nullptr);
   CHECK(error == nullptr);
@@ -1185,7 +1203,7 @@ void run_contract() {
 
   signature_operation = nullptr;
   CHECK(kb_signature_file_async(
-            context, selector.c_str(), signature_path.c_str(), &options,
+            device, signature_path.c_str(), &options,
             &signature_operation, &error) == KB_OK);
   CHECK(signature_operation != nullptr);
   CHECK(kb_operation_wait(signature_operation, KB_WAIT_INFINITE) == KB_OK);
@@ -1195,7 +1213,7 @@ void run_contract() {
   kb_command_result_release(result);
   result = nullptr;
 
-  CHECK(kb_signature_file(context, selector.c_str(), signature_path.c_str(),
+  CHECK(kb_signature_file(device, signature_path.c_str(),
                           &options, &result, &error) == KB_E_DEVICE_FAIL);
   CHECK(result == nullptr);
   CHECK(error != nullptr);
@@ -1209,7 +1227,7 @@ void run_contract() {
   options.progress_callback = cancel_flash_at_download;
   signature_operation = nullptr;
   CHECK(kb_signature_file_async(
-            context, selector.c_str(), signature_path.c_str(), &options,
+            device, signature_path.c_str(), &options,
             &signature_operation, &error) == KB_OK);
   CHECK(kb_operation_wait(signature_operation, KB_WAIT_INFINITE) ==
         KB_E_CANCELLED);
@@ -1224,7 +1242,7 @@ void run_contract() {
   flash_options.progress_user_data = &flash_watermarks;
   kb_operation_t* flash_operation = nullptr;
   CHECK(kb_flash_file_async(
-            context, selector.c_str(), "system", image_path.c_str(),
+            device, "system", image_path.c_str(),
             &flash_options, &flash_operation, &error) == KB_OK);
   CHECK(flash_operation != nullptr);
   CHECK(error == nullptr);
@@ -1236,7 +1254,7 @@ void run_contract() {
         std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
 
   flash_watermarks.clear();
-  CHECK(kb_flash_file(context, selector.c_str(), "system", image_path.c_str(),
+  CHECK(kb_flash_file(device, "system", image_path.c_str(),
                       &flash_options, &error) == KB_OK);
   CHECK(error == nullptr);
   CHECK(flash_watermarks ==
@@ -1245,7 +1263,7 @@ void run_contract() {
   kb_flash_options_init_sized(&flash_options, sizeof(flash_options));
   flash_operation = nullptr;
   CHECK(kb_flash_file_async(
-            context, selector.c_str(), "system", image_path.c_str(),
+            device, "system", image_path.c_str(),
             &flash_options, &flash_operation, &error) == KB_OK);
   CHECK(flash_operation != nullptr);
   CHECK(error == nullptr);
@@ -1263,7 +1281,7 @@ void run_contract() {
         std::vector<std::string>({"policy", "locked partition"}));
   CHECK(asynchronous_flash_error.session_poisoned == 0);
 
-  CHECK(kb_flash_file(context, selector.c_str(), "system", image_path.c_str(),
+  CHECK(kb_flash_file(device, "system", image_path.c_str(),
                       &flash_options, &error) == KB_E_DEVICE_FAIL);
   const auto blocking_flash_error = snapshot_error(error);
   kb_error_release(error);
@@ -1274,7 +1292,7 @@ void run_contract() {
   flash_options.progress_callback = cancel_flash_at_download;
   flash_operation = nullptr;
   CHECK(kb_flash_file_async(
-            context, selector.c_str(), "system", image_path.c_str(),
+            device, "system", image_path.c_str(),
             &flash_options, &flash_operation, &error) == KB_OK);
   CHECK(flash_operation != nullptr);
   CHECK(kb_operation_wait(flash_operation, KB_WAIT_INFINITE) ==
@@ -1287,10 +1305,10 @@ void run_contract() {
                     selector.c_str()) == 0);
   kb_operation_release(flash_operation);
 
-  CHECK(kb_flash_file_async(context, "tcp:", "system", image_path.c_str(),
-                            nullptr, &flash_operation,
-                            &error) == KB_E_INVALID_ARGUMENT);
-  CHECK(flash_operation == nullptr);
+  kb_device_t* invalid_device = nullptr;
+  CHECK(kb_device_open(context, "tcp:", &invalid_device, &error) ==
+        KB_E_INVALID_ARGUMENT);
+  CHECK(invalid_device == nullptr);
   CHECK(error != nullptr);
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   CHECK(std::strcmp(kb_error_device_identifier(error), "tcp:") == 0);
@@ -1304,7 +1322,7 @@ void run_contract() {
   update_options.progress_callback = record_progress;
   update_options.progress_user_data = &update_watermarks;
   const auto package_path = update_package.path().string();
-  CHECK(kb_update_package(context, selector.c_str(), package_path.c_str(),
+  CHECK(kb_update_package(device, package_path.c_str(),
                           &update_options, &error) == KB_OK);
   CHECK(error == nullptr);
   CHECK(std::ranges::find(update_watermarks, 16U) !=
@@ -1313,7 +1331,7 @@ void run_contract() {
   TemporaryUpdatePackage fastbootd_package(
       "version 1\nreboot fastboot\n");
   const auto fastbootd_path = fastbootd_package.path().string();
-  CHECK(kb_update_package(context, selector.c_str(), fastbootd_path.c_str(),
+  CHECK(kb_update_package(device, fastbootd_path.c_str(),
                           nullptr, &error) == KB_E_NOT_SUPPORTED);
   CHECK(error != nullptr);
   CHECK(kb_error_status(error) == KB_E_NOT_SUPPORTED);
@@ -1326,7 +1344,7 @@ void run_contract() {
   kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.progress_callback = cancel_on_second_execute;
   update_options.progress_user_data = &cancellation_probe;
-  CHECK(kb_update_package(context, selector.c_str(), package_path.c_str(),
+  CHECK(kb_update_package(device, package_path.c_str(),
                           &update_options, &error) == KB_E_DEVICE_FAIL);
   CHECK(cancellation_probe.execute_callbacks == 2U);
   CHECK(error != nullptr);
@@ -1344,7 +1362,7 @@ void run_contract() {
   kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.wipe = 1;
   update_options.skip_reboot = 1;
-  CHECK(kb_update_package(context, selector.c_str(), wipe_path.c_str(),
+  CHECK(kb_update_package(device, wipe_path.c_str(),
                           &update_options, &error) == KB_OK);
   CHECK(error == nullptr);
 
@@ -1354,7 +1372,7 @@ void run_contract() {
   kb_update_options_init_sized(&update_options, sizeof(update_options));
   update_options.timeout_ms = 1000U;
   const auto deadline_started = std::chrono::steady_clock::now();
-  CHECK(kb_update_package(context, selector.c_str(), deadline_path.c_str(),
+  CHECK(kb_update_package(device, deadline_path.c_str(),
                           &update_options, &error) == KB_E_TIMEOUT);
   const auto deadline_elapsed = std::chrono::steady_clock::now() -
                                 deadline_started;
@@ -1366,6 +1384,7 @@ void run_contract() {
   kb_error_release(error);
   error = nullptr;
 
+  kb_device_release(device);
   kb_context_release(context);
   server.finish();
 }
@@ -1392,6 +1411,8 @@ void run_flash_raw_contract() {
   kb_context_t* context = nullptr;
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+  kb_device_t* device = nullptr;
+  CHECK(kb_device_open(context, selector.c_str(), &device, &error) == KB_OK);
   kb_legacy_boot_options_t boot_options;
   kb_legacy_boot_options_init_sized(&boot_options, sizeof(boot_options));
   boot_options.header_version = 2U;
@@ -1400,10 +1421,11 @@ void run_flash_raw_contract() {
   boot_options.dtb_path = dtb_path.c_str();
   boot_options.dtb_offset = 0x01200000ULL;
   CHECK(kb_flash_raw_with_boot_options(
-            context, selector.c_str(), "boot", kernel_path.c_str(),
+            device, "boot", kernel_path.c_str(),
             ramdisk_path.c_str(), nullptr, &boot_options, nullptr, &error) ==
         KB_OK);
   CHECK(error == nullptr);
+  kb_device_release(device);
   kb_context_release(context);
   server.finish();
 }
@@ -1415,6 +1437,8 @@ void context_release_is_safe_after_async_update_start() {
   CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
   CHECK(context != nullptr);
   CHECK(error == nullptr);
+  kb_device_t* device = nullptr;
+  CHECK(kb_device_open(context, "tcp:127.0.0.1:1", &device, &error) == KB_OK);
 
   ReleaseContextProbe probe{.context = context, .released = false};
   kb_update_options_t options;
@@ -1424,7 +1448,7 @@ void context_release_is_safe_after_async_update_start() {
   kb_operation_t* operation = nullptr;
   const auto package_path = package.path().string();
   CHECK(kb_update_package_async(
-            context, "usb:255-255", package_path.c_str(), &options,
+            device, package_path.c_str(), &options,
             &operation, &error) == KB_OK);
   CHECK(operation != nullptr);
   CHECK(error == nullptr);
@@ -1432,6 +1456,7 @@ void context_release_is_safe_after_async_update_start() {
   CHECK(status == KB_E_NO_DEVICE || status == KB_E_IO);
   CHECK(probe.released.load(std::memory_order_acquire));
   kb_operation_release(operation);
+  kb_device_release(device);
 }
 
 void whole_update_timeout_includes_progress_callbacks() {
@@ -1439,6 +1464,8 @@ void whole_update_timeout_includes_progress_callbacks() {
   kb_context_t* context = nullptr;
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+  kb_device_t* device = nullptr;
+  CHECK(kb_device_open(context, "tcp:127.0.0.1:1", &device, &error) == KB_OK);
 
   DelayOpenProbe probe;
   kb_update_options_t options;
@@ -1447,7 +1474,7 @@ void whole_update_timeout_includes_progress_callbacks() {
   options.progress_callback = delay_transport_open;
   options.progress_user_data = &probe;
   const auto package_path = package.path().string();
-  CHECK(kb_update_package(context, "tcp:127.0.0.1:1",
+  CHECK(kb_update_package(device,
                           package_path.c_str(), &options,
                           &error) == KB_E_TIMEOUT);
   CHECK(probe.delayed);
@@ -1456,6 +1483,7 @@ void whole_update_timeout_includes_progress_callbacks() {
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   CHECK(strstr(kb_error_message(error), "transport open") != nullptr);
   kb_error_release(error);
+  kb_device_release(device);
   kb_context_release(context);
 }
 
@@ -1463,11 +1491,12 @@ void run_cxx_contract() {
   CxxScriptedServer server;
   const auto selector_text =
       "tcp:127.0.0.1:" + std::to_string(server.port());
-  const kairosboot::DeviceSelector selector{std::string_view{selector_text}};
   auto context = kairosboot::Context::create();
   CHECK(context.has_value());
+  auto device = context->open_device(selector_text);
+  CHECK(device.has_value());
 
-  auto binary = context->getvar(selector, "binary");
+  auto binary = device->getvar("binary");
   CHECK(binary.has_value());
   CHECK(binary->device_identifier() == selector_text);
   CHECK(binary->terminal_payload().size() == 3U);
@@ -1486,7 +1515,7 @@ void run_cxx_contract() {
   CHECK(text->kind == kairosboot::CommandMessageKind::Text);
   CHECK(!binary->message(2).has_value());
 
-  auto failed = context->erase(selector, "userdata");
+  auto failed = device->erase("userdata");
   CHECK(!failed.has_value());
   CHECK(failed.error().status() == KB_E_DEVICE_FAIL);
   CHECK(failed.error().device_message().size() == 3U);
@@ -1499,9 +1528,13 @@ void run_cxx_contract() {
 
   std::optional<kairosboot::CommandResult> retained;
   {
-    auto operation = context->getvar_async(selector, "delayed");
+    auto operation = device->getvar_async("delayed");
     CHECK(operation.has_value());
     server.wait_for_delayed_command();
+    auto overlapping = device->getvar_async("binary");
+    CHECK(!overlapping.has_value());
+    CHECK(overlapping.error().status() == KB_E_BUSY);
+    CHECK(overlapping.error().device_identifier() == selector_text);
     auto premature = operation->command_result();
     CHECK(!premature.has_value());
     CHECK(premature.error().status() == KB_E_BUSY);
@@ -1509,6 +1542,9 @@ void run_cxx_contract() {
     auto completed = operation->wait_result();
     CHECK(completed.has_value());
     retained.emplace(std::move(*completed));
+    auto after_terminal = device->getvar("binary");
+    CHECK(after_terminal.has_value());
+    CHECK(after_terminal->device_identifier() == selector_text);
   }
   CHECK(retained.has_value());
   CHECK(as_string(retained->terminal_payload()) == "ready");
@@ -1526,8 +1562,7 @@ void run_cxx_contract() {
   for (std::size_t index = 0; index < stage_data.size(); ++index) {
     stage_data[index] = std::byte{static_cast<unsigned char>(index)};
   }
-  auto stage_operation = context->stage_async(selector, stage_data,
-                                               stage_options);
+  auto stage_operation = device->stage_async(stage_data, stage_options);
   CHECK(stage_operation.has_value());
   stage_data.clear();
   stage_data.shrink_to_fit();
@@ -1538,15 +1573,15 @@ void run_cxx_contract() {
 
   kairosboot::CommandOptions receive_options;
   receive_options.maximum_receive_bytes = 3;
-  auto uploaded = context->upload(selector, receive_options);
+  auto uploaded = device->upload(receive_options);
   CHECK(uploaded.has_value());
   CHECK(uploaded->data().size() == 3U);
   CHECK(uploaded->data()[0] == std::byte{'d'});
   CHECK(uploaded->data()[1] == std::byte{0});
   CHECK(uploaded->data()[2] == std::byte{0xff});
 
-  auto fetched = context->fetch(
-      selector, "vendor", kairosboot::FetchRange{.offset = 2, .size = 3},
+  auto fetched = device->fetch(
+      "vendor", kairosboot::FetchRange{.offset = 2, .size = 3},
       receive_options);
   CHECK(fetched.has_value());
   CHECK(fetched->data().size() == 3U);
@@ -1555,7 +1590,7 @@ void run_cxx_contract() {
   CHECK(fetched->data()[2] == std::byte{0xff});
 
   receive_options.maximum_receive_bytes = 16;
-  auto oversized = context->upload(selector, receive_options);
+  auto oversized = device->upload(receive_options);
   CHECK(!oversized.has_value());
   CHECK(oversized.error().status() == KB_E_PROTOCOL);
   CHECK(oversized.error().inbound_expected_bytes() == 32U);
@@ -1578,9 +1613,8 @@ void run_cxx_contract() {
     flash_watermarks.push_back(progress.bytes_completed);
     return kairosboot::ProgressAction::Continue;
   };
-  auto flash_operation = context->flash_file_async(
-      std::optional<std::string_view>{selector_text}, "system", flash_path,
-      flash_options);
+  auto flash_operation =
+      device->flash_file_async("system", flash_path, flash_options);
   CHECK(flash_operation.has_value());
   CHECK(flash_operation->wait().has_value());
   CHECK(flash_operation->state() == KB_OPERATION_SUCCEEDED);
@@ -1588,14 +1622,12 @@ void run_cxx_contract() {
         std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
 
   flash_watermarks.clear();
-  auto flashed = context->flash_file(
-      std::optional<std::string_view>{selector_text}, "system", flash_path,
-      flash_options);
+  auto flashed = device->flash_file("system", flash_path, flash_options);
   CHECK(flashed.has_value());
   CHECK(flash_watermarks ==
         std::vector<std::uint64_t>({0U, 0U, 16U, 16U}));
 
-  auto cancelled_operation = context->getvar_async(selector, "cancel");
+  auto cancelled_operation = device->getvar_async("cancel");
   CHECK(cancelled_operation.has_value());
   server.wait_for_cancel_command();
   std::stop_source cancellation;
@@ -1624,12 +1656,15 @@ void run_udp_flash_contract() {
   kb_context_t* c_context = nullptr;
   kb_error_t* error = nullptr;
   CHECK(kb_context_create(nullptr, &c_context, &error) == KB_OK);
+  kb_device_t* c_device = nullptr;
+  CHECK(kb_device_open(c_context, selector_text.c_str(), &c_device, &error) ==
+        KB_OK);
   kb_flash_options_t c_options;
   kb_flash_options_init_sized(&c_options, sizeof(c_options));
   c_options.timeout_ms = 2'000U;
   kb_operation_t* operation = nullptr;
   CHECK(kb_flash_file_async(
-            c_context, selector_text.c_str(), "system", image_path.c_str(),
+            c_device, "system", image_path.c_str(),
             &c_options, &operation, &error) == KB_OK);
   CHECK(operation != nullptr);
   CHECK(kb_operation_wait(operation, KB_WAIT_INFINITE) == KB_OK);
@@ -1637,13 +1672,13 @@ void run_udp_flash_contract() {
   kb_operation_release(operation);
   CHECK(error == nullptr);
 
-  CHECK(kb_flash_file(c_context, selector_text.c_str(), "system",
+  CHECK(kb_flash_file(c_device, "system",
                       image_path.c_str(), &c_options, &error) == KB_OK);
   CHECK(error == nullptr);
 
   operation = nullptr;
   CHECK(kb_flash_file_async(
-            c_context, selector_text.c_str(), "system", image_path.c_str(),
+            c_device, "system", image_path.c_str(),
             &c_options, &operation, &error) == KB_OK);
   CHECK(operation != nullptr);
   CHECK(error == nullptr);
@@ -1660,7 +1695,7 @@ void run_udp_flash_contract() {
         std::vector<std::string>({"policy", "locked partition"}));
   CHECK(asynchronous_flash_error.session_poisoned == 0);
 
-  CHECK(kb_flash_file(c_context, selector_text.c_str(), "system",
+  CHECK(kb_flash_file(c_device, "system",
                       image_path.c_str(), &c_options, &error) ==
         KB_E_DEVICE_FAIL);
   const auto blocking_flash_error = snapshot_error(error);
@@ -1672,7 +1707,7 @@ void run_udp_flash_contract() {
   c_options.timeout_ms = 0U;
   operation = nullptr;
   CHECK(kb_flash_file_async(
-            c_context, selector_text.c_str(), "system", image_path.c_str(),
+            c_device, "system", image_path.c_str(),
             &c_options, &operation, &error) == KB_OK);
   CHECK(operation != nullptr);
   CHECK(error == nullptr);
@@ -1686,35 +1721,37 @@ void run_udp_flash_contract() {
   kb_operation_release(operation);
 
   operation = nullptr;
-  CHECK(kb_flash_file_async(
-            c_context, "udp:127.0.0.1:70000", "system", image_path.c_str(),
-            &c_options, &operation, &error) == KB_E_INVALID_ARGUMENT);
-  CHECK(operation == nullptr);
+  kb_device_t* invalid_device = nullptr;
+  CHECK(kb_device_open(c_context, "udp:127.0.0.1:70000", &invalid_device,
+                       &error) == KB_E_INVALID_ARGUMENT);
+  CHECK(invalid_device == nullptr);
   CHECK(error != nullptr);
   CHECK(kb_error_transfer_state(error) == KB_TRANSFER_NOT_SENT);
   kb_error_release(error);
+  kb_device_release(c_device);
   kb_context_release(c_context);
 
   auto cxx_context = kairosboot::Context::create();
   CHECK(cxx_context.has_value());
+  auto cxx_device = cxx_context->open_device(selector_text);
+  CHECK(cxx_device.has_value());
   kairosboot::FlashOptions cxx_options;
   cxx_options.timeout = std::chrono::seconds{2};
-  auto cxx_operation = cxx_context->flash_file_async(
-      std::optional<std::string_view>{selector_text}, "system",
-      package.path() / "system.img", cxx_options);
+  auto cxx_operation = cxx_device->flash_file_async(
+      "system", package.path() / "system.img", cxx_options);
   CHECK(cxx_operation.has_value());
   CHECK(cxx_operation->wait().has_value());
-  auto cxx_result = cxx_context->flash_file(
-      std::optional<std::string_view>{selector_text}, "system",
-      package.path() / "system.img", cxx_options);
+  auto cxx_result = cxx_device->flash_file(
+      "system", package.path() / "system.img", cxx_options);
   CHECK(cxx_result.has_value());
 
   cxx_options.timeout = std::chrono::milliseconds{100};
   const auto unavailable_tcp =
       "tcp:127.0.0.1:" + std::to_string(unavailable_tcp_port());
-  auto tcp_failure = cxx_context->flash_file(
-      std::optional<std::string_view>{unavailable_tcp}, "system",
-      package.path() / "system.img", cxx_options);
+  auto unavailable_tcp_device = cxx_context->open_device(unavailable_tcp);
+  CHECK(unavailable_tcp_device.has_value());
+  auto tcp_failure = unavailable_tcp_device->flash_file(
+      "system", package.path() / "system.img", cxx_options);
   CHECK(!tcp_failure.has_value());
   CHECK(tcp_failure.error().status() == KB_E_IO ||
         tcp_failure.error().status() == KB_E_TIMEOUT);
@@ -1723,9 +1760,10 @@ void run_udp_flash_contract() {
 
   const auto unavailable_udp =
       "udp:127.0.0.1:" + std::to_string(unavailable_udp_port());
-  auto udp_failure = cxx_context->flash_file(
-      std::optional<std::string_view>{unavailable_udp}, "system",
-      package.path() / "system.img", cxx_options);
+  auto unavailable_udp_device = cxx_context->open_device(unavailable_udp);
+  CHECK(unavailable_udp_device.has_value());
+  auto udp_failure = unavailable_udp_device->flash_file(
+      "system", package.path() / "system.img", cxx_options);
   CHECK(!udp_failure.has_value());
   CHECK(udp_failure.error().status() == KB_E_TIMEOUT ||
         udp_failure.error().status() == KB_E_IO);

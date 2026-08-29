@@ -52,11 +52,8 @@ def invoke(
         creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         arguments = [
             str(cli),
-            "--device",
+            "-s",
             f"tcp:127.0.0.1:{port}",
-            "--timeout-ms",
-            "5000",
-            "--json",
         ]
         arguments.extend(command if command is not None else ["boot", str(image)])
         process = subprocess.Popen(
@@ -64,6 +61,11 @@ def invoke(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=creation_flags,
+            env={
+                **os.environ,
+                "KAIROSBOOT_INTERNAL_TEST_JSON": "1",
+                "KAIROSBOOT_INTERNAL_TEST_TIMEOUT_MS": "5000",
+            },
         )
         connection, _ = listener.accept()
         with connection:
@@ -109,7 +111,7 @@ def legacy_boot_image(
         len(ramdisk),
         0x20002000,
         len(second),
-        0x20003000,
+        0x20F00000,
         0x20004000,
         page_size,
         0,
@@ -181,8 +183,6 @@ def main() -> int:
                 "0x1000",
                 "--ramdisk-offset",
                 "0x2000",
-                "--second-offset",
-                "0x3000",
                 "--tags-offset",
                 "0x4000",
                 "boot",

@@ -92,7 +92,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/coverageId"},
-        "transport": {"enum": ["tcp", "udp"]},
+        "transport": {"enum": ["host", "tcp", "udp"]},
         "coverageIds": {
           "type": "array",
           "minItems": 1,

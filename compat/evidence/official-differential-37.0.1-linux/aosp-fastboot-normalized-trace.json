@@ -2,98 +2,6 @@
   "scenarios": [
     {
       "deviceState": {
-        "hostOutputKind": "devices"
-      },
-      "events": [
-        {
-          "argv": [
-            "devices"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "TEXT",
-          "message": "devices"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-host-devices"
-    },
-    {
-      "deviceState": {
-        "hostOutputKind": "help"
-      },
-      "events": [
-        {
-          "argv": [
-            "--help"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "TEXT",
-          "message": "help"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-host-help"
-    },
-    {
-      "deviceState": {
-        "hostOutputKind": "help"
-      },
-      "events": [
-        {
-          "argv": [
-            "-h"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "TEXT",
-          "message": "help"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-host-help-short"
-    },
-    {
-      "deviceState": {
-        "hostOutputKind": "version"
-      },
-      "events": [
-        {
-          "argv": [
-            "--version"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "TEXT",
-          "message": "version"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-host-version"
-    },
-    {
-      "deviceState": {
         "product": "product_a"
       },
       "events": [
@@ -392,88 +300,6 @@
     },
     {
       "deviceState": {
-        "partitions": {
-          "system": {
-            "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
-            "size": 32
-          }
-        },
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "--force",
-            "flash",
-            "system",
-            "<ARTIFACT>/system.img"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "GETVAR",
-          "name": "is-userspace"
-        },
-        {
-          "kind": "OKAY",
-          "message": "no"
-        },
-        {
-          "kind": "GETVAR",
-          "name": "has-slot:system"
-        },
-        {
-          "kind": "OKAY",
-          "message": "no"
-        },
-        {
-          "kind": "GETVAR",
-          "name": "is-logical:system"
-        },
-        {
-          "kind": "OKAY",
-          "message": "no"
-        },
-        {
-          "kind": "GETVAR",
-          "name": "max-download-size"
-        },
-        {
-          "kind": "OKAY",
-          "message": "0x00100000"
-        },
-        {
-          "command": "download:00000020",
-          "kind": "COMMAND"
-        },
-        {
-          "direction": "host-to-device",
-          "kind": "DATA",
-          "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
-          "size": 32
-        },
-        {
-          "kind": "OKAY",
-          "message": "downloaded"
-        },
-        {
-          "command": "flash:system",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "flashed"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-flash-force"
-    },
-    {
-      "deviceState": {
         "product": "product_a",
         "signature": {
           "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
@@ -628,36 +454,6 @@
     {
       "deviceState": {
         "commands": [
-          "reboot-recovery"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "reboot-recovery"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "reboot-recovery",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-reboot-recovery"
-    },
-    {
-      "deviceState": {
-        "commands": [
           "continue"
         ],
         "product": "product_a"
@@ -718,45 +514,6 @@
     },
     {
       "deviceState": {
-        "commands": [
-          "oem differential-info"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "oem",
-            "differential-info"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "oem differential-info",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "INFO",
-          "message": "phase one"
-        },
-        {
-          "kind": "TEXT",
-          "message": "phase two"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-informational-responses"
-    },
-    {
-      "deviceState": {
         "product": "product_a"
       },
       "events": [
@@ -791,46 +548,6 @@
     },
     {
       "deviceState": {
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "get_staged",
-            "<OUTPUT>/stage.bin"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "upload",
-          "kind": "COMMAND"
-        },
-        {
-          "direction": "device-to-host",
-          "kind": "DATA",
-          "sha256": "816b1087ed7a2c2f5a46c8e4736577cd91ad2e1759378644f4b0d2127ed75576",
-          "size": 20
-        },
-        {
-          "kind": "OKAY",
-          "message": "uploaded"
-        },
-        {
-          "kind": "FILE",
-          "path": "<OUTPUT>/stage.bin",
-          "sha256": "816b1087ed7a2c2f5a46c8e4736577cd91ad2e1759378644f4b0d2127ed75576",
-          "size": 20
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-get-staged"
-    },
-    {
-      "deviceState": {
         "commands": [
           "flashing get_unlock_ability"
         ],
@@ -840,7 +557,7 @@
         {
           "argv": [
             "flashing",
-            "get_unlock_ability"
+            "get-unlock-ability"
           ],
           "kind": "CLI_PARSE",
           "result": "ok"
@@ -859,130 +576,6 @@
         }
       ],
       "id": "official-tcp-flashing-get-unlock-ability"
-    },
-    {
-      "deviceState": {
-        "commands": [
-          "flashing lock"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "flashing",
-            "lock"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "flashing lock",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-flashing-lock"
-    },
-    {
-      "deviceState": {
-        "commands": [
-          "flashing unlock"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "flashing",
-            "unlock"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "flashing unlock",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-flashing-unlock"
-    },
-    {
-      "deviceState": {
-        "commands": [
-          "flashing lock_critical"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "flashing",
-            "lock_critical"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "flashing lock_critical",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-flashing-lock-critical"
-    },
-    {
-      "deviceState": {
-        "commands": [
-          "flashing unlock_critical"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "flashing",
-            "unlock_critical"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "flashing unlock_critical",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-flashing-unlock-critical"
     },
     {
       "deviceState": {
@@ -1081,68 +674,6 @@
     {
       "deviceState": {
         "commands": [
-          "gsi:disable"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "gsi",
-            "disable"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "gsi:disable",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-gsi-disable"
-    },
-    {
-      "deviceState": {
-        "commands": [
-          "gsi:status"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "gsi",
-            "status"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "gsi:status",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-gsi-status"
-    },
-    {
-      "deviceState": {
-        "commands": [
           "snapshot-update:cancel"
         ],
         "product": "product_a"
@@ -1170,96 +701,6 @@
         }
       ],
       "id": "official-tcp-snapshot-cancel"
-    },
-    {
-      "deviceState": {
-        "commands": [
-          "snapshot-update:merge"
-        ],
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "snapshot-update",
-            "merge"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "snapshot-update:merge",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "accepted"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-snapshot-merge"
-    },
-    {
-      "deviceState": {
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "-s",
-            "<ENDPOINT>",
-            "getvar",
-            "product"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "GETVAR",
-          "name": "product"
-        },
-        {
-          "kind": "OKAY",
-          "message": "product_a"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-serial-selector"
-    },
-    {
-      "deviceState": {
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "--verbose",
-            "getvar",
-            "product"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "kind": "GETVAR",
-          "name": "product"
-        },
-        {
-          "kind": "OKAY",
-          "message": "product_a"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-verbose"
     },
     {
       "deviceState": {
@@ -1307,75 +748,6 @@
         }
       ],
       "id": "official-tcp-boot-raw"
-    },
-    {
-      "deviceState": {
-        "boot": {
-          "sha256": "7f278763e043951a587dd53fb4dd8e33fdf66fa453ce892e99ccf4758ba07a5a",
-          "size": 16384
-        },
-        "product": "product_a"
-      },
-      "events": [
-        {
-          "argv": [
-            "--base",
-            "0x10000000",
-            "--kernel-offset",
-            "0x00008000",
-            "--ramdisk-offset",
-            "0x01000000",
-            "--tags-offset",
-            "0x00000100",
-            "--page-size",
-            "4096",
-            "--header-version",
-            "2",
-            "--os-version",
-            "13.0.0",
-            "--os-patch-level",
-            "2024-01-05",
-            "--cmdline",
-            "console=ttyS0 differential",
-            "--dtb",
-            "<ARTIFACT>/dtb.bin",
-            "--dtb-offset",
-            "0x01100000",
-            "boot",
-            "<ARTIFACT>/kernel.bin",
-            "<ARTIFACT>/ramdisk.bin"
-          ],
-          "kind": "CLI_PARSE",
-          "result": "ok"
-        },
-        {
-          "command": "download:00004000",
-          "kind": "COMMAND"
-        },
-        {
-          "direction": "host-to-device",
-          "kind": "DATA",
-          "sha256": "7f278763e043951a587dd53fb4dd8e33fdf66fa453ce892e99ccf4758ba07a5a",
-          "size": 16384
-        },
-        {
-          "kind": "OKAY",
-          "message": "downloaded"
-        },
-        {
-          "command": "boot",
-          "kind": "COMMAND"
-        },
-        {
-          "kind": "OKAY",
-          "message": "booting"
-        },
-        {
-          "code": 0,
-          "kind": "EXIT"
-        }
-      ],
-      "id": "official-tcp-boot-raw-options"
     },
     {
       "deviceState": {
