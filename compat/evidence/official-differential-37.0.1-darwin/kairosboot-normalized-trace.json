@@ -2,6 +2,98 @@
   "scenarios": [
     {
       "deviceState": {
+        "hostOutputKind": "devices"
+      },
+      "events": [
+        {
+          "argv": [
+            "devices"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "TEXT",
+          "message": "devices"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-host-devices"
+    },
+    {
+      "deviceState": {
+        "hostOutputKind": "help"
+      },
+      "events": [
+        {
+          "argv": [
+            "--help"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "TEXT",
+          "message": "help"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-host-help"
+    },
+    {
+      "deviceState": {
+        "hostOutputKind": "help"
+      },
+      "events": [
+        {
+          "argv": [
+            "-h"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "TEXT",
+          "message": "help"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-host-help-short"
+    },
+    {
+      "deviceState": {
+        "hostOutputKind": "version"
+      },
+      "events": [
+        {
+          "argv": [
+            "--version"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "TEXT",
+          "message": "version"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-host-version"
+    },
+    {
+      "deviceState": {
         "product": "product_a"
       },
       "events": [
@@ -579,6 +671,46 @@
     },
     {
       "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "get_staged",
+            "<OUTPUT>/stage.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "upload",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "device-to-host",
+          "kind": "DATA",
+          "sha256": "816b1087ed7a2c2f5a46c8e4736577cd91ad2e1759378644f4b0d2127ed75576",
+          "size": 20
+        },
+        {
+          "kind": "OKAY",
+          "message": "uploaded"
+        },
+        {
+          "kind": "FILE",
+          "path": "<OUTPUT>/stage.bin",
+          "sha256": "816b1087ed7a2c2f5a46c8e4736577cd91ad2e1759378644f4b0d2127ed75576",
+          "size": 20
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-get-staged"
+    },
+    {
+      "deviceState": {
         "commands": [
           "flashing get_unlock_ability"
         ],
@@ -1055,6 +1187,75 @@
         }
       ],
       "id": "official-tcp-boot-raw"
+    },
+    {
+      "deviceState": {
+        "boot": {
+          "sha256": "7f278763e043951a587dd53fb4dd8e33fdf66fa453ce892e99ccf4758ba07a5a",
+          "size": 16384
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "--base",
+            "0x10000000",
+            "--kernel-offset",
+            "0x00008000",
+            "--ramdisk-offset",
+            "0x01000000",
+            "--tags-offset",
+            "0x00000100",
+            "--page-size",
+            "4096",
+            "--header-version",
+            "2",
+            "--os-version",
+            "13.0.0",
+            "--os-patch-level",
+            "2024-01-05",
+            "--cmdline",
+            "console=ttyS0 differential",
+            "--dtb",
+            "<ARTIFACT>/dtb.bin",
+            "--dtb-offset",
+            "0x01100000",
+            "boot",
+            "<ARTIFACT>/kernel.bin",
+            "<ARTIFACT>/ramdisk.bin"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "command": "download:00004000",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "7f278763e043951a587dd53fb4dd8e33fdf66fa453ce892e99ccf4758ba07a5a",
+          "size": 16384
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "boot",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "booting"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-boot-raw-options"
     },
     {
       "deviceState": {

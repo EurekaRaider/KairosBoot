@@ -11,21 +11,53 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "57a9b7b7e1bb15edd81e088b1115f7a83a4d22126b864c2ceb8497f58bde4adf"
+      "sha256": "e1e1463a0f7a590aa1f0a0e1ad4f0fe357e76c93aa61674dbacbb2788080b880"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "57a9b7b7e1bb15edd81e088b1115f7a83a4d22126b864c2ceb8497f58bde4adf"
+      "sha256": "e1e1463a0f7a590aa1f0a0e1ad4f0fe357e76c93aa61674dbacbb2788080b880"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
     "releaseArtifactSha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
     "sha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
-    "sourceCommit": "ea6a106b03b5f2346afe215783d8ee0fc894d997"
+    "sourceCommit": "ce8e7b64d1835bf376dddea59a1f5d1e70634ac0"
   },
   "result": "matched",
   "scenarios": [
+    {
+      "coverageIds": [
+        "command.devices"
+      ],
+      "id": "official-host-devices",
+      "result": "matched",
+      "transport": "host"
+    },
+    {
+      "coverageIds": [
+        "option.help"
+      ],
+      "id": "official-host-help",
+      "result": "matched",
+      "transport": "host"
+    },
+    {
+      "coverageIds": [
+        "option.help-short"
+      ],
+      "id": "official-host-help-short",
+      "result": "matched",
+      "transport": "host"
+    },
+    {
+      "coverageIds": [
+        "option.version"
+      ],
+      "id": "official-host-version",
+      "result": "matched",
+      "transport": "host"
+    },
     {
       "coverageIds": [
         "command.getvar",
@@ -141,6 +173,15 @@
         "command.stage"
       ],
       "id": "official-tcp-stage",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.get-staged",
+        "protocol.upload"
+      ],
+      "id": "official-tcp-get-staged",
       "result": "matched",
       "transport": "tcp"
     },
@@ -267,6 +308,24 @@
     },
     {
       "coverageIds": [
+        "option.base",
+        "option.kernel-offset",
+        "option.ramdisk-offset",
+        "option.tags-offset",
+        "option.page-size",
+        "option.header-version",
+        "option.os-version",
+        "option.os-patch-level",
+        "option.cmdline",
+        "option.dtb",
+        "option.dtb-offset"
+      ],
+      "id": "official-tcp-boot-raw-options",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
         "command.flash-raw",
         "capability.boot-image-construction"
       ],
@@ -277,6 +336,13 @@
   ],
   "schemaVersion": 1,
   "uncoveredScenarios": [
+    {
+      "coverageIds": [
+        "command.fetch"
+      ],
+      "id": "official-scripted-fetch-chunking",
+      "reason": "official Fastboot probes has-slot and max-fetch-size and performs ranged chunked fetches, while the current no-range KairosBoot CLI sends one direct fetch:partition receive command"
+    },
     {
       "coverageIds": [
         "command.reboot-fastboot"
