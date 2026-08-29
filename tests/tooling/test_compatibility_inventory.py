@@ -26,6 +26,16 @@ SPEC.loader.exec_module(GENERATOR)
 
 
 class CompatibilityInventoryTests(unittest.TestCase):
+    def test_locked_37_0_1_options_do_not_misclassify_verbose_as_vendor_id(
+        self,
+    ) -> None:
+        source = json.loads(
+            (REPOSITORY_ROOT / GENERATOR.SOURCE_PATH).read_text(encoding="utf-8")
+        )
+        entries = {entry["id"]: entry for entry in source["entries"]}
+        self.assertNotIn("option.vendor-id", entries)
+        self.assertEqual(entries["option.verbose"]["spelling"], "--verbose")
+
     def test_checked_outputs_are_exact_and_have_no_unknown_state(self) -> None:
         inventory, yaml_text = GENERATOR.generate(REPOSITORY_ROOT)
         self.assertFalse(inventory["claimCompatibility"])
@@ -39,10 +49,10 @@ class CompatibilityInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
-            33,
+            32,
         )
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["matchedScenarios"], 30
+            inventory["officialDifferentialCoverage"]["matchedScenarios"], 29
         )
         for identifier in expected_required_gaps:
             self.assertIn(f'  - "{identifier}"\n', yaml_text)
@@ -297,13 +307,13 @@ class CompatibilityInventoryTests(unittest.TestCase):
             ):
                 current, _ = GENERATOR.generate(root)
             self.assertEqual(
-                current["officialDifferentialCoverage"]["matchedScenarios"], 30
+                current["officialDifferentialCoverage"]["matchedScenarios"], 29
             )
             self.assertEqual(
                 current["officialDifferentialCoverage"][
                     "requiredEntriesWithEvidence"
                 ],
-                33,
+                32,
             )
             self.assertFalse(current["claimCompatibility"])
 

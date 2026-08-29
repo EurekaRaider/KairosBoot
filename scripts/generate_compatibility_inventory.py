@@ -208,11 +208,6 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["--device", "<ENDPOINT>", "getvar", "product"],
         "getvars": ["product"], "commands": [], "data": [],
     },
-    "official-tcp-vendor-id": {
-        "transport": "tcp", "coverageIds": ["option.vendor-id"],
-        "argv": ["--vendor-id", "0x18d1", "getvar", "product"],
-        "getvars": ["product"], "commands": [], "data": [],
-    },
     "official-tcp-verbose": {
         "transport": "tcp", "coverageIds": ["option.verbose"],
         "argv": ["--verbose", "getvar", "product"],

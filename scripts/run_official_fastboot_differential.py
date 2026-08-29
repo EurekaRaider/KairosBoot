@@ -460,6 +460,13 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
                 while not recorder.finished:
                     response = recorder.handle(_receive_frame(connection))
                     _send_frame(connection, response)
+        except socket.timeout as error:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise CaptureGateError(
+                f"{label} TCP exchange timed out; events={recorder.events!r}; "
+                f"stdout={stdout!r}, stderr={stderr!r}"
+            ) from error
         except CaptureGateError as error:
             process.kill()
             stdout, stderr = process.communicate()
@@ -740,13 +747,6 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             "getvar:product", coverage_ids=("option.serial",),
             aosp_arguments=("getvar", "product"),
             kairosboot_arguments=("getvar", "product"),
-        ),
-        Scenario(
-            "official-tcp-vendor-id", "tcp",
-            ("--vendor-id", "0x18d1", "getvar", "product"),
-            "getvar:product", coverage_ids=("option.vendor-id",),
-            aosp_arguments=("-i", "0x18d1", "getvar", "product"),
-            kairosboot_arguments=("--vendor-id", "0x18d1", "getvar", "product"),
         ),
         Scenario(
             "official-tcp-verbose", "tcp",

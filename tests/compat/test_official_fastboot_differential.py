@@ -187,10 +187,9 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-gsi-status",
             "official-tcp-snapshot-merge",
             "official-tcp-serial-selector",
-            "official-tcp-vendor-id",
             "official-tcp-verbose",
         }
-        self.assertEqual(len(scenarios), 30)
+        self.assertEqual(len(scenarios), 29)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -200,7 +199,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         )
         self.assertEqual(
             self.runner._kairosboot_command(
-                pathlib.Path("kairosboot"), by_id["official-tcp-vendor-id"]
+                pathlib.Path("kairosboot"), by_id["official-tcp-verbose"]
             ),
             [
                 "kairosboot",
@@ -208,8 +207,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "{endpoint}",
                 "--timeout-ms",
                 "5000",
-                "--vendor-id",
-                "0x18d1",
+                "--verbose",
                 "getvar",
                 "product",
             ],
@@ -293,7 +291,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-gsi-status",
                 "official-tcp-snapshot-merge",
                 "official-tcp-serial-selector",
-                "official-tcp-vendor-id",
                 "official-tcp-verbose",
             }.issubset(scenario_ids)
         )

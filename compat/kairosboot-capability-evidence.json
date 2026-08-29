@@ -263,14 +263,6 @@
       "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
     },
     {
-      "ids": ["option.vendor-id"],
-      "status": "implemented",
-      "cSymbols": ["kb_context_create"],
-      "cliCommands": ["-i", "--vendor-id"],
-      "evidence": ["tests/c_api_test.c", "tests/cxx_api_test.cpp", "tests/cli/scripted_cli_test.py", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
-      "note": "A context-level USB vendor filter is shared by enumeration and operation selection across C, C++23, .NET, and CLI; network selectors remain unaffected."
-    },
-    {
       "ids": ["option.verbose"],
       "status": "implemented",
       "cliCommands": ["-v", "--verbose"],
@@ -408,6 +400,13 @@
     }
   ],
   "additionalDeviations": [
+    {
+      "id": "deviation.vendor-id-filter-extension",
+      "status": "intentional-deviation",
+      "scope": "transport.usb",
+      "evidence": ["tests/c_api_test.c", "tests/cxx_api_test.cpp", "tests/cli/scripted_cli_test.py", "bindings/dotnet/KairosBoot.ContractTests/Program.cs"],
+      "note": "KairosBoot retains a context-level USB vendor filter through C, C++23, .NET and CLI even though the locked Platform-Tools 37.0.1 fastboot no longer exposes a vendor-id option."
+    },
     {
       "id": "deviation.update-plan-malformed-android-info",
       "status": "intentional-deviation",

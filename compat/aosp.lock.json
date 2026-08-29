@@ -12,7 +12,7 @@
     "releaseNotes": "https://developer.android.com/tools/releases/platform-tools",
     "compatibilityInventory": {
       "path": "compat/aosp-platform-tools-37.0.1-source-inventory.json",
-      "sha256": "ce51a9b97906d0537ce9eb070c04e9c3782ff2b4876fdf9288a89e312e0f3ec8"
+      "sha256": "82f49375de3ee0335f4f11b6f162e0e4b5a91d6cd20412f7e333509ded67717d"
     },
     "officialArchives": {
       "linux": {
