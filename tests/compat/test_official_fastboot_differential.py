@@ -164,10 +164,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             self.runner._kairosboot_command(pathlib.Path("kairosboot"), scenario),
             [
                 "kairosboot",
-                "--device",
+                "-s",
                 "{endpoint}",
-                "--timeout-ms",
-                "5000",
                 "getvar",
                 "product",
             ],
@@ -183,6 +181,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-host-help-short",
             "official-host-version",
             "official-tcp-reboot-recovery",
+            "official-tcp-reboot-fastboot",
             "official-tcp-erase",
             "official-tcp-set-active",
             "official-tcp-slot-options",
@@ -203,7 +202,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 43)
+        self.assertEqual(len(scenarios), 44)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -338,6 +337,29 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
              if event["kind"] == "COMMAND"],
             ["download:00000004", "flash:system",
              "download:00000004", "flash:system"],
+        )
+
+    def test_reboot_fastboot_records_mode_transition_across_connections(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-reboot-fastboot",
+            "tcp",
+            ("reboot", "fastboot"),
+            "getvar:is-userspace",
+            variable_sequences=(("is-userspace", ("no", "yes")),),
+            reconnect_after_commands=("reboot-fastboot",),
+            terminal_occurrences=2,
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        self.assertEqual(recorder.handle(b"getvar:is-userspace"), b"OKAYno")
+        self.assertEqual(recorder.handle(b"reboot-fastboot"), b"OKAYaccepted")
+        self.assertFalse(recorder.finished)
+        self.assertEqual(recorder.handle(b"getvar:is-userspace"), b"OKAYyes")
+        self.assertTrue(recorder.finished)
+        capture = recorder.capture(0)
+        self.assertEqual(
+            [event.get("name") for event in capture["events"]
+             if event["kind"] == "GETVAR"],
+            ["is-userspace", "is-userspace"],
         )
 
     def test_committed_capture_is_schema_valid_real_matched_evidence(self) -> None:

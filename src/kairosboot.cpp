@@ -4079,6 +4079,294 @@ kb_status_t start_vendor_boot_ramdisk_async(
       SlotPolicy{}, transfer_permits, task_context);
 }
 
+[[nodiscard]] kairosboot::api::OperationOutcome
+execute_network_reboot_fastboot(
+    const PreparedTarget &target, const kb_command_options_t &options,
+    const UpdateClock::time_point deadline,
+    kairosboot::api::OperationState::TaskContext &task_context) {
+  const auto &identifier = target.selector.identifier;
+  auto remaining = remaining_update_timeout(
+      deadline, identifier, "initial reboot-fastboot connection");
+  if (!remaining) {
+    return operation_failure(std::move(remaining.error()));
+  }
+  auto transport_options = options;
+  transport_options.timeout_ms = *remaining;
+  auto opened = open_target(target, transport_options,
+                            task_context.cancellation_token(), deadline);
+  if (!opened) {
+    return operation_failure(std::move(opened.error()));
+  }
+
+  kairosboot::protocol::SessionOptions session_options{};
+  session_options.io_timeout = std::chrono::milliseconds{*remaining};
+  kairosboot::protocol::FastbootSession initial_session(
+      std::move(*opened), session_options);
+  kairosboot::fastboot::PrimitiveService initial_service(initial_session);
+  auto initial_cancellation = task_context.register_cancellation_hook(
+      [&initial_service] { initial_service.request_cancel(); });
+  auto userspace = initial_service.getvar("is-userspace");
+  bool bootloader_mode = false;
+  if (!userspace) {
+    if (userspace.error().code !=
+        kairosboot::fastboot::PrimitiveErrorCode::DeviceFail) {
+      return operation_failure(kairosboot::api::normalize_public_error(
+          userspace.error(), identifier));
+    }
+    bootloader_mode = true;
+  } else if (userspace->terminal.payload == "yes") {
+    return kairosboot::api::OperationOutcome::succeeded(
+        make_command_result(
+            PrimitiveExecution{.reply = std::move(*userspace), .data = {}},
+            identifier));
+  } else if (userspace->terminal.payload == "no") {
+    bootloader_mode = true;
+  } else {
+    return operation_failure(update_error(
+        KB_E_PROTOCOL,
+        "Fastboot is-userspace must be exactly 'yes' or 'no'", identifier));
+  }
+  if (!bootloader_mode) {
+    return operation_failure(update_error(
+        KB_E_INTERNAL, "reboot-fastboot reached an invalid mode state",
+        identifier));
+  }
+
+  auto rebooted =
+      initial_service.reboot(kairosboot::fastboot::RebootTarget::Fastboot);
+  if (!rebooted) {
+    return operation_failure(kairosboot::api::normalize_public_error(
+        rebooted.error(), identifier));
+  }
+  if (rebooted->outbound_certainty !=
+      kairosboot::protocol::TransferCertainty::FullyTransferred) {
+    return operation_failure(update_error(
+        KB_E_PROTOCOL,
+        "reboot-fastboot did not fully transfer before reconnect",
+        identifier, KB_TRANSFER_PARTIAL_OR_UNKNOWN));
+  }
+  initial_cancellation.reset();
+  initial_session.close();
+
+  kairosboot::fastboot::SteadyReconnectWaiter waiter;
+  auto backoff = std::chrono::milliseconds{50};
+  constexpr auto maximum_backoff = std::chrono::milliseconds{1'000};
+  for (;;) {
+    if (task_context.cancel_requested()) {
+      return cancelled_operation(identifier, KB_TRANSFER_FULLY_TRANSFERRED,
+                                 "reboot-fastboot reconnect was cancelled");
+    }
+    auto retry_timeout = remaining_update_timeout(
+        deadline, identifier, "reboot-fastboot reconnect");
+    if (!retry_timeout) {
+      auto failure = std::move(retry_timeout.error());
+      failure.transfer_state = KB_TRANSFER_FULLY_TRANSFERRED;
+      return operation_failure(std::move(failure));
+    }
+    auto wait_duration = backoff;
+    if (deadline != UpdateClock::time_point::max()) {
+      const auto time_left = std::chrono::ceil<std::chrono::milliseconds>(
+          deadline - UpdateClock::now());
+      wait_duration = std::min(wait_duration, time_left);
+    }
+    auto waited = waiter.wait_for(wait_duration,
+                                  task_context.cancellation_token());
+    if (waited.status ==
+        kairosboot::fastboot::ReconnectWaitStatus::Cancelled) {
+      return cancelled_operation(identifier, KB_TRANSFER_FULLY_TRANSFERRED,
+                                 "reboot-fastboot reconnect was cancelled");
+    }
+    if (waited.status !=
+        kairosboot::fastboot::ReconnectWaitStatus::Elapsed) {
+      return operation_failure(update_error(
+          KB_E_IO, "reboot-fastboot reconnect wait failed", identifier,
+          KB_TRANSFER_FULLY_TRANSFERRED));
+    }
+
+    retry_timeout = remaining_update_timeout(
+        deadline, identifier, "reboot-fastboot reconnect open");
+    if (!retry_timeout) {
+      auto failure = std::move(retry_timeout.error());
+      failure.transfer_state = KB_TRANSFER_FULLY_TRANSFERRED;
+      return operation_failure(std::move(failure));
+    }
+    auto retry_options = options;
+    retry_options.timeout_ms = *retry_timeout;
+    auto reconnected = open_target(target, retry_options,
+                                   task_context.cancellation_token(), deadline);
+    if (!reconnected) {
+      backoff = std::min(backoff * 2, maximum_backoff);
+      continue;
+    }
+
+    kairosboot::protocol::SessionOptions retry_session_options{};
+    retry_session_options.io_timeout =
+        std::chrono::milliseconds{*retry_timeout};
+    kairosboot::protocol::FastbootSession retry_session(
+        std::move(*reconnected), retry_session_options);
+    kairosboot::fastboot::PrimitiveService retry_service(retry_session);
+    auto retry_cancellation = task_context.register_cancellation_hook(
+        [&retry_service] { retry_service.request_cancel(); });
+    auto mode = retry_service.getvar("is-userspace");
+    if (!mode) {
+      using kairosboot::fastboot::PrimitiveErrorCode;
+      const auto code = mode.error().code;
+      if (code == PrimitiveErrorCode::Closed ||
+          code == PrimitiveErrorCode::Poisoned ||
+          code == PrimitiveErrorCode::Timeout ||
+          code == PrimitiveErrorCode::Disconnected ||
+          code == PrimitiveErrorCode::TransportIo) {
+        retry_cancellation.reset();
+        retry_session.close();
+        backoff = std::min(backoff * 2, maximum_backoff);
+        continue;
+      }
+      auto failure = kairosboot::api::normalize_public_error(
+          mode.error(), identifier);
+      failure.transfer_state = KB_TRANSFER_FULLY_TRANSFERRED;
+      return operation_failure(std::move(failure));
+    }
+    if (mode->terminal.payload != "yes") {
+      return operation_failure(update_error(
+          KB_E_PROTOCOL,
+          "reboot-fastboot reconnected to a device that is not in fastbootd",
+          identifier, KB_TRANSFER_FULLY_TRANSFERRED));
+    }
+    return kairosboot::api::OperationOutcome::succeeded(
+        make_command_result(
+            PrimitiveExecution{.reply = std::move(*mode), .data = {}},
+            identifier));
+  }
+}
+
+[[nodiscard]] kairosboot::api::OperationOutcome execute_usb_reboot_fastboot(
+    const PreparedTarget &target, const UpdateClock::time_point deadline,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits>
+        &transfer_permits,
+    kairosboot::api::OperationState::TaskContext &task_context) {
+  const auto &identifier = target.selector.identifier;
+  auto remaining = remaining_update_timeout(
+      deadline, identifier, "reboot-fastboot USB open");
+  if (!remaining) {
+    return operation_failure(std::move(remaining.error()));
+  }
+  auto prepared_device = prepare_public_update_device(
+      target, *remaining, deadline, task_context.cancellation_token(), {},
+      transfer_permits);
+  if (!prepared_device) {
+    return operation_failure(std::move(prepared_device.error()));
+  }
+
+  const kairosboot::fastboot::UpdateOperationContext context{
+      .cancellation = task_context.cancellation_token(),
+      .deadline = deadline == UpdateClock::time_point::max()
+                      ? std::optional<UpdateClock::time_point>{}
+                      : std::optional<UpdateClock::time_point>{deadline},
+  };
+  kairosboot::fastboot::UpdateDeviceTaskInput input{
+      .task = kairosboot::fastboot::PlannedUpdateTask{
+          .kind = kairosboot::fastboot::UpdateTaskKind::Reboot,
+          .reboot_target =
+              kairosboot::fastboot::PlannedRebootTarget::Fastboot,
+      },
+  };
+  auto prepared_task =
+      prepared_device->update_device->prepare_task(std::move(input), context);
+  if (!prepared_task) {
+    return operation_failure(
+        public_update_device_error(prepared_task.error(), identifier));
+  }
+  auto executed = (*prepared_task)->execute(context);
+  if (!executed) {
+    return operation_failure(
+        public_update_device_error(executed.error(), identifier));
+  }
+
+  kairosboot::fastboot::PrimitiveReply result{
+      .terminal = kairosboot::protocol::Response{
+          .kind = kairosboot::protocol::ResponseKind::Okay,
+          .payload = "yes",
+      },
+  };
+  return kairosboot::api::OperationOutcome::succeeded(
+      make_command_result(
+          PrimitiveExecution{.reply = std::move(result), .data = {}},
+          identifier));
+}
+
+kb_status_t start_reboot_fastboot_async(
+    kb_device_t *device, const kb_command_options_t *options,
+    kb_operation_t **operation, kb_error_t **error) {
+  clear_error(error);
+  if (operation == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "operation output pointer must not be null");
+  }
+  *operation = nullptr;
+  if (device == nullptr) {
+    return fail(error, KB_E_INVALID_ARGUMENT, "device must not be null");
+  }
+  if (!valid_command_options(options)) {
+    return fail(error, KB_E_INVALID_ARGUMENT,
+                "command options have an incompatible size, API version, or receive bound",
+                device_error_identifier(device));
+  }
+  try {
+    auto operation_lease = try_acquire_device_operation(*device);
+    if (!operation_lease) {
+      return fail(error, KB_E_BUSY,
+                  "device already has an active protocol operation",
+                  device_error_identifier(device));
+    }
+    auto target = prepare_target(device->context, device->selector.c_str());
+    if (!target) {
+      return fail(error, target.error());
+    }
+    auto copied_options = command_options_or_default(options);
+    auto transfer_permits =
+        kairosboot::api::current_device_batch_transfer_permits(device);
+    auto identifier = target->selector.identifier;
+    auto task = [operation_lease = std::move(operation_lease),
+                 target = std::move(*target), copied_options,
+                 transfer_permits = std::move(transfer_permits),
+                 identifier = std::move(identifier)](
+                    kairosboot::api::OperationState::TaskContext &task_context)
+        mutable -> kairosboot::api::OperationOutcome {
+      static_cast<void>(operation_lease);
+      auto deadline = update_deadline(UpdateClock::now(),
+                                      copied_options.timeout_ms, identifier);
+      if (!deadline) {
+        return operation_failure(std::move(deadline.error()));
+      }
+      if (target.selector.kind ==
+              kairosboot::api::DeviceSelectorKind::Tcp ||
+          target.selector.kind ==
+              kairosboot::api::DeviceSelectorKind::Udp) {
+        return execute_network_reboot_fastboot(
+            target, copied_options, *deadline, task_context);
+      }
+      return execute_usb_reboot_fastboot(
+          target, *deadline, transfer_permits, task_context);
+    };
+    auto result = std::make_unique<kb_operation>(std::move(task));
+    if (!result->state->start()) {
+      return fail(error, KB_E_INTERNAL,
+                  "unable to start the reboot-fastboot operation",
+                  device_error_identifier(device));
+    }
+    *operation = result.release();
+    return KB_OK;
+  } catch (const std::bad_alloc &) {
+    return fail(error, KB_E_OUT_OF_MEMORY,
+                "unable to allocate the reboot-fastboot operation",
+                device_error_identifier(device));
+  } catch (...) {
+    return fail(error, KB_E_INTERNAL,
+                "unable to create the reboot-fastboot operation",
+                device_error_identifier(device));
+  }
+}
+
 kb_status_t start_boot_source_async(
     kb_device_t &device,
     std::shared_ptr<const kairosboot::image::IImageSource> image_source,
@@ -6157,8 +6445,8 @@ kb_status_t KB_CALL kb_reboot_async(
     native_target = kairosboot::fastboot::RebootTarget::Recovery;
     break;
   case KB_REBOOT_FASTBOOT:
-    native_target = kairosboot::fastboot::RebootTarget::Fastboot;
-    break;
+    return start_reboot_fastboot_async(device, options_or_null, operation,
+                                       error);
   default:
     return fail(error, KB_E_INVALID_ARGUMENT, "reboot target is invalid",
                 device_error_identifier(device));

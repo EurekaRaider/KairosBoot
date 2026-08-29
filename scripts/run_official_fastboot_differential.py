@@ -61,6 +61,8 @@ class Scenario:
     informational_responses: tuple[tuple[str, str], ...] = ()
     terminal_occurrences: int = 1
     receive_chunks: tuple[bytes, ...] = ()
+    variable_sequences: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    reconnect_after_commands: tuple[str, ...] = ()
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -263,6 +265,7 @@ class WireRecorder:
         self.finished = False
         self.terminal_seen = 0
         self.receive_index = 0
+        self.variable_indices: dict[str, int] = {}
         self.device_state: dict[str, Any] = {"product": "product_a"}
 
     def _finish_command(self, command: str) -> None:
@@ -319,7 +322,14 @@ class WireRecorder:
                 "unlocked": "yes",
             }
             values.update(dict(self.scenario.variable_values))
-            message = values.get(name, "")
+            sequences = dict(self.scenario.variable_sequences)
+            sequence = sequences.get(name)
+            if sequence:
+                index = self.variable_indices.get(name, 0)
+                message = sequence[min(index, len(sequence) - 1)]
+                self.variable_indices[name] = index + 1
+            else:
+                message = values.get(name, "")
             self.events.append({"kind": "OKAY", "message": message})
             self._finish_command(command)
             return b"OKAY" + message.encode("ascii")
@@ -534,19 +544,29 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
             env=environment,
         )
         try:
-            connection, _ = listener.accept()
-            with connection:
-                connection.settimeout(10)
-                hello = _receive_exact(connection, 4)
-                if hello != b"FB01":
-                    raise CaptureGateError(f"unexpected Fastboot TCP handshake: {hello!r}")
-                connection.sendall(hello)
-                while not recorder.finished:
-                    response = recorder.handle(_receive_frame(connection))
-                    if response is not None:
-                        _send_frame(connection, response)
-                    for pending in recorder.take_pending_responses():
-                        _send_frame(connection, pending)
+            while not recorder.finished:
+                connection, _ = listener.accept()
+                with connection:
+                    connection.settimeout(10)
+                    hello = _receive_exact(connection, 4)
+                    if hello != b"FB01":
+                        raise CaptureGateError(
+                            f"unexpected Fastboot TCP handshake: {hello!r}"
+                        )
+                    connection.sendall(hello)
+                    while not recorder.finished:
+                        request = _receive_frame(connection)
+                        response = recorder.handle(request)
+                        if response is not None:
+                            _send_frame(connection, response)
+                        for pending in recorder.take_pending_responses():
+                            _send_frame(connection, pending)
+                        try:
+                            command_text = request.decode("ascii")
+                        except UnicodeDecodeError:
+                            command_text = ""
+                        if command_text in scenario.reconnect_after_commands:
+                            break
         except socket.timeout as error:
             process.kill()
             stdout, stderr = process.communicate()
@@ -985,6 +1005,14 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             coverage_ids=("command.delete-logical-partition",),
         ),
         Scenario(
+            "official-tcp-reboot-fastboot", "tcp",
+            ("reboot", "fastboot"), "getvar:is-userspace",
+            coverage_ids=("command.reboot-fastboot",),
+            variable_sequences=(("is-userspace", ("no", "yes")),),
+            reconnect_after_commands=("reboot-fastboot",),
+            terminal_occurrences=2,
+        ),
+        Scenario(
             "official-tcp-gsi-wipe", "tcp", ("gsi", "wipe"), "gsi:wipe",
             coverage_ids=("command.gsi-wipe",),
         ),
@@ -1096,15 +1124,6 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
 
 
 UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
-    {
-        "id": "official-scripted-reboot-fastboot",
-        "coverageIds": ["command.reboot-fastboot"],
-        "reason": (
-            "official Fastboot reconnects after reboot-fastboot and verifies "
-            "getvar:is-userspace, while the current KairosBoot reboot API retires "
-            "the session after the terminal response"
-        ),
-    },
     {
         "id": "official-scripted-format",
         "coverageIds": ["command.format", "option.fs-options"],
