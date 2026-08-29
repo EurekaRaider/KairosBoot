@@ -179,6 +179,7 @@ add_library(
   src/api/device_selector.cpp
   src/api/error_mapping.cpp
   src/api/operation_state.cpp
+  src/fastboot/device_connection.cpp
   src/fastboot/file_receive_service.cpp
   src/fastboot/libusb_reconnect_adapters.cpp
   src/fastboot/primitive_update_device.cpp
@@ -189,14 +190,7 @@ add_library(
   src/fastboot/update_package_preflight.cpp
   src/fastboot/super_optimizer.cpp
   src/fastboot/update_plan.cpp
-  src/fleet/artifact_preflight.cpp
-  src/fleet/canonical_json.cpp
   src/fleet/controller_scheduler.cpp
-  src/fleet/device_actor.cpp
-  src/fleet/device_preflight.cpp
-  src/fleet/fleet_coordinator.cpp
-  src/fleet/job_plan.cpp
-  src/fleet/job_report.cpp
   src/image/artifact_source.cpp
   src/image/boot_image_builder.cpp
   src/image/file_source.cpp
@@ -440,70 +434,6 @@ if(BUILD_TESTING)
   add_test(NAME vendor_boot_repacker
            COMMAND kairosboot_vendor_boot_repacker_tests)
   set_tests_properties(vendor_boot_repacker PROPERTIES TIMEOUT 20)
-
-  add_executable(kairosboot_canonical_json_tests
-                 tests/fleet/canonical_json_tests.cpp)
-  target_compile_features(kairosboot_canonical_json_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_canonical_json_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_canonical_json_tests
-                        PRIVATE kairosboot_internal)
-  kairosboot_enable_strict_warnings(kairosboot_canonical_json_tests)
-  add_test(NAME canonical_json COMMAND kairosboot_canonical_json_tests)
-  set_tests_properties(canonical_json PROPERTIES TIMEOUT 10)
-
-  add_executable(kairosboot_job_report_tests tests/fleet/job_report_tests.cpp)
-  target_compile_features(kairosboot_job_report_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_job_report_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_job_report_tests PRIVATE kairosboot_internal)
-  kairosboot_enable_strict_warnings(kairosboot_job_report_tests)
-  add_test(NAME job_report COMMAND kairosboot_job_report_tests)
-  set_tests_properties(job_report PROPERTIES TIMEOUT 20)
-
-  add_executable(kairosboot_artifact_preflight_tests
-                 tests/fleet/artifact_preflight_tests.cpp)
-  target_compile_features(kairosboot_artifact_preflight_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_artifact_preflight_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_artifact_preflight_tests
-                        PRIVATE kairosboot_internal)
-  kairosboot_enable_strict_warnings(kairosboot_artifact_preflight_tests)
-  add_test(NAME artifact_preflight COMMAND kairosboot_artifact_preflight_tests)
-  set_tests_properties(artifact_preflight PROPERTIES TIMEOUT 20)
-
-  add_executable(kairosboot_device_preflight_tests
-                 tests/fleet/device_preflight_tests.cpp)
-  target_compile_features(kairosboot_device_preflight_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_device_preflight_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_device_preflight_tests
-                        PRIVATE kairosboot_internal kairosboot_libusb)
-  kairosboot_enable_strict_warnings(kairosboot_device_preflight_tests)
-  add_test(NAME device_preflight COMMAND kairosboot_device_preflight_tests)
-  set_tests_properties(device_preflight PROPERTIES TIMEOUT 30)
-
-  add_executable(kairosboot_device_actor_tests
-                 tests/fleet/device_actor_tests.cpp)
-  target_compile_features(kairosboot_device_actor_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_device_actor_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_device_actor_tests
-                        PRIVATE kairosboot_internal kairosboot_libusb)
-  kairosboot_enable_strict_warnings(kairosboot_device_actor_tests)
-  add_test(NAME device_actor COMMAND kairosboot_device_actor_tests)
-  set_tests_properties(device_actor PROPERTIES TIMEOUT 60)
-
-  add_executable(kairosboot_fleet_coordinator_tests
-                 tests/fleet/fleet_coordinator_tests.cpp)
-  target_compile_features(kairosboot_fleet_coordinator_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_fleet_coordinator_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_fleet_coordinator_tests
-                        PRIVATE kairosboot_internal kairosboot_libusb)
-  kairosboot_enable_strict_warnings(kairosboot_fleet_coordinator_tests)
-  add_test(NAME fleet_coordinator COMMAND kairosboot_fleet_coordinator_tests)
-  set_tests_properties(fleet_coordinator PROPERTIES TIMEOUT 60)
 
   add_executable(kairosboot_error_mapping_tests
                  tests/api/error_mapping_tests.cpp)

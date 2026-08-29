@@ -309,6 +309,44 @@ def check_required_files() -> None:
             fail(f"required repository file is missing: {name}")
 
 
+def check_no_product_yaml() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode("utf-8").split("\0")
+    product_yaml = sorted(
+        path
+        for path in tracked
+        if path
+        and Path(path).suffix.lower() in {".yaml", ".yml"}
+        and not path.startswith(".github/")
+    )
+    if product_yaml:
+        fail(
+            "product/runtime YAML files are forbidden; only GitHub "
+            f"infrastructure may use YAML: {product_yaml}"
+        )
+
+    removed_manifest_pipeline = (
+        "src/fleet/manifest.hpp",
+        "src/fleet/job_plan.cpp",
+        "src/fleet/job_plan.hpp",
+        "src/fleet/artifact_preflight.cpp",
+        "src/fleet/artifact_preflight.hpp",
+        "src/fleet/device_actor.cpp",
+        "src/fleet/device_actor.hpp",
+        "src/fleet/fleet_coordinator.cpp",
+        "src/fleet/fleet_coordinator.hpp",
+        "src/fleet/job_report.cpp",
+        "src/fleet/job_report.hpp",
+    )
+    stale = [path for path in removed_manifest_pipeline if (ROOT / path).exists()]
+    if stale:
+        fail(f"removed manifest/job pipeline was reintroduced: {stale}")
+
+
 def check_compatibility_baseline() -> None:
     lock = json.loads((ROOT / "compat" / "aosp.lock.json").read_text(encoding="utf-8"))
     inventory = json.loads(
@@ -532,6 +570,7 @@ def check_compatibility_baseline() -> None:
 
 def main() -> None:
     check_required_files()
+    check_no_product_yaml()
     check_codeowners()
     check_version()
     check_workflows()

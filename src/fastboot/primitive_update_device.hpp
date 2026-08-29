@@ -17,12 +17,10 @@
 #include <string_view>
 #include <vector>
 
-namespace kairosboot::fleet {
+namespace kairosboot::fastboot {
+
 struct DevicePreflightProbeResult;
 struct OpenedDevicePreflightSession;
-}
-
-namespace kairosboot::fastboot {
 
 class PrimitiveUpdateSessionActor;
 
@@ -74,8 +72,8 @@ bind_initial_reconnect_session(
 // is accepted.
 [[nodiscard]] std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
 bind_initial_libusb_update_session(
-    fleet::OpenedDevicePreflightSession opened,
-    const fleet::DevicePreflightProbeResult& probe);
+    OpenedDevicePreflightSession opened,
+    const DevicePreflightProbeResult& probe);
 
 struct PrimitiveUpdateProgress final {
     std::size_t part_index{};

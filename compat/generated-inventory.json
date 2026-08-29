@@ -145,7 +145,8 @@
       "evidence": [
         "tests/fastboot/libusb_reconnect_adapters_tests.cpp",
         "tests/fastboot/reconnect_coordinator_tests.cpp",
-        "tests/fleet/fleet_coordinator_tests.cpp"
+        "tests/c_api_test.c",
+        "tests/cxx_api_test.cpp"
       ],
       "id": "capability.fastbootd-reenumeration",
       "kind": "image-plan",

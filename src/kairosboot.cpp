@@ -6,6 +6,7 @@
 #include "src/api/command_result_handle.hpp"
 #include "src/api/error_mapping.hpp"
 #include "src/api/operation_state.hpp"
+#include "src/fastboot/device_connection.hpp"
 #include "src/fastboot/file_receive_service.hpp"
 #include "src/fastboot/libusb_reconnect_adapters.hpp"
 #include "src/fastboot/primitive_update_device.hpp"
@@ -15,7 +16,6 @@
 #include "src/fastboot/update_executor.hpp"
 #include "src/fastboot/update_package_preflight.hpp"
 #include "src/fastboot/variable_parser.hpp"
-#include "src/fleet/device_preflight.hpp"
 #include "src/image/artifact_source.hpp"
 #include "src/image/boot_image_builder.hpp"
 #include "src/image/file_source.hpp"
@@ -2725,9 +2725,9 @@ try_optimize_public_super(
 
 [[nodiscard]] kairosboot::api::OperationErrorPayload
 public_update_open_error(
-    const kairosboot::fleet::DevicePreflightOpenError &error,
+    const kairosboot::fastboot::DevicePreflightOpenError &error,
     const std::string_view identifier) {
-  using kairosboot::fleet::DevicePreflightOpenErrorCode;
+  using kairosboot::fastboot::DevicePreflightOpenErrorCode;
   kb_status_t status = KB_E_IO;
   switch (error.code) {
   case DevicePreflightOpenErrorCode::Cancelled:
@@ -2762,9 +2762,9 @@ public_update_open_error(
 
 [[nodiscard]] kairosboot::api::OperationErrorPayload
 public_update_probe_error(
-    const kairosboot::fleet::DevicePreflightProbeError &error,
+    const kairosboot::fastboot::DevicePreflightProbeError &error,
     const std::string_view identifier) {
-  using kairosboot::fleet::DevicePreflightProbeErrorCode;
+  using kairosboot::fastboot::DevicePreflightProbeErrorCode;
   kb_status_t status = KB_E_PROTOCOL;
   switch (error.code) {
   case DevicePreflightProbeErrorCode::Cancelled:
@@ -2874,7 +2874,7 @@ prepare_public_update_device(
     kairosboot::protocol::SessionOptions session_options{};
     session_options.io_timeout = std::chrono::milliseconds{timeout_ms};
     auto opener =
-        kairosboot::fleet::make_libusb_device_preflight_session_opener(
+        kairosboot::fastboot::make_libusb_device_preflight_session_opener(
             target.usb_runtime, budget, data_ring, session_options);
     if (!opener) {
       return std::unexpected(
@@ -2885,7 +2885,7 @@ prepare_public_update_device(
       return std::unexpected(
           public_update_open_error(opened.error(), target.selector.identifier));
     }
-    kairosboot::fleet::FastbootDevicePreflightProbe probe;
+    kairosboot::fastboot::FastbootDevicePreflightProbe probe;
     auto probed = probe.probe(*opened->session, deadline, cancellation);
     if (!probed) {
       return std::unexpected(
