@@ -1205,6 +1205,59 @@ def run(cli: pathlib.Path) -> None:
             "file": str(default_boot),
         }
 
+        # Platform-Tools classifies these images as Extra and deliberately
+        # excludes them from flashall. Exercise their independent default-file
+        # flash path so every frozen image-table entry still has direct wire
+        # execution coverage.
+        extra_default_images = {
+            "bootloader": "bootloader.img",
+            "cache": "cache.img",
+            "radio": "radio.img",
+            "super": "super.img",
+            "userdata": "userdata.img",
+        }
+        for index, (partition, filename) in enumerate(
+            extra_default_images.items(), start=1
+        ):
+            payload = bytes([0xB0 + index]) * 16
+            image = default_product_out / filename
+            image.write_bytes(payload)
+
+            def flashed_default_extra(
+                connection: socket.socket,
+                expected_partition: str = partition,
+                expected_payload: bytes = payload,
+            ) -> None:
+                encoded_partition = expected_partition.encode("ascii")
+                assert receive_frame(connection) == b"getvar:is-userspace"
+                send_frame(connection, b"OKAYno")
+                assert receive_frame(connection) == b"getvar:has-slot:" + encoded_partition
+                send_frame(connection, b"OKAYno")
+                assert receive_frame(connection) == b"getvar:is-logical:" + encoded_partition
+                send_frame(connection, b"OKAYno")
+                assert receive_frame(connection) == b"getvar:max-download-size"
+                send_frame(connection, b"OKAY0x00100000")
+                assert receive_frame(connection) == b"download:00000010"
+                send_frame(connection, b"DATA00000010")
+                assert receive_frame(connection) == expected_payload
+                send_frame(connection, b"OKAYdownloaded")
+                assert receive_frame(connection) == b"flash:" + encoded_partition
+                send_frame(connection, b"OKAYflashed")
+
+            stdout, stderr = invoke(
+                cli,
+                ["--json", "flash", partition],
+                flashed_default_extra,
+                environment=default_environment,
+            )
+            document = parse_success_json(stdout, stderr)
+            assert document == {
+                "ok": True,
+                "command": "flash",
+                "partition": partition,
+                "file": str(image),
+            }
+
         def flashed_default_boot_slot_a(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"getvar:is-userspace"
             send_frame(connection, b"OKAYno")

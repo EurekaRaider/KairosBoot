@@ -1,6 +1,6 @@
 # KairosBoot release readiness
 
-Repository audit baseline: `ea9cca6`
+Repository audit baseline: `906c9b25604b62ce61cd647393d11afae3faa773`
 
 This audit covers R5/R6 release construction and governance contracts that can
 be verified without publishing, signing credentials, GitHub Actions execution,
@@ -23,28 +23,30 @@ or USB hardware. It does not declare KairosBoot v1.0.0 ready.
 
 These gates must remain blocking; none can be inferred from local tests.
 
-1. Compatibility is not complete. `compat/generated-inventory.json` still has
-   `claimCompatibility: false`, with 2 missing and 34 partial entries. A v1.0.0
-   release cannot claim full AOSP Fastboot parity until the compatibility owner
-   closes or explicitly accepts those entries and reruns the official
-   differentials.
+1. The capability inventory has no missing entries. The 25 formerly partial
+   optional image entries now have per-entry execution coverage, but
+   `claimCompatibility` must remain false until official differential evidence
+   covers the required-entry set (the current frozen capture covers 22 of 87
+   required entries and leaves 8 candidate scenarios uncovered).
 2. The repository and managed package versions remain `0.1.0-dev`. Change them
    to the final identical version only after functionality and ABI are frozen;
    the release workflow rejects any tag/version mismatch.
 3. The ABI v1 manifest and symbol whitelist are enforced, but the final ABI
    freeze must occur after all remaining public C API work is complete and then
    pass on every native target.
-4. The aggregate commit must first reach `main`, then CI and Policy must pass on
-   that exact main commit. This audit did not run or trigger GitHub Actions.
+4. CI and Policy passed on exact `main` commit
+   `906c9b25604b62ce61cd647393d11afae3faa773`. Any later compatibility,
+   version, ABI, or release batch must pass both workflows again on its exact
+   merged commit.
 5. The hardware lab is not configured on the public repository: the
    `KAIROSBOOT_HIL_ENABLED` repository variable was absent and no HIL workflow
    runs existed at the audit time. Configure the protected self-hosted lab and
    produce exact-head evidence for real USB fault injection, throughput,
    32-device fairness/makespan, reconnect behavior, and the 24-hour soak.
-6. The live `github-release` Environment had the correct custom `v*` tag
-   deployment policy, but its reviewer and `prevent_self_review` fields were
-   unset at the audit time. Apply `.github/environments/github-release.json`,
-   preserve the `v*` tag policy, and read both settings back before tagging.
+6. The live `github-release` Environment currently has `EurekaRaider` as its
+   required reviewer, `prevent_self_review: false`, admin bypass enabled, and
+   the protected custom tag policy. Read these settings back again immediately
+   before tagging so governance drift remains fail-closed.
 7. Create the final tag only as an annotated, verified, signed `vX.Y.Z` tag by
    an allowlisted actor/email. The Environment approval, draft Release,
    attestation, asset validation, and final publication must occur on that tag.
@@ -55,17 +57,19 @@ These gates must remain blocking; none can be inferred from local tests.
 
 ## Final release sequence
 
-1. Close compatibility gaps, regenerate the compatibility inventory, freeze
-   the C ABI, and synchronize `version.json` and the managed package version.
+1. Expand official differential coverage to the required-entry set, regenerate
+   the compatibility inventory, freeze the C ABI, and synchronize
+   `version.json` and the managed package version.
 2. Merge the reviewed batch to `main`; run the six-platform CI and Policy once
    on that exact head.
 3. Configure and run HIL on the same head, retaining validated evidence for the
    required performance, fault, fleet, and soak gates.
-4. Apply and read back the Release Environment reviewer, self-review, and `v*`
-   tag policy fixtures.
+4. Read back the Release Environment reviewer, self-review, admin-bypass, and
+   `v*` tag policy settings and repair any drift from the checked-in fixtures.
 5. Create the verified signed tag. After the Release workflow builds all
    artifacts in Release mode, approve the protected Environment and let the
    workflow validate and publish the GitHub Release.
 
-No remote CI, HIL, tag, Release, environment mutation, or registry publication
-was performed by this audit.
+This audit read the live Release Environment and prior exact-head workflow
+results. It did not trigger remote CI, mutate the Environment, run HIL, create
+a tag or Release, or publish to a registry.

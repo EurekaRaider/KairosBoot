@@ -65,6 +65,7 @@ language-binding implementation slice:
    signed-tag/release governance, and platform signing/notarization once
    credentials are available.
 
-This audit does not reclassify compatibility inventory entries or claim the
-whole project is release-ready. Compatibility inventory regeneration and any
-non-runtime command/image gaps must be evaluated by their owning workstream.
+This runtime/fleet audit does not claim the whole project is release-ready. A
+later compatibility batch added per-entry execution coverage for every frozen
+optional image, but full compatibility still requires broader official
+differential evidence plus the hardware acceptance gates above.

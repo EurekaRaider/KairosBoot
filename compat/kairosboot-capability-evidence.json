@@ -86,7 +86,7 @@
     {
       "ids": ["command.update"],
       "status": "implemented",
-      "cSymbols": ["kb_update_package", "kb_update_package_async"],
+      "cSymbols": ["kb_update_package", "kb_update_package_async", "kb_flash_file", "kb_flash_file_async"],
       "cliCommands": ["update"],
       "evidence": ["tests/fastboot/update_package_preflight_tests.cpp", "tests/fastboot/update_plan_tests.cpp", "tests/fastboot/update_executor_tests.cpp", "tests/fastboot/update_operation_tests.cpp", "tests/fastboot/super_optimizer_tests.cpp", "tests/api/c_primitive_tcp_tests.cpp", "tests/cli/scripted_cli_test.py", "tests/compat/aosp-update-plan-37.0.1.json"],
       "note": "Update performs fail-closed ZIP/directory preflight, frozen fastboot-info and fallback planning, device validation, dynamic-partition transitions, sparse and vbmeta transforms, slot policy, deterministic super optimization, execution, cancellation, progress and reboot policy across the complete locked option surface."
@@ -400,11 +400,11 @@
     },
     {
       "ids": ["image.bootloader", "image.init-boot", "image.boot-other", "image.cache", "image.dtbo", "image.dts", "image.odm", "image.odm-dlkm", "image.product", "image.pvmfw", "image.radio", "image.recovery", "image.super", "image.system-dlkm", "image.system-ext", "image.system-other", "image.userdata", "image.vbmeta", "image.vbmeta-system", "image.vbmeta-vendor", "image.vendor", "image.vendor-boot", "image.vendor-dlkm", "image.vendor-kernel-boot", "image.vendor-other"],
-      "status": "partial",
+      "status": "implemented",
       "cSymbols": ["kb_update_package", "kb_update_package_async"],
-      "cliCommands": ["update"],
-      "evidence": ["tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp", "tests/fastboot/update_package_preflight_tests.cpp"],
-      "note": "The optional locked fallback images are recognized and planned, but per-entry direct execution coverage remains incomplete."
+      "cliCommands": ["update", "flash"],
+      "evidence": ["tests/fastboot/aosp_hardcoded_image_inventory_37_0_1.hpp", "tests/fastboot/update_package_preflight_tests.cpp", "tests/cli/scripted_cli_test.py"],
+      "note": "Every optional frozen image-table entry has direct execution coverage: BootCritical and Normal images run through ZIP fallback preflight, immutable hash/slot binding, prepare and execute; the five AOSP Extra images excluded from flashall run through their independent default-file CLI download/flash wire path."
     }
   ],
   "additionalDeviations": [
