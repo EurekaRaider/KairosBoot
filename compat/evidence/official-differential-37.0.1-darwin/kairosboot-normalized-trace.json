@@ -687,6 +687,411 @@
     },
     {
       "deviceState": {
+        "erased": [
+          "system"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "erase",
+            "system"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "partition-type:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "raw"
+        },
+        {
+          "command": "erase:system",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "erased"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-erase"
+    },
+    {
+      "deviceState": {
+        "activeSlot": "b",
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "set_active",
+            "b"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "slot-count"
+        },
+        {
+          "kind": "OKAY",
+          "message": "2"
+        },
+        {
+          "command": "set_active:b",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "active"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-set-active"
+    },
+    {
+      "deviceState": {
+        "activeSlot": "b",
+        "partitions": {
+          "system_b": {
+            "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+            "size": 32
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "--slot",
+            "b",
+            "--set-active",
+            "flash",
+            "system",
+            "<ARTIFACT>/system.img"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "slot-count"
+        },
+        {
+          "kind": "OKAY",
+          "message": "2"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "slot-count"
+        },
+        {
+          "kind": "OKAY",
+          "message": "2"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "yes"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:system_b"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "max-download-size"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x00100000"
+        },
+        {
+          "command": "download:00000020",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+          "size": 32
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:system_b",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "command": "set_active:b",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "active"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-slot-options"
+    },
+    {
+      "deviceState": {
+        "partitions": {
+          "vbmeta": {
+            "sha256": "7f984334095bd6497fb78c8f4d93033b32d866bc26416757c903b4ed0e4cfdfa",
+            "size": 256
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "--disable-verity",
+            "--disable-verification",
+            "flash",
+            "vbmeta",
+            "<ARTIFACT>/vbmeta.img"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:vbmeta"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:vbmeta"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:vbmeta"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "partition-size:vbmeta"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x1000"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "max-download-size"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x00100000"
+        },
+        {
+          "command": "download:00000100",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "7f984334095bd6497fb78c8f4d93033b32d866bc26416757c903b4ed0e4cfdfa",
+          "size": 256
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:vbmeta",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-avb-flags"
+    },
+    {
+      "deviceState": {
+        "partitions": {
+          "system": {
+            "sha256": "fd1bbde52b83a4c6c4e5f5a7d6bd8ad83a90c8c8e95a85bca358bfbdf5e71f1b",
+            "size": 4148
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "-S",
+            "4200",
+            "flash",
+            "system",
+            "<ARTIFACT>/sparse-input.img"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "partition-size:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x2000"
+        },
+        {
+          "command": "download:00001034",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "8335c4661f2cfa437b96eafaa38936c64bffd2308b97233e6216083999ecaf25",
+          "size": 4148
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:system",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "command": "download:00001034",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "fd1bbde52b83a4c6c4e5f5a7d6bd8ad83a90c8c8e95a85bca358bfbdf5e71f1b",
+          "size": 4148
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:system",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-sparse-limit"
+    },
+    {
+      "deviceState": {
         "commands": [
           "oem differential"
         ],
@@ -828,6 +1233,99 @@
         }
       ],
       "id": "official-tcp-get-staged"
+    },
+    {
+      "deviceState": {
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "fetch",
+            "system",
+            "<OUTPUT>/system.img"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "max-fetch-size"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x8"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "partition-size:system"
+        },
+        {
+          "kind": "OKAY",
+          "message": "0x14"
+        },
+        {
+          "command": "fetch:system:0x00000000:0x00000008",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "device-to-host",
+          "kind": "DATA",
+          "sha256": "2fae3161afa91d7fbb06457c1aa89562b72e90f760ca366798f94762bc8ee278",
+          "size": 8
+        },
+        {
+          "kind": "OKAY",
+          "message": "fetched"
+        },
+        {
+          "command": "fetch:system:0x00000008:0x00000008",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "device-to-host",
+          "kind": "DATA",
+          "sha256": "7473cc5b184f4ebc69c75e4112bb961a7291ce47e4d47f4b7f002a1cb3779ae6",
+          "size": 8
+        },
+        {
+          "kind": "OKAY",
+          "message": "fetched"
+        },
+        {
+          "command": "fetch:system:0x00000010:0x00000004",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "device-to-host",
+          "kind": "DATA",
+          "sha256": "98ab0b9a3368f7c1de8b68b55a08a4c8e06d5ca5f192ebf2c75cd6986b42c145",
+          "size": 4
+        },
+        {
+          "kind": "OKAY",
+          "message": "fetched"
+        },
+        {
+          "kind": "FILE",
+          "path": "<OUTPUT>/system.img",
+          "sha256": "816b1087ed7a2c2f5a46c8e4736577cd91ad2e1759378644f4b0d2127ed75576",
+          "size": 20
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-fetch-chunking"
     },
     {
       "deviceState": {
@@ -1046,6 +1544,188 @@
         }
       ],
       "id": "official-tcp-delete-logical-partition"
+    },
+    {
+      "deviceState": {
+        "partitions": {
+          "super": {
+            "sha256": "cfbff82e159066d192121db4a0988bd6fd091792dade519b1f80f23d2ce4b324",
+            "size": 4148
+          }
+        },
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "resize-logical-partition",
+            "system_a",
+            "4096"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "command": "fetch:super:0x00000000:0x00100000",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "device-to-host",
+          "kind": "DATA",
+          "sha256": "5e1cfe4fe46f85e773d23a339a4e766e24108b6ea8e347a367f459396c7dbd7f",
+          "size": 65536
+        },
+        {
+          "kind": "OKAY",
+          "message": "fetched"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:system_a"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "command": "download:00001034",
+          "kind": "COMMAND"
+        },
+        {
+          "direction": "host-to-device",
+          "kind": "DATA",
+          "sha256": "cfbff82e159066d192121db4a0988bd6fd091792dade519b1f80f23d2ce4b324",
+          "size": 4148
+        },
+        {
+          "kind": "OKAY",
+          "message": "downloaded"
+        },
+        {
+          "command": "flash:super",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "flashed"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-resize-logical-partition"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "resize-logical-partition:differential:8192"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "resize-logical-partition",
+            "differential",
+            "8192"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "yes"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "has-slot:differential"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-logical:differential"
+        },
+        {
+          "kind": "OKAY",
+          "message": "yes"
+        },
+        {
+          "command": "resize-logical-partition:differential:8192",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-resize-logical-partition-fastbootd"
+    },
+    {
+      "deviceState": {
+        "commands": [
+          "reboot-fastboot"
+        ],
+        "product": "product_a"
+      },
+      "events": [
+        {
+          "argv": [
+            "reboot",
+            "fastboot"
+          ],
+          "kind": "CLI_PARSE",
+          "result": "ok"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "no"
+        },
+        {
+          "command": "reboot-fastboot",
+          "kind": "COMMAND"
+        },
+        {
+          "kind": "OKAY",
+          "message": "accepted"
+        },
+        {
+          "kind": "GETVAR",
+          "name": "is-userspace"
+        },
+        {
+          "kind": "OKAY",
+          "message": "yes"
+        },
+        {
+          "code": 0,
+          "kind": "EXIT"
+        }
+      ],
+      "id": "official-tcp-reboot-fastboot"
     },
     {
       "deviceState": {

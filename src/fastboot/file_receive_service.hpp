@@ -89,6 +89,16 @@ public:
         std::uint64_t maximum_bytes,
         const protocol::TransferProgressObserver& observer = {});
 
+    // Matches the Fastboot CLI whole-partition fetch policy: resolve the
+    // current slot, query the device limits, receive bounded ranges into one
+    // private file, and publish the destination only after every range passes.
+    [[nodiscard]] std::expected<FileReceiveResult, FileReceiveError>
+    fetch_partition(
+        std::string_view partition,
+        const std::filesystem::path& destination,
+        std::uint64_t maximum_bytes,
+        const protocol::TransferProgressObserver& observer = {});
+
     void request_cancel() noexcept;
 
 private:

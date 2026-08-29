@@ -309,6 +309,91 @@ def check_required_files() -> None:
             fail(f"required repository file is missing: {name}")
 
 
+def check_no_product_yaml() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode("utf-8").split("\0")
+    product_yaml = sorted(
+        path
+        for path in tracked
+        if path
+        and Path(path).suffix.lower() in {".yaml", ".yml"}
+        and not path.startswith(".github/")
+    )
+    if product_yaml:
+        fail(
+            "product/runtime YAML files are forbidden; only GitHub "
+            f"infrastructure may use YAML: {product_yaml}"
+        )
+
+    removed_manifest_pipeline = (
+        "schemas/flash-job.v1.schema.json",
+        "tests/contracts/job-report-v1.golden.json",
+        "src/fleet/manifest.hpp",
+        "src/fleet/job_plan.cpp",
+        "src/fleet/job_plan.hpp",
+        "src/fleet/artifact_preflight.cpp",
+        "src/fleet/artifact_preflight.hpp",
+        "src/fleet/canonical_json.cpp",
+        "src/fleet/canonical_json.hpp",
+        "src/fleet/device_actor.cpp",
+        "src/fleet/device_actor.hpp",
+        "src/fleet/device_preflight.cpp",
+        "src/fleet/device_preflight.hpp",
+        "src/fleet/fleet_coordinator.cpp",
+        "src/fleet/fleet_coordinator.hpp",
+        "src/fleet/job_report.cpp",
+        "src/fleet/job_report.hpp",
+        "tests/fleet/artifact_preflight_tests.cpp",
+        "tests/fleet/canonical_json_tests.cpp",
+        "tests/fleet/device_actor_tests.cpp",
+        "tests/fleet/device_preflight_tests.cpp",
+        "tests/fleet/fleet_coordinator_tests.cpp",
+        "tests/fleet/job_report_tests.cpp",
+    )
+    stale = [path for path in removed_manifest_pipeline if (ROOT / path).exists()]
+    if stale:
+        fail(f"removed manifest/job pipeline was reintroduced: {stale}")
+
+    public_product_roots = (
+        "CMakeLists.txt",
+        "cmake/",
+        "include/",
+        "src/",
+        "cli/",
+        "bindings/dotnet/KairosBoot/",
+        "examples/",
+        "packaging/",
+    )
+    forbidden_product_markers = re.compile(
+        r"yaml-cpp|#\s*include\s*[<\"]yaml|\bYAML::|kb_run_job|kb_job_|"
+        r"kairosboot\.io/v1|\bFlashJob\b|\brun-job\b|\bjob-file\b",
+        re.IGNORECASE,
+    )
+    stale_markers: list[str] = []
+    for relative in tracked:
+        if not relative or not any(
+            relative == root or relative.startswith(root)
+            for root in public_product_roots
+        ):
+            continue
+        path = ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if forbidden_product_markers.search(text):
+            stale_markers.append(relative)
+    if stale_markers:
+        fail(
+            "removed YAML/job public surface was reintroduced: "
+            f"{sorted(stale_markers)}"
+        )
+
+
 def check_compatibility_baseline() -> None:
     lock = json.loads((ROOT / "compat" / "aosp.lock.json").read_text(encoding="utf-8"))
     inventory = json.loads(
@@ -532,6 +617,7 @@ def check_compatibility_baseline() -> None:
 
 def main() -> None:
     check_required_files()
+    check_no_product_yaml()
     check_codeowners()
     check_version()
     check_workflows()

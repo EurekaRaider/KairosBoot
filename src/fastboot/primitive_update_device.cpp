@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "primitive_update_device.hpp"
 
+#include "src/fastboot/device_connection.hpp"
 #include "src/fastboot/variable_parser.hpp"
-#include "src/fleet/device_preflight.hpp"
 #include "src/transport/image_transfer_source.hpp"
 #include "src/transport/transfer_ring.hpp"
 
@@ -456,8 +456,8 @@ bind_initial_reconnect_session(
 
 std::expected<VerifiedInitialSessionBinding, UpdateDeviceError>
 bind_initial_libusb_update_session(
-    fleet::OpenedDevicePreflightSession opened,
-    const fleet::DevicePreflightProbeResult& probe) {
+    OpenedDevicePreflightSession opened,
+    const DevicePreflightProbeResult& probe) {
     if (!probe.product_query_completed || !probe.mode_query_completed ||
         probe.mode != FastbootUsbMode::Bootloader ||
         opened.session == nullptr ||

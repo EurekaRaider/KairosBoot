@@ -1289,14 +1289,16 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   if (command == "reboot") {
     result.kind = CommandKind::Reboot;
     if (argc - command_index > 2) {
-      return error("reboot accepts at most the bootloader target");
+      return error("reboot accepts at most the bootloader or fastboot target");
     }
     if (argc - command_index == 2) {
       const std::string_view target{argv[index]};
       if (target == "bootloader") {
         result.reboot_target = kairosboot::RebootTarget::Bootloader;
+      } else if (target == "fastboot") {
+        result.reboot_target = kairosboot::RebootTarget::Fastboot;
       } else {
-        return error("reboot target must be bootloader");
+        return error("reboot target must be bootloader or fastboot");
       }
     }
     return result;

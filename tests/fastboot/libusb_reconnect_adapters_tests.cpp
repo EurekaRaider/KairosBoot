@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/libusb_reconnect_adapters.hpp"
+#include "src/fastboot/device_connection.hpp"
 #include "src/fastboot/primitive_update_device.hpp"
 #include "src/fastboot/primitive_service.hpp"
-
-#include "src/fleet/job_plan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -38,8 +37,6 @@ using kairosboot::fastboot::FastbootUsbMode;
 using kairosboot::fastboot::LibusbReconnectAdapter;
 using kairosboot::fastboot::PrimitiveErrorCode;
 using kairosboot::fastboot::PrimitiveService;
-using kairosboot::fastboot::PreparedReconnectBinding;
-using kairosboot::fastboot::PreparedReconnectBindingErrorCode;
 using kairosboot::fastboot::ReconnectCandidate;
 using kairosboot::fastboot::ReconnectCoordinator;
 using kairosboot::fastboot::ReconnectErrorCode;
@@ -48,31 +45,18 @@ using kairosboot::fastboot::ReconnectOptions;
 using kairosboot::fastboot::ReconnectTarget;
 using kairosboot::fastboot::ReconnectUsbFingerprintPolicy;
 using kairosboot::fastboot::SteadyReconnectWaiter;
-using kairosboot::fastboot::make_prepared_reconnect_binding;
 using kairosboot::fastboot::bind_initial_libusb_update_session;
-using kairosboot::fleet::DevicePreflightOpenError;
-using kairosboot::fleet::DevicePreflightProbeError;
-using kairosboot::fleet::DevicePreflightProbeResult;
-using kairosboot::fleet::DevicePreflightTimePoint;
-using kairosboot::fleet::DevicePreflightUsbFingerprint;
-using kairosboot::fleet::DevicePreflightUsbIdentity;
-using kairosboot::fleet::FlashJobManifest;
-using kairosboot::fleet::FastbootDevicePreflightProbe;
-using kairosboot::fleet::IDevicePreflightProbe;
-using kairosboot::fleet::IDevicePreflightSessionOpener;
-using kairosboot::fleet::JobPlan;
-using kairosboot::fleet::LocatedManifestString;
-using kairosboot::fleet::ManifestArtifact;
-using kairosboot::fleet::ManifestEraseStep;
-using kairosboot::fleet::ManifestPolicy;
-using kairosboot::fleet::ManifestSelector;
-using kairosboot::fleet::ManifestSourceLocation;
-using kairosboot::fleet::ManifestStep;
-using kairosboot::fleet::ManifestTarget;
-using kairosboot::fleet::OpenedDevicePreflightSession;
-using kairosboot::fleet::make_job_plan;
-using kairosboot::fleet::make_libusb_device_preflight_session_opener;
-using kairosboot::fleet::preflight_fleet_devices;
+using kairosboot::fastboot::DevicePreflightOpenError;
+using kairosboot::fastboot::DevicePreflightProbeError;
+using kairosboot::fastboot::DevicePreflightProbeResult;
+using kairosboot::fastboot::DevicePreflightTimePoint;
+using kairosboot::fastboot::DevicePreflightUsbFingerprint;
+using kairosboot::fastboot::DevicePreflightUsbIdentity;
+using kairosboot::fastboot::FastbootDevicePreflightProbe;
+using kairosboot::fastboot::IDevicePreflightProbe;
+using kairosboot::fastboot::IDevicePreflightSessionOpener;
+using kairosboot::fastboot::OpenedDevicePreflightSession;
+using kairosboot::fastboot::make_libusb_device_preflight_session_opener;
 using kairosboot::protocol::FastbootSession;
 using kairosboot::protocol::ITransportSession;
 using kairosboot::protocol::SessionOptions;
@@ -116,12 +100,6 @@ void wait_until(Predicate predicate) {
         std::this_thread::sleep_for(1ms);
     }
 }
-
-template <typename Value>
-concept PublicBindingConstructor = requires { Value{ReconnectTarget{}}; };
-
-static_assert(!std::is_copy_constructible_v<PreparedReconnectBinding>);
-static_assert(!PublicBindingConstructor<PreparedReconnectBinding>);
 
 class FakeLibusb final : public std::enable_shared_from_this<FakeLibusb> {
 public:
@@ -1124,42 +1102,6 @@ void test_final_interruption_handoff_never_publishes_sticky_cancel() {
     }
 }
 
-inline constexpr ManifestSourceLocation kLocation{1U, 1U};
-
-[[nodiscard]] LocatedManifestString located(std::string value) {
-    return {.value = std::move(value), .location = kLocation};
-}
-
-[[nodiscard]] JobPlan one_device_plan() {
-    FlashJobManifest manifest{
-        .location = kLocation,
-        .artifacts = {ManifestArtifact{
-            .location = kLocation,
-            .id = located("unused"),
-            .path = located("images/unused.img"),
-            .sha256 = located(std::string(64U, '1')),
-        }},
-        .targets = {ManifestTarget{
-            .location = kLocation,
-            .name = located("target"),
-            .selector = ManifestSelector{
-                .location = kLocation,
-                .serials = {located("SERIAL")},
-                .usb_paths = {},
-            },
-            .expected_product = located("product-a"),
-            .steps = {ManifestStep{
-                .location = kLocation,
-                .payload = ManifestEraseStep{located("metadata")},
-            }},
-        }},
-        .policy = ManifestPolicy{},
-    };
-    auto plan = make_job_plan(std::move(manifest));
-    CHECK(plan.has_value());
-    return std::move(*plan);
-}
-
 [[nodiscard]] UsbDeviceInfo preflight_device() {
     UsbDeviceInfo device{
         .vendor_id = 0x18D1U,
@@ -1302,68 +1244,6 @@ void test_public_update_binding_accepts_only_verified_bootloader_start() {
     CHECK(!rejected.has_value());
 }
 
-void test_prepared_binding_is_unforgeable_and_fail_closed() {
-    const auto plan = one_device_plan();
-    const std::array snapshot{preflight_device()};
-    PreflightOpener opener;
-    PreflightProbe probe;
-    auto prepared = preflight_fleet_devices(
-        plan,
-        snapshot,
-        opener,
-        probe,
-        std::chrono::steady_clock::now() + 2s);
-    CHECK(prepared.has_value());
-    CHECK(prepared->devices().size() == 1U);
-    auto binding = make_prepared_reconnect_binding(
-        prepared->devices().front());
-    CHECK(binding.has_value());
-
-    auto target = binding->target_after_transition(
-        FastbootUsbMode::Fastbootd,
-        SessionState::Ready,
-        TransferCertainty::FullyTransferred);
-    CHECK(target.has_value());
-    CHECK(target->physical_port.bus_number == 1U);
-    CHECK(target->physical_port.ports ==
-          std::vector<std::uint8_t>({3U, 4U}));
-    CHECK(target->product == "product-a");
-    CHECK(target->previous_mode == FastbootUsbMode::Bootloader);
-    CHECK(target->required_mode == FastbootUsbMode::Fastbootd);
-    CHECK(target->usb_fingerprint_policy ==
-          ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity);
-
-    auto same_mode = binding->target_after_transition(
-        FastbootUsbMode::Bootloader,
-        SessionState::Ready,
-        TransferCertainty::FullyTransferred);
-    CHECK(same_mode.has_value());
-    CHECK(same_mode->usb_fingerprint_policy ==
-          ReconnectUsbFingerprintPolicy::Exact);
-
-    auto poisoned = binding->target_after_transition(
-        FastbootUsbMode::Fastbootd,
-        SessionState::Poisoned,
-        TransferCertainty::FullyTransferred);
-    CHECK(!poisoned.has_value());
-    CHECK(poisoned.error().code ==
-          PreparedReconnectBindingErrorCode::UnsafeSessionState);
-    auto uncertain = binding->target_after_transition(
-        FastbootUsbMode::Fastbootd,
-        SessionState::Ready,
-        TransferCertainty::PartialOrUnknown);
-    CHECK(!uncertain.has_value());
-    CHECK(uncertain.error().code ==
-          PreparedReconnectBindingErrorCode::UnsafeTransferOutcome);
-    auto not_sent = binding->target_after_transition(
-        FastbootUsbMode::Fastbootd,
-        SessionState::Ready,
-        TransferCertainty::NotTransferred);
-    CHECK(!not_sent.has_value());
-    CHECK(not_sent.error().code ==
-          PreparedReconnectBindingErrorCode::UnsafeTransferOutcome);
-}
-
 }  // namespace
 
 int main() {
@@ -1381,7 +1261,6 @@ int main() {
         test_live_product_mode_serial_and_interruption_fail_closed();
         test_final_interruption_handoff_never_publishes_sticky_cancel();
         test_public_update_binding_accepts_only_verified_bootloader_start();
-        test_prepared_binding_is_unforgeable_and_fail_closed();
     } catch (const std::exception& error) {
         std::cerr << "libusb reconnect adapter test failed: " << error.what()
                   << '\n';

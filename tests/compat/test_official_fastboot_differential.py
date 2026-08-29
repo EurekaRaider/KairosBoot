@@ -164,10 +164,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             self.runner._kairosboot_command(pathlib.Path("kairosboot"), scenario),
             [
                 "kairosboot",
-                "--device",
+                "-s",
                 "{endpoint}",
-                "--timeout-ms",
-                "5000",
                 "getvar",
                 "product",
             ],
@@ -183,6 +181,12 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-host-help-short",
             "official-host-version",
             "official-tcp-reboot-recovery",
+            "official-tcp-reboot-fastboot",
+            "official-tcp-erase",
+            "official-tcp-set-active",
+            "official-tcp-slot-options",
+            "official-tcp-avb-flags",
+            "official-tcp-sparse-limit",
             "official-tcp-flashing-lock",
             "official-tcp-flashing-unlock",
             "official-tcp-flashing-lock-critical",
@@ -193,12 +197,21 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-serial-selector",
             "official-tcp-verbose",
             "official-tcp-get-staged",
+            "official-tcp-fetch-chunking",
+            "official-tcp-resize-logical-partition",
+            "official-tcp-resize-logical-partition-fastbootd",
             "official-tcp-boot-raw-options",
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 37)
+        self.assertEqual(len(scenarios), 46)
         self.assertTrue(expected.issubset(by_id))
+        super_metadata = self.runner._synthetic_super_metadata()
+        self.assertEqual(len(super_metadata), 65_536)
+        self.assertEqual(
+            hashlib.sha256(super_metadata).hexdigest(),
+            "5e1cfe4fe46f85e773d23a339a4e766e24108b6ea8e347a367f459396c7dbd7f",
+        )
         self.assertEqual(
             self.runner._aosp_command(
                 pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]
@@ -217,10 +230,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             ),
             [
                 "kairosboot",
-                "--device",
+                "-s",
                 "{endpoint}",
-                "--timeout-ms",
-                "5000",
                 "--verbose",
                 "getvar",
                 "product",
@@ -310,6 +321,55 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             {"size": 4, "sha256": hashlib.sha256(b"sig\x00").hexdigest()},
         )
 
+    def test_fragmented_download_and_repeated_terminal_are_normalized(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-multipart",
+            "tcp",
+            ("flash", "system", "fixture.img"),
+            "flash:system",
+            terminal_occurrences=2,
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        for payload in (b"abcd", b"efgh"):
+            self.assertEqual(recorder.handle(b"download:00000004"), b"DATA00000004")
+            self.assertIsNone(recorder.handle(payload[:2]))
+            self.assertEqual(recorder.handle(payload[2:]), b"OKAYdownloaded")
+            self.assertEqual(recorder.handle(b"flash:system"), b"OKAYflashed")
+        capture = recorder.capture(0)
+        self.assertEqual(
+            [event["size"] for event in capture["events"] if event["kind"] == "DATA"],
+            [4, 4],
+        )
+        self.assertEqual(
+            [event["command"] for event in capture["events"]
+             if event["kind"] == "COMMAND"],
+            ["download:00000004", "flash:system",
+             "download:00000004", "flash:system"],
+        )
+
+    def test_reboot_fastboot_records_mode_transition_across_connections(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-reboot-fastboot",
+            "tcp",
+            ("reboot", "fastboot"),
+            "getvar:is-userspace",
+            variable_sequences=(("is-userspace", ("no", "yes")),),
+            reconnect_after_commands=("reboot-fastboot",),
+            terminal_occurrences=2,
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        self.assertEqual(recorder.handle(b"getvar:is-userspace"), b"OKAYno")
+        self.assertEqual(recorder.handle(b"reboot-fastboot"), b"OKAYaccepted")
+        self.assertFalse(recorder.finished)
+        self.assertEqual(recorder.handle(b"getvar:is-userspace"), b"OKAYyes")
+        self.assertTrue(recorder.finished)
+        capture = recorder.capture(0)
+        self.assertEqual(
+            [event.get("name") for event in capture["events"]
+             if event["kind"] == "GETVAR"],
+            ["is-userspace", "is-userspace"],
+        )
+
     def test_committed_capture_is_schema_valid_real_matched_evidence(self) -> None:
         schema = json.loads(
             (
@@ -377,9 +437,15 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-host-help-short",
                 "official-host-version",
                 "official-tcp-get-staged",
+                "official-tcp-fetch-chunking",
                 "official-tcp-boot-raw-options",
                 "official-tcp-flash-force",
                 "official-tcp-informational-responses",
+                "official-tcp-erase",
+                "official-tcp-set-active",
+                "official-tcp-slot-options",
+                "official-tcp-avb-flags",
+                "official-tcp-sparse-limit",
             }.issubset(scenario_ids)
         )
         cli_arguments = [
@@ -391,15 +457,17 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         uncovered = {item["id"] for item in metadata["uncoveredScenarios"]}
         self.assertTrue(
             {
-                "official-scripted-slot-policy",
-                "official-scripted-avb-flags",
-                "official-scripted-sparse-limit",
                 "official-scripted-format",
                 "official-scripted-wipe-super",
                 "official-scripted-update-flashall",
             }.issubset(uncovered)
         )
         self.assertNotIn("official-scripted-boot-flash-raw", uncovered)
+        self.assertNotIn("official-scripted-erase", uncovered)
+        self.assertNotIn("official-scripted-slot-options", uncovered)
+        self.assertNotIn("official-scripted-avb-flags", uncovered)
+        self.assertNotIn("official-scripted-sparse-limit", uncovered)
+        self.assertNotIn("official-scripted-fetch-chunking", uncovered)
 
     def test_committed_evidence_index_covers_every_locked_platform(self) -> None:
         index = json.loads(

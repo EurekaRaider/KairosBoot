@@ -557,7 +557,15 @@ def run(cli: pathlib.Path) -> None:
                 connection: socket.socket,
                 expected: bytes = wire_command,
                 binary_result: bool = command_index == 0,
+                resize: bool = arguments[0] == "resize-logical-partition",
             ) -> None:
+                if resize:
+                    assert receive_frame(connection) == b"getvar:is-userspace"
+                    send_frame(connection, b"OKAYyes")
+                    assert receive_frame(connection) == b"getvar:has-slot:system_ext"
+                    send_frame(connection, b"OKAYno")
+                    assert receive_frame(connection) == b"getvar:is-logical:system_ext"
+                    send_frame(connection, b"OKAYyes")
                 assert receive_frame(connection) == expected
                 if binary_result:
                     send_frame(connection, b"INFOi\x00\xff")
@@ -1050,16 +1058,14 @@ def run(cli: pathlib.Path) -> None:
             }
 
         def flashed_default_boot_slot_a(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
             assert receive_frame(connection) == b"getvar:is-userspace"
             send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:has-slot:boot"
             send_frame(connection, b"OKAYyes")
-            assert receive_frame(connection) == b"getvar:is-logical:boot"
+            assert receive_frame(connection) == b"getvar:is-logical:boot_a"
             send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:has-slot:boot"
-            send_frame(connection, b"OKAYyes")
-            assert receive_frame(connection) == b"getvar:slot-count"
-            send_frame(connection, b"OKAY2")
             assert receive_frame(connection) == b"getvar:max-download-size"
             send_frame(connection, b"OKAY0x00100000")
             assert receive_frame(connection) == b"download:00000010"
@@ -1197,8 +1203,10 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:is-logical:system"
             send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:max-download-size"
-            send_frame(connection, b"OKAY0x00100000")
+            assert receive_frame(connection) == b"getvar:is-logical:system"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:partition-size:system"
+            send_frame(connection, b"OKAY0x3000")
             for _ in range(3):
                 command = receive_frame(connection)
                 assert command.startswith(b"download:")
@@ -1307,6 +1315,10 @@ def run(cli: pathlib.Path) -> None:
             send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:is-logical:vbmeta"
             send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:is-logical:vbmeta"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:partition-size:vbmeta"
+            send_frame(connection, b"OKAY0x1000")
             assert receive_frame(connection) == b"getvar:max-download-size"
             send_frame(connection, b"OKAY0x00100000")
             assert receive_frame(connection) == b"download:00000100"
@@ -1319,22 +1331,18 @@ def run(cli: pathlib.Path) -> None:
             assert receive_frame(connection) == b"flash:vbmeta"
             send_frame(connection, b"OKAYflashed")
         def flashed_all_slots(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"getvar:is-userspace"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:has-slot:system"
-            send_frame(connection, b"OKAYyes")
-            assert receive_frame(connection) == b"getvar:is-logical:system"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:has-slot:system"
-            send_frame(connection, b"OKAYyes")
             assert receive_frame(connection) == b"getvar:slot-count"
             send_frame(connection, b"OKAY2")
             assert receive_frame(connection) == b"getvar:slot-count"
             send_frame(connection, b"OKAY2")
             assert receive_frame(connection) == b"getvar:current-slot"
             send_frame(connection, b"OKAYa")
-            assert receive_frame(connection) == b"set_active:b"
-            send_frame(connection, b"OKAYactive")
+            assert receive_frame(connection) == b"getvar:is-userspace"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:has-slot:system"
+            send_frame(connection, b"OKAYyes")
+            assert receive_frame(connection) == b"getvar:is-logical:system_a"
+            send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:max-download-size"
             send_frame(connection, b"OKAY0x00100000")
             for slot in (b"a", b"b"):
@@ -1344,6 +1352,8 @@ def run(cli: pathlib.Path) -> None:
                 send_frame(connection, b"OKAYdownloaded")
                 assert receive_frame(connection) == b"flash:system_" + slot
                 send_frame(connection, b"OKAYflashed")
+            assert receive_frame(connection) == b"set_active:b"
+            send_frame(connection, b"OKAYactive")
 
         stdout, stderr = invoke(
             cli,
@@ -1415,14 +1425,6 @@ def run(cli: pathlib.Path) -> None:
         assert document["command"] == "flash"
 
         def ambiguous_other_slot(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"getvar:is-userspace"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:has-slot:system"
-            send_frame(connection, b"OKAYyes")
-            assert receive_frame(connection) == b"getvar:is-logical:system"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:has-slot:system"
-            send_frame(connection, b"OKAYyes")
             assert receive_frame(connection) == b"getvar:slot-count"
             send_frame(connection, b"OKAY3")
 
@@ -1435,11 +1437,9 @@ def run(cli: pathlib.Path) -> None:
         parse_failure_json(stdout, stderr, "invalid_argument")
 
         def unsupported_slot(connection: socket.socket) -> None:
+            assert receive_frame(connection) == b"getvar:slot-count"
+            send_frame(connection, b"OKAY2")
             assert receive_frame(connection) == b"getvar:is-userspace"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:has-slot:system"
-            send_frame(connection, b"OKAYno")
-            assert receive_frame(connection) == b"getvar:is-logical:system"
             send_frame(connection, b"OKAYno")
             assert receive_frame(connection) == b"getvar:has-slot:system"
             send_frame(connection, b"OKAYno")
@@ -1718,10 +1718,20 @@ def run(cli: pathlib.Path) -> None:
         fetch_payload = b"f\x00\xff"
 
         def fetched_data(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"fetch:vendor"
+            assert receive_frame(connection) == b"getvar:has-slot:vendor"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-fetch-size"
+            send_frame(connection, b"OKAY0x2")
+            assert receive_frame(connection) == b"getvar:partition-size:vendor"
+            send_frame(connection, b"OKAY0x3")
+            assert receive_frame(connection) == b"fetch:vendor:0x00000000:0x00000002"
             send_frame(connection, b"INFOfetching")
-            send_frame(connection, b"DATA00000003")
-            send_frame(connection, fetch_payload)
+            send_frame(connection, b"DATA00000002")
+            send_frame(connection, fetch_payload[:2])
+            send_frame(connection, b"OKAYfetched")
+            assert receive_frame(connection) == b"fetch:vendor:0x00000002:0x00000001"
+            send_frame(connection, b"DATA00000001")
+            send_frame(connection, fetch_payload[2:])
             send_frame(connection, b"OKAYfetched")
 
         stdout, stderr = invoke(

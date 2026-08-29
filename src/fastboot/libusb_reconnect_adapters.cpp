@@ -38,15 +38,6 @@ namespace {
         });
 }
 
-[[nodiscard]] bool valid_mode(const FastbootUsbMode mode) noexcept {
-    switch (mode) {
-        case FastbootUsbMode::Bootloader:
-        case FastbootUsbMode::Fastbootd:
-            return true;
-    }
-    return false;
-}
-
 [[nodiscard]] ReconnectUsbFingerprint reconnect_fingerprint(
     const transport::UsbDeviceInfo& device) noexcept {
     return ReconnectUsbFingerprint{
@@ -56,18 +47,6 @@ namespace {
         .interface_class = device.interface_class,
         .interface_subclass = device.interface_subclass,
         .interface_protocol = device.interface_protocol,
-    };
-}
-
-[[nodiscard]] ReconnectUsbFingerprint reconnect_fingerprint(
-    const fleet::DevicePreflightUsbFingerprint& value) noexcept {
-    return ReconnectUsbFingerprint{
-        .vendor_id = value.vendor_id,
-        .product_id = value.product_id,
-        .interface_number = value.interface_number,
-        .interface_class = value.interface_class,
-        .interface_subclass = value.interface_subclass,
-        .interface_protocol = value.interface_protocol,
     };
 }
 
@@ -398,106 +377,6 @@ private:
     mutable std::mutex mutex_;
     mutable bool consumed_{};
 };
-
-PreparedReconnectBinding::PreparedReconnectBinding(
-    ReconnectTarget identity) noexcept
-    : identity_(std::move(identity)) {}
-
-std::expected<ReconnectTarget, PreparedReconnectBindingError>
-PreparedReconnectBinding::target_after_transition(
-    const FastbootUsbMode required_mode,
-    const protocol::SessionState preceding_session_state,
-    const protocol::TransferCertainty preceding_operation_certainty) const {
-    try {
-        if (!valid_mode(required_mode)) {
-            return std::unexpected(PreparedReconnectBindingError{
-                .code = PreparedReconnectBindingErrorCode::InvalidRequiredMode,
-                .message = "Fastboot reconnect required mode is invalid",
-            });
-        }
-        if (preceding_session_state != protocol::SessionState::Ready) {
-            return std::unexpected(PreparedReconnectBindingError{
-                .code = PreparedReconnectBindingErrorCode::UnsafeSessionState,
-                .message =
-                    "Fastboot reconnect refuses a busy, poisoned, or closed preceding session",
-            });
-        }
-        if (preceding_operation_certainty !=
-            protocol::TransferCertainty::FullyTransferred) {
-            return std::unexpected(PreparedReconnectBindingError{
-                .code =
-                    PreparedReconnectBindingErrorCode::UnsafeTransferOutcome,
-                .message =
-                    "Fastboot reconnect requires a fully transferred transition command",
-            });
-        }
-        auto target = identity_;
-        target.required_mode = required_mode;
-        target.usb_fingerprint_policy =
-            required_mode == identity_.previous_mode
-            ? ReconnectUsbFingerprintPolicy::Exact
-            : ReconnectUsbFingerprintPolicy::AllowChangeWithLiveIdentity;
-        target.preceding_operation_certainty =
-            preceding_operation_certainty;
-        return target;
-    } catch (const std::bad_alloc&) {
-        return std::unexpected(PreparedReconnectBindingError{
-            .code = PreparedReconnectBindingErrorCode::ResourceExhausted,
-            .message = {},
-        });
-    } catch (...) {
-        return std::unexpected(PreparedReconnectBindingError{
-            .code = PreparedReconnectBindingErrorCode::UnexpectedFailure,
-            .message = {},
-        });
-    }
-}
-
-std::expected<PreparedReconnectBinding, PreparedReconnectBindingError>
-make_prepared_reconnect_binding(
-    const fleet::PreparedDeviceSession& prepared) noexcept {
-    try {
-        const auto& usb = prepared.usb_identity();
-        const auto fingerprint = reconnect_fingerprint(usb.usb_fingerprint);
-        if (!valid_ports(usb.hub_port_chain) ||
-            !valid_optional_text(usb.serial) ||
-            !valid_fingerprint(fingerprint) ||
-            !valid_text(prepared.observed_product()) ||
-            prepared.expected_product() != prepared.observed_product() ||
-            !valid_mode(prepared.observed_mode())) {
-            return std::unexpected(PreparedReconnectBindingError{
-                .code = PreparedReconnectBindingErrorCode::InvalidPreparedIdentity,
-                .message =
-                    "prepared device does not contain a complete reconnect identity",
-            });
-        }
-        return PreparedReconnectBinding{ReconnectTarget{
-            .physical_port = UsbPhysicalPortPath{
-                .bus_number = usb.bus_number,
-                .ports = usb.hub_port_chain,
-            },
-            .serial = usb.serial,
-            .usb_fingerprint = fingerprint,
-            .product = std::string{prepared.observed_product()},
-            .previous_mode = prepared.observed_mode(),
-            .required_mode = prepared.observed_mode(),
-            .usb_fingerprint_policy =
-                ReconnectUsbFingerprintPolicy::Exact,
-            .preceding_operation_certainty =
-                protocol::TransferCertainty::FullyTransferred,
-        }};
-    } catch (const std::bad_alloc&) {
-        return std::unexpected(PreparedReconnectBindingError{
-            .code = PreparedReconnectBindingErrorCode::ResourceExhausted,
-            .message = {},
-        });
-    } catch (...) {
-        return std::unexpected(PreparedReconnectBindingError{
-            .code = PreparedReconnectBindingErrorCode::UnexpectedFailure,
-            .message = {},
-        });
-    }
-}
 
 LibusbReconnectAdapter::LibusbReconnectAdapter(
     std::shared_ptr<transport::LibusbRuntime> runtime,

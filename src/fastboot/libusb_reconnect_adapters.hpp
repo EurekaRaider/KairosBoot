@@ -2,7 +2,6 @@
 #pragma once
 
 #include "src/fastboot/reconnect_coordinator.hpp"
-#include "src/fleet/device_preflight.hpp"
 #include "src/transport/usb_fastboot.hpp"
 
 #include <cstdint>
@@ -14,57 +13,6 @@
 #include <vector>
 
 namespace kairosboot::fastboot {
-
-enum class PreparedReconnectBindingErrorCode : std::uint8_t {
-    InvalidPreparedIdentity,
-    InvalidRequiredMode,
-    UnsafeSessionState,
-    UnsafeTransferOutcome,
-    ResourceExhausted,
-    UnexpectedFailure,
-};
-
-struct PreparedReconnectBindingError final {
-    PreparedReconnectBindingErrorCode code{
-        PreparedReconnectBindingErrorCode::UnexpectedFailure};
-    std::string message;
-};
-
-// Move-only identity capability whose constructor is reachable only through a
-// PreparedDeviceSession. PreparedDeviceSession itself is created only by the
-// complete live preflight/product barrier, so later actors cannot forge an
-// initial reconnect identity from manifest or passive USB text alone.
-class PreparedReconnectBinding final {
-public:
-    PreparedReconnectBinding(const PreparedReconnectBinding&) = delete;
-    PreparedReconnectBinding& operator=(const PreparedReconnectBinding&) = delete;
-    PreparedReconnectBinding(PreparedReconnectBinding&&) noexcept = default;
-    PreparedReconnectBinding& operator=(PreparedReconnectBinding&&) noexcept =
-        default;
-    ~PreparedReconnectBinding() = default;
-
-    [[nodiscard]] std::expected<ReconnectTarget,
-                                PreparedReconnectBindingError>
-    target_after_transition(
-        FastbootUsbMode required_mode,
-        protocol::SessionState preceding_session_state,
-        protocol::TransferCertainty preceding_operation_certainty) const;
-
-private:
-    explicit PreparedReconnectBinding(ReconnectTarget identity) noexcept;
-
-    ReconnectTarget identity_;
-
-    friend std::expected<PreparedReconnectBinding,
-                         PreparedReconnectBindingError>
-    make_prepared_reconnect_binding(
-        const fleet::PreparedDeviceSession&) noexcept;
-};
-
-[[nodiscard]] std::expected<PreparedReconnectBinding,
-                            PreparedReconnectBindingError>
-make_prepared_reconnect_binding(
-    const fleet::PreparedDeviceSession& prepared) noexcept;
 
 enum class LibusbReconnectAdapterFactoryErrorCode : std::uint8_t {
     InvalidArgument,

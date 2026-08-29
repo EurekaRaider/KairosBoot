@@ -199,6 +199,56 @@ void binary_upload_is_published_only_after_terminal_okay() {
     CHECK(script->complete());
 }
 
+void whole_partition_fetch_is_chunked_and_published_once() {
+    TemporaryDirectory temporary;
+    const auto destination = temporary.path() / "system.bin";
+    write_file(destination, "old-complete-file");
+
+    auto transport = std::make_unique<ScriptedTransport>();
+    auto* script = transport.get();
+    script->expect_write("getvar:has-slot:system");
+    script->respond("OKAYno");
+    script->expect_write("getvar:max-fetch-size");
+    script->respond("OKAY0x4");
+    script->expect_write("getvar:partition-size:system");
+    script->respond("OKAY0x9");
+    const auto expect_chunk =
+        [script](const std::string_view command,
+                 const std::string_view data_header,
+                 const std::string_view payload) {
+        script->expect_write(command);
+        script->respond(data_header);
+        script->respond(payload);
+        script->respond("OKAYfetched");
+    };
+    expect_chunk("fetch:system:0x00000000:0x00000004", "DATA00000004", "abcd");
+    expect_chunk("fetch:system:0x00000004:0x00000004", "DATA00000004", "efgh");
+    expect_chunk("fetch:system:0x00000008:0x00000001", "DATA00000001", "i");
+
+    FastbootSession session(std::move(transport));
+    PrimitiveService primitives(session);
+    FileReceiveService files(primitives);
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> progress;
+    const auto result = files.fetch_partition(
+        "system", destination, 9,
+        [&progress](const std::uint64_t completed, const std::uint64_t total) {
+            progress.emplace_back(completed, total);
+            return TransferProgressAction::continue_transfer;
+        });
+
+    CHECK(result.has_value());
+    CHECK(result->bytes_published == 9U);
+    CHECK(result->reply.inbound_expected == 1U);
+    CHECK(result->reply.inbound_transferred == 1U);
+    CHECK(progress ==
+          (std::vector<std::pair<std::uint64_t, std::uint64_t>>{
+              {4U, 9U}, {8U, 9U}, {9U, 9U}}));
+    CHECK(read_file(destination) == bytes("abcdefghi"));
+    CHECK(temporary_count(temporary.path()) == 0U);
+    CHECK(session.state() == SessionState::Ready);
+    CHECK(script->complete());
+}
+
 void zero_length_data_is_rejected_without_publishing() {
     TemporaryDirectory temporary;
     const auto destination = temporary.path() / "zero.bin";
@@ -704,6 +754,8 @@ int main() {
     const std::array tests{
         Test{"binary upload publishes after OKAY",
              binary_upload_is_published_only_after_terminal_okay},
+        Test{"whole partition fetch is chunked atomically",
+             whole_partition_fetch_is_chunked_and_published_once},
         Test{"zero DATA is rejected transactionally",
              zero_length_data_is_rejected_without_publishing},
         Test{"device failures preserve old files",

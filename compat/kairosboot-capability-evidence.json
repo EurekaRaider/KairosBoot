@@ -346,7 +346,7 @@
       "status": "implemented",
       "cSymbols": ["kb_update_package", "kb_update_package_async"],
       "cliCommands": ["update"],
-      "evidence": ["tests/fastboot/libusb_reconnect_adapters_tests.cpp", "tests/fastboot/reconnect_coordinator_tests.cpp", "tests/fleet/fleet_coordinator_tests.cpp"],
+      "evidence": ["tests/fastboot/libusb_reconnect_adapters_tests.cpp", "tests/fastboot/reconnect_coordinator_tests.cpp", "tests/c_api_test.c", "tests/cxx_api_test.cpp"],
       "note": "Physical-port keyed fastbootd re-enumeration and controller-permit rebinding are implemented."
     },
     {

@@ -145,6 +145,12 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["reboot", "bootloader"], "getvars": [],
         "commands": ["reboot-bootloader"], "data": [],
     },
+    "official-tcp-reboot-fastboot": {
+        "transport": "tcp", "coverageIds": ["command.reboot-fastboot"],
+        "argv": ["reboot", "fastboot"],
+        "getvars": ["is-userspace", "is-userspace"],
+        "commands": ["reboot-fastboot"], "data": [],
+    },
     "official-tcp-reboot-recovery": {
         "transport": "tcp", "coverageIds": ["command.reboot-recovery"],
         "argv": ["reboot-recovery"], "getvars": [],
@@ -154,6 +160,60 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
     "official-tcp-continue": {
         "transport": "tcp", "coverageIds": ["command.continue"],
         "argv": ["continue"], "getvars": [], "commands": ["continue"], "data": [],
+    },
+    "official-tcp-erase": {
+        "transport": "tcp", "coverageIds": ["command.erase"],
+        "argv": ["erase", "system"],
+        "getvars": ["has-slot:system", "partition-type:system"],
+        "commands": ["erase:system"], "data": [],
+    },
+    "official-tcp-set-active": {
+        "transport": "tcp",
+        "coverageIds": ["command.set-active", "capability.a-b-slots"],
+        "argv": ["set_active", "b"], "getvars": ["slot-count"],
+        "commands": ["set_active:b"], "data": [],
+    },
+    "official-tcp-slot-options": {
+        "transport": "tcp",
+        "coverageIds": ["option.slot", "option.set-active"],
+        "argv": ["--slot", "b", "--set-active", "flash", "system",
+                 "<ARTIFACT>/system.img"],
+        "getvars": [
+            "slot-count", "slot-count", "is-userspace", "has-slot:system",
+            "is-logical:system_b", "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system_b", "set_active:b"],
+        "data": [["host-to-device", 32]],
+    },
+    "official-tcp-avb-flags": {
+        "transport": "tcp",
+        "coverageIds": [
+            "option.disable-verity", "option.disable-verification",
+            "capability.vbmeta-avb-mutation",
+        ],
+        "argv": ["--disable-verity", "--disable-verification", "flash",
+                 "vbmeta", "<ARTIFACT>/vbmeta.img"],
+        "getvars": [
+            "is-userspace", "has-slot:vbmeta", "is-logical:vbmeta",
+            "is-logical:vbmeta", "partition-size:vbmeta", "max-download-size",
+        ],
+        "commands": ["download:00000100", "flash:vbmeta"],
+        "data": [["host-to-device", 256]],
+    },
+    "official-tcp-sparse-limit": {
+        "transport": "tcp",
+        "coverageIds": ["option.sparse-limit", "capability.android-sparse"],
+        "argv": ["-S", "4200", "flash", "system",
+                 "<ARTIFACT>/sparse-input.img"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "is-logical:system", "partition-size:system",
+        ],
+        "commands": [
+            "download:00001034", "flash:system",
+            "download:00001034", "flash:system",
+        ],
+        "data": [["host-to-device", 4148], ["host-to-device", 4148]],
     },
     "official-tcp-oem": {
         "transport": "tcp", "coverageIds": ["command.oem"],
@@ -179,6 +239,22 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "coverageIds": ["command.get-staged", "protocol.upload"],
         "argv": ["get_staged", "<OUTPUT>/stage.bin"], "getvars": [],
         "commands": ["upload"], "data": [["device-to-host", 20]],
+    },
+    "official-tcp-fetch-chunking": {
+        "transport": "tcp", "coverageIds": ["command.fetch"],
+        "argv": ["fetch", "system", "<OUTPUT>/system.img"],
+        "getvars": [
+            "has-slot:system", "max-fetch-size", "partition-size:system",
+        ],
+        "commands": [
+            "fetch:system:0x00000000:0x00000008",
+            "fetch:system:0x00000008:0x00000008",
+            "fetch:system:0x00000010:0x00000004",
+        ],
+        "data": [
+            ["device-to-host", 8], ["device-to-host", 8],
+            ["device-to-host", 4],
+        ],
     },
     "official-tcp-flashing-get-unlock-ability": {
         "transport": "tcp",
@@ -221,6 +297,26 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "transport": "tcp", "coverageIds": ["command.delete-logical-partition"],
         "argv": ["delete-logical-partition", "differential"], "getvars": [],
         "commands": ["delete-logical-partition:differential"], "data": [],
+    },
+    "official-tcp-resize-logical-partition": {
+        "transport": "tcp", "coverageIds": ["command.resize-logical-partition"],
+        "argv": ["resize-logical-partition", "system_a", "4096"],
+        "getvars": ["is-userspace", "has-slot:system_a"],
+        "commands": [
+            "fetch:super:0x00000000:0x00100000",
+            "download:00001034",
+            "flash:super",
+        ],
+        "data": [["device-to-host", 65536], ["host-to-device", 4148]],
+    },
+    "official-tcp-resize-logical-partition-fastbootd": {
+        "transport": "tcp", "coverageIds": ["command.resize-logical-partition"],
+        "argv": ["resize-logical-partition", "differential", "8192"],
+        "getvars": [
+            "is-userspace", "has-slot:differential", "is-logical:differential",
+        ],
+        "commands": ["resize-logical-partition:differential:8192"],
+        "data": [],
     },
     "official-tcp-gsi-wipe": {
         "transport": "tcp", "coverageIds": ["command.gsi-wipe"],
@@ -301,6 +397,8 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
     "official-scripted-fetch-chunking": ["command.fetch"],
     "official-scripted-reboot-fastboot": ["command.reboot-fastboot"],
+    # Historical captures remain structurally auditable after a candidate is
+    # promoted to a matched scenario. Current captures no longer emit it.
     "official-scripted-erase": ["command.erase"],
     # Retain the old mapping so a stale pre-fix capture remains structurally
     # auditable; current evidence is accepted only from the matched scenarios.

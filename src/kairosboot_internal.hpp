@@ -3,12 +3,55 @@
 
 #include <kairosboot/kairosboot.h>
 
+#include "src/transport/transfer_ring.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <optional>
+#include <string>
 
 namespace kairosboot::api {
+
+struct DeviceBatchSchedulingInfo final {
+  std::string device_key;
+  std::string controller_id;
+};
+
+struct DeviceBatchTransferPermits final {
+  kb_device_t* device{};
+  std::shared_ptr<transport::TransferPermitProvider> provider;
+  transport::TransferRingConfig config{};
+};
+
+// The batch start callback is synchronous: it must return the child operation
+// it just created. A thread-local scope therefore carries one scheduler binding
+// into that operation without mutating the Device or racing another batch that
+// attempts to use the same handle concurrently.
+class ScopedDeviceBatchTransferPermits final {
+public:
+  ScopedDeviceBatchTransferPermits(
+      kb_device_t* device,
+      std::shared_ptr<transport::TransferPermitProvider> provider,
+      transport::TransferRingConfig config) noexcept;
+  ~ScopedDeviceBatchTransferPermits();
+
+  ScopedDeviceBatchTransferPermits(
+      const ScopedDeviceBatchTransferPermits&) = delete;
+  ScopedDeviceBatchTransferPermits& operator=(
+      const ScopedDeviceBatchTransferPermits&) = delete;
+
+private:
+  std::optional<DeviceBatchTransferPermits> previous_;
+};
+
+[[nodiscard]] DeviceBatchSchedulingInfo device_batch_scheduling_info(
+    const kb_device_t* device);
+
+[[nodiscard]] std::optional<DeviceBatchTransferPermits>
+current_device_batch_transfer_permits(const kb_device_t* device) noexcept;
 
 namespace detail {
 

@@ -97,7 +97,8 @@ expect_usage(duplicate_serial "duplicate device selector"
              -s tcp:127.0.0.1:1 -s tcp:127.0.0.1:1 getvar product)
 expect_usage(json_option "unknown option" --json devices)
 expect_usage(fetch_extra "fetch requires exactly" fetch system out extra)
-expect_usage(reboot_target "reboot target must be bootloader" reboot recovery)
+expect_usage(reboot_target "reboot target must be bootloader or fastboot"
+             reboot recovery)
 
 expect_exit(devices 0 devices)
 expect_exit(devices_long 0 devices -l)
@@ -111,6 +112,8 @@ expect_accepted(flashing_ability -s tcp:127.0.0.1:1 flashing get_unlock_ability)
 expect_accepted(reboot_bootloader -s tcp:127.0.0.1:1 reboot-bootloader)
 expect_accepted(reboot_recovery -s tcp:127.0.0.1:1 reboot-recovery)
 expect_accepted(reboot_fastboot -s tcp:127.0.0.1:1 reboot-fastboot)
+expect_accepted(reboot_fastboot_operand
+                -s tcp:127.0.0.1:1 reboot fastboot)
 expect_accepted(repeated_serials
                 -s tcp:127.0.0.1:1 -s tcp:127.0.0.1:2 getvar product)
 expect_accepted(flash_option_after_command flash boot missing.img --slot a)

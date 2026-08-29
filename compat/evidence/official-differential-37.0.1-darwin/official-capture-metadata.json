@@ -11,18 +11,18 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "3acedf936870fcd5fa5fb608211eb37dc11c3740921d521fef03f8f889579fb3"
+      "sha256": "b955b1e68e619f0182dfd80a9e8c5011c394fbfcdd4022997033aab9ed5fd646"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "3acedf936870fcd5fa5fb608211eb37dc11c3740921d521fef03f8f889579fb3"
+      "sha256": "b955b1e68e619f0182dfd80a9e8c5011c394fbfcdd4022997033aab9ed5fd646"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "47f6504696dc51935e16e4bdcf9de70118d15b21c325c7fc8cf6f13aa96f3590",
-    "sha256": "47f6504696dc51935e16e4bdcf9de70118d15b21c325c7fc8cf6f13aa96f3590",
-    "sourceCommit": "48faab98eea12ec1fdf0d592fb2d00652e67aefa"
+    "releaseArtifactSha256": "3afc35782ea089fcacefa4ccf89e3b2be9acd6ac2cc6b17de4fa2a2021bc847d",
+    "sha256": "3afc35782ea089fcacefa4ccf89e3b2be9acd6ac2cc6b17de4fa2a2021bc847d",
+    "sourceCommit": "c0a259ef241a5c7153cafd0630af514ae1aab797"
   },
   "result": "matched",
   "scenarios": [
@@ -170,6 +170,51 @@
     },
     {
       "coverageIds": [
+        "command.erase"
+      ],
+      "id": "official-tcp-erase",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.set-active",
+        "capability.a-b-slots"
+      ],
+      "id": "official-tcp-set-active",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "option.slot",
+        "option.set-active"
+      ],
+      "id": "official-tcp-slot-options",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "option.disable-verity",
+        "option.disable-verification",
+        "capability.vbmeta-avb-mutation"
+      ],
+      "id": "official-tcp-avb-flags",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "option.sparse-limit",
+        "capability.android-sparse"
+      ],
+      "id": "official-tcp-sparse-limit",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
         "command.oem"
       ],
       "id": "official-tcp-oem",
@@ -198,6 +243,14 @@
         "protocol.upload"
       ],
       "id": "official-tcp-get-staged",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.fetch"
+      ],
+      "id": "official-tcp-fetch-chunking",
       "result": "matched",
       "transport": "tcp"
     },
@@ -254,6 +307,30 @@
         "command.delete-logical-partition"
       ],
       "id": "official-tcp-delete-logical-partition",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.resize-logical-partition"
+      ],
+      "id": "official-tcp-resize-logical-partition",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.resize-logical-partition"
+      ],
+      "id": "official-tcp-resize-logical-partition-fastbootd",
+      "result": "matched",
+      "transport": "tcp"
+    },
+    {
+      "coverageIds": [
+        "command.reboot-fastboot"
+      ],
+      "id": "official-tcp-reboot-fastboot",
       "result": "matched",
       "transport": "tcp"
     },
@@ -354,54 +431,6 @@
   "uncoveredScenarios": [
     {
       "coverageIds": [
-        "command.fetch"
-      ],
-      "id": "official-scripted-fetch-chunking",
-      "reason": "official Fastboot probes has-slot and max-fetch-size and performs ranged chunked fetches, while the current no-range KairosBoot CLI sends one direct fetch:partition receive command"
-    },
-    {
-      "coverageIds": [
-        "command.reboot-fastboot"
-      ],
-      "id": "official-scripted-reboot-fastboot",
-      "reason": "official Fastboot reconnects after reboot-fastboot and verifies getvar:is-userspace, while the current KairosBoot reboot API retires the session after the terminal response"
-    },
-    {
-      "coverageIds": [
-        "command.erase"
-      ],
-      "id": "official-scripted-erase",
-      "reason": "official Fastboot probes has-slot and partition-type before erase while KairosBoot sends the protocol command directly, so strict wire order differs"
-    },
-    {
-      "coverageIds": [
-        "command.set-active",
-        "option.slot",
-        "option.set-active",
-        "capability.a-b-slots"
-      ],
-      "id": "official-scripted-slot-policy",
-      "reason": "official Fastboot probes slot-count before the operation while KairosBoot uses a different getvar sequence, so the strict wire event order differs"
-    },
-    {
-      "coverageIds": [
-        "option.disable-verity",
-        "option.disable-verification",
-        "capability.vbmeta-avb-mutation"
-      ],
-      "id": "official-scripted-avb-flags",
-      "reason": "the mutated DATA hash matches in a real capture, but official Fastboot performs additional is-logical and partition-size probes; strict wire event parity therefore does not pass"
-    },
-    {
-      "coverageIds": [
-        "option.sparse-limit",
-        "capability.android-sparse"
-      ],
-      "id": "official-scripted-sparse-limit",
-      "reason": "official Fastboot performs additional partition probes before sparse download, so the strict normalized wire event sequence differs"
-    },
-    {
-      "coverageIds": [
         "command.format",
         "option.fs-options"
       ],
@@ -424,13 +453,6 @@
       ],
       "id": "official-scripted-update-flashall",
       "reason": "update and flashall may reboot between bootloader and fastbootd and reopen the device; the single-session TCP/UDP scripted transport cannot model that lifecycle without turning the device plan into a fixture oracle"
-    },
-    {
-      "coverageIds": [
-        "command.resize-logical-partition"
-      ],
-      "id": "official-scripted-resize-logical-partition",
-      "reason": "official Fastboot fetches and parses device-specific super metadata before resizing; a transport-only scripted device cannot synthesize that metadata without becoming a fixture oracle"
     }
   ]
 }

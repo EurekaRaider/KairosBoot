@@ -338,7 +338,7 @@ private:
         CHECK(as_string(read_frame(socket)) == "upload");
         write_frame(socket, "DATA00000020");
       }
-      constexpr std::array<const char*, 13> management_commands{
+      constexpr std::array<const char*, 12> management_commands{
           "flashing lock",
           "flashing unlock",
           "flashing lock_critical",
@@ -351,7 +351,6 @@ private:
           "snapshot-update:merge",
           "create-logical-partition:system_ext:0",
           "delete-logical-partition:system_ext",
-          "resize-logical-partition:system_ext:18446744073709551615",
       };
       for (std::size_t index = 0; index < management_commands.size(); ++index) {
         auto socket = accept();
@@ -363,6 +362,18 @@ private:
         } else {
           write_frame(socket, "OKAYdone");
         }
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+        write_frame(socket, "OKAYyes");
+        CHECK(as_string(read_frame(socket)) == "getvar:has-slot:system_ext");
+        write_frame(socket, "OKAYno");
+        CHECK(as_string(read_frame(socket)) == "getvar:is-logical:system_ext");
+        write_frame(socket, "OKAYyes");
+        CHECK(as_string(read_frame(socket)) ==
+              "resize-logical-partition:system_ext:18446744073709551615");
+        write_frame(socket, "OKAYdone");
       }
       constexpr std::array<const char*, 4> rejected_commands{
           "flashing unlock",
@@ -735,6 +746,76 @@ private:
   bool delayed_ready_{false};
   bool release_delayed_{false};
   bool cancel_ready_{false};
+  std::exception_ptr failure_;
+};
+
+class RebootFastbootServer final {
+public:
+  RebootFastbootServer()
+      : acceptor_(context_, tcp::endpoint(tcp::v4(), 0)),
+        port_(acceptor_.local_endpoint().port()),
+        worker_([this] { run(); }) {}
+
+  ~RebootFastbootServer() {
+    if (worker_.joinable()) {
+      boost::system::error_code ignored;
+      acceptor_.close(ignored);
+      worker_.join();
+    }
+  }
+
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+  void finish() {
+    worker_.join();
+    if (failure_ != nullptr) {
+      std::rethrow_exception(failure_);
+    }
+  }
+
+private:
+  void handshake(tcp::socket& socket) {
+    std::array<char, 4> handshake{};
+    boost::asio::read(socket, boost::asio::buffer(handshake));
+    CHECK((handshake == std::array<char, 4>{'F', 'B', '0', '1'}));
+    boost::asio::write(socket, boost::asio::buffer(handshake));
+  }
+
+  tcp::socket accept() {
+    tcp::socket socket(context_);
+    acceptor_.accept(socket);
+    handshake(socket);
+    return socket;
+  }
+
+  void run() noexcept {
+    try {
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+        write_frame(socket, "OKAYno");
+        CHECK(as_string(read_frame(socket)) == "reboot-fastboot");
+        write_frame(socket, "OKAYaccepted");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+        write_frame(socket, "OKAYyes");
+      }
+      {
+        auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:is-userspace");
+        write_frame(socket, "OKAYyes");
+      }
+    } catch (...) {
+      failure_ = std::current_exception();
+    }
+  }
+
+  boost::asio::io_context context_;
+  tcp::acceptor acceptor_;
+  std::uint16_t port_;
+  std::thread worker_;
   std::exception_ptr failure_;
 };
 
@@ -1389,6 +1470,43 @@ void run_contract() {
   server.finish();
 }
 
+void run_reboot_fastboot_contract() {
+  RebootFastbootServer server;
+  const auto selector =
+      "tcp:127.0.0.1:" + std::to_string(server.port());
+  kb_context_t* context = nullptr;
+  kb_device_t* device = nullptr;
+  kb_error_t* error = nullptr;
+  CHECK(kb_context_create(nullptr, &context, &error) == KB_OK);
+  CHECK(kb_device_open(context, selector.c_str(), &device, &error) == KB_OK);
+
+  kb_command_options_t options;
+  kb_command_options_init_sized(&options, sizeof(options));
+  options.timeout_ms = 2'000U;
+  kb_command_result_t* result = nullptr;
+  CHECK(kb_reboot(device, KB_REBOOT_FASTBOOT, &options, &result, &error) ==
+        KB_OK);
+  CHECK(result != nullptr);
+  CHECK(error == nullptr);
+  std::size_t size = 0U;
+  const auto* terminal = kb_command_result_terminal_payload(result, &size);
+  CHECK(std::string(reinterpret_cast<const char*>(terminal), size) == "yes");
+  kb_command_result_release(result);
+
+  result = nullptr;
+  CHECK(kb_reboot(device, KB_REBOOT_FASTBOOT, &options, &result, &error) ==
+        KB_OK);
+  CHECK(result != nullptr);
+  CHECK(error == nullptr);
+  terminal = kb_command_result_terminal_payload(result, &size);
+  CHECK(std::string(reinterpret_cast<const char*>(terminal), size) == "yes");
+  kb_command_result_release(result);
+
+  kb_device_release(device);
+  kb_context_release(context);
+  server.finish();
+}
+
 void run_flash_raw_contract() {
   FlashRawServer server;
   const auto selector = "tcp:127.0.0.1:" + std::to_string(server.port());
@@ -1778,6 +1896,7 @@ void run_udp_flash_contract() {
 int main() {
   try {
     run_contract();
+    run_reboot_fastboot_contract();
     run_flash_raw_contract();
     context_release_is_safe_after_async_update_start();
     whole_update_timeout_includes_progress_callbacks();
