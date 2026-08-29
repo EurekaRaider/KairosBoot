@@ -148,7 +148,8 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "official-tcp-reboot-recovery": {
         "transport": "tcp", "coverageIds": ["command.reboot-recovery"],
-        "argv": ["reboot", "recovery"], "getvars": [],
+        "argv": ["reboot-recovery"], "getvars": [],
+        "legacyArgv": [["reboot", "recovery"]],
         "commands": ["reboot-recovery"], "data": [],
     },
     "official-tcp-continue": {
@@ -183,7 +184,8 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
     "official-tcp-flashing-get-unlock-ability": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-get-unlock-ability"],
-        "argv": ["flashing", "get-unlock-ability"], "getvars": [],
+        "argv": ["flashing", "get_unlock_ability"], "getvars": [],
+        "legacyArgv": [["flashing", "get-unlock-ability"]],
         "commands": ["flashing get_unlock_ability"], "data": [],
     },
     "official-tcp-flashing-lock": {
@@ -199,13 +201,15 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
     "official-tcp-flashing-lock-critical": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-lock-critical"],
-        "argv": ["flashing", "lock-critical"], "getvars": [],
+        "argv": ["flashing", "lock_critical"], "getvars": [],
+        "legacyArgv": [["flashing", "lock-critical"]],
         "commands": ["flashing lock_critical"], "data": [],
     },
     "official-tcp-flashing-unlock-critical": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-unlock-critical"],
-        "argv": ["flashing", "unlock-critical"], "getvars": [],
+        "argv": ["flashing", "unlock_critical"], "getvars": [],
+        "legacyArgv": [["flashing", "unlock-critical"]],
         "commands": ["flashing unlock_critical"], "data": [],
     },
     "official-tcp-create-logical-partition": {
@@ -246,7 +250,8 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "official-tcp-serial-selector": {
         "transport": "tcp", "coverageIds": ["option.serial"],
-        "argv": ["--device", "<ENDPOINT>", "getvar", "product"],
+        "argv": ["-s", "<ENDPOINT>", "getvar", "product"],
+        "legacyArgv": [["--device", "<ENDPOINT>", "getvar", "product"]],
         "getvars": ["product"], "commands": [], "data": [],
     },
     "official-tcp-verbose": {
@@ -484,7 +489,8 @@ def _validate_scenario_semantics(
         isinstance(cli_parse, dict)
         and cli_parse.get("kind") == "CLI_PARSE"
         and cli_parse.get("result") == "ok"
-        and cli_parse.get("argv") == contract["argv"],
+        and cli_parse.get("argv")
+        in [contract["argv"], *contract.get("legacyArgv", [])],
         f"{metadata_path}#{identifier}: CLI command semantics differ from the whitelist",
     )
     _require(

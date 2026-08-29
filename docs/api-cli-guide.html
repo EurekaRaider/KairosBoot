@@ -488,16 +488,15 @@
 cmake --build build --config Release
 ctest --test-dir build --build-config Release --output-on-failure
 cmake --install build --config Release --prefix &lt;install-prefix&gt;</code></pre></div>
-        <p data-lang="zh">KairosBoot 动态链接 libusb。Windows 设备需已安装兼容的 WinUSB 驱动；<code>doctor</code> 只提供诊断，不会替换驱动。网络传输由 Boost.Asio 实现，对使用者不暴露 Winsock API。</p>
-        <p data-lang="en">KairosBoot dynamically links libusb. Windows devices need a compatible WinUSB driver; <code>doctor</code> diagnoses but never replaces it. Network transports use Boost.Asio and do not expose Winsock APIs to consumers.</p>
+        <p data-lang="zh">KairosBoot 动态链接 libusb。Windows 设备需已安装兼容的 WinUSB 驱动；库只提供诊断信息，不会替换驱动。网络传输由 Boost.Asio 实现，对使用者不暴露 Winsock API。</p>
+        <p data-lang="en">KairosBoot dynamically links libusb. Windows devices need a compatible WinUSB driver; the library reports diagnostics but never replaces the driver. Network transports use Boost.Asio and do not expose Winsock APIs to consumers.</p>
 
         <h3 data-lang="zh">先做只读检查</h3><h3 data-lang="en">Start with read-only checks</h3>
         <div class="code-wrap"><pre><code>kairosboot --version
-kairosboot doctor
 kairosboot devices
-kairosboot --json devices
-kairosboot getvar product
-kairosboot --device usb:1-2.3 getvar current-slot</code></pre></div>
+kairosboot devices -l
+kairosboot -s ABC123 getvar product
+kairosboot -s usb:1-2.3 getvar current-slot</code></pre></div>
 
         <h3 data-lang="zh">在 CMake consumer 中链接</h3><h3 data-lang="en">Link from a CMake consumer</h3>
         <div class="code-wrap"><pre><code>find_package(KairosBoot CONFIG REQUIRED)
@@ -518,8 +517,8 @@ target_link_libraries(my_cpp_app PRIVATE KairosBoot::Cxx)</code></pre></div>
       <section id="selectors">
         <h2 data-lang="zh">设备选择与传输</h2>
         <h2 data-lang="en">Device selectors and transports</h2>
-        <p data-lang="zh">CLI 使用 <code>--device &lt;selector&gt;</code>（或兼容形式 <code>--serial &lt;id&gt;</code>）。API 只在打开 <code>Device</code> 对象时接收 selector：C 使用 <code>kb_device_open</code>，C++ 使用 <code>Context::open_device</code>，C# 使用 <code>Context.OpenDevice</code>；之后所有单设备操作都直接调用该对象，不再重复传 selector。无参打开只在当前恰好有一台 USB Fastboot 设备时自动选择，否则返回 no-device 或 ambiguous-device。</p>
-        <p data-lang="en">The CLI uses <code>--device &lt;selector&gt;</code> (or the compatible <code>--serial &lt;id&gt;</code> form). APIs accept a selector only while opening a <code>Device</code>: <code>kb_device_open</code> in C, <code>Context::open_device</code> in C++, and <code>Context.OpenDevice</code> in C#. Every subsequent single-device operation is invoked on that object without repeating a selector. The parameterless form auto-selects only when exactly one USB Fastboot device is present; otherwise it returns no-device or ambiguous-device.</p>
+        <p data-lang="zh">CLI 与 Fastboot 一致，使用 <code>-s SERIAL</code> 或 <code>-s tcp|udp:HOST[:PORT]</code>。API 只在打开 <code>Device</code> 对象时接收 selector：C 使用 <code>kb_device_open</code>，C++ 使用 <code>Context::open_device</code>，C# 使用 <code>Context.OpenDevice</code>；之后所有单设备操作都直接调用该对象，不再重复传 selector。无参打开只在当前恰好有一台 USB Fastboot 设备时自动选择，否则返回 no-device 或 ambiguous-device。</p>
+        <p data-lang="en">Like Fastboot, the CLI uses <code>-s SERIAL</code> or <code>-s tcp|udp:HOST[:PORT]</code>. APIs accept a selector only while opening a <code>Device</code>: <code>kb_device_open</code> in C, <code>Context::open_device</code> in C++, and <code>Context.OpenDevice</code> in C#. Every subsequent single-device operation is invoked on that object without repeating a selector. The parameterless form auto-selects only when exactly one USB Fastboot device is present; otherwise it returns no-device or ambiguous-device.</p>
         <div class="table-scroll"><table>
           <thead><tr><th><span data-lang="zh">形式</span><span data-lang="en">Form</span></th><th><span data-lang="zh">含义</span><span data-lang="en">Meaning</span></th><th><span data-lang="zh">示例</span><span data-lang="en">Example</span></th></tr></thead>
           <tbody>
@@ -531,8 +530,8 @@ target_link_libraries(my_cpp_app PRIVATE KairosBoot::Cxx)</code></pre></div>
           </tbody>
         </table></div>
         <div class="callout">
-          <p data-lang="zh"><code>-i</code>/<code>--vendor-id</code> 和 <code>ContextOptions.usb_vendor_id</code> 是 KairosBoot 的 USB 枚举过滤能力，仅影响 USB；不会过滤 TCP/UDP endpoint。多设备生产作业优先使用物理 USB path 绑定重连，再用 serial/product 二次验证。</p>
-          <p data-lang="en"><code>-i</code>/<code>--vendor-id</code> and <code>ContextOptions.usb_vendor_id</code> are KairosBoot USB-enumeration filters. They affect USB only, never TCP/UDP endpoints. For production fleets, prefer physical USB-path reconnect binding with serial/product as secondary verification.</p>
+          <p data-lang="zh"><code>ContextOptions.usb_vendor_id</code> 是 SDK 的 USB 枚举过滤能力，仅影响 USB；Fastboot 兼容 CLI 不增加 vendor-id 选项。多设备生产作业优先使用物理 USB path 绑定重连，再用 serial/product 二次验证。</p>
+          <p data-lang="en"><code>ContextOptions.usb_vendor_id</code> is an SDK USB-enumeration filter and affects USB only; the Fastboot-compatible CLI adds no vendor-id option. For production fleets, prefer physical USB-path reconnect binding with serial/product as secondary verification.</p>
         </div>
       </section>
 
@@ -541,48 +540,47 @@ target_link_libraries(my_cpp_app PRIVATE KairosBoot::Cxx)</code></pre></div>
         <h2 data-lang="en">CLI usage</h2>
         <h3 data-lang="zh">常用刷写流程</h3><h3 data-lang="en">Common flashing workflow</h3>
         <div class="code-wrap"><pre><code># Read-only identity checks
-kairosboot --device ABC123 getvar product
-kairosboot --device ABC123 getvar current-slot
+kairosboot -s ABC123 getvar product
+kairosboot -s ABC123 getvar current-slot
 
 # Flash one image; choose an explicit device in multi-device environments
-kairosboot --device ABC123 flash boot images/boot.img
+kairosboot -s ABC123 flash boot images/boot.img
 
 # Flash a package; preserves userdata by default
-kairosboot --device ABC123 update image-product.zip
+kairosboot -s ABC123 update image-product.zip
 
 # Apply package wipe tasks and skip final reboot
-kairosboot --device ABC123 update image-product.zip --wipe --skip-reboot
+kairosboot -s ABC123 -w --skip-reboot update image-product.zip
 
 # Use a slot and activate it before prepared flash tasks
-kairosboot --device ABC123 --slot b --set-active=b flash boot images/boot.img
+kairosboot -s ABC123 --slot b --set-active=b flash boot images/boot.img
 
 # Reboot explicitly
-kairosboot --device ABC123 reboot system</code></pre></div>
+kairosboot -s ABC123 reboot</code></pre></div>
 
         <h3 data-lang="zh">镜像、动态分区与接收</h3><h3 data-lang="en">Images, dynamic partitions, and receive</h3>
         <div class="code-wrap"><pre><code># Build and boot an Android boot image from components
-kairosboot --device ABC123 boot kernel.bin ramdisk.img \
-  --header-version 2 --dtb board.dtb
+kairosboot -s ABC123 --header-version 2 --dtb board.dtb \
+  boot kernel.bin ramdisk.img
 
 # Replace a named vendor_boot v4 ramdisk and optional DTB
-kairosboot --device ABC123 --dtb board.dtb \
+kairosboot -s ABC123 --dtb board.dtb \
   flash vendor_boot:default vendor-ramdisk.img
 
 # Create or resize a logical partition
-kairosboot --device ABC123 create-logical-partition scratch 1073741824
-kairosboot --device ABC123 resize-logical-partition scratch 2147483648
+kairosboot -s ABC123 create-logical-partition scratch 1073741824
+kairosboot -s ABC123 resize-logical-partition scratch 2147483648
 
-# Receive a bounded partition range atomically to a file
-kairosboot --device ABC123 --max-receive-bytes 134217728 \
-  fetch vendor_boot vendor_boot.img --offset 0 --size 67108864
+# Fetch a partition atomically to a file
+kairosboot -s ABC123 fetch vendor_boot vendor_boot.img
 
 # Stage and retrieve data
-kairosboot --device ABC123 stage metadata.bin
-kairosboot --device ABC123 get-staged staged-output.bin</code></pre></div>
+kairosboot -s ABC123 stage metadata.bin
+kairosboot -s ABC123 get_staged staged-output.bin</code></pre></div>
 
-        <h3 data-lang="zh">机器可读输出与退出码</h3><h3 data-lang="en">Machine-readable output and exit codes</h3>
-        <p data-lang="zh">支持 <code>--json</code> 的命令应优先用于自动化；stdout 用于结构化结果，诊断信息写入 stderr。脚本必须同时检查退出码，不要只解析文本。</p>
-        <p data-lang="en">Prefer <code>--json</code> commands in automation; stdout carries structured results and diagnostics go to stderr. Scripts must check the exit code as well as parsing output.</p>
+        <h3 data-lang="zh">输出与退出码</h3><h3 data-lang="en">Output and exit codes</h3>
+        <p data-lang="zh">CLI 保持 Fastboot 风格的文本输出，不增加 <code>--json</code>。需要结构化结果、进度和报告的自动化应使用 C、C++23 或 .NET API，并始终检查状态码。</p>
+        <p data-lang="en">The CLI keeps Fastboot-style text output and does not add <code>--json</code>. Automation that needs structured results, progress, or reports should use the C, C++23, or .NET API and always check status codes.</p>
         <div class="table-scroll"><table>
           <thead><tr><th><span data-lang="zh">退出码</span><span data-lang="en">Exit code</span></th><th><span data-lang="zh">含义</span><span data-lang="en">Meaning</span></th></tr></thead>
           <tbody>
@@ -601,19 +599,18 @@ kairosboot --device ABC123 get-staged staged-output.bin</code></pre></div>
         <div class="table-scroll"><table>
           <thead><tr><th><span data-lang="zh">类别</span><span data-lang="en">Group</span></th><th><span data-lang="zh">命令</span><span data-lang="en">Command</span></th><th><span data-lang="zh">用途</span><span data-lang="en">Purpose</span></th></tr></thead>
           <tbody>
-            <tr><td><span data-lang="zh">基础</span><span data-lang="en">Basics</span></td><td><code>--version [--json]</code><br><code>-h | --help [--json]</code></td><td><span data-lang="zh">版本与帮助</span><span data-lang="en">Version and help</span></td></tr>
-            <tr><td><span data-lang="zh">诊断</span><span data-lang="en">Diagnostics</span></td><td><code>doctor [--json]</code><br><code>devices [--json]</code><br><code>getvar &lt;variable&gt;</code></td><td><span data-lang="zh">检查运行环境、枚举设备、读取变量</span><span data-lang="en">Inspect the runtime, enumerate devices, read a variable</span></td></tr>
-            <tr><td><span data-lang="zh">Fleet</span><span data-lang="en">Fleet</span></td><td><code>validate &lt;manifest&gt;</code><br><code>plan &lt;manifest&gt; [--digest]</code><br><code>run &lt;manifest&gt;</code></td><td><span data-lang="zh">离线验证、确定性计划与多设备执行</span><span data-lang="en">Offline validation, deterministic planning, and multi-device execution</span></td></tr>
+            <tr><td><span data-lang="zh">基础</span><span data-lang="en">Basics</span></td><td><code>--version</code><br><code>-h | --help</code></td><td><span data-lang="zh">版本与帮助</span><span data-lang="en">Version and help</span></td></tr>
+            <tr><td><span data-lang="zh">基础</span><span data-lang="en">Basics</span></td><td><code>devices [-l]</code><br><code>getvar &lt;variable&gt;</code></td><td><span data-lang="zh">枚举设备与读取变量</span><span data-lang="en">Enumerate devices and read a variable</span></td></tr>
             <tr><td><span data-lang="zh">刷写</span><span data-lang="en">Flash</span></td><td><code>flash &lt;partition&gt; [file]</code><br><code>flash vendor_boot:RAMDISK &lt;file&gt;</code><br><code>flash:raw &lt;partition&gt; &lt;kernel&gt; [ramdisk [second]]</code></td><td><span data-lang="zh">刷单镜像、替换 vendor_boot ramdisk、构建并刷 boot 镜像</span><span data-lang="en">Flash an image, replace a vendor_boot ramdisk, or build and flash a boot image</span></td></tr>
             <tr><td><span data-lang="zh">整包</span><span data-lang="en">Package</span></td><td><code>update &lt;package&gt; [options]</code><br><code>flashall [options]</code><br><code>wipe-super [super_empty.img]</code></td><td><span data-lang="zh">执行 update.zip/flash-all 任务或重置动态分区</span><span data-lang="en">Run update.zip/flash-all tasks or reset dynamic partitions</span></td></tr>
-            <tr><td><span data-lang="zh">启动镜像</span><span data-lang="en">Boot image</span></td><td><code>boot &lt;kernel-or-image&gt; [ramdisk [second]]</code><br><code>make-boot-image &lt;output&gt; &lt;kernel&gt; [ramdisk [second]]</code><br><code>boot-staged</code></td><td><span data-lang="zh">构建/临时启动镜像，或启动 staged 内容</span><span data-lang="en">Build or temporarily boot an image, or boot staged content</span></td></tr>
-            <tr><td><span data-lang="zh">分区</span><span data-lang="en">Partition</span></td><td><code>erase &lt;partition&gt;</code><br><code>format[:type[:size]] &lt;partition&gt;</code><br><code>set-active &lt;slot&gt;</code></td><td><span data-lang="zh">擦除、格式化与槽位切换</span><span data-lang="en">Erase, format, and switch slots</span></td></tr>
-            <tr><td><span data-lang="zh">接收/暂存</span><span data-lang="en">Receive/stage</span></td><td><code>stage &lt;file&gt;</code><br><code>upload &lt;output&gt;</code><br><code>get-staged &lt;output&gt;</code><br><code>fetch &lt;partition&gt; &lt;output&gt; [--offset ...] [--size ...]</code></td><td><span data-lang="zh">向设备暂存或把有界数据原子写入 Host 文件</span><span data-lang="en">Stage to the device or atomically publish bounded data to a host file</span></td></tr>
-            <tr><td><span data-lang="zh">重启</span><span data-lang="en">Reboot</span></td><td><code>reboot [system|bootloader|recovery|fastboot]</code><br><code>continue</code></td><td><span data-lang="zh">重启到指定目标或继续启动</span><span data-lang="en">Reboot to a target or continue boot</span></td></tr>
-            <tr><td><span data-lang="zh">安全状态</span><span data-lang="en">Security state</span></td><td><code>flashing &lt;lock|unlock|lock-critical|unlock-critical|get-unlock-ability&gt;</code></td><td><span data-lang="zh">设备锁定状态操作；可能清除数据</span><span data-lang="en">Device lock-state operations; may wipe data</span></td></tr>
+            <tr><td><span data-lang="zh">启动镜像</span><span data-lang="en">Boot image</span></td><td><code>boot &lt;kernel&gt; [ramdisk [second]]</code><br><code>flash:raw &lt;partition&gt; &lt;kernel&gt; [ramdisk [second]]</code></td><td><span data-lang="zh">构建并临时启动或刷写 Android boot image</span><span data-lang="en">Build and boot or flash an Android boot image</span></td></tr>
+            <tr><td><span data-lang="zh">分区</span><span data-lang="en">Partition</span></td><td><code>erase &lt;partition&gt;</code><br><code>format[:type[:size]] &lt;partition&gt;</code><br><code>set_active &lt;slot&gt;</code></td><td><span data-lang="zh">擦除、格式化与槽位切换</span><span data-lang="en">Erase, format, and switch slots</span></td></tr>
+            <tr><td><span data-lang="zh">接收/暂存</span><span data-lang="en">Receive/stage</span></td><td><code>stage &lt;file&gt;</code><br><code>get_staged &lt;output&gt;</code><br><code>fetch &lt;partition&gt; &lt;output&gt;</code></td><td><span data-lang="zh">向设备暂存或把设备数据原子写入 Host 文件</span><span data-lang="en">Stage to the device or atomically publish device data to a host file</span></td></tr>
+            <tr><td><span data-lang="zh">重启</span><span data-lang="en">Reboot</span></td><td><code>reboot [bootloader]</code><br><code>reboot-bootloader</code><br><code>reboot-recovery</code><br><code>reboot-fastboot</code><br><code>continue</code></td><td><span data-lang="zh">使用 AOSP Fastboot 拼写重启或继续启动</span><span data-lang="en">Reboot or continue boot using AOSP Fastboot spellings</span></td></tr>
+            <tr><td><span data-lang="zh">安全状态</span><span data-lang="en">Security state</span></td><td><code>flashing &lt;lock|unlock|lock_critical|unlock_critical|get_unlock_ability&gt;</code></td><td><span data-lang="zh">设备锁定状态操作；可能清除数据</span><span data-lang="en">Device lock-state operations; may wipe data</span></td></tr>
             <tr><td><span data-lang="zh">动态系统</span><span data-lang="en">Dynamic system</span></td><td><code>gsi &lt;wipe|disable|status&gt;</code><br><code>snapshot-update &lt;cancel|merge&gt;</code></td><td><span data-lang="zh">GSI 与 snapshot update 管理</span><span data-lang="en">Manage GSI and snapshot updates</span></td></tr>
             <tr><td><span data-lang="zh">逻辑分区</span><span data-lang="en">Logical partition</span></td><td><code>create-logical-partition &lt;partition&gt; &lt;size-bytes&gt;</code><br><code>delete-logical-partition &lt;partition&gt;</code><br><code>resize-logical-partition &lt;partition&gt; &lt;size-bytes&gt;</code></td><td><span data-lang="zh">创建、删除与调整逻辑分区</span><span data-lang="en">Create, delete, and resize logical partitions</span></td></tr>
-            <tr><td><span data-lang="zh">高级</span><span data-lang="en">Advanced</span></td><td><code>signature &lt;file&gt;</code><br><code>oem &lt;command...&gt;</code><br><code>raw &lt;command...&gt;</code></td><td><span data-lang="zh">签名数据、OEM passthrough 与原始命令；仅在明确了解设备语义时使用</span><span data-lang="en">Signature data, OEM passthrough, and raw commands; use only when device semantics are known</span></td></tr>
+            <tr><td><span data-lang="zh">高级</span><span data-lang="en">Advanced</span></td><td><code>signature &lt;file&gt;</code><br><code>oem [command...]</code></td><td><span data-lang="zh">AOSP 签名数据与 OEM passthrough</span><span data-lang="en">AOSP signature data and OEM passthrough</span></td></tr>
           </tbody>
         </table></div>
 
@@ -621,20 +618,18 @@ kairosboot --device ABC123 get-staged staged-output.bin</code></pre></div>
         <div class="table-scroll"><table>
           <thead><tr><th><span data-lang="zh">选项</span><span data-lang="en">Option</span></th><th><span data-lang="zh">说明</span><span data-lang="en">Description</span></th></tr></thead>
           <tbody>
-            <tr><td><code>--device &lt;selector&gt;</code>, <code>--serial &lt;id&gt;</code></td><td><span data-lang="zh">显式选择 USB/TCP/UDP 目标</span><span data-lang="en">Select a USB/TCP/UDP target explicitly</span></td></tr>
-            <tr><td><code>-i</code>, <code>--vendor-id &lt;id&gt;</code></td><td><span data-lang="zh">仅过滤 USB vendor ID</span><span data-lang="en">Filter USB vendor ID only</span></td></tr>
+            <tr><td><code>-s SERIAL</code>, <code>-s tcp|udp:HOST[:PORT]</code></td><td><span data-lang="zh">按 Fastboot 语法选择 USB/TCP/UDP 目标</span><span data-lang="en">Select a USB/TCP/UDP target using Fastboot syntax</span></td></tr>
+            <tr><td><code>-l</code></td><td><span data-lang="zh">配合 devices 输出设备路径</span><span data-lang="en">Include device paths with devices</span></td></tr>
             <tr><td><code>-v</code>, <code>--verbose</code></td><td><span data-lang="zh">详细诊断输出</span><span data-lang="en">Verbose diagnostics</span></td></tr>
             <tr><td><code>--slot &lt;a|b|other|all&gt;</code>, <code>-a</code>, <code>--set-active[=...]</code></td><td><span data-lang="zh">A/B 任务展开与激活策略</span><span data-lang="en">A/B task expansion and activation policy</span></td></tr>
-            <tr><td><code>--json</code></td><td><span data-lang="zh">机器可读 JSON（受支持命令）</span><span data-lang="en">Machine-readable JSON on supported commands</span></td></tr>
-            <tr><td><code>--timeout-ms &lt;ms&gt;</code></td><td><span data-lang="zh">设置 I/O 或任务期限，语义取决于命令</span><span data-lang="en">Set an I/O or operation deadline, depending on the command</span></td></tr>
-            <tr><td><code>--max-receive-bytes &lt;bytes&gt;</code></td><td><span data-lang="zh">限制 upload/get-staged/fetch 的接收大小</span><span data-lang="en">Bound upload/get-staged/fetch receive size</span></td></tr>
+            <tr><td><code>--unbuffered</code></td><td><span data-lang="zh">接受 Fastboot 兼容选项；SDK 数据面始终采用有界流式缓冲</span><span data-lang="en">Accept the Fastboot-compatible option; the SDK data path always uses bounded streaming buffers</span></td></tr>
             <tr><td><code>--disable-verity</code>, <code>--disable-verification</code></td><td><span data-lang="zh">修改匹配 vbmeta 分区的 AVB 标志</span><span data-lang="en">Modify AVB flags on matching vbmeta partitions</span></td></tr>
             <tr><td><code>-S SIZE[K|M|G]</code></td><td><span data-lang="zh">flash/flash:raw/update/flashall 的 sparse 分片上限</span><span data-lang="en">Sparse split limit for flash/flash:raw/update/flashall</span></td></tr>
             <tr><td><code>--force</code></td><td><span data-lang="zh">允许特定不安全路径继续；不绕过结构和 I/O 完整性错误</span><span data-lang="en">Allow selected unsafe paths; does not bypass structural or I/O integrity failures</span></td></tr>
             <tr><td><code>--fs-options=casefold,projid,compress</code></td><td><span data-lang="zh">仅用于 format 的文件系统特性</span><span data-lang="en">Filesystem features for format only</span></td></tr>
-            <tr><td><code>--wipe</code>, <code>--skip-reboot</code>, <code>--skip-secondary</code></td><td><span data-lang="zh">update/flashall 数据清除、重启与副槽策略</span><span data-lang="en">Update/flashall wipe, reboot, and secondary-slot policy</span></td></tr>
+            <tr><td><code>-w</code>, <code>--skip-reboot</code>, <code>--skip-secondary</code></td><td><span data-lang="zh">update/flashall 数据清除、重启与副槽策略</span><span data-lang="en">Update/flashall wipe, reboot, and secondary-slot policy</span></td></tr>
             <tr><td><code>--exclude-dynamic-partitions</code>, <code>--disable-fastboot-info</code>, <code>--disable-super-optimization</code></td><td><span data-lang="zh">控制 package planner 的动态分区和 super 路径</span><span data-lang="en">Control dynamic-partition and super paths in the package planner</span></td></tr>
-            <tr><td><code>--cmdline</code>, <code>--base</code>, <code>--page-size</code>, offsets, <code>--header-version</code>, OS fields, <code>--dtb</code></td><td><span data-lang="zh">boot/flash:raw/make-boot-image 的 Android boot image 布局</span><span data-lang="en">Android boot-image layout for boot/flash:raw/make-boot-image</span></td></tr>
+            <tr><td><code>--cmdline</code>, <code>--base</code>, <code>--page-size</code>, documented offsets, <code>--header-version</code>, OS fields, <code>--dtb</code></td><td><span data-lang="zh">boot/flash:raw 的 Android boot image 布局</span><span data-lang="en">Android boot-image layout for boot/flash:raw</span></td></tr>
           </tbody>
         </table></div>
       </section>
@@ -921,8 +916,8 @@ Console.WriteLine(report.Json);</code></pre></div>
       <section id="fleet">
         <h2 data-lang="zh">多设备 Fleet</h2>
         <h2 data-lang="en">Multi-device Fleet</h2>
-        <p data-lang="zh"><code>kairosboot.io/v1</code> manifest 把 artifact、设备选择、产品约束、步骤与并行策略绑定在一个可验证文件中。<code>validate</code> 只做语法和语义验证；<code>plan</code> 生成确定性 canonical JSON 与 SHA-256；<code>run</code> 才会枚举设备、校验 artifact 并执行。</p>
-        <p data-lang="en">A <code>kairosboot.io/v1</code> manifest binds artifacts, device selectors, product constraints, steps, and concurrency policy in one verifiable file. <code>validate</code> performs syntax and semantic validation only; <code>plan</code> produces deterministic canonical JSON and SHA-256; only <code>run</code> enumerates devices, verifies artifacts, and executes.</p>
+        <p data-lang="zh"><code>kairosboot.io/v1</code> manifest 把 artifact、设备选择、产品约束、步骤与并行策略绑定在一个可验证文件中。Fleet 是 KairosBoot SDK 能力，不伪装成 Fastboot CLI 命令：使用 <code>kb_validate_job_file</code>、<code>kb_plan_job_file</code> 与 <code>kb_run_job_file</code>，或对应的 C++23/.NET API。</p>
+        <p data-lang="en">A <code>kairosboot.io/v1</code> manifest binds artifacts, device selectors, product constraints, steps, and concurrency policy in one verifiable file. Fleet is a KairosBoot SDK capability and is not disguised as a Fastboot CLI command: use <code>kb_validate_job_file</code>, <code>kb_plan_job_file</code>, and <code>kb_run_job_file</code>, or their C++23/.NET equivalents.</p>
         <div class="code-wrap"><pre><code>apiVersion: kairosboot.io/v1
 kind: FlashJob
 artifacts:
@@ -943,15 +938,10 @@ policy:
   onDeviceFailure: continue
   maxParallelDevices: 32
   memoryBudget: auto</code></pre></div>
-        <div class="code-wrap"><pre><code># 1. Offline: no device enumeration and no artifact open
-kairosboot validate fleet-job.yaml
-
-# 2. Inspect the exact deterministic plan and digest
-kairosboot plan fleet-job.yaml
-kairosboot plan fleet-job.yaml --digest
-
-# 3. Connect devices, re-check identities/products/hashes, then run
-kairosboot --json --timeout-ms 3600000 run fleet-job.yaml</code></pre></div>
+        <div class="code-wrap"><pre><code>/* C11: offline validation, deterministic planning, then execution. */
+kb_validate_job_file("fleet-job.yaml", &amp;error);
+kb_plan_job_file("fleet-job.yaml", &amp;plan, &amp;error);
+kb_run_job_file(context, "fleet-job.yaml", &amp;options, &amp;report, &amp;error);</code></pre></div>
         <ul>
           <li data-lang="zh">每台设备必须且只能匹配一个 target；跨 target 重复 selector 会使验证失败。</li>
           <li data-lang="en">Every device must match exactly one target; duplicate selectors across targets fail validation.</li>
@@ -973,7 +963,7 @@ kairosboot --json --timeout-ms 3600000 run fleet-job.yaml</code></pre></div>
           <div class="mini-card"><h3 data-lang="zh">超时</h3><h3 data-lang="en">Timeouts</h3><p data-lang="zh">flash/command options 是每次 I/O deadline；update/job options 是整个操作 deadline。初始化后的默认值为无限，不代表系统不会因断连或协议错误失败。</p><p data-lang="en">Flash/command options use per-I/O deadlines; update/job options use whole-operation deadlines. The initialized default is infinite, but disconnects and protocol errors still fail.</p></div>
           <div class="mini-card"><h3 data-lang="zh">取消</h3><h3 data-lang="en">Cancellation</h3><p data-lang="zh">取消是请求，不是线程强杀。释放 operation/job 前等待 transport 与回调 drain，避免 use-after-free 和跨设备串线。</p><p data-lang="en">Cancellation is a request, not a thread kill. Transport and callbacks drain before operation/job release to avoid use-after-free and cross-device mix-ups.</p></div>
           <div class="mini-card"><h3 data-lang="zh">传输确定性</h3><h3 data-lang="en">Transfer certainty</h3><p data-lang="zh"><code>NotSent</code>、<code>PartialOrUnknown</code>、<code>FullyTransferred</code> 描述失败时 Host 能确认的数据状态；状态不确定时必须重新建立可信会话。</p><p data-lang="en"><code>NotSent</code>, <code>PartialOrUnknown</code>, and <code>FullyTransferred</code> describe what the host knows after a failure. An uncertain state requires a newly trusted session.</p></div>
-          <div class="mini-card"><h3 data-lang="zh">接收文件</h3><h3 data-lang="en">Received files</h3><p data-lang="zh">upload/get-staged/fetch 的 file API 先写临时文件，只有收到精确 DATA 和终态 OKAY 后才原子替换目标；失败或取消保留原文件。</p><p data-lang="en">File forms of upload/get-staged/fetch write a temporary file and atomically replace the destination only after exact DATA and terminal OKAY; failure or cancellation preserves the original.</p></div>
+          <div class="mini-card"><h3 data-lang="zh">接收文件</h3><h3 data-lang="en">Received files</h3><p data-lang="zh">upload/get-staged/fetch 的 SDK file API 先写临时文件，只有收到精确 DATA 和终态 OKAY 后才原子替换目标；Fastboot CLI 只公开官方 <code>get_staged</code> 与 <code>fetch</code> 命令。</p><p data-lang="en">The upload/get-staged/fetch SDK file APIs write a temporary file and atomically replace the destination only after exact DATA and terminal OKAY; the Fastboot CLI exposes only the official <code>get_staged</code> and <code>fetch</code> commands.</p></div>
         </div>
 
         <h3 data-lang="zh">稳定 C 状态码</h3><h3 data-lang="en">Stable C status codes</h3>

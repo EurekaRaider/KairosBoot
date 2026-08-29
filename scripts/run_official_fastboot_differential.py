@@ -682,10 +682,8 @@ def _kairosboot_command(binary: pathlib.Path, scenario: Scenario) -> list[str]:
         return [str(binary), *arguments]
     return [
         str(binary),
-        "--device",
+        "-s",
         "{endpoint}",
-        "--timeout-ms",
-        "5000",
         *arguments,
     ]
 
@@ -803,10 +801,9 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
         ),
         Scenario(
             "official-tcp-reboot-recovery", "tcp",
-            ("reboot", "recovery"), "reboot-recovery",
+            ("reboot-recovery",), "reboot-recovery",
             coverage_ids=("command.reboot-recovery",),
             aosp_arguments=("reboot-recovery",),
-            kairosboot_arguments=("reboot", "recovery"),
         ),
         Scenario(
             "official-tcp-continue", "tcp", ("continue",), "continue",
@@ -833,18 +830,18 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             ("get_staged", "<OUTPUT>/stage.bin"), "upload",
             coverage_ids=("command.get-staged", "protocol.upload"),
             aosp_arguments=("get_staged", str(staged_output)),
-            kairosboot_arguments=("get-staged", str(staged_output)),
+            kairosboot_arguments=("get_staged", str(staged_output)),
             receive_payload=receive_payload,
             output_path=staged_output,
             output_event_path="<OUTPUT>/stage.bin",
         ),
         Scenario(
             "official-tcp-flashing-get-unlock-ability", "tcp",
-            ("flashing", "get-unlock-ability"),
+            ("flashing", "get_unlock_ability"),
             "flashing get_unlock_ability",
             coverage_ids=("command.flashing-get-unlock-ability",),
             aosp_arguments=("flashing", "get_unlock_ability"),
-            kairosboot_arguments=("flashing", "get-unlock-ability"),
+            kairosboot_arguments=("flashing", "get_unlock_ability"),
         ),
         Scenario(
             "official-tcp-flashing-lock", "tcp", ("flashing", "lock"),
@@ -856,17 +853,17 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
         ),
         Scenario(
             "official-tcp-flashing-lock-critical", "tcp",
-            ("flashing", "lock-critical"), "flashing lock_critical",
+            ("flashing", "lock_critical"), "flashing lock_critical",
             coverage_ids=("command.flashing-lock-critical",),
             aosp_arguments=("flashing", "lock_critical"),
-            kairosboot_arguments=("flashing", "lock-critical"),
+            kairosboot_arguments=("flashing", "lock_critical"),
         ),
         Scenario(
             "official-tcp-flashing-unlock-critical", "tcp",
-            ("flashing", "unlock-critical"), "flashing unlock_critical",
+            ("flashing", "unlock_critical"), "flashing unlock_critical",
             coverage_ids=("command.flashing-unlock-critical",),
             aosp_arguments=("flashing", "unlock_critical"),
-            kairosboot_arguments=("flashing", "unlock-critical"),
+            kairosboot_arguments=("flashing", "unlock_critical"),
         ),
         Scenario(
             "official-tcp-create-logical-partition", "tcp",
@@ -904,7 +901,7 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
         ),
         Scenario(
             "official-tcp-serial-selector", "tcp",
-            ("--device", "<ENDPOINT>", "getvar", "product"),
+            ("-s", "<ENDPOINT>", "getvar", "product"),
             "getvar:product", coverage_ids=("option.serial",),
             aosp_arguments=("getvar", "product"),
             kairosboot_arguments=("getvar", "product"),

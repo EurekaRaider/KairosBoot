@@ -408,6 +408,11 @@ void OperationState::run() noexcept {
         }
     }
 
+    // Release task captures before publishing the terminal state. Callers may
+    // start the next operation as soon as wait() observes that state, so
+    // per-device leases and other task-scoped resources must already be gone.
+    task = {};
+
     // Deregistration waits for a concurrently executing cancellation hook. The
     // terminal state is deliberately published only after that drain completes.
     clear_cancellation_hook_before_terminal();

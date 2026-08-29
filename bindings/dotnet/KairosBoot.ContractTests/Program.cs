@@ -1957,7 +1957,7 @@ internal static class Program
                     progress,
                     CancellationToken.None)).ConfigureAwait(false);
 
-            Check(exception.Status == KairosBootStatus.Io, "flash status");
+            Check(exception.Status == KairosBootStatus.InvalidArgument, "flash partition status");
             Check(exception.TransferState == TransferState.NotSent, "transfer state");
             Check(exception.DeviceIdentifier == "tcp:127.0.0.1:5554", "device identity");
             Check(!exception.InboundExpectedBytes.HasValue, "flash inbound size unspecified");
@@ -2128,6 +2128,8 @@ internal static class Program
                 server.Commands.SequenceEqual(new[]
                 {
                     "getvar:product",
+                    "getvar:has-slot:userdata",
+                    "getvar:partition-type:userdata",
                     "erase:userdata",
                     "upload",
                     "flashing lock",
@@ -2332,6 +2334,10 @@ internal static class Program
             Check(
                 server.WaitForCancellationCommand(TimeSpan.FromSeconds(5)),
                 "management cancellation command observed");
+            var overlapping = await ExpectAsync<KairosBootException>(
+                () => device.GetVarAsync("product", options)).ConfigureAwait(false);
+            Check(overlapping.Status == KairosBootStatus.Busy, "same device overlap status");
+            Check(overlapping.DeviceIdentifier == server.Selector, "same device overlap selector");
             cancellation.Cancel();
             await ExpectAsync<OperationCanceledException>(() => pending)
                 .ConfigureAwait(false);

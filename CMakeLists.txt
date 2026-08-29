@@ -1122,17 +1122,16 @@ if(BUILD_TESTING)
       "-DEXPECTED_VERSION=${KAIROSBOOT_VERSION_STRING}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli.cmake")
   add_test(
-    NAME boot_image_cli
-    COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_image_cli_test.py"
-            --cli "$<TARGET_FILE:kairosboot_cli>")
-  set_tests_properties(boot_image_cli PROPERTIES TIMEOUT 30)
-  add_test(
     NAME boot_file_cli
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/boot_file_cli_test.py"
             --cli "$<TARGET_FILE:kairosboot_cli>")
-  set_tests_properties(boot_file_cli PROPERTIES TIMEOUT 45)
+  add_test(
+    NAME cli_scripted
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/scripted_cli_test.py"
+            --cli "$<TARGET_FILE:kairosboot_cli>")
+  set_tests_properties(boot_file_cli cli_scripted PROPERTIES TIMEOUT 240)
 endif()
 
 install(

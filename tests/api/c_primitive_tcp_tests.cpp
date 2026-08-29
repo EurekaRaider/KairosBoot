@@ -668,6 +668,11 @@ private:
       }
       {
         auto socket = accept();
+        CHECK(as_string(read_frame(socket)) == "getvar:binary");
+        write_frame(socket, binary_frame("OKAY", {'v', 0, 0xff}));
+      }
+      {
+        auto socket = accept();
         CHECK(as_string(read_frame(socket)) == "download:00000010");
         write_frame(socket, "DATA00000010");
         const auto payload = read_frame(socket);
@@ -1526,6 +1531,10 @@ void run_cxx_contract() {
     auto operation = device->getvar_async("delayed");
     CHECK(operation.has_value());
     server.wait_for_delayed_command();
+    auto overlapping = device->getvar_async("binary");
+    CHECK(!overlapping.has_value());
+    CHECK(overlapping.error().status() == KB_E_BUSY);
+    CHECK(overlapping.error().device_identifier() == selector_text);
     auto premature = operation->command_result();
     CHECK(!premature.has_value());
     CHECK(premature.error().status() == KB_E_BUSY);
@@ -1533,6 +1542,9 @@ void run_cxx_contract() {
     auto completed = operation->wait_result();
     CHECK(completed.has_value());
     retained.emplace(std::move(*completed));
+    auto after_terminal = device->getvar("binary");
+    CHECK(after_terminal.has_value());
+    CHECK(after_terminal->device_identifier() == selector_text);
   }
   CHECK(retained.has_value());
   CHECK(as_string(retained->terminal_payload()) == "ready");

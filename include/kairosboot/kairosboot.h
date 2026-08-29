@@ -577,9 +577,12 @@ KB_API kb_status_t KB_CALL kb_wipe_super(
  *   usb:<bus>-<port>[.<port>...] physical USB path
  *   tcp:<host>[:port]            Fastboot TCP (default port 5554)
  *   udp:<host>[:port]            Fastboot UDP (default port 5554)
- * IPv6 network hosts use brackets. Device-scoped blocking calls start the matching async
- * operation, wait, and extract its immutable result. A successful result is
- * owned by the caller and must be released with kb_command_result_release(). */
+ * IPv6 network hosts use brackets. Each device handle admits one active
+ * protocol operation; starting another before the first reaches a terminal
+ * state returns KB_E_BUSY. Use separate device handles for separate DUTs.
+ * Device-scoped blocking calls start the matching async operation, wait, and
+ * extract its immutable result. A successful result is owned by the caller and
+ * must be released with kb_command_result_release(). */
 KB_API kb_status_t KB_CALL kb_getvar_async(
     kb_device_t *device, const char *variable,
     const kb_command_options_t *options_or_null,

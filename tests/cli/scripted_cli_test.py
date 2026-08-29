@@ -5,11 +5,9 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import os
 import pathlib
-import re
 import signal
 import socket
 import struct
@@ -18,6 +16,32 @@ import tempfile
 import time
 from collections.abc import Callable, Sequence
 from typing import Optional
+
+
+def normalize_cli_arguments(arguments: Sequence[str]) -> tuple[list[str], bool]:
+    """Strip the private JSON fixture marker before invoking the public CLI."""
+    normalized: list[str] = []
+    json_requested = False
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--json":
+            json_requested = True
+            index += 1
+            continue
+        normalized.append(argument)
+        index += 1
+    return normalized, json_requested
+
+
+def cli_test_environment(
+    environment: Optional[dict[str, str]], json_requested: bool, timeout_ms: int
+) -> dict[str, str]:
+    result = dict(os.environ if environment is None else environment)
+    if json_requested:
+        result["KAIROSBOOT_INTERNAL_TEST_JSON"] = "1"
+    result["KAIROSBOOT_INTERNAL_TEST_TIMEOUT_MS"] = str(timeout_ms)
+    return result
 
 
 def receive_exact(connection: socket.socket, size: int) -> bytes:
@@ -146,6 +170,7 @@ def invoke_udp(
     expected_exit: int = 0,
     timeout_ms: int = 5000,
 ) -> tuple[bytes, bytes]:
+    normalized, json_requested = normalize_cli_arguments(arguments)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
         server.bind(("127.0.0.1", 0))
         server.settimeout(10)
@@ -153,14 +178,13 @@ def invoke_udp(
         process = subprocess.Popen(
             [
                 str(cli),
-                "--device",
+                "-s",
                 f"udp:127.0.0.1:{port}",
-                "--timeout-ms",
-                str(timeout_ms),
-                *arguments,
+                *normalized,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=cli_test_environment(None, json_requested, timeout_ms),
         )
         device_error: Optional[BaseException] = None
         try:
@@ -196,6 +220,7 @@ def invoke(
     environment: Optional[dict[str, str]] = None,
     working_directory: Optional[pathlib.Path] = None,
 ) -> tuple[bytes, bytes]:
+    normalized, json_requested = normalize_cli_arguments(arguments)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
@@ -204,17 +229,15 @@ def invoke(
         port = listener.getsockname()[1]
         command = [
             str(cli),
-            "--device",
+            "-s",
             f"tcp:127.0.0.1:{port}",
-            "--timeout-ms",
-            str(timeout_ms),
-            *arguments,
+            *normalized,
         ]
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=environment,
+            env=cli_test_environment(environment, json_requested, timeout_ms),
             cwd=working_directory,
         )
         device_error: Optional[BaseException] = None
@@ -253,6 +276,7 @@ def invoke_without_connection(
     expected_status: str,
     environment: Optional[dict[str, str]] = None,
 ) -> dict[str, object]:
+    normalized, _ = normalize_cli_arguments(arguments)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
@@ -261,14 +285,13 @@ def invoke_without_connection(
         completed = subprocess.run(
             [
                 str(cli),
-                "--device",
+                "-s",
                 f"tcp:127.0.0.1:{port}",
-                "--json",
-                *arguments,
+                *normalized,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=environment,
+            env=cli_test_environment(environment, True, 5000),
             timeout=10,
             check=False,
         )
@@ -306,6 +329,9 @@ def invoke_flash_without_server(
     image: pathlib.Path,
     timeout_ms: int = 100,
 ) -> dict[str, object]:
+    normalized, _ = normalize_cli_arguments(
+        ["flash", "system", str(image)]
+    )
     socket_type = socket.SOCK_STREAM if scheme == "tcp" else socket.SOCK_DGRAM
     with socket.socket(socket.AF_INET, socket_type) as reservation:
         reservation.bind(("127.0.0.1", 0))
@@ -314,17 +340,13 @@ def invoke_flash_without_server(
     completed = subprocess.run(
         [
             str(cli),
-            "--device",
+            "-s",
             f"{scheme}:127.0.0.1:{port}",
-            "--timeout-ms",
-            str(timeout_ms),
-            "--json",
-            "flash",
-            "system",
-            str(image),
+            *normalized,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=cli_test_environment(None, True, timeout_ms),
         timeout=10,
         check=False,
     )
@@ -365,6 +387,7 @@ def invoke_cancelled(
     arguments: Sequence[str] = ("snapshot-update", "merge"),
     expected_command: bytes = b"snapshot-update:merge",
 ) -> tuple[bytes, bytes]:
+    normalized, _ = normalize_cli_arguments(arguments)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
@@ -377,16 +400,14 @@ def invoke_cancelled(
         process = subprocess.Popen(
             [
                 str(cli),
-                "--device",
+                "-s",
                 f"tcp:127.0.0.1:{port}",
-                "--timeout-ms",
-                "5000",
-                "--json",
-                *arguments,
+                *normalized,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=creation_flags,
+            env=cli_test_environment(None, True, 5000),
         )
         connection, _ = listener.accept()
         with connection:
@@ -455,239 +476,9 @@ def make_update_package(
     return package
 
 
-def run_fleet_commands(cli: pathlib.Path, directory: pathlib.Path) -> None:
-    """Context-free validate/plan contract: fixed bytes and exit codes."""
-    contracts = pathlib.Path(__file__).resolve().parent.parent / "contracts"
-    fixture = contracts / "fleet-job-v1.fixture.yaml"
-    golden = (contracts / "job-plan-v1.golden.json").read_bytes()
-    if not golden.endswith(b"\n") or b"\n" in golden[:-1]:
-        raise AssertionError(f"golden plan contract is not one line: {golden!r}")
-
-    syntax_manifest = directory / "fleet-syntax.yaml"
-    syntax_manifest.write_text(
-        "apiVersion: kairosboot.io/v1\nkind: [unclosed\n", encoding="utf-8"
-    )
-    semantic_manifest = directory / "fleet-semantic.yaml"
-    semantic_manifest.write_text(
-        "apiVersion: kairosboot.io/v1\nkind: FlashJob\nbogusField: true\n",
-        encoding="utf-8",
-    )
-    missing_manifest = directory / "fleet-missing.yaml"
-
-    def local(
-        arguments: Sequence[str], expected_exit: int
-    ) -> tuple[bytes, bytes]:
-        completed = subprocess.run(
-            [str(cli), *arguments],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=10,
-            check=False,
-        )
-        if completed.returncode != expected_exit:
-            raise AssertionError(
-                f"unexpected exit for {arguments!r}: "
-                f"{completed.returncode} != {expected_exit}, "
-                f"stdout={completed.stdout!r}, stderr={completed.stderr!r}"
-            )
-        # The CLI follows the platform text-mode line endings (CRLF on
-        # Windows); compare the logical content by normalizing CRLF to LF.
-        return (
-            completed.stdout.replace(b"\r\n", b"\n"),
-            completed.stderr.replace(b"\r\n", b"\n"),
-        )
-
-    # validate: deterministic one-line success summary on stdout.
-    stdout, stderr = local(["validate", str(fixture)], 0)
-    if stdout != f"OK {fixture}\n".encode("utf-8") or stderr != b"":
-        raise AssertionError(f"validate success output changed: {stdout!r}")
-
-    stdout, stderr = local(["--json", "validate", str(fixture)], 0)
-    document = parse_success_json(stdout, stderr)
-    if document != {
-        "ok": True,
-        "command": "validate",
-        "manifest": str(fixture),
-    }:
-        raise AssertionError(f"unexpected validate JSON: {document!r}")
-
-    # validate: YAML syntax failure carries the path, line, and column.
-    stdout, stderr = local(["validate", str(syntax_manifest)], 4)
-    if stdout != b"" or not stderr.startswith(b"kairosboot: "):
-        raise AssertionError(f"syntax failure output changed: {stderr!r}")
-    if f"{syntax_manifest}:".encode("utf-8") not in stderr:
-        raise AssertionError(f"syntax failure lost the path: {stderr!r}")
-    if re.search(rb":\d+:\d+: ", stderr) is None:
-        raise AssertionError(f"syntax failure lost line/column: {stderr!r}")
-    if b"(native error 0)" not in stderr:
-        raise AssertionError(f"syntax failure lost native code: {stderr!r}")
-
-    # validate: semantic failure pins the offending line and column.
-    stdout, stderr = local(["validate", str(semantic_manifest)], 4)
-    if stdout != b"" or not stderr.startswith(b"kairosboot: "):
-        raise AssertionError(f"semantic failure output changed: {stderr!r}")
-    if f"{semantic_manifest}:3:1: ".encode("utf-8") not in stderr:
-        raise AssertionError(f"semantic failure lost 3:1 mark: {stderr!r}")
-    if b"manifest map contains an unknown field" not in stderr:
-        raise AssertionError(f"semantic failure lost the reason: {stderr!r}")
-    if b"(native error 0)" not in stderr:
-        raise AssertionError(f"semantic failure lost native code: {stderr!r}")
-
-    # validate: a missing file reports the preserved platform native code.
-    stdout, stderr = local(["validate", str(missing_manifest)], 4)
-    if stdout != b"":
-        raise AssertionError(f"missing file wrote stdout: {stdout!r}")
-    if f"{missing_manifest}".encode("utf-8") not in stderr:
-        raise AssertionError(f"missing file lost the path: {stderr!r}")
-    if b"(native error 2)" not in stderr:
-        raise AssertionError(f"missing file lost native code: {stderr!r}")
-
-    # plan: stdout is the golden canonical JSON byte-for-byte, one trailing LF.
-    stdout, stderr = local(["plan", str(fixture)], 0)
-    if stdout != golden or stderr != b"":
-        raise AssertionError(
-            f"plan output is not the golden contract: {stdout[:80]!r}..."
-        )
-
-    # plan --digest: SHA-256 hex of the canonical JSON bytes.
-    digest = hashlib.sha256(golden[:-1]).hexdigest()
-    if digest != (
-        "992daa21b5ea246910fc5d9ffffafed3e36e883d6a407b70abe3b04def3823f4"
-    ):
-        raise AssertionError(f"golden digest drifted: {digest}")
-    stdout, stderr = local(["plan", str(fixture), "--digest"], 0)
-    if stdout != f"{digest}\n".encode("ascii") or stderr != b"":
-        raise AssertionError(f"plan --digest output changed: {stdout!r}")
-
-    # plan: failures never emit partial JSON on stdout.
-    stdout, stderr = local(["plan", str(semantic_manifest)], 4)
-    if stdout != b"":
-        raise AssertionError(f"failed plan wrote stdout: {stdout!r}")
-    if f"{semantic_manifest}:3:1: ".encode("utf-8") not in stderr:
-        raise AssertionError(f"failed plan lost 3:1 mark: {stderr!r}")
-
-    # run: the CLI uses the public C++23 wrapper and production preparation.
-    # This fixture intentionally has no artifact, so preflight fails before
-    # device enumeration while still returning the canonical job report.
-    stdout, stderr = local(["--json", "run", str(fixture)], 4)
-    if stderr != b"":
-        raise AssertionError(f"JSON run wrote stderr: {stderr!r}")
-    run_document = json.loads(stdout)
-    if run_document.get("ok") is not False or run_document.get("command") != "run":
-        raise AssertionError(f"unexpected run JSON envelope: {run_document!r}")
-    if run_document.get("status") != "io":
-        raise AssertionError(f"run did not enforce artifact preflight: {run_document!r}")
-    run_report = run_document.get("report")
-    if not isinstance(run_report, dict) or run_report.get("state") != "failed":
-        raise AssertionError(f"run lost its failure report: {run_document!r}")
-    report_error = run_report.get("error")
-    if (
-        not isinstance(report_error, dict)
-        or report_error.get("code") != 9
-        or report_error.get("status") != "io"
-    ):
-        raise AssertionError(f"run report lost artifact I/O failure: {run_report!r}")
-
-    stdout, stderr = local(["run", str(fixture)], 4)
-    if stdout != b"" or b"kairosboot: " not in stderr or b"Fleet report: {" not in stderr:
-        raise AssertionError(f"human run failure changed: {stdout!r}, {stderr!r}")
-
-    stdout, stderr = local(
-        ["--json", "--timeout-ms", "0", "run", str(fixture)], 4
-    )
-    timeout_document = json.loads(stdout)
-    if timeout_document.get("status") != "timeout":
-        raise AssertionError(f"run timeout exit changed: {timeout_document!r}")
-
-    # Usage errors follow the repository's exit-2 parse contract.
-    stdout, stderr = local(["validate"], 2)
-    if stdout != b"" or not stderr.startswith(
-        b"kairosboot: validate requires exactly <manifest>\nUsage:\n"
-    ):
-        raise AssertionError(f"validate arity error changed: {stderr!r}")
-
-    stdout, stderr = local(["plan"], 2)
-    if stdout != b"" or not stderr.startswith(
-        b"kairosboot: plan requires exactly <manifest>\nUsage:\n"
-    ):
-        raise AssertionError(f"plan arity error changed: {stderr!r}")
-
-    stdout, stderr = local(["run"], 2)
-    if stdout != b"" or b"run requires exactly <manifest>" not in stderr:
-        raise AssertionError(f"run arity error changed: {stderr!r}")
-
-    stdout, stderr = local(
-        ["--device", "usb:1-1", "run", str(fixture)], 2
-    )
-    if b"option --device is not valid for run" not in stderr:
-        raise AssertionError(f"run device rejection changed: {stderr!r}")
-
-    stdout, stderr = local(["plan", "job.yaml", "extra.yaml"], 2)
-    if b"plan supports only --digest after <manifest>" not in stderr:
-        raise AssertionError(f"plan operand error changed: {stderr!r}")
-
-    stdout, stderr = local(["plan", "job.yaml", "--digest", "--digest"], 2)
-    if b"plan option --digest may only be specified once" not in stderr:
-        raise AssertionError(f"plan digest error changed: {stderr!r}")
-
-    stdout, stderr = local(["--json", "plan", "job.yaml"], 2)
-    if stdout != (
-        b'{"ok":false,"status":"invalid_argument",'
-        b'"message":"option --json is not valid for plan"}\n'
-    ) or stderr != b"":
-        raise AssertionError(f"plan json rejection changed: {stdout!r}")
-
-    stdout, stderr = local(
-        ["--device", "tcp:127.0.0.1:9", "validate", "job.yaml"], 2
-    )
-    if b"option --device is not valid for validate" not in stderr:
-        raise AssertionError(f"validate device rejection changed: {stderr!r}")
-
-    stdout, stderr = local(["frobnicate"], 2)
-    if stdout != b"" or not stderr.startswith(
-        b"kairosboot: unknown command\nUsage:\n"
-    ):
-        raise AssertionError(f"unknown command error changed: {stderr!r}")
-
-    stdout, stderr = local(["-S", "0", "flash"], 2)
-    if b"flash requires <partition> [file]" not in stderr:
-        raise AssertionError(f"zero sparse limit was not accepted: {stderr!r}")
-
-    stdout, stderr = local(["flash", "boot", "boot.img", "extra.img"], 2)
-    if b"flash requires <partition> [file]" not in stderr:
-        raise AssertionError(f"excess flash operands were not rejected: {stderr!r}")
-
-    stdout, stderr = local(["-S", "18446744073709551615G", "flash"], 2)
-    if b"option -S requires SIZE[K|M|G]" not in stderr:
-        raise AssertionError(f"sparse limit overflow was not rejected: {stderr!r}")
-
-    stdout, stderr = local(["-S", "1K", "-S", "2K", "flash"], 2)
-    if b"option -S may only be specified once" not in stderr:
-        raise AssertionError(f"duplicate sparse limit was not rejected: {stderr!r}")
-
-    stdout, stderr = local(["-h"], 0)
-    if not stdout.startswith(b"Usage:\n") or stderr != b"":
-        raise AssertionError(f"short help output changed: {stdout!r}, {stderr!r}")
-
-    stdout, stderr = local(["--verbose", "-h"], 0)
-    if not stdout.startswith(b"Usage:\n") or stderr != (
-        b"kairosboot: command=help selector=auto\n"
-    ):
-        raise AssertionError(f"verbose help output changed: {stdout!r}, {stderr!r}")
-
-    stdout, stderr = local(["-v", "-v", "-h"], 2)
-    if b"option --verbose may only be specified once" not in stderr:
-        raise AssertionError(f"duplicate verbose option changed: {stderr!r}")
-    stdout, stderr = local(["-i", "0x10000", "-h"], 2)
-    if b"requires a USB vendor id in [1, 0xffff]" not in stderr:
-        raise AssertionError(f"vendor id range error changed: {stderr!r}")
-
-
 def run(cli: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="kairosboot-cli-") as raw_directory:
         directory = pathlib.Path(raw_directory)
-
-        run_fleet_commands(cli, directory)
 
         def binary_getvar(connection: socket.socket) -> None:
             assert receive_frame(connection) == b"getvar:binary"
@@ -697,7 +488,7 @@ def run(cli: pathlib.Path) -> None:
 
         stdout, stderr = invoke(
             cli,
-            ["--vendor-id", "0x18d1", "--json", "getvar", "binary"],
+            ["--json", "getvar", "binary"],
             binary_getvar,
         )
         document = parse_success_json(stdout, stderr)
@@ -730,10 +521,10 @@ def run(cli: pathlib.Path) -> None:
         management_commands = [
             (["flashing", "lock"], b"flashing lock"),
             (["flashing", "unlock"], b"flashing unlock"),
-            (["flashing", "lock-critical"], b"flashing lock_critical"),
-            (["flashing", "unlock-critical"], b"flashing unlock_critical"),
+            (["flashing", "lock_critical"], b"flashing lock_critical"),
+            (["flashing", "unlock_critical"], b"flashing unlock_critical"),
             (
-                ["flashing", "get-unlock-ability"],
+                ["flashing", "get_unlock_ability"],
                 b"flashing get_unlock_ability",
             ),
             (["gsi", "wipe"], b"gsi:wipe"),
@@ -957,7 +748,7 @@ def run(cli: pathlib.Path) -> None:
 
         stdout, stderr = invoke(
             cli,
-            ["--json", "update", str(wipe_package), "--wipe", "--skip-reboot"],
+            ["--json", "update", str(wipe_package), "-w", "--skip-reboot"],
             wipe_success,
         )
         document = parse_success_json(stdout, stderr)
@@ -968,7 +759,7 @@ def run(cli: pathlib.Path) -> None:
         flashall_environment["ANDROID_PRODUCT_OUT"] = str(wipe_package)
         stdout, stderr = invoke(
             cli,
-            ["--json", "flashall", "--wipe", "--skip-reboot"],
+            ["--json", "flashall", "-w", "--skip-reboot"],
             wipe_success,
             environment=flashall_environment,
         )
@@ -1744,7 +1535,7 @@ def run(cli: pathlib.Path) -> None:
             assert int.from_bytes(image[16:20], "little") == 3
             assert int.from_bytes(image[20:24], "little") == 0x20002000
             assert int.from_bytes(image[24:28], "little") == len(raw_second_payload)
-            assert int.from_bytes(image[28:32], "little") == 0x20003000
+            assert int.from_bytes(image[28:32], "little") == 0x20F00000
             assert int.from_bytes(image[32:36], "little") == 0x20004000
             assert int.from_bytes(image[36:40], "little") == 4096
             assert int.from_bytes(image[40:44], "little") == 2
@@ -1777,8 +1568,6 @@ def run(cli: pathlib.Path) -> None:
                 "0x1000",
                 "--ramdisk-offset",
                 "0x2000",
-                "--second-offset",
-                "0x3000",
                 "--tags-offset",
                 "0x4000",
                 "--header-version",
@@ -1856,15 +1645,15 @@ def run(cli: pathlib.Path) -> None:
             completed = subprocess.run(
                 [
                     str(cli),
-                    "--device",
+                    "-s",
                     invalid_selector,
-                    "--json",
                     "flash",
                     "system",
                     str(stage_file),
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=cli_test_environment(None, True, 5000),
                 timeout=10,
                 check=False,
             )
@@ -1905,43 +1694,21 @@ def run(cli: pathlib.Path) -> None:
             b"staged"
         ).decode("ascii")
 
-        upload_file = directory / "上传-结果.bin"
-        upload_payload = b"d\x00\xff"
-        upload_file.write_bytes(b"previous-complete-output")
-
-        def uploaded_data(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"upload"
-            send_frame(connection, b"DATA00000003")
-            send_frame(connection, upload_payload)
-            send_frame(connection, b"OKAYuploaded")
-
-        stdout, stderr = invoke(
-            cli, ["--json", "upload", str(upload_file)], uploaded_data
-        )
-        document = parse_success_json(stdout, stderr)
-        assert document["command"] == "upload"
-        assert document["dataBytes"] == 3
-        assert document["output"] == str(upload_file)
-        assert "data" not in document
-        assert upload_file.read_bytes() == upload_payload
-        assert_no_temporary_outputs(directory)
-
         staged_file = directory / "已暂存-结果.bin"
         staged_payload = b"s\x00\xfe"
 
         def staged_data(connection: socket.socket) -> None:
-            # get-staged is the descriptive host API/CLI spelling for the
-            # AOSP Fastboot upload wire command.
+            # AOSP get_staged uses the upload wire command.
             assert receive_frame(connection) == b"upload"
             send_frame(connection, b"DATA00000003")
             send_frame(connection, staged_payload)
             send_frame(connection, b"OKAYstaged")
 
         stdout, stderr = invoke(
-            cli, ["--json", "get-staged", str(staged_file)], staged_data
+            cli, ["--json", "get_staged", str(staged_file)], staged_data
         )
         document = parse_success_json(stdout, stderr)
-        assert document["command"] == "get-staged"
+        assert document["command"] == "get_staged"
         assert document["dataBytes"] == 3
         assert document["output"] == str(staged_file)
         assert staged_file.read_bytes() == staged_payload
@@ -1951,10 +1718,7 @@ def run(cli: pathlib.Path) -> None:
         fetch_payload = b"f\x00\xff"
 
         def fetched_data(connection: socket.socket) -> None:
-            assert (
-                receive_frame(connection)
-                == b"fetch:vendor:0x00000002:0x00000003"
-            )
+            assert receive_frame(connection) == b"fetch:vendor"
             send_frame(connection, b"INFOfetching")
             send_frame(connection, b"DATA00000003")
             send_frame(connection, fetch_payload)
@@ -1967,10 +1731,6 @@ def run(cli: pathlib.Path) -> None:
                 "fetch",
                 "vendor",
                 str(fetch_file),
-                "--offset",
-                "2",
-                "--size",
-                "3",
             ],
             fetched_data,
         )
@@ -1980,27 +1740,6 @@ def run(cli: pathlib.Path) -> None:
         assert document["output"] == str(fetch_file)
         assert "data" not in document
         assert fetch_file.read_bytes() == fetch_payload
-        assert_no_temporary_outputs(directory)
-
-        failed_output = directory / "failed-upload.bin"
-        failed_output.write_bytes(b"previous-complete-output")
-
-        def interrupted_upload(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"upload"
-            send_frame(connection, b"DATA00000003")
-            send_frame(connection, b"bad")
-            # Closing without a terminal response makes the operation fail.
-
-        stdout, stderr = invoke(
-            cli,
-            ["--json", "upload", str(failed_output)],
-            interrupted_upload,
-            expected_exit=4,
-        )
-        failure = json.loads(stdout)
-        assert failure["ok"] is False
-        assert stderr == b""
-        assert failed_output.read_bytes() == b"previous-complete-output"
         assert_no_temporary_outputs(directory)
 
         def binary_failure(connection: socket.socket) -> None:

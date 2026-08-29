@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <charconv>
 #include <cstddef>
@@ -72,8 +73,13 @@ struct kb_context {
   std::shared_ptr<kb_context_usb_state> usb_state;
 };
 
+struct kb_device_operation_state {
+  std::atomic_bool busy{false};
+};
+
 struct kb_device {
   kb_context context;
+  std::shared_ptr<kb_device_operation_state> operation_state;
   std::string selector;
   std::string identifier;
   std::string serial;
@@ -173,6 +179,40 @@ kb_status_t fail(
     }
   }
   return payload.status;
+}
+
+class DeviceOperationLease final {
+public:
+  explicit DeviceOperationLease(
+      std::shared_ptr<kb_device_operation_state> state) noexcept
+      : state_(std::move(state)) {}
+
+  ~DeviceOperationLease() {
+    state_->busy.store(false, std::memory_order_release);
+  }
+
+  DeviceOperationLease(const DeviceOperationLease &) = delete;
+  DeviceOperationLease &operator=(const DeviceOperationLease &) = delete;
+
+private:
+  std::shared_ptr<kb_device_operation_state> state_;
+};
+
+[[nodiscard]] std::shared_ptr<DeviceOperationLease>
+try_acquire_device_operation(kb_device_t &device) {
+  auto state = device.operation_state;
+  bool expected = false;
+  if (!state->busy.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return {};
+  }
+  try {
+    return std::make_shared<DeviceOperationLease>(state);
+  } catch (...) {
+    state->busy.store(false, std::memory_order_release);
+    throw;
+  }
 }
 
 bool valid_utf8(const std::string_view value) noexcept {
@@ -2201,17 +2241,25 @@ kb_status_t start_primitive_async(
   }
 
   try {
+    auto operation_lease = try_acquire_device_operation(*device);
+    if (!operation_lease) {
+      return fail(error, KB_E_BUSY,
+                  "device already has an active protocol operation",
+                  device->identifier.c_str());
+    }
     auto target = prepare_target(device->context, selector_text);
     if (!target) {
       return fail(error, target.error());
     }
     auto copied_options = command_options_or_default(options);
     auto identifier = target->selector.identifier;
-    auto task = [target = std::move(*target), copied_options,
+    auto task = [operation_lease = std::move(operation_lease),
+                 target = std::move(*target), copied_options,
                  executor = std::move(executor),
                  identifier = std::move(identifier)](
                     kairosboot::api::OperationState::TaskContext &task_context)
         mutable -> kairosboot::api::OperationOutcome {
+      static_cast<void>(operation_lease);
       if (task_context.cancel_requested()) {
         return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT);
       }
@@ -2283,6 +2331,12 @@ kb_status_t start_file_receive_async(
   }
 
   try {
+    auto operation_lease = try_acquire_device_operation(*device);
+    if (!operation_lease) {
+      return fail(error, KB_E_BUSY,
+                  "device already has an active protocol operation",
+                  device->identifier.c_str());
+    }
     auto target = prepare_target(device->context, selector_text);
     if (!target) {
       return fail(error, target.error());
@@ -2292,13 +2346,15 @@ kb_status_t start_file_receive_async(
     std::string output_path_copy{output_path};
     auto destination = utf8_path(output_path_copy);
     std::string stage{progress_stage};
-    auto task = [target = std::move(*target), copied_options,
+    auto task = [operation_lease = std::move(operation_lease),
+                 target = std::move(*target), copied_options,
                  executor = std::move(executor),
                  identifier = std::move(identifier),
                  output_path_copy = std::move(output_path_copy),
                  destination = std::move(destination), stage = std::move(stage)](
                     kairosboot::api::OperationState::TaskContext &task_context)
         mutable -> kairosboot::api::OperationOutcome {
+      static_cast<void>(operation_lease);
       if (task_context.cancel_requested()) {
         return cancelled_operation(identifier, KB_TRANSFER_NOT_SENT);
       }
@@ -3071,6 +3127,12 @@ kb_status_t start_flash_source_async(
     kb_operation_t **operation,
     kb_error_t **error) {
   const auto selector_text = device.selector.c_str();
+  auto operation_lease = try_acquire_device_operation(device);
+  if (!operation_lease) {
+    return fail(error, KB_E_BUSY,
+                "device already has an active protocol operation",
+                device.identifier.c_str());
+  }
   auto prepared_target = prepare_target(device.context, selector_text);
   if (!prepared_target) {
     return fail(error, prepared_target.error());
@@ -3078,7 +3140,8 @@ kb_status_t start_flash_source_async(
 
   auto selected_identifier = prepared_target->selector.identifier;
   std::string partition_copy{partition};
-  auto task = [target = std::move(*prepared_target),
+  auto task = [operation_lease = std::move(operation_lease),
+               target = std::move(*prepared_target),
                image_source = std::move(image_source),
                partition_copy = std::move(partition_copy), flash_options,
                slot_policy = std::move(slot_policy),
@@ -3087,6 +3150,7 @@ kb_status_t start_flash_source_async(
                   kairosboot::api::OperationState::TaskContext
                       &task_context) mutable
       -> kairosboot::api::OperationOutcome {
+    static_cast<void>(operation_lease);
     if (task_context.cancel_requested()) {
       return cancelled_operation(selected_identifier, KB_TRANSFER_NOT_SENT);
     }
@@ -3356,6 +3420,12 @@ kb_status_t start_vendor_boot_ramdisk_async(
     const kb_flash_options_t flash_options, SlotPolicy slot_policy,
     kb_operation_t **operation, kb_error_t **error) {
   const auto selector_text = device.selector.c_str();
+  auto operation_lease = try_acquire_device_operation(device);
+  if (!operation_lease) {
+    return fail(error, KB_E_BUSY,
+                "device already has an active protocol operation",
+                device.identifier.c_str());
+  }
   auto prepared_target = prepare_target(device.context, selector_text);
   if (!prepared_target) {
     return fail(error, prepared_target.error());
@@ -3364,7 +3434,8 @@ kb_status_t start_vendor_boot_ramdisk_async(
   std::string partition_copy{partition};
   std::string ramdisk_name_copy{ramdisk_name};
   auto selected_identifier = prepared_target->selector.identifier;
-  auto task = [target = std::move(*prepared_target),
+  auto task = [operation_lease = std::move(operation_lease),
+               target = std::move(*prepared_target),
                partition_copy = std::move(partition_copy),
                ramdisk_name_copy = std::move(ramdisk_name_copy),
                new_ramdisk = std::move(new_ramdisk),
@@ -3373,6 +3444,7 @@ kb_status_t start_vendor_boot_ramdisk_async(
                selected_identifier = std::move(selected_identifier)](
                   kairosboot::api::OperationState::TaskContext &task_context)
       mutable -> kairosboot::api::OperationOutcome {
+    static_cast<void>(operation_lease);
     if (task_context.cancel_requested()) {
       return cancelled_operation(selected_identifier, KB_TRANSFER_NOT_SENT);
     }
@@ -3797,18 +3869,26 @@ kb_status_t start_boot_source_async(
     return fail(error, kairosboot::api::normalize_public_error(
                            valid_size.error(), device.identifier));
   }
+  auto operation_lease = try_acquire_device_operation(device);
+  if (!operation_lease) {
+    return fail(error, KB_E_BUSY,
+                "device already has an active protocol operation",
+                device.identifier.c_str());
+  }
   auto prepared_target = prepare_target(device.context, selector_text);
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
 
   auto selected_identifier = prepared_target->selector.identifier;
-  auto task = [target = std::move(*prepared_target),
+  auto task = [operation_lease = std::move(operation_lease),
+               target = std::move(*prepared_target),
                image_source = std::move(image_source), boot_options,
                selected_identifier = std::move(selected_identifier)](
                   kairosboot::api::OperationState::TaskContext
                       &task_context) mutable
       -> kairosboot::api::OperationOutcome {
+    static_cast<void>(operation_lease);
     if (task_context.cancel_requested()) {
       return cancelled_operation(selected_identifier, KB_TRANSFER_NOT_SENT);
     }
@@ -4113,6 +4193,7 @@ kb_status_t KB_CALL kb_device_open(kb_context_t *context,
     auto result = std::make_unique<kb_device>();
     result->context.options = context->options;
     result->context.usb_state = context->usb_state;
+    result->operation_state = std::make_shared<kb_device_operation_state>();
     result->identifier = target->selector.identifier;
     if (target->usb_device.has_value()) {
       result->usb_path = physical_usb_path(*target->usb_device);
@@ -4923,6 +5004,12 @@ kb_status_t KB_CALL kb_update_package_async(
                   "update package path must be valid UTF-8",
                   device_error_identifier(device));
     }
+    auto operation_lease = try_acquire_device_operation(*device);
+    if (!operation_lease) {
+      return fail(error, KB_E_BUSY,
+                  "device already has an active protocol operation",
+                  device_error_identifier(device));
+    }
     auto selector = parse_target_selector(device->selector.c_str());
     if (!selector) {
       return fail(error, selector.error());
@@ -4936,12 +5023,14 @@ kb_status_t KB_CALL kb_update_package_async(
     auto native_package_path =
         std::filesystem::absolute(utf8_path(package_path_view));
     auto usb_state = device->context.usb_state;
-    auto task = [usb_state = std::move(usb_state),
+    auto task = [operation_lease = std::move(operation_lease),
+                 usb_state = std::move(usb_state),
                  selector = std::move(*selector),
                  package = std::move(native_package_path),
                  copied_options = std::move(*copied_options)](
                     kairosboot::api::OperationState::TaskContext &task_context)
         mutable -> kairosboot::api::OperationOutcome {
+      static_cast<void>(operation_lease);
       return run_prepared_public_update(
           usb_state, std::move(selector), package, copied_options.native,
           copied_options.slot_policy, task_context);
@@ -5027,6 +5116,12 @@ kb_status_t KB_CALL kb_wipe_super_async(
                   device_error_identifier(device));
     }
 
+    auto operation_lease = try_acquire_device_operation(*device);
+    if (!operation_lease) {
+      return fail(error, KB_E_BUSY,
+                  "device already has an active protocol operation",
+                  device_error_identifier(device));
+    }
     auto selector = parse_target_selector(device->selector.c_str());
     if (!selector) {
       return fail(error, selector.error());
@@ -5040,12 +5135,14 @@ kb_status_t KB_CALL kb_wipe_super_async(
     auto native_image_path =
         std::filesystem::absolute(utf8_path(image_path));
     auto usb_state = device->context.usb_state;
-    auto task = [usb_state = std::move(usb_state),
+    auto task = [operation_lease = std::move(operation_lease),
+                 usb_state = std::move(usb_state),
                  selector = std::move(*selector),
                  image = std::move(native_image_path),
                  copied_options = std::move(*copied_options)](
                     kairosboot::api::OperationState::TaskContext &task_context)
         mutable -> kairosboot::api::OperationOutcome {
+      static_cast<void>(operation_lease);
       return run_public_wipe_super(usb_state, std::move(selector), image,
                                    copied_options.native, task_context);
     };
@@ -5203,6 +5300,12 @@ kb_status_t KB_CALL kb_format_partition_async(
   }
 
   try {
+    auto operation_lease = try_acquire_device_operation(*device);
+    if (!operation_lease) {
+      return fail(error, KB_E_BUSY,
+                  "device already has an active protocol operation",
+                  device_error_identifier(device));
+    }
     auto prepared_target =
         prepare_target(device->context, device->selector.c_str());
     if (!prepared_target) {
@@ -5213,7 +5316,8 @@ kb_status_t KB_CALL kb_format_partition_async(
     auto selected_identifier = prepared_target->selector.identifier;
     std::string partition_copy{partition};
 
-    auto task = [target = std::move(*prepared_target),
+    auto task = [operation_lease = std::move(operation_lease),
+                 target = std::move(*prepared_target),
                  selected_identifier = std::move(selected_identifier),
                  partition_copy = std::move(partition_copy),
                  type_override = std::move(type_override),
@@ -5222,6 +5326,7 @@ kb_status_t KB_CALL kb_format_partition_async(
                     kairosboot::api::OperationState::TaskContext
                         &task_context) mutable
         -> kairosboot::api::OperationOutcome {
+      static_cast<void>(operation_lease);
       if (task_context.cancel_requested()) {
         return cancelled_operation(selected_identifier,
                                    KB_TRANSFER_NOT_SENT);
