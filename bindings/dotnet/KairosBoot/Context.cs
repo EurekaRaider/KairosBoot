@@ -5,7 +5,7 @@ using KairosBoot.Interop;
 
 namespace KairosBoot;
 
-/// <summary>Owns process-wide KairosBoot resources, device discovery, and Fleet jobs.</summary>
+/// <summary>Owns process-wide KairosBoot resources and device discovery.</summary>
 public sealed partial class Context : IDisposable
 {
     private readonly ContextSafeHandle handle;

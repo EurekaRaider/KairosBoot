@@ -41,8 +41,9 @@ int kb_test_legacy_initializer_bounds(void) {
                           KB_UPDATE_OPTIONS_V1_SIZE);
   CHECK_LEGACY_INIT_BOUND(kb_command_options_init, kb_command_options_t,
                           KB_COMMAND_OPTIONS_V1_SIZE);
-  CHECK_LEGACY_INIT_BOUND(kb_job_options_init, kb_job_options_t,
-                          KB_JOB_OPTIONS_V1_SIZE);
+  CHECK_LEGACY_INIT_BOUND(kb_device_batch_options_init,
+                          kb_device_batch_options_t,
+                          KB_DEVICE_BATCH_OPTIONS_V1_SIZE);
   CHECK_LEGACY_INIT_BOUND(kb_version_init, kb_version_t, KB_VERSION_V1_SIZE);
   return 0;
 }

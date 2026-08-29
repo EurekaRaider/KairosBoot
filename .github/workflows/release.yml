@@ -484,9 +484,6 @@ jobs:
             miniz_destination="bindings/dotnet/KairosBoot/runtimes/${rid}/native/licenses/miniz"
             mkdir -p "$miniz_destination"
             cp "native/${artifact}/share/kairosboot/miniz/LICENSE" "$miniz_destination/"
-            yaml_cpp_destination="bindings/dotnet/KairosBoot/runtimes/${rid}/native/licenses/yaml-cpp"
-            mkdir -p "$yaml_cpp_destination"
-            cp "native/${artifact}/share/kairosboot/yaml-cpp/LICENSE" "$yaml_cpp_destination/"
           done
 
       - name: Pack managed SDK with native runtimes and symbols
@@ -689,15 +686,6 @@ jobs:
             release-assets/miniz-3.1.2.zip \
             release-assets/miniz-3.1.2-LICENSE
           test -s release-assets/miniz-3.1.2-LICENSE
-          curl --fail --silent --show-error --location \
-            --output release-assets/yaml-cpp-0.9.0.tar.gz \
-            https://github.com/jbeder/yaml-cpp/releases/download/yaml-cpp-0.9.0/yaml-cpp-yaml-cpp-0.9.0.tar.gz
-          printf '%s  %s\n' \
-            '298593d9c440fd9034b8b193d96318b76d49bc97c6ceadb7b0836edf0b6d7539' \
-            'release-assets/yaml-cpp-0.9.0.tar.gz' | sha256sum --check
-          tar -xOf release-assets/yaml-cpp-0.9.0.tar.gz LICENSE \
-            >release-assets/yaml-cpp-0.9.0-LICENSE
-          test -s release-assets/yaml-cpp-0.9.0-LICENSE
           cp LICENSE "release-assets/KairosBoot-v${VERSION}-LICENSE.txt"
           cp THIRD_PARTY_NOTICES.md "release-assets/KairosBoot-v${VERSION}-THIRD_PARTY_NOTICES.md"
           cp UNSIGNED.txt "release-assets/KairosBoot-v${VERSION}-UNSIGNED.txt"
@@ -712,7 +700,6 @@ jobs:
             --libusb-source release-assets/libusb-1.0.30.tar.bz2 \
             --boost-source release-assets/boost-1.92.0-cmake.tar.xz \
             --miniz-source release-assets/miniz-3.1.2.zip \
-            --yaml-cpp-source release-assets/yaml-cpp-0.9.0.tar.gz \
             --output release-assets/KairosBoot.spdx.json
           python3 scripts/generate_provenance.py \
             --assets release-assets \

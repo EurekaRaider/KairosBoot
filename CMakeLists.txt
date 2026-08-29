@@ -131,45 +131,6 @@ foreach(_miniz_file IN ITEMS miniz.c miniz.h LICENSE)
   endif()
 endforeach()
 
-# yaml-cpp is the private, statically linked parser for the versioned Fleet
-# manifest. Keep tools, contrib, tests, and upstream install rules disabled so
-# it cannot grow the public SDK surface or add a runtime dependency.
-string(JSON KAIROSBOOT_LOCKED_YAML_CPP_VERSION GET
-       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" yamlCpp requiredVersion)
-string(JSON KAIROSBOOT_LOCKED_YAML_CPP_URL GET
-       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" yamlCpp sourceArchive)
-string(JSON KAIROSBOOT_LOCKED_YAML_CPP_SHA256 GET
-       "${KAIROSBOOT_DEPENDENCY_LOCK_JSON}" yamlCpp sourceArchiveSha256)
-set(KAIROSBOOT_YAML_CPP_VERSION "${KAIROSBOOT_LOCKED_YAML_CPP_VERSION}")
-set(KAIROSBOOT_YAML_CPP_URL "${KAIROSBOOT_LOCKED_YAML_CPP_URL}")
-set(KAIROSBOOT_YAML_CPP_SHA256 "${KAIROSBOOT_LOCKED_YAML_CPP_SHA256}")
-string(LENGTH "${KAIROSBOOT_YAML_CPP_SHA256}"
-       KAIROSBOOT_YAML_CPP_SHA256_LENGTH)
-if(NOT KAIROSBOOT_YAML_CPP_SHA256_LENGTH EQUAL 64
-   OR NOT KAIROSBOOT_YAML_CPP_SHA256 MATCHES "^[0-9a-fA-F]+$")
-  message(FATAL_ERROR "KAIROSBOOT_YAML_CPP_SHA256 must be a SHA-256 digest")
-endif()
-
-set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
-set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
-set(YAML_ENABLE_PIC ON CACHE BOOL "" FORCE)
-set(YAML_MSVC_SHARED_RT ON CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  kairosboot_yaml_cpp
-  URL "${KAIROSBOOT_YAML_CPP_URL}"
-  URL_HASH "SHA256=${KAIROSBOOT_YAML_CPP_SHA256}")
-FetchContent_MakeAvailable(kairosboot_yaml_cpp)
-if(NOT TARGET yaml-cpp::yaml-cpp)
-  message(FATAL_ERROR
-          "yaml-cpp ${KAIROSBOOT_YAML_CPP_VERSION} did not provide its target")
-endif()
-if(NOT EXISTS "${kairosboot_yaml_cpp_SOURCE_DIR}/LICENSE")
-  message(FATAL_ERROR "yaml-cpp release is missing LICENSE")
-endif()
-
 add_library(kairosboot_miniz STATIC
             "${kairosboot_miniz_source_SOURCE_DIR}/miniz.c")
 set_target_properties(
@@ -236,7 +197,6 @@ add_library(
   src/fleet/fleet_coordinator.cpp
   src/fleet/job_plan.cpp
   src/fleet/job_report.cpp
-  src/fleet/manifest.cpp
   src/image/artifact_source.cpp
   src/image/boot_image_builder.cpp
   src/image/file_source.cpp
@@ -271,8 +231,8 @@ target_include_directories(
          "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(kairosboot_internal
                       PRIVATE kairosboot_libusb kairosboot_miniz
-                              yaml-cpp::yaml-cpp Boost::asio_core
-                              Threads::Threads ${CMAKE_DL_LIBS})
+                              Boost::asio_core Threads::Threads
+                              ${CMAKE_DL_LIBS})
 if(WIN32)
   # Boost.Asio still uses the operating system's Winsock implementation. Keep
   # the platform link dependency explicit for every supported Windows toolchain.
@@ -293,8 +253,7 @@ kairosboot_enable_strict_warnings(kairosboot_internal)
 
 add_library(kairosboot SHARED
             src/kairosboot.cpp
-            src/api/fleet_plan.cpp
-            src/api/fleet_run.cpp)
+            src/api/device_batch.cpp)
 if(WIN32)
   target_sources(kairosboot PRIVATE abi/kairosboot.def)
 elseif(APPLE)
@@ -493,15 +452,6 @@ if(BUILD_TESTING)
   add_test(NAME canonical_json COMMAND kairosboot_canonical_json_tests)
   set_tests_properties(canonical_json PROPERTIES TIMEOUT 10)
 
-  add_executable(kairosboot_job_plan_tests tests/fleet/job_plan_tests.cpp)
-  target_compile_features(kairosboot_job_plan_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_job_plan_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_job_plan_tests PRIVATE kairosboot_internal)
-  kairosboot_enable_strict_warnings(kairosboot_job_plan_tests)
-  add_test(NAME job_plan COMMAND kairosboot_job_plan_tests)
-  set_tests_properties(job_plan PROPERTIES TIMEOUT 10)
-
   add_executable(kairosboot_job_report_tests tests/fleet/job_report_tests.cpp)
   target_compile_features(kairosboot_job_report_tests PRIVATE cxx_std_23)
   target_include_directories(kairosboot_job_report_tests
@@ -554,17 +504,6 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_fleet_coordinator_tests)
   add_test(NAME fleet_coordinator COMMAND kairosboot_fleet_coordinator_tests)
   set_tests_properties(fleet_coordinator PROPERTIES TIMEOUT 60)
-
-  add_executable(kairosboot_fleet_manifest_tests
-                 tests/fleet/manifest_tests.cpp)
-  target_compile_features(kairosboot_fleet_manifest_tests PRIVATE cxx_std_23)
-  target_include_directories(kairosboot_fleet_manifest_tests
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_fleet_manifest_tests
-                        PRIVATE kairosboot_internal)
-  kairosboot_enable_strict_warnings(kairosboot_fleet_manifest_tests)
-  add_test(NAME fleet_manifest COMMAND kairosboot_fleet_manifest_tests)
-  set_tests_properties(fleet_manifest PROPERTIES TIMEOUT 30)
 
   add_executable(kairosboot_error_mapping_tests
                  tests/api/error_mapping_tests.cpp)
@@ -803,41 +742,6 @@ if(BUILD_TESTING)
   kairosboot_enable_strict_warnings(kairosboot_c_api_test)
   add_test(NAME c_api COMMAND kairosboot_c_api_test)
 
-  add_executable(kairosboot_c_fleet_plan_test tests/c_fleet_plan_test.c)
-  set_target_properties(
-    kairosboot_c_fleet_plan_test
-    PROPERTIES C_STANDARD 11
-               C_STANDARD_REQUIRED ON
-               C_EXTENSIONS OFF)
-  target_compile_definitions(
-    kairosboot_c_fleet_plan_test
-    PRIVATE KAIROSBOOT_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_c_fleet_plan_test PRIVATE KairosBoot::C)
-  kairosboot_enable_strict_warnings(kairosboot_c_fleet_plan_test)
-  add_test(NAME c_fleet_plan COMMAND kairosboot_c_fleet_plan_test)
-
-  add_executable(
-    kairosboot_c_fleet_run_test
-    tests/c_api/fleet_run_test.c
-    tests/c_api/fleet_run_test_support.cpp
-    src/api/fleet_run.cpp)
-  set_target_properties(
-    kairosboot_c_fleet_run_test
-    PROPERTIES C_STANDARD 11
-               C_STANDARD_REQUIRED ON
-               C_EXTENSIONS OFF)
-  target_compile_features(kairosboot_c_fleet_run_test PRIVATE cxx_std_23)
-  target_compile_definitions(kairosboot_c_fleet_run_test
-                             PRIVATE KAIROSBOOT_BUILDING_LIBRARY)
-  target_include_directories(kairosboot_c_fleet_run_test
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(
-    kairosboot_c_fleet_run_test
-    PRIVATE KairosBoot::C kairosboot_internal kairosboot_libusb)
-  kairosboot_enable_strict_warnings(kairosboot_c_fleet_run_test)
-  add_test(NAME c_fleet_run COMMAND kairosboot_c_fleet_run_test)
-  set_tests_properties(c_fleet_run PROPERTIES TIMEOUT 20)
-
   add_executable(kairosboot_c_primitive_tcp_tests
                  tests/api/c_primitive_tcp_tests.cpp)
   target_compile_features(kairosboot_c_primitive_tcp_tests PRIVATE cxx_std_23)
@@ -855,32 +759,6 @@ if(BUILD_TESTING)
   target_link_libraries(kairosboot_cxx_api_test PRIVATE KairosBoot::Cxx)
   kairosboot_enable_strict_warnings(kairosboot_cxx_api_test)
   add_test(NAME cxx_api COMMAND kairosboot_cxx_api_test)
-
-  add_executable(kairosboot_cxx_fleet_plan_test tests/cxx_fleet_plan_test.cpp)
-  target_compile_features(kairosboot_cxx_fleet_plan_test PRIVATE cxx_std_23)
-  target_compile_definitions(
-    kairosboot_cxx_fleet_plan_test
-    PRIVATE KAIROSBOOT_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(kairosboot_cxx_fleet_plan_test PRIVATE KairosBoot::Cxx)
-  kairosboot_enable_strict_warnings(kairosboot_cxx_fleet_plan_test)
-  add_test(NAME cxx_fleet_plan COMMAND kairosboot_cxx_fleet_plan_test)
-
-  add_executable(
-    kairosboot_cxx_fleet_run_test
-    tests/cxx_fleet_run_test.cpp
-    tests/c_api/fleet_run_test_support.cpp
-    src/api/fleet_run.cpp)
-  target_compile_features(kairosboot_cxx_fleet_run_test PRIVATE cxx_std_23)
-  target_compile_definitions(kairosboot_cxx_fleet_run_test
-                             PRIVATE KAIROSBOOT_BUILDING_LIBRARY)
-  target_include_directories(kairosboot_cxx_fleet_run_test
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(
-    kairosboot_cxx_fleet_run_test
-    PRIVATE KairosBoot::Cxx kairosboot_internal kairosboot_libusb)
-  kairosboot_enable_strict_warnings(kairosboot_cxx_fleet_run_test)
-  add_test(NAME cxx_fleet_run COMMAND kairosboot_cxx_fleet_run_test)
-  set_tests_properties(cxx_fleet_run PROPERTIES TIMEOUT 20)
 
   add_executable(kairosboot_cxx_primitive_tcp_tests
                  tests/api/cxx_primitive_tcp_tests.cpp)
@@ -1068,10 +946,6 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_hil_evidence.py")
   add_test(
-    NAME fleet_contract_schemas
-    COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_fleet_contracts.py")
-  add_test(
     NAME release_tooling
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_release_tools.py")
@@ -1148,8 +1022,6 @@ install(FILES "${boost_SOURCE_DIR}/LICENSE_1_0.txt"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/boost")
 install(FILES "${kairosboot_miniz_source_SOURCE_DIR}/LICENSE"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/miniz")
-install(FILES "${kairosboot_yaml_cpp_SOURCE_DIR}/LICENSE"
-        DESTINATION "${CMAKE_INSTALL_DATADIR}/kairosboot/yaml-cpp")
 
 configure_package_config_file(
   cmake/KairosBootConfig.cmake.in

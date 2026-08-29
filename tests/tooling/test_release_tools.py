@@ -63,10 +63,6 @@ class ReleaseToolTests(unittest.TestCase):
         (install / "share" / "kairosboot" / "miniz" / "LICENSE").write_text(
             "miniz MIT\n", encoding="utf-8"
         )
-        (install / "share" / "kairosboot" / "yaml-cpp").mkdir()
-        (install / "share" / "kairosboot" / "yaml-cpp" / "LICENSE").write_text(
-            "yaml-cpp MIT\n", encoding="utf-8"
-        )
         windows = platform.startswith("windows-")
         (install / "share" / "kairosboot" / "release-build.json").write_text(
             json.dumps(
@@ -380,10 +376,6 @@ class ReleaseToolTests(unittest.TestCase):
                 "KairosBoot-v1.2.3-linux-x64-sdk/share/kairosboot/miniz/LICENSE",
                 names,
             )
-            self.assertIn(
-                "KairosBoot-v1.2.3-linux-x64-sdk/share/kairosboot/yaml-cpp/LICENSE",
-                names,
-            )
         with tarfile.open(cli, "r:gz") as archive:
             member = archive.getmember("KairosBoot-v1.2.3-linux-x64-cli/bin/kairosboot")
             self.assertEqual(member.mode & 0o777, 0o755)
@@ -393,10 +385,6 @@ class ReleaseToolTests(unittest.TestCase):
             )
             self.assertIn(
                 "KairosBoot-v1.2.3-linux-x64-cli/share/kairosboot/miniz/LICENSE",
-                archive.getnames(),
-            )
-            self.assertIn(
-                "KairosBoot-v1.2.3-linux-x64-cli/share/kairosboot/yaml-cpp/LICENSE",
                 archive.getnames(),
             )
         with tarfile.open(symbol_archive, "r:gz") as archive:
@@ -601,13 +589,11 @@ class ReleaseToolTests(unittest.TestCase):
         libusb = self.root / "libusb.tar.bz2"
         boost = self.root / "boost.tar.xz"
         miniz = self.root / "miniz.zip"
-        yaml_cpp = self.root / "yaml-cpp.tar.gz"
         output = self.root / "KairosBoot.spdx.json"
         source.write_bytes(b"source")
         libusb.write_bytes(b"libusb")
         boost.write_bytes(b"boost")
         miniz.write_bytes(b"miniz")
-        yaml_cpp.write_bytes(b"yaml-cpp")
         run_script(
             "generate_sbom.py",
             "--version",
@@ -620,8 +606,6 @@ class ReleaseToolTests(unittest.TestCase):
             boost,
             "--miniz-source",
             miniz,
-            "--yaml-cpp-source",
-            yaml_cpp,
             "--output",
             output,
         )
@@ -646,11 +630,6 @@ class ReleaseToolTests(unittest.TestCase):
             hashlib.sha256(b"miniz").hexdigest(),
         )
         self.assertEqual(packages["miniz"]["licenseDeclared"], "MIT")
-        self.assertEqual(
-            packages["yaml-cpp"]["checksums"][0]["checksumValue"],
-            hashlib.sha256(b"yaml-cpp").hexdigest(),
-        )
-        self.assertEqual(packages["yaml-cpp"]["licenseDeclared"], "MIT")
         self.assertEqual(
             packages["Microsoft Visual C++ Runtime"]["supplier"],
             "Organization: Microsoft Corporation",
@@ -700,8 +679,6 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertIn("libusb-1.0.30-COPYING", expected)
         self.assertIn("miniz-3.1.2.zip", expected)
         self.assertIn("miniz-3.1.2-LICENSE", expected)
-        self.assertIn("yaml-cpp-0.9.0.tar.gz", expected)
-        self.assertIn("yaml-cpp-0.9.0-LICENSE", expected)
         run_script(
             "check_release_assets.py",
             "--assets",
@@ -829,15 +806,6 @@ class ReleaseToolTests(unittest.TestCase):
                 self.assertEqual(len(forbidden), 1)
 
         self.assertFalse(SMOKE_MODULE.is_forbidden_compression_runtime("libzstd.so.1"))
-        for dependency in (
-            "yaml-cpp.dll",
-            "libyaml-cpp.0.9.dylib",
-            "libyaml-cpp.so.0.9",
-        ):
-            with self.subTest(dependency=dependency):
-                self.assertTrue(
-                    SMOKE_MODULE.is_forbidden_compression_runtime(dependency)
-                )
 
 
 if __name__ == "__main__":

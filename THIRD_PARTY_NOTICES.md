@@ -42,18 +42,6 @@ stdio, and zlib-compatible names disabled. CRC validation remains enabled.
 miniz is not exposed by the installed APIs and does not add a shared-library
 runtime dependency. Binary, SDK, and NuGet distributions include its `LICENSE`.
 
-## yaml-cpp 0.9.0
-
-- Project: https://github.com/jbeder/yaml-cpp
-- Version: 0.9.0
-- License: MIT
-- Source archive: https://github.com/jbeder/yaml-cpp/releases/download/yaml-cpp-0.9.0/yaml-cpp-yaml-cpp-0.9.0.tar.gz
-
-KairosBoot builds yaml-cpp as a private static library with its tools, contrib,
-tests, and install rules disabled. It is used only to parse the bounded Fleet
-manifest input and is not exposed by the installed C or C++ API. Binary, SDK,
-and NuGet distributions include its `LICENSE`.
-
 ## Microsoft Visual C++ Runtime
 
 Windows binary distributions include the architecture-matching, app-local

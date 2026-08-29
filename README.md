@@ -67,7 +67,7 @@ still under development.
 | Transport core | Fastboot response state machine plus asynchronous USB and Boost.Asio-based TCP v1 / reliable UDP v1 internals tested independently |
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
 | Flash operations | C, C++23, .NET, and CLI execute cancellable single-device USB download/flash with validated raw or Android sparse inputs |
-| Fleet jobs | Versioned schema and scheduler primitives exist; manifest planning and execution are not public features yet |
+| Device batches | C/C++23/.NET APIs accept explicit opened devices; CLI repeats `-s` and runs up to 32 selected devices concurrently |
 | Performance and HIL | Acceptance goals are defined; 32-device, throughput, fairness, and soak claims have not been demonstrated yet |
 
 ### Target platforms
@@ -94,13 +94,18 @@ syntax; it does not add KairosBoot-specific top-level commands:
 ./build/kairosboot devices -l
 ./build/kairosboot -s SERIAL getvar product
 ./build/kairosboot -s SERIAL flash system images/system.img
+./build/kairosboot -s SERIAL_A -s SERIAL_B flash system images/system.img
 ./build/kairosboot -s SERIAL set_active b
 ./build/kairosboot -s SERIAL get_staged staged.bin
 ```
 
-Use `-s tcp:HOST[:PORT]` or `-s udp:HOST[:PORT]` for network Fastboot. Fleet
-validation, planning, reports, and execution remain available through the C,
-C++23, and .NET APIs rather than non-standard Fastboot CLI commands.
+Repeated `-s` selectors run the same command concurrently on up to 32 devices.
+Commands that write one host output file (`fetch` and `get_staged`) require a
+single selector so devices cannot overwrite the same path.
+
+Use `-s tcp:HOST[:PORT]` or `-s udp:HOST[:PORT]` for network Fastboot. Repeat
+`-s` to run the same Fastboot-compatible device command concurrently; the C,
+C++23, and .NET APIs accept explicit opened `Device` objects for the same model.
 
 ### Use the C11 API
 
@@ -184,17 +189,17 @@ C++23 RAII wrapper ────┼──> versioned C ABI ──> Fastboot / ima
 .NET wrapper ──────────┤                              │
 CLI (via C++ wrapper) ─┘                    USB / TCP / UDP internals
                                                        │
-                                      transfer runtime / fleet primitives
+                                      transfer runtime / device scheduler
 ```
 
 One C ABI is the compatibility boundary for every language surface. The CLI is
 also a public SDK consumer, which keeps its behavior from drifting into a
 private implementation path.
 
-Today, public calls reach versioning, context management, diagnostics, USB
-enumeration, and cancellable single-file USB download/flash. The remaining
-Fastboot command families, network session selection, and fleet orchestration
-are still being connected to the public surfaces.
+Public calls cover versioning, context management, diagnostics, USB discovery,
+USB/TCP/UDP devices, Fastboot command families, update/flashall, and cancellable
+explicit-device batches. Real-hardware performance and soak gates remain
+separate acceptance work.
 
 ## Build
 
@@ -204,7 +209,7 @@ KairosBoot requires:
 - Python 3 and `make` for the locked dependency preparation step
 - A C11 compiler and a compiler with C++23 support
 - Ninja or another supported CMake generator
-- Network access on the first configure so CMake `FetchContent` can download the locked Boost, miniz, and yaml-cpp archives
+- Network access on the first configure so CMake `FetchContent` can download the locked Boost and miniz archives
 
 Release builds use exactly libusb 1.0.30 as a dynamically linked dependency.
 Prepare it from the repository's locked, hash-verified source archives before
@@ -236,11 +241,6 @@ private static target with archive-writing, stdio, and zlib-compatible names
 disabled while retaining CRC validation. It does not add a miniz or zlib shared
 runtime dependency and is not part of the public API.
 
-Fleet manifest parsing uses the locked yaml-cpp 0.9.0 release as another
-position-independent private static dependency. Its tools, tests, contrib code,
-shared library, and install rules remain disabled, so it adds no runtime library
-or public SDK type.
-
 For a multi-configuration generator such as Visual Studio, build and test the
 explicit Release configuration:
 
@@ -256,7 +256,7 @@ cmake --install build --prefix "$PWD/install"
 ```
 
 The install contains the matching libusb runtime, LGPL license and dependency
-manifest, plus the Boost, miniz, and yaml-cpp license texts. Release automation
+metadata, plus the Boost and miniz license texts. Release automation
 builds with the CMake `Release` configuration; when
 `KAIROSBOOT_RELEASE_SYMBOLS=ON`, debug symbols are published separately without
 disabling optimization.
@@ -290,8 +290,8 @@ The planned work is deliberately separated from the status table above:
    continue, reboot, getvar, fetch/stage, format, and OEM passthrough.
 3. Add update/flashall, ZIP and sparse pipelines, A/B slots, dynamic/super,
    fastbootd, AVB, boot/vendor_boot, logical partitions, snapshots, and GSI.
-4. Expose deterministic fleet manifest validation, planning, execution,
-   cancellation, and reports across at least 32 devices.
+4. Complete deterministic Device-object batch execution, cancellation,
+   progress, and per-device reports across at least 32 devices.
 5. Tune against measured raw USB ceilings, compare with the pinned AOSP
    Fastboot baseline, then pass fault-injection, fairness, and 24-hour soak
    gates on the six target combinations.
@@ -300,10 +300,9 @@ The planned work is deliberately separated from the status table above:
 
 ```text
 include/kairosboot/  C11 API and C++23 wrapper
-src/                 ABI implementation, protocol, image, fleet, and transport cores
+src/                 ABI implementation, protocol, image, scheduling, and transport cores
 cli/                 kairosboot command-line consumer
 bindings/dotnet/     .NET Framework 4.8 and .NET 10 binding/package
-schemas/             versioned job and report schemas
 compat/              pinned AOSP compatibility inventory
 tests/               native, managed, transport, packaging, and tooling tests
 scripts/             dependency preparation and release packaging tools
@@ -320,6 +319,6 @@ security issues through [SECURITY.md](SECURITY.md).
 
 KairosBoot original source code is licensed under the [MIT License](LICENSE).
 libusb is dynamically linked and retains its LGPL license. Boost retains the
-Boost Software License 1.0. miniz and yaml-cpp are statically linked under MIT.
+Boost Software License 1.0. miniz is statically linked under MIT.
 Other third-party components retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

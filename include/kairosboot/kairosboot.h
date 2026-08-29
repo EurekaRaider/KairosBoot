@@ -120,9 +120,8 @@ typedef struct kb_device_list kb_device_list_t;
 typedef struct kb_error kb_error_t;
 typedef struct kb_operation kb_operation_t;
 typedef struct kb_command_result kb_command_result_t;
-typedef struct kb_job_plan kb_job_plan_t;
-typedef struct kb_job kb_job_t;
-typedef struct kb_job_report kb_job_report_t;
+typedef struct kb_device_batch kb_device_batch_t;
+typedef struct kb_device_batch_report kb_device_batch_report_t;
 
 typedef struct kb_version {
   uint32_t struct_size;
@@ -279,16 +278,29 @@ typedef struct kb_command_options {
   uint64_t maximum_receive_bytes;
 } kb_command_options_t;
 
-typedef struct kb_job_options {
+typedef struct kb_device_batch_options {
   uint32_t struct_size;
   uint32_t api_version;
-  /* Whole-job deadline in milliseconds, including manifest parsing,
-   * planning, preflight, device execution, cancellation drain and report
-   * publication. The initialized default is infinite. */
+  /* Whole-batch deadline in milliseconds, including operation startup,
+   * device execution, cancellation drain and report publication. The
+   * initialized default is infinite. */
   uint32_t timeout_ms;
   kb_progress_callback_t progress_callback;
   void *progress_user_data;
-} kb_job_options_t;
+  /* Zero selects the device count, capped at 32. */
+  uint32_t max_parallel_devices;
+  /* Non-zero continues starting queued devices after one device fails. */
+  int32_t continue_on_error;
+} kb_device_batch_options_t;
+
+/* Called once for each selected device. The callback must start exactly one
+ * asynchronous Device operation and transfer its operation handle to the
+ * batch. It runs on a batch worker thread, never on the libusb event thread.
+ * device is borrowed and device_index is stable for the complete batch.
+ * user_data and every device handle must remain valid until batch release. */
+typedef kb_status_t(KB_CALL *kb_device_batch_start_callback_t)(
+    kb_device_t *device, size_t device_index, void *user_data,
+    kb_operation_t **operation, kb_error_t **error);
 
 #define KB_VERSION_V1_SIZE                                                   \
   ((uint32_t)(offsetof(kb_version_t, string) +                               \
@@ -334,9 +346,8 @@ typedef struct kb_job_options {
 #define KB_COMMAND_OPTIONS_V1_SIZE                                           \
   ((uint32_t)(offsetof(kb_command_options_t, maximum_receive_bytes) +        \
               sizeof(((kb_command_options_t *)0)->maximum_receive_bytes)))
-#define KB_JOB_OPTIONS_V1_SIZE                                               \
-  ((uint32_t)(offsetof(kb_job_options_t, progress_user_data) +               \
-              sizeof(((kb_job_options_t *)0)->progress_user_data)))
+#define KB_DEVICE_BATCH_OPTIONS_V1_SIZE                                      \
+  ((uint32_t)sizeof(kb_device_batch_options_t))
 
 KB_API void KB_CALL kb_context_options_init(kb_context_options_t *options);
 KB_API void KB_CALL kb_flash_options_init(kb_flash_options_t *options);
@@ -344,7 +355,8 @@ KB_API void KB_CALL kb_legacy_boot_options_init(
     kb_legacy_boot_options_t *options);
 KB_API void KB_CALL kb_update_options_init(kb_update_options_t *options);
 KB_API void KB_CALL kb_command_options_init(kb_command_options_t *options);
-KB_API void KB_CALL kb_job_options_init(kb_job_options_t *options);
+KB_API void KB_CALL kb_device_batch_options_init(
+    kb_device_batch_options_t *options);
 KB_API void KB_CALL kb_version_init(kb_version_t *version);
 
 /* The legacy initializer symbols above initialize only their frozen v1 prefix
@@ -362,8 +374,8 @@ KB_API void KB_CALL kb_update_options_init_sized(kb_update_options_t *options,
                                                  uint32_t struct_size);
 KB_API void KB_CALL kb_command_options_init_sized(kb_command_options_t *options,
                                                   uint32_t struct_size);
-KB_API void KB_CALL kb_job_options_init_sized(kb_job_options_t *options,
-                                              uint32_t struct_size);
+KB_API void KB_CALL kb_device_batch_options_init_sized(
+    kb_device_batch_options_t *options, uint32_t struct_size);
 KB_API void KB_CALL kb_version_init_sized(kb_version_t *version,
                                           uint32_t struct_size);
 
@@ -398,9 +410,10 @@ kb_command_options_init_current(kb_command_options_t *options) {
   kb_command_options_init_sized(options,
                                 (uint32_t)sizeof(kb_command_options_t));
 }
-static inline void KB_CALL
-kb_job_options_init_current(kb_job_options_t *options) {
-  kb_job_options_init_sized(options, (uint32_t)sizeof(kb_job_options_t));
+static inline void KB_CALL kb_device_batch_options_init_current(
+    kb_device_batch_options_t *options) {
+  kb_device_batch_options_init_sized(
+      options, (uint32_t)sizeof(kb_device_batch_options_t));
 }
 static inline void KB_CALL kb_version_init_current(kb_version_t *version) {
   kb_version_init_sized(version, (uint32_t)sizeof(kb_version_t));
@@ -410,7 +423,7 @@ static inline void KB_CALL kb_version_init_current(kb_version_t *version) {
 #define kb_legacy_boot_options_init kb_legacy_boot_options_init_current
 #define kb_update_options_init kb_update_options_init_current
 #define kb_command_options_init kb_command_options_init_current
-#define kb_job_options_init kb_job_options_init_current
+#define kb_device_batch_options_init kb_device_batch_options_init_current
 #define kb_version_init kb_version_init_current
 #endif
 
@@ -433,6 +446,10 @@ KB_API kb_status_t KB_CALL kb_device_open(
 KB_API const char *KB_CALL kb_device_identifier(const kb_device_t *device);
 KB_API const char *KB_CALL kb_device_serial(const kb_device_t *device);
 KB_API const char *KB_CALL kb_device_usb_path(const kb_device_t *device);
+/* Adds one ownership reference. Every successful retain must be paired with
+ * kb_device_release(). This lets an asynchronous batch own its Device handles
+ * independently of the caller. */
+KB_API kb_status_t KB_CALL kb_device_retain(kb_device_t *device);
 KB_API void KB_CALL kb_device_release(kb_device_t *device);
 
 KB_API kb_status_t KB_CALL kb_enumerate_devices(
@@ -768,54 +785,72 @@ KB_API kb_status_t KB_CALL kb_fetch_file(
     const kb_command_options_t *options_or_null,
     kb_command_result_t **result, kb_error_t **error);
 
-/* Context-free Fleet manifest entry points. Neither function needs a
- * kb_context_t: parsing and validation never initialize libusb, enumerate
- * devices, or open artifact paths; only the manifest file itself is read.
- * kb_validate_job_file stops after full semantic validation. Failures use
- * the standard error handle: the manifest source path and, when known, its
- * line and column appear inside the stable UTF-8 message and the platform
- * native code is preserved in kb_error_native_code(). */
-KB_API kb_status_t KB_CALL kb_validate_job_file(const char *file_path,
-                                                kb_error_t **error);
-KB_API kb_status_t KB_CALL kb_plan_job_file(
-    const char *file_path, kb_job_plan_t **plan, kb_error_t **error);
+/* Executes one asynchronous Device operation for every explicit Device
+ * object. No selector file or hidden re-enumeration is involved. The
+ * input order defines stable device indexes in callbacks and reports. The
+ * batch retains every Device until release, limits concurrency according to
+ * options, cancels all active child operations together, and isolates device
+ * failures when continue_on_error is non-zero. */
+KB_API kb_status_t KB_CALL kb_device_batch_run_async(
+    kb_device_t *const *devices, size_t device_count,
+    kb_device_batch_start_callback_t start_callback, void *start_user_data,
+    const kb_device_batch_options_t *options_or_null,
+    kb_device_batch_t **batch, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_device_batch_run(
+    kb_device_t *const *devices, size_t device_count,
+    kb_device_batch_start_callback_t start_callback, void *start_user_data,
+    const kb_device_batch_options_t *options_or_null,
+    kb_device_batch_report_t **report, kb_error_t **error);
 
-/* Planning returns an immutable snapshot owned by the caller. The borrowed
- * canonical JSON is NUL-terminated UTF-8 without a trailing LF; *size, when
- * requested, excludes the terminator. Both borrows stay valid until the
- * plan is released. */
-KB_API const char *KB_CALL kb_job_plan_canonical_json(
-    const kb_job_plan_t *plan, size_t *size);
-KB_API const char *KB_CALL kb_job_plan_sha256_hex(const kb_job_plan_t *plan);
-KB_API void KB_CALL kb_job_plan_release(kb_job_plan_t *plan);
+/* Simple one-to-many convenience entry points for the two common complete
+ * flashing workflows. They share the same lifecycle and report contract as
+ * kb_device_batch_run[_async]. */
+KB_API kb_status_t KB_CALL kb_flash_file_batch_async(
+    kb_device_t *const *devices, size_t device_count, const char *partition,
+    const char *file_path, const kb_flash_options_t *flash_options_or_null,
+    const kb_device_batch_options_t *batch_options_or_null,
+    kb_device_batch_t **batch, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_flash_file_batch(
+    kb_device_t *const *devices, size_t device_count, const char *partition,
+    const char *file_path, const kb_flash_options_t *flash_options_or_null,
+    const kb_device_batch_options_t *batch_options_or_null,
+    kb_device_batch_report_t **report, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_update_package_batch_async(
+    kb_device_t *const *devices, size_t device_count, const char *package_path,
+    const kb_update_options_t *update_options_or_null,
+    const kb_device_batch_options_t *batch_options_or_null,
+    kb_device_batch_t **batch, kb_error_t **error);
+KB_API kb_status_t KB_CALL kb_update_package_batch(
+    kb_device_t *const *devices, size_t device_count, const char *package_path,
+    const kb_update_options_t *update_options_or_null,
+    const kb_device_batch_options_t *batch_options_or_null,
+    kb_device_batch_report_t **report, kb_error_t **error);
 
-/* Runs a versioned Fleet manifest. The blocking entry point always starts the
- * matching asynchronous job and waits for it. A terminal report is returned
- * for success, cancellation and execution/preflight failure whenever report
- * construction itself succeeds. The report is owned by the caller and stays
- * valid independently of the job handle. */
-KB_API kb_status_t KB_CALL kb_run_job_file_async(
-    kb_context_t *context, const char *file_path,
-    const kb_job_options_t *options_or_null, kb_job_t **job,
+KB_API kb_status_t KB_CALL kb_device_batch_wait(
+    kb_device_batch_t *batch, uint32_t timeout_ms);
+KB_API kb_status_t KB_CALL kb_device_batch_cancel(kb_device_batch_t *batch);
+KB_API kb_operation_state_t KB_CALL kb_device_batch_state(
+    const kb_device_batch_t *batch);
+KB_API const kb_error_t *KB_CALL kb_device_batch_error(
+    const kb_device_batch_t *batch);
+KB_API kb_status_t KB_CALL kb_device_batch_get_report(
+    const kb_device_batch_t *batch, kb_device_batch_report_t **report,
     kb_error_t **error);
-KB_API kb_status_t KB_CALL kb_run_job_file(
-    kb_context_t *context, const char *file_path,
-    const kb_job_options_t *options_or_null, kb_job_report_t **report,
-    kb_error_t **error);
+KB_API void KB_CALL kb_device_batch_release(kb_device_batch_t *batch);
 
-KB_API kb_status_t KB_CALL kb_job_wait(kb_job_t *job, uint32_t timeout_ms);
-KB_API kb_status_t KB_CALL kb_job_cancel(kb_job_t *job);
-KB_API kb_operation_state_t KB_CALL kb_job_state(const kb_job_t *job);
-KB_API const kb_error_t *KB_CALL kb_job_error(const kb_job_t *job);
-KB_API kb_status_t KB_CALL kb_job_get_report(
-    const kb_job_t *job, kb_job_report_t **report, kb_error_t **error);
-KB_API void KB_CALL kb_job_release(kb_job_t *job);
-
-/* Borrowed NUL-terminated UTF-8 canonical JSON. *size excludes the terminator;
- * the borrow remains valid until kb_job_report_release(). */
-KB_API const char *KB_CALL kb_job_report_json(
-    const kb_job_report_t *report, size_t *size);
-KB_API void KB_CALL kb_job_report_release(kb_job_report_t *report);
+KB_API size_t KB_CALL kb_device_batch_report_count(
+    const kb_device_batch_report_t *report);
+KB_API kb_status_t KB_CALL kb_device_batch_report_status(
+    const kb_device_batch_report_t *report, size_t device_index);
+KB_API const char *KB_CALL kb_device_batch_report_identifier(
+    const kb_device_batch_report_t *report, size_t device_index);
+KB_API const char *KB_CALL kb_device_batch_report_message(
+    const kb_device_batch_report_t *report, size_t device_index);
+/* Borrowed NUL-terminated UTF-8 JSON. *size excludes the terminator. */
+KB_API const char *KB_CALL kb_device_batch_report_json(
+    const kb_device_batch_report_t *report, size_t *size);
+KB_API void KB_CALL kb_device_batch_report_release(
+    kb_device_batch_report_t *report);
 
 KB_API kb_status_t KB_CALL kb_operation_wait(kb_operation_t *operation,
                                               uint32_t timeout_ms);

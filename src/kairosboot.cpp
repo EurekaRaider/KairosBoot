@@ -78,6 +78,7 @@ struct kb_device_operation_state {
 };
 
 struct kb_device {
+  std::atomic_size_t reference_count{1U};
   kb_context context;
   std::shared_ptr<kb_device_operation_state> operation_state;
   std::string selector;
@@ -3980,23 +3981,6 @@ kb_status_t finish_blocking_operation(kb_operation_t *operation,
 
 } // namespace
 
-namespace kairosboot::api {
-
-std::expected<std::shared_ptr<transport::LibusbRuntime>, OperationErrorPayload>
-acquire_fleet_usb_runtime(kb_context_t &context) {
-  auto runtime = acquire_context_usb_runtime(context);
-  if (!runtime) {
-    return std::unexpected(normalize_public_error(runtime.error(), {}));
-  }
-  return std::move(*runtime);
-}
-
-std::uint16_t fleet_usb_vendor_id(const kb_context_t &context) noexcept {
-  return context.usb_state == nullptr ? 0U : context.usb_state->usb_vendor_id;
-}
-
-} // namespace kairosboot::api
-
 extern "C" {
 
 void KB_CALL kb_context_options_init(kb_context_options_t *options) {
@@ -4230,7 +4214,20 @@ const char *KB_CALL kb_device_usb_path(const kb_device_t *device) {
   return device == nullptr ? nullptr : device->usb_path.c_str();
 }
 
-void KB_CALL kb_device_release(kb_device_t *device) { delete device; }
+kb_status_t KB_CALL kb_device_retain(kb_device_t *device) {
+  if (device == nullptr) {
+    return KB_E_INVALID_ARGUMENT;
+  }
+  device->reference_count.fetch_add(1U, std::memory_order_relaxed);
+  return KB_OK;
+}
+
+void KB_CALL kb_device_release(kb_device_t *device) {
+  if (device != nullptr &&
+      device->reference_count.fetch_sub(1U, std::memory_order_acq_rel) == 1U) {
+    delete device;
+  }
+}
 
 kb_status_t KB_CALL kb_enumerate_devices(kb_context_t *context,
                                          kb_device_list_t **devices,

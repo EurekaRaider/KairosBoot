@@ -108,13 +108,6 @@ typedef struct kb_operation {
   char *device_identifier;
 } kb_operation_t;
 
-typedef struct kb_job_options {
-  uint32_t struct_size;
-  uint32_t api_version;
-  uint32_t timeout_ms;
-  kb_progress_callback_t progress_callback;
-  void *progress_user_data;
-} kb_job_options_t;
 
 typedef struct kb_command_options {
   uint32_t struct_size;
@@ -134,18 +127,7 @@ typedef struct kb_version {
   const char *string;
 } kb_version_t;
 
-typedef struct kb_job {
-  int32_t kind;
-  int32_t polls;
-  int32_t cancelled;
-  int32_t terminal_state;
-  kb_progress_callback_t progress_callback;
-  void *progress_user_data;
-} kb_job_t;
 
-typedef struct kb_job_report {
-  char *json;
-} kb_job_report_t;
 
 typedef struct kb_error {
   int32_t status;
@@ -160,8 +142,6 @@ KB_TEST_API void KB_TEST_CALL kb_flash_options_init_sized(
     kb_flash_options_t *options, uint32_t struct_size);
 KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init_sized(
     kb_legacy_boot_options_t *options, uint32_t struct_size);
-KB_TEST_API void KB_TEST_CALL kb_job_options_init_sized(
-    kb_job_options_t *options, uint32_t struct_size);
 KB_TEST_API void KB_TEST_CALL kb_command_options_init_sized(
     kb_command_options_t *options, uint32_t struct_size);
 KB_TEST_API void KB_TEST_CALL kb_version_init_sized(
@@ -181,14 +161,7 @@ static int32_t cancel_count;
 static int32_t operation_release_count;
 static int32_t context_release_count;
 static int32_t device_release_count;
-static int32_t job_options_init_count;
-static int32_t job_async_start_count;
-static int32_t job_blocking_count;
-static int32_t job_cancel_count;
-static int32_t job_release_count;
-static int32_t job_report_release_count;
 static int32_t context_sentinel;
-static kb_error_t job_error = {KB_E_IO, "scripted fleet failure"};
 
 static const char expected_unicode_package[] = {
     'i', 'm', 'a', 'g', 'e', 's', '/', (char)0xe5, (char)0x8d,
@@ -321,16 +294,6 @@ static int valid_custom_legacy_boot_options(
          options->dtb_offset == 0x01200000ULL;
 }
 
-static int valid_job_options(const kb_job_options_t *options) {
-  return options != NULL &&
-         options->struct_size == (uint32_t)sizeof(*options) &&
-         options->api_version == 1 &&
-         ((options->progress_callback == NULL &&
-           options->progress_user_data == NULL) ||
-          (options->progress_callback != NULL &&
-           options->progress_user_data != NULL));
-}
-
 static void record_failure(const int32_t code) {
   if (failure_code == 0) {
     failure_code = code;
@@ -368,12 +331,6 @@ KB_TEST_API void KB_TEST_CALL kb_test_reset(void) {
   operation_release_count = 0;
   context_release_count = 0;
   device_release_count = 0;
-  job_options_init_count = 0;
-  job_async_start_count = 0;
-  job_blocking_count = 0;
-  job_cancel_count = 0;
-  job_release_count = 0;
-  job_report_release_count = 0;
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_failure_code(void) {
@@ -430,30 +387,6 @@ KB_TEST_API int32_t KB_TEST_CALL kb_test_context_release_count(void) {
 
 KB_TEST_API int32_t KB_TEST_CALL kb_test_device_release_count(void) {
   return device_release_count;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_test_job_options_init_count(void) {
-  return job_options_init_count;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_test_job_async_start_count(void) {
-  return job_async_start_count;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_test_job_blocking_count(void) {
-  return job_blocking_count;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_test_job_cancel_count(void) {
-  return job_cancel_count;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_test_job_release_count(void) {
-  return job_release_count;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_test_job_report_release_count(void) {
-  return job_report_release_count;
 }
 
 KB_TEST_API const char *KB_TEST_CALL kb_status_string(int32_t status) {
@@ -654,27 +587,6 @@ KB_TEST_API void KB_TEST_CALL kb_legacy_boot_options_init_sized(
   ++legacy_boot_options_init_count;
 }
 
-KB_TEST_API void KB_TEST_CALL kb_job_options_init(kb_job_options_t *options) {
-  kb_job_options_init_sized(options, (uint32_t)sizeof(*options));
-}
-
-KB_TEST_API void KB_TEST_CALL kb_job_options_init_sized(
-    kb_job_options_t *options, uint32_t struct_size) {
-  if (options == NULL) {
-    record_failure(80);
-    return;
-  }
-  const size_t writable =
-      initialize_known_prefix(options, struct_size, sizeof(*options));
-  initialize_u32_field(options, writable,
-                       offsetof(kb_job_options_t, struct_size), struct_size);
-  initialize_u32_field(options, writable,
-                       offsetof(kb_job_options_t, api_version), 1);
-  initialize_u32_field(options, writable,
-                       offsetof(kb_job_options_t, timeout_ms), UINT32_MAX);
-  ++job_options_init_count;
-}
-
 KB_TEST_API void KB_TEST_CALL kb_command_options_init(
     kb_command_options_t *options) {
   kb_command_options_init_sized(options, (uint32_t)sizeof(*options));
@@ -708,231 +620,6 @@ KB_TEST_API void KB_TEST_CALL kb_version_init_sized(kb_version_t *version,
                        struct_size);
   initialize_u32_field(version, writable, offsetof(kb_version_t, api_version),
                        1);
-}
-
-static kb_job_report_t *make_job_report(const char *json) {
-  kb_job_report_t *report = (kb_job_report_t *)calloc(1, sizeof(*report));
-  if (report == NULL) {
-    return NULL;
-  }
-  const size_t size = strlen(json) + 1;
-  report->json = (char *)malloc(size);
-  if (report->json == NULL) {
-    free(report);
-    return NULL;
-  }
-  memcpy(report->json, json, size);
-  return report;
-}
-
-static const char *job_report_json(const kb_job_t *job) {
-  if (job->kind == 1) {
-    return "{\"state\":\"succeeded\",\"devices\":[{\"id\":\"SERIAL-01\"}]}";
-  }
-  if (job->kind == 2) {
-    return "{\"state\":\"failed\",\"devices\":[{\"id\":\"SERIAL-FAIL\"}]}";
-  }
-  return "{\"state\":\"cancelled\",\"devices\":[]}";
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_run_job_file_async(
-    void *context, const char *file_path, const kb_job_options_t *options,
-    kb_job_t **job, void **error) {
-  if (context != &context_sentinel || file_path == NULL || job == NULL ||
-      error == NULL || !valid_job_options(options)) {
-    record_failure(81);
-    return KB_E_INVALID_ARGUMENT;
-  }
-
-  int32_t kind = 0;
-  if (same_string(file_path, "success.yaml")) {
-    kind = 1;
-    if (options->timeout_ms != 2 || options->progress_callback == NULL) {
-      record_failure(82);
-      return KB_E_INVALID_ARGUMENT;
-    }
-  } else if (same_string(file_path, "failure.yaml")) {
-    kind = 2;
-  } else if (same_string(file_path, "cancel.yaml")) {
-    kind = 3;
-    if (options->progress_callback == NULL) {
-      record_failure(83);
-      return KB_E_INVALID_ARGUMENT;
-    }
-  } else if (same_string(file_path, "dispose.yaml")) {
-    kind = 4;
-  } else {
-    record_failure(84);
-    return KB_E_INVALID_ARGUMENT;
-  }
-
-  kb_job_t *created = (kb_job_t *)calloc(1, sizeof(*created));
-  if (created == NULL) {
-    record_failure(85);
-    return KB_E_INVALID_ARGUMENT;
-  }
-  created->kind = kind;
-  created->progress_callback = options->progress_callback;
-  created->progress_user_data = options->progress_user_data;
-  *job = created;
-  *error = NULL;
-  ++job_async_start_count;
-  return KB_OK;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_run_job_file(
-    void *context, const char *file_path, const kb_job_options_t *options,
-    kb_job_report_t **report, void **error) {
-  if (context != &context_sentinel || !same_string(file_path, "blocking.yaml") ||
-      report == NULL || error == NULL || !valid_job_options(options) ||
-      options->timeout_ms != 17 || options->progress_callback != NULL) {
-    record_failure(86);
-    return KB_E_INVALID_ARGUMENT;
-  }
-  *report = make_job_report("{\"state\":\"succeeded\",\"blocking\":true}");
-  if (*report == NULL) {
-    record_failure(87);
-    return KB_E_INVALID_ARGUMENT;
-  }
-  *error = NULL;
-  ++job_blocking_count;
-  return KB_OK;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_job_wait(kb_job_t *job,
-                                             uint32_t timeout_ms) {
-  if (job == NULL || (timeout_ms != 0 && timeout_ms != UINT32_MAX)) {
-    record_failure(88);
-    return KB_E_INVALID_ARGUMENT;
-  }
-  if (job->terminal_state == 2) {
-    return KB_OK;
-  }
-  if (job->terminal_state == 3) {
-    return KB_E_IO;
-  }
-  if (job->terminal_state == 4 || job->cancelled) {
-    job->terminal_state = 4;
-    return KB_E_CANCELLED;
-  }
-  if (job->polls == 0) {
-    if (job->progress_callback != NULL) {
-      kb_progress_t progress;
-      memset(&progress, 0, sizeof(progress));
-      progress.struct_size = (uint32_t)sizeof(progress);
-      progress.api_version = 1;
-      progress.bytes_completed = 3;
-      progress.bytes_total = 9;
-      progress.stage = "execute";
-      progress.device_identifier = "SERIAL-01";
-      if (job->progress_callback(&progress, job->progress_user_data) != 0) {
-        job->cancelled = 1;
-      }
-    }
-    ++job->polls;
-    if (job->cancelled) {
-      job->terminal_state = 4;
-      return KB_E_CANCELLED;
-    }
-    if (timeout_ms == 0) {
-      return KB_E_TIMEOUT;
-    }
-  }
-  if (job->kind == 1) {
-    job->terminal_state = 2;
-    return KB_OK;
-  }
-  if (job->kind == 2) {
-    job->terminal_state = 3;
-    return KB_E_IO;
-  }
-  if (timeout_ms == UINT32_MAX) {
-    job->terminal_state = 4;
-    return KB_E_CANCELLED;
-  }
-  return KB_E_TIMEOUT;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_job_cancel(kb_job_t *job) {
-  if (job == NULL) {
-    record_failure(89);
-    return KB_E_INVALID_ARGUMENT;
-  }
-  if (!job->cancelled && job->terminal_state == 0) {
-    job->cancelled = 1;
-    ++job_cancel_count;
-  }
-  return KB_OK;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_job_state(const kb_job_t *job) {
-  if (job == NULL) {
-    return 3;
-  }
-  return job->terminal_state == 0 ? 1 : job->terminal_state;
-}
-
-KB_TEST_API const kb_error_t *KB_TEST_CALL kb_job_error(const kb_job_t *job) {
-  if (job == NULL || (job->terminal_state != 3 && job->terminal_state != 4)) {
-    return NULL;
-  }
-  job_error.status = job->terminal_state == 4 ? KB_E_CANCELLED : KB_E_IO;
-  job_error.message = job->terminal_state == 4
-                          ? "scripted fleet cancellation"
-                          : "scripted fleet failure";
-  return &job_error;
-}
-
-KB_TEST_API int32_t KB_TEST_CALL kb_job_get_report(
-    const kb_job_t *job, kb_job_report_t **report, void **error) {
-  if (job == NULL || report == NULL || error == NULL) {
-    record_failure(90);
-    return KB_E_INVALID_ARGUMENT;
-  }
-  *report = NULL;
-  *error = NULL;
-  if (job->terminal_state == 0) {
-    return KB_E_BUSY;
-  }
-  *report = make_job_report(job_report_json(job));
-  return *report == NULL ? KB_E_INVALID_ARGUMENT : KB_OK;
-}
-
-KB_TEST_API void KB_TEST_CALL kb_job_release(kb_job_t *job) {
-  if (job == NULL) {
-    record_failure(91);
-    return;
-  }
-  if (job->terminal_state == 0 && !job->cancelled) {
-    job->cancelled = 1;
-    ++job_cancel_count;
-  }
-  ++job_release_count;
-  free(job);
-}
-
-KB_TEST_API const char *KB_TEST_CALL kb_job_report_json(
-    const kb_job_report_t *report, size_t *size) {
-  if (size != NULL) {
-    *size = 0;
-  }
-  if (report == NULL || report->json == NULL) {
-    return NULL;
-  }
-  if (size != NULL) {
-    *size = strlen(report->json);
-  }
-  return report->json;
-}
-
-KB_TEST_API void KB_TEST_CALL kb_job_report_release(kb_job_report_t *report) {
-  if (report == NULL) {
-    record_failure(92);
-    return;
-  }
-  ++job_report_release_count;
-  free(report->json);
-  free(report);
 }
 
 KB_TEST_API int32_t KB_TEST_CALL kb_update_package_async(

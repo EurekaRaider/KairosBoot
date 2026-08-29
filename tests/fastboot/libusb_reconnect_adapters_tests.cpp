@@ -1133,9 +1133,6 @@ inline constexpr ManifestSourceLocation kLocation{1U, 1U};
 [[nodiscard]] JobPlan one_device_plan() {
     FlashJobManifest manifest{
         .location = kLocation,
-        .api_version = located("kairosboot.io/v1"),
-        .kind = located("FlashJob"),
-        .source_sha256 = {},
         .artifacts = {ManifestArtifact{
             .location = kLocation,
             .id = located("unused"),

@@ -53,6 +53,21 @@ observe_update_progress(const kb_progress_t *progress, void *user_data) {
   return probe->cancel != 0 ? KB_PROGRESS_CANCEL : KB_PROGRESS_CONTINUE;
 }
 
+static kb_status_t KB_CALL reject_batch_start(
+    kb_device_t *device, size_t device_index, void *user_data,
+    kb_operation_t **operation, kb_error_t **error) {
+  (void)device;
+  (void)device_index;
+  (void)user_data;
+  if (operation != NULL) {
+    *operation = NULL;
+  }
+  if (error != NULL) {
+    *error = NULL;
+  }
+  return KB_E_INVALID_ARGUMENT;
+}
+
 int main(void) {
   kb_status_t(KB_CALL *device_flash_file)(
       kb_device_t *, const char *, const char *, const kb_flash_options_t *,
@@ -141,11 +156,13 @@ int main(void) {
   CHECK(strcmp(kb_status_string(KB_E_PROTOCOL), "protocol") == 0);
   CHECK(strcmp(kb_status_string(KB_E_DEVICE_FAIL), "device_fail") == 0);
 
-  kb_job_options_t job_options;
-  kb_job_options_init(&job_options);
-  CHECK(job_options.struct_size == sizeof(job_options));
-  CHECK(job_options.api_version == KB_API_VERSION);
-  CHECK(job_options.timeout_ms == KB_WAIT_INFINITE);
+  kb_device_batch_options_t batch_options;
+  kb_device_batch_options_init(&batch_options);
+  CHECK(batch_options.struct_size == sizeof(batch_options));
+  CHECK(batch_options.api_version == KB_API_VERSION);
+  CHECK(batch_options.timeout_ms == KB_WAIT_INFINITE);
+  CHECK(batch_options.max_parallel_devices == 0);
+  CHECK(batch_options.continue_on_error == 1);
 
   CHECK_CURRENT_INIT_DESIGNATORS(kb_context_options_init,
                                  kb_context_options_t);
@@ -155,7 +172,8 @@ int main(void) {
   CHECK_CURRENT_INIT_DESIGNATORS(kb_update_options_init, kb_update_options_t);
   CHECK_CURRENT_INIT_DESIGNATORS(kb_command_options_init,
                                  kb_command_options_t);
-  CHECK_CURRENT_INIT_DESIGNATORS(kb_job_options_init, kb_job_options_t);
+  CHECK_CURRENT_INIT_DESIGNATORS(kb_device_batch_options_init,
+                                 kb_device_batch_options_t);
   CHECK_CURRENT_INIT_DESIGNATORS(kb_version_init, kb_version_t);
   CHECK(kb_test_legacy_initializer_bounds() == 0);
 
@@ -183,6 +201,52 @@ int main(void) {
   CHECK(strcmp(kb_device_identifier(tcp_device), "tcp:127.0.0.1:1") == 0);
   CHECK(strcmp(kb_device_serial(tcp_device), "") == 0);
   CHECK(strcmp(kb_device_usb_path(tcp_device), "") == 0);
+  CHECK(kb_device_retain(tcp_device) == KB_OK);
+  kb_device_release(tcp_device);
+  CHECK(strcmp(kb_device_identifier(tcp_device), "tcp:127.0.0.1:1") == 0);
+
+  {
+    kb_device_batch_t *batch = (kb_device_batch_t *)(uintptr_t)1;
+    CHECK(kb_device_batch_run_async(NULL, 0, reject_batch_start, NULL, NULL,
+                                    &batch, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(batch == NULL);
+    CHECK(error != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    kb_device_t *duplicates[] = {tcp_device, tcp_device};
+    CHECK(kb_device_batch_run_async(duplicates, 2, reject_batch_start, NULL,
+                                    NULL, &batch, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(batch == NULL);
+    CHECK(error != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    kb_device_t *devices[] = {tcp_device, udp_device};
+    kb_device_batch_report_t *report = NULL;
+    CHECK(kb_device_batch_run(devices, 2, reject_batch_start, NULL, NULL,
+                              &report, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(report != NULL);
+    CHECK(error != NULL);
+    CHECK(kb_device_batch_report_count(report) == 2U);
+    CHECK(kb_device_batch_report_status(report, 0) == KB_E_INVALID_ARGUMENT);
+    CHECK(kb_device_batch_report_status(report, 1) == KB_E_INVALID_ARGUMENT);
+    CHECK(strcmp(kb_device_batch_report_identifier(report, 0),
+                 "tcp:127.0.0.1:1") == 0);
+    CHECK(strcmp(kb_device_batch_report_identifier(report, 1),
+                 "udp:127.0.0.1:1") == 0);
+    size_t report_size = 0U;
+    const char *report_json = kb_device_batch_report_json(report, &report_size);
+    CHECK(report_json != NULL);
+    CHECK(report_size == strlen(report_json));
+    CHECK(strstr(report_json, "\"schemaVersion\":1") != NULL);
+    kb_device_batch_report_release(report);
+    kb_error_release(error);
+    error = NULL;
+  }
 
   {
     kb_context_options_t vendor_options;

@@ -21,9 +21,6 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, EntryPoint = "kb_command_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void CommandOptionsInitSized(ref NativeCommandOptions options, uint structSize);
 
-    [DllImport(LibraryName, EntryPoint = "kb_job_options_init_sized", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void JobOptionsInitSized(ref NativeJobOptions options, uint structSize);
-
     [DllImport(LibraryName, EntryPoint = "kb_version_init_sized", CallingConvention = CallingConvention.Cdecl)]
     internal static extern void VersionInitSized(ref NativeVersion version, uint structSize);
 
@@ -561,71 +558,6 @@ internal static partial class NativeMethods
         ref NativeCommandOptions options,
         out IntPtr operation,
         out IntPtr error);
-
-    [DllImport(LibraryName, EntryPoint = "kb_validate_job_file", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int ValidateJobFile(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
-        out IntPtr error);
-
-    [DllImport(LibraryName, EntryPoint = "kb_plan_job_file", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int PlanJobFile(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
-        out IntPtr plan,
-        out IntPtr error);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_plan_canonical_json", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr JobPlanCanonicalJson(JobPlanSafeHandle plan, out UIntPtr size);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_plan_sha256_hex", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr JobPlanSha256Hex(JobPlanSafeHandle plan);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_plan_release", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void JobPlanRelease(IntPtr plan);
-
-    [DllImport(LibraryName, EntryPoint = "kb_run_job_file_async", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int RunJobFileAsync(
-        ContextSafeHandle context,
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
-        ref NativeJobOptions options,
-        out IntPtr job,
-        out IntPtr error);
-
-    [DllImport(LibraryName, EntryPoint = "kb_run_job_file", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int RunJobFile(
-        ContextSafeHandle context,
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath,
-        ref NativeJobOptions options,
-        out IntPtr report,
-        out IntPtr error);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_wait", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int JobWait(JobSafeHandle job, uint timeoutMilliseconds);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_cancel", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int JobCancel(JobSafeHandle job);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_state", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int JobState(JobSafeHandle job);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_error", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr JobError(JobSafeHandle job);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_get_report", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int JobGetReport(
-        JobSafeHandle job,
-        out IntPtr report,
-        out IntPtr error);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_release", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void JobRelease(IntPtr job);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_report_json", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr JobReportJson(
-        JobReportSafeHandle report,
-        out UIntPtr size);
-
-    [DllImport(LibraryName, EntryPoint = "kb_job_report_release", CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void JobReportRelease(IntPtr report);
 
     [DllImport(LibraryName, EntryPoint = "kb_operation_wait", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int OperationWait(OperationSafeHandle operation, uint timeoutMilliseconds);

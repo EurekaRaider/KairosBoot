@@ -306,9 +306,6 @@ void append_u32(std::string& bytes, const std::uint32_t value) {
     }
     FlashJobManifest manifest{
         .location = kLocation,
-        .api_version = located("kairosboot.io/v1"),
-        .kind = located("FlashJob"),
-        .source_sha256 = Sha256Digest{},
         .artifacts = {ManifestArtifact{
             .location = kLocation,
             .id = located("image"),

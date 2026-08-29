@@ -207,8 +207,7 @@ std::filesystem::path path_from_utf8(const std::string_view value) {
 }
 
 struct GlobalOptions {
-  std::optional<std::string> selector;
-  std::string_view selector_option;
+  std::vector<std::string> selectors;
   bool json{false};
   std::optional<std::uint32_t> timeout_ms;
   std::optional<std::uint16_t> usb_vendor_id;
@@ -623,7 +622,6 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
     }
   }
   int index = 1;
-  bool serial_seen = false;
   bool verbose_seen = false;
   bool dtb_seen = false;
   bool cmdline_seen = false;
@@ -656,16 +654,16 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
       continue;
     }
     if (argument == "-s") {
-      if (serial_seen) {
-        return error("option -s may only be specified once");
-      }
       if (index + 1 >= argc || argv[index + 1][0] == '\0' ||
           std::string_view{argv[index + 1]}.starts_with("--")) {
         return error("option -s requires a non-empty serial or network device");
       }
-      result.global.selector = std::string{argv[index + 1]};
-      result.global.selector_option = argument;
-      serial_seen = true;
+      const std::string selector{argv[index + 1]};
+      if (std::ranges::find(result.global.selectors, selector) !=
+          result.global.selectors.end()) {
+        return error("option -s contains a duplicate device selector");
+      }
+      result.global.selectors.push_back(selector);
       index += 2;
       continue;
     }
@@ -903,9 +901,8 @@ std::expected<Invocation, ParseError> parse_invocation(const int argc,
   }
   const auto reject_device_globals =
       [&]() -> std::optional<std::expected<Invocation, ParseError>> {
-    if (result.global.selector.has_value()) {
-      return error("option " + std::string{result.global.selector_option} +
-                   " is not valid for " + std::string{command});
+    if (!result.global.selectors.empty()) {
+      return error("option -s is not valid for " + std::string{command});
     }
     if (result.global.legacy_boot_options_set) {
       return error("legacy boot layout options are not valid for " +
@@ -1576,10 +1573,10 @@ kairosboot::UpdateOptions update_options(const GlobalOptions &options) {
 }
 
 std::optional<std::string_view> selector_view(const GlobalOptions &options) {
-  if (!options.selector.has_value()) {
+  if (options.selectors.empty()) {
     return std::nullopt;
   }
-  return std::string_view{*options.selector};
+  return std::string_view{options.selectors.front()};
 }
 
 #if defined(_WIN32)
@@ -2562,7 +2559,7 @@ constexpr std::string_view usage_text() noexcept {
          " get_staged OUT_FILE\n\n"
          "options:\n"
          " -w                         Wipe userdata.\n"
-         " -s SERIAL                  Specify a USB device.\n"
+         " -s SERIAL                  Specify a USB device; repeat for a parallel batch.\n"
          " -s tcp|udp:HOST[:PORT]     Specify a network device.\n"
          " -S SIZE[K|M|G]             Set the sparse file limit.\n"
          " --force --slot SLOT --set-active[=SLOT]\n"
@@ -2591,54 +2588,31 @@ bool json_requested(const int, wchar_t **) noexcept {
 }
 #endif
 
-int run_cli(const int argc, char **argv) {
-  const auto invocation = parse_invocation(argc, argv);
-  if (!invocation) {
-    const int result = print_parse_error(invocation.error());
-    if (!invocation.error().json) {
-      print_usage(std::cerr);
-    }
-    return result;
-  }
-
-  if (invocation->global.verbose && !invocation->global.json) {
-    std::cerr << "kairosboot: command=" << command_name(invocation->kind);
-    if (invocation->global.selector.has_value()) {
-      std::cerr << " selector=" << *invocation->global.selector;
-    } else {
-      std::cerr << " selector=auto";
-    }
-    if (invocation->global.usb_vendor_id.has_value()) {
-      std::cerr << " usb-vendor=0x" << std::hex
-                << *invocation->global.usb_vendor_id << std::dec;
-    }
-    std::cerr << '\n';
-  }
-
-  switch (invocation->kind) {
+int run_invocation(const Invocation &invocation) {
+  switch (invocation.kind) {
   case CommandKind::Version:
-    return print_version(invocation->global.json);
+    return print_version(invocation.global.json);
   case CommandKind::Help:
-    return print_help(invocation->global.json);
+    return print_help(invocation.global.json);
   case CommandKind::Devices:
-    return print_devices(invocation->global, invocation->long_listing);
+    return print_devices(invocation.global, invocation.long_listing);
   case CommandKind::Flash:
-    return flash_file(*invocation);
+    return flash_file(invocation);
   case CommandKind::FlashVendorBootRamdisk:
-    return flash_vendor_boot_ramdisk(*invocation);
+    return flash_vendor_boot_ramdisk(invocation);
   case CommandKind::FlashRaw:
-    return flash_raw(*invocation);
+    return flash_raw(invocation);
   case CommandKind::Signature:
-    return signature_file(*invocation);
+    return signature_file(invocation);
   case CommandKind::Update:
   case CommandKind::Flashall:
-    return update_package(*invocation);
+    return update_package(invocation);
   case CommandKind::BootFile:
-    return boot_file(*invocation);
+    return boot_file(invocation);
   case CommandKind::WipeSuper:
-    return wipe_super(*invocation);
+    return wipe_super(invocation);
   case CommandKind::Format:
-    return format_partition(*invocation);
+    return format_partition(invocation);
   case CommandKind::Getvar:
   case CommandKind::Erase:
   case CommandKind::SetActive:
@@ -2648,16 +2622,99 @@ int run_cli(const int argc, char **argv) {
   case CommandKind::Stage:
   case CommandKind::GetStaged:
   case CommandKind::Fetch:
-    return run_typed_command(*invocation);
+    return run_typed_command(invocation);
   case CommandKind::Flashing:
   case CommandKind::Gsi:
   case CommandKind::SnapshotUpdate:
   case CommandKind::CreateLogicalPartition:
   case CommandKind::DeleteLogicalPartition:
   case CommandKind::ResizeLogicalPartition:
-    return run_management_command(*invocation);
+    return run_management_command(invocation);
   }
   return 4;
+}
+
+int run_device_batch(const Invocation &invocation) {
+  if (invocation.kind == CommandKind::GetStaged ||
+      invocation.kind == CommandKind::Fetch) {
+    return print_local_runtime_error(
+        LocalRuntimeError{
+            KB_E_INVALID_ARGUMENT,
+            "repeated -s is not supported for commands that write one host output file"},
+        invocation.global.json);
+  }
+
+  const auto &selectors = invocation.global.selectors;
+  std::vector<int> results(selectors.size(), 4);
+  std::atomic_size_t next_index{0U};
+  const auto worker_count = std::min<std::size_t>(selectors.size(), 32U);
+  std::vector<std::jthread> workers;
+  workers.reserve(worker_count);
+  for (std::size_t worker = 0U; worker < worker_count; ++worker) {
+    workers.emplace_back([&] {
+      for (;;) {
+        const auto index = next_index.fetch_add(1U);
+        if (index >= selectors.size()) {
+          return;
+        }
+        auto device_invocation = invocation;
+        device_invocation.global.selectors = {selectors[index]};
+        results[index] = run_invocation(device_invocation);
+      }
+    });
+  }
+  workers.clear();
+
+  const auto failed = std::ranges::find_if(results, [](const int value) {
+    return value != 0;
+  });
+  return failed == results.end() ? 0 : *failed;
+}
+
+int run_cli(const int argc, char **argv) {
+  const auto parsed = parse_invocation(argc, argv);
+  if (!parsed) {
+    const int result = print_parse_error(parsed.error());
+    if (!parsed.error().json) {
+      print_usage(std::cerr);
+    }
+    return result;
+  }
+  const auto &invocation = *parsed;
+
+  if (invocation.global.verbose && !invocation.global.json) {
+    std::cerr << "kairosboot: command=" << command_name(invocation.kind);
+    if (!invocation.global.selectors.empty()) {
+      std::cerr << " selectors=";
+      for (std::size_t index = 0U;
+           index < invocation.global.selectors.size(); ++index) {
+        if (index != 0U) {
+          std::cerr << ',';
+        }
+        std::cerr << invocation.global.selectors[index];
+      }
+    } else {
+      std::cerr << " selector=auto";
+    }
+    if (invocation.global.usb_vendor_id.has_value()) {
+      std::cerr << " usb-vendor=0x" << std::hex
+                << *invocation.global.usb_vendor_id << std::dec;
+    }
+    std::cerr << '\n';
+  }
+
+  if (invocation.global.selectors.size() > 1U) {
+    if (invocation.kind == CommandKind::Version ||
+        invocation.kind == CommandKind::Help ||
+        invocation.kind == CommandKind::Devices) {
+      return print_local_runtime_error(
+          LocalRuntimeError{KB_E_INVALID_ARGUMENT,
+                            "repeated -s requires a device command"},
+          invocation.global.json);
+    }
+    return run_device_batch(invocation);
+  }
+  return run_invocation(invocation);
 }
 
 } // namespace

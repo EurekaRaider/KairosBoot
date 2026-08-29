@@ -37,7 +37,7 @@ class CompatibilityInventoryTests(unittest.TestCase):
         self.assertEqual(entries["option.verbose"]["spelling"], "--verbose")
 
     def test_checked_outputs_are_exact_and_have_no_unknown_state(self) -> None:
-        inventory, yaml_text = GENERATOR.generate(REPOSITORY_ROOT)
+        inventory = GENERATOR.generate(REPOSITORY_ROOT)
         self.assertFalse(inventory["claimCompatibility"])
         self.assertEqual(
             set(inventory["statusVocabulary"]), GENERATOR.ALLOWED_STATUSES
@@ -45,28 +45,21 @@ class CompatibilityInventoryTests(unittest.TestCase):
         expected_required_gaps: list[str] = []
         self.assertEqual(inventory["requiredGaps"], expected_required_gaps)
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["status"], "partial"
+            inventory["officialDifferentialCoverage"]["status"], "not-run"
         )
         self.assertEqual(
             inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
-            51,
+            0,
         )
         self.assertEqual(
-            inventory["officialDifferentialCoverage"]["matchedScenarios"], 37
+            inventory["officialDifferentialCoverage"]["matchedScenarios"], 0
         )
-        for identifier in expected_required_gaps:
-            self.assertIn(f'  - "{identifier}"\n', yaml_text)
-        self.assertIn("requiredGaps: []\n", yaml_text)
         for entry in inventory["entries"]:
             self.assertIn(entry["status"], GENERATOR.ALLOWED_STATUSES)
             self.assertNotIn("unknown", entry["status"])
         self.assertEqual(
             (REPOSITORY_ROOT / GENERATOR.JSON_OUTPUT).read_text(encoding="utf-8"),
             GENERATOR._canonical_json(inventory),
-        )
-        self.assertEqual(
-            (REPOSITORY_ROOT / GENERATOR.YAML_OUTPUT).read_text(encoding="utf-8"),
-            yaml_text,
         )
 
     def test_frozen_image_inventory_matches_independent_cpp_oracle(self) -> None:
@@ -195,11 +188,9 @@ class CompatibilityInventoryTests(unittest.TestCase):
     def test_manual_generated_file_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = self._fixture_root(Path(raw))
-            inventory, yaml_text = GENERATOR.generate(root)
+            inventory = GENERATOR.generate(root)
             json_path = root / GENERATOR.JSON_OUTPUT
-            yaml_path = root / GENERATOR.YAML_OUTPUT
             json_path.write_text(GENERATOR._canonical_json(inventory), encoding="utf-8")
-            yaml_path.write_text(yaml_text, encoding="utf-8")
             GENERATOR._check_file(json_path, GENERATOR._canonical_json(inventory))
             json_path.write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(GENERATOR.InventoryError, "stale"):
@@ -305,7 +296,7 @@ class CompatibilityInventoryTests(unittest.TestCase):
             with mock.patch.object(
                 GENERATOR, "_repository_commit", return_value=capture_commit
             ):
-                current, _ = GENERATOR.generate(root)
+                current = GENERATOR.generate(root)
             self.assertEqual(
                 current["officialDifferentialCoverage"]["matchedScenarios"], 37
             )
@@ -320,7 +311,7 @@ class CompatibilityInventoryTests(unittest.TestCase):
             with mock.patch.object(
                 GENERATOR, "_repository_commit", return_value="f" * 40
             ):
-                stale, _ = GENERATOR.generate(root)
+                stale = GENERATOR.generate(root)
             self.assertEqual(
                 stale["officialDifferentialCoverage"]["matchedScenarios"], 0
             )
