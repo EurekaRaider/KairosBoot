@@ -155,6 +155,18 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "transport": "tcp", "coverageIds": ["command.continue"],
         "argv": ["continue"], "getvars": [], "commands": ["continue"], "data": [],
     },
+    "official-tcp-erase": {
+        "transport": "tcp", "coverageIds": ["command.erase"],
+        "argv": ["erase", "system"],
+        "getvars": ["has-slot:system", "partition-type:system"],
+        "commands": ["erase:system"], "data": [],
+    },
+    "official-tcp-set-active": {
+        "transport": "tcp",
+        "coverageIds": ["command.set-active", "capability.a-b-slots"],
+        "argv": ["set_active", "b"], "getvars": ["slot-count"],
+        "commands": ["set_active:b"], "data": [],
+    },
     "official-tcp-oem": {
         "transport": "tcp", "coverageIds": ["command.oem"],
         "argv": ["oem", "differential"], "getvars": [],
@@ -301,6 +313,8 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
     "official-scripted-fetch-chunking": ["command.fetch"],
     "official-scripted-reboot-fastboot": ["command.reboot-fastboot"],
+    # Historical captures remain structurally auditable after a candidate is
+    # promoted to a matched scenario. Current captures no longer emit it.
     "official-scripted-erase": ["command.erase"],
     # Retain the old mapping so a stale pre-fix capture remains structurally
     # auditable; current evidence is accepted only from the matched scenarios.
@@ -310,6 +324,7 @@ UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
     "official-scripted-slot-policy": [
         "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
     ],
+    "official-scripted-slot-options": ["option.slot", "option.set-active"],
     "official-scripted-avb-flags": [
         "option.disable-verity", "option.disable-verification",
         "capability.vbmeta-avb-mutation",

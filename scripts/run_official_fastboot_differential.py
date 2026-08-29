@@ -810,6 +810,16 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             coverage_ids=("command.continue",),
         ),
         Scenario(
+            "official-tcp-erase", "tcp", ("erase", "system"),
+            "erase:system", coverage_ids=("command.erase",),
+        ),
+        Scenario(
+            "official-tcp-set-active", "tcp", ("set_active", "b"),
+            "set_active:b",
+            coverage_ids=("command.set-active", "capability.a-b-slots"),
+            variable_values=(("slot-count", "2"),),
+        ),
+        Scenario(
             "official-tcp-oem", "tcp", ("oem", "differential"),
             "oem differential", coverage_ids=("command.oem",),
         ),
@@ -1008,20 +1018,11 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "id": "official-scripted-erase",
-        "coverageIds": ["command.erase"],
+        "id": "official-scripted-slot-options",
+        "coverageIds": ["option.slot", "option.set-active"],
         "reason": (
-            "official Fastboot probes has-slot and partition-type before erase while "
-            "KairosBoot sends the protocol command directly, so strict wire order differs"
-        ),
-    },
-    {
-        "id": "official-scripted-slot-policy",
-        "coverageIds": ["command.set-active", "option.slot", "option.set-active",
-                        "capability.a-b-slots"],
-        "reason": (
-            "official Fastboot probes slot-count before the operation while KairosBoot "
-            "uses a different getvar sequence, so the strict wire event order differs"
+            "the direct set_active command is covered, but flash/update slot-selection "
+            "options require a multi-step device plan beyond this transport scenario"
         ),
     },
     {
