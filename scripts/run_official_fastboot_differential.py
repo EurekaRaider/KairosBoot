@@ -54,6 +54,10 @@ class Scenario:
     kairosboot_arguments: Optional[tuple[str, ...]] = None
     variable_values: tuple[tuple[str, str], ...] = ()
     environment: tuple[tuple[str, str], ...] = ()
+    receive_payload: Optional[bytes] = None
+    output_path: Optional[pathlib.Path] = None
+    output_event_path: Optional[str] = None
+    host_output_kind: Optional[str] = None
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -251,6 +255,7 @@ class WireRecorder:
         ]
         self.expected_data_size: Optional[int] = None
         self.downloaded: Optional[bytes] = None
+        self.pending_responses: list[bytes] = []
         self.finished = False
         self.device_state: dict[str, Any] = {"product": "product_a"}
 
@@ -308,6 +313,26 @@ class WireRecorder:
             return b"OKAY" + message.encode("ascii")
 
         self.events.append({"kind": "COMMAND", "command": command})
+        if self.scenario.receive_payload is not None and (
+            command == "upload" or command.startswith("fetch:")
+        ):
+            received = self.scenario.receive_payload
+            terminal_message = "uploaded" if command == "upload" else "fetched"
+            self.events.append(
+                {
+                    "kind": "DATA",
+                    "direction": "device-to-host",
+                    "size": len(received),
+                    "sha256": hashlib.sha256(received).hexdigest(),
+                }
+            )
+            self.events.append({"kind": "OKAY", "message": terminal_message})
+            self.pending_responses = [
+                received,
+                b"OKAY" + terminal_message.encode("ascii"),
+            ]
+            self._finish_command(command)
+            return f"DATA{len(received):08x}".encode("ascii")
         if command.startswith("download:"):
             encoded_size = command[len("download:") :]
             if re.fullmatch(r"[0-9a-fA-F]{8}", encoded_size) is None:
@@ -401,10 +426,34 @@ class WireRecorder:
         self.finished = True
         return b"FAILunsupported scripted command"
 
+    def take_pending_responses(self) -> list[bytes]:
+        responses = self.pending_responses
+        self.pending_responses = []
+        return responses
+
     def capture(self, exit_code: int) -> dict[str, Any]:
         if not self.finished:
             raise CaptureGateError(
                 f"scenario {self.scenario.identifier} ended before its terminal command"
+            )
+        if self.scenario.output_path is not None:
+            if self.scenario.output_event_path is None:
+                raise CaptureGateError("output scenario has no normalized FILE path")
+            try:
+                output = self.scenario.output_path.read_bytes()
+            except OSError as error:
+                raise CaptureGateError(
+                    f"Fastboot client did not create {self.scenario.output_path}: {error}"
+                ) from error
+            if output != self.scenario.receive_payload:
+                raise CaptureGateError("Fastboot client output differs from device payload")
+            self.events.append(
+                {
+                    "kind": "FILE",
+                    "path": self.scenario.output_event_path,
+                    "size": len(output),
+                    "sha256": hashlib.sha256(output).hexdigest(),
+                }
             )
         self.events.append({"kind": "EXIT", "code": exit_code})
         return {
@@ -460,6 +509,8 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
                 while not recorder.finished:
                     response = recorder.handle(_receive_frame(connection))
                     _send_frame(connection, response)
+                    for pending in recorder.take_pending_responses():
+                        _send_frame(connection, pending)
         except socket.timeout as error:
             process.kill()
             stdout, stderr = process.communicate()
@@ -548,6 +599,8 @@ def _capture_udp(command: Sequence[str], scenario: Scenario, label: str) -> dict
 def capture_scenario(
     command: Sequence[str], scenario: Scenario, label: str
 ) -> dict[str, Any]:
+    if scenario.transport == "host":
+        return _capture_host(command, scenario, label)
     if scenario.transport == "tcp":
         return _capture_tcp(command, scenario, label)
     if scenario.transport == "udp":
@@ -555,13 +608,65 @@ def capture_scenario(
     raise CaptureGateError(f"unknown scenario transport: {scenario.transport}")
 
 
+def _capture_host(
+    command: Sequence[str], scenario: Scenario, label: str
+) -> dict[str, Any]:
+    environment = os.environ.copy()
+    environment.update(scenario.environment)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            env=environment,
+            timeout=PROCESS_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CaptureGateError(f"{label} host command failed: {error}") from error
+    if completed.returncode != 0:
+        raise CaptureGateError(
+            f"{label} host command exited {completed.returncode}: "
+            f"stdout={completed.stdout!r}, stderr={completed.stderr!r}"
+        )
+    try:
+        output = (completed.stdout + completed.stderr).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CaptureGateError(f"{label} host output is not UTF-8") from error
+    output_kind = scenario.host_output_kind
+    if output_kind == "help" and "usage" not in output.lower():
+        raise CaptureGateError(f"{label} help output has no usage text")
+    if output_kind == "version" and (
+        not output.strip() or re.search(r"\d+\.\d+", output) is None
+    ):
+        raise CaptureGateError(f"{label} version output has no version number")
+    if output_kind not in {"devices", "help", "version"}:
+        raise CaptureGateError("host scenario has no supported output contract")
+    return {
+        "id": scenario.identifier,
+        "events": [
+            {
+                "kind": "CLI_PARSE",
+                "argv": list(scenario.arguments),
+                "result": "ok",
+            },
+            {"kind": "TEXT", "message": output_kind},
+            {"kind": "EXIT", "code": completed.returncode},
+        ],
+        "deviceState": {"hostOutputKind": output_kind},
+    }
+
+
 def _aosp_command(binary: pathlib.Path, scenario: Scenario) -> list[str]:
     arguments = scenario.aosp_arguments or scenario.arguments
+    if scenario.transport == "host":
+        return [str(binary), *arguments]
     return [str(binary), "-s", "{endpoint}", *arguments]
 
 
 def _kairosboot_command(binary: pathlib.Path, scenario: Scenario) -> list[str]:
     arguments = scenario.kairosboot_arguments or scenario.arguments
+    if scenario.transport == "host":
+        return [str(binary), *arguments]
     return [
         str(binary),
         "--device",
@@ -599,9 +704,30 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     kernel_path.write_bytes(bytes(index & 0xFF for index in range(2000)))
     ramdisk_path = output_dir / "differential-ramdisk.bin"
     ramdisk_path.write_bytes(b"differential-ramdisk")
+    dtb_path = output_dir / "differential-dtb.bin"
+    dtb_path.write_bytes(bytes(range(64)))
+    receive_payload = b"kairosboot-receive\x00\xff"
+    staged_output = output_dir / "staged-output.bin"
+    fetch_output = output_dir / "vendor-output.img"
     default_system_path = output_dir / "system.img"
     default_system_path.write_bytes(bytes(range(32)))
     return [
+        Scenario(
+            "official-host-devices", "host", ("devices",), "host",
+            coverage_ids=("command.devices",), host_output_kind="devices",
+        ),
+        Scenario(
+            "official-host-help", "host", ("--help",), "host",
+            coverage_ids=("option.help",), host_output_kind="help",
+        ),
+        Scenario(
+            "official-host-help-short", "host", ("-h",), "host",
+            coverage_ids=("option.help-short",), host_output_kind="help",
+        ),
+        Scenario(
+            "official-host-version", "host", ("--version",), "host",
+            coverage_ids=("option.version",), host_output_kind="version",
+        ),
         Scenario(
             "official-tcp-getvar", "tcp", ("getvar", "product"),
             "getvar:product", coverage_ids=("command.getvar", "transport.tcp"),
@@ -676,6 +802,26 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             "download", image_path, ("command.stage",),
             aosp_arguments=("stage", str(image_path)),
             kairosboot_arguments=("stage", str(image_path)),
+        ),
+        Scenario(
+            "official-tcp-get-staged", "tcp",
+            ("get_staged", "<OUTPUT>/stage.bin"), "upload",
+            coverage_ids=("command.get-staged", "protocol.upload"),
+            aosp_arguments=("get_staged", str(staged_output)),
+            kairosboot_arguments=("get-staged", str(staged_output)),
+            receive_payload=receive_payload,
+            output_path=staged_output,
+            output_event_path="<OUTPUT>/stage.bin",
+        ),
+        Scenario(
+            "official-tcp-fetch", "tcp",
+            ("fetch", "vendor", "<OUTPUT>/vendor.img"), "fetch:vendor",
+            coverage_ids=("command.fetch",),
+            aosp_arguments=("fetch", "vendor", str(fetch_output)),
+            kairosboot_arguments=("fetch", "vendor", str(fetch_output)),
+            receive_payload=receive_payload,
+            output_path=fetch_output,
+            output_event_path="<OUTPUT>/vendor.img",
         ),
         Scenario(
             "official-tcp-flashing-get-unlock-ability", "tcp",
@@ -760,6 +906,58 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
                                    "capability.boot-image-construction"),
             aosp_arguments=("boot", str(kernel_path), str(ramdisk_path)),
             kairosboot_arguments=("boot", str(kernel_path), str(ramdisk_path)),
+        ),
+        Scenario(
+            "official-tcp-boot-raw-options", "tcp",
+            (
+                "--base", "0x10000000",
+                "--kernel-offset", "0x00008000",
+                "--ramdisk-offset", "0x01000000",
+                "--tags-offset", "0x00000100",
+                "--page-size", "4096",
+                "--header-version", "2",
+                "--os-version", "13.0.0",
+                "--os-patch-level", "2024-01-05",
+                "--cmdline", "console=ttyS0 differential",
+                "--dtb", "<ARTIFACT>/dtb.bin",
+                "--dtb-offset", "0x01100000",
+                "boot", "<ARTIFACT>/kernel.bin", "<ARTIFACT>/ramdisk.bin",
+            ),
+            "boot",
+            coverage_ids=(
+                "option.base", "option.kernel-offset", "option.ramdisk-offset",
+                "option.tags-offset", "option.page-size", "option.header-version",
+                "option.os-version", "option.os-patch-level", "option.cmdline",
+                "option.dtb", "option.dtb-offset",
+            ),
+            aosp_arguments=(
+                "--base", "0x10000000",
+                "--kernel-offset", "0x00008000",
+                "--ramdisk-offset", "0x01000000",
+                "--tags-offset", "0x00000100",
+                "--page-size", "4096",
+                "--header-version", "2",
+                "--os-version", "13.0.0",
+                "--os-patch-level", "2024-01-05",
+                "--cmdline", "console=ttyS0 differential",
+                "--dtb", str(dtb_path),
+                "--dtb-offset", "0x01100000",
+                "boot", str(kernel_path), str(ramdisk_path),
+            ),
+            kairosboot_arguments=(
+                "--base", "0x10000000",
+                "--kernel-offset", "0x00008000",
+                "--ramdisk-offset", "0x01000000",
+                "--tags-offset", "0x00000100",
+                "--page-size", "4096",
+                "--header-version", "2",
+                "--os-version", "13.0.0",
+                "--os-patch-level", "2024-01-05",
+                "--cmdline", "console=ttyS0 differential",
+                "--dtb", str(dtb_path),
+                "--dtb-offset", "0x01100000",
+                "boot", str(kernel_path), str(ramdisk_path),
+            ),
         ),
         Scenario(
             "official-tcp-flash-raw", "tcp",
@@ -909,6 +1107,8 @@ def _run_capture(arguments: argparse.Namespace) -> int:
     kairosboot_capture = {"schemaVersion": 1, "scenarios": []}
     for scenario in scenarios:
         try:
+            if scenario.output_path is not None:
+                scenario.output_path.unlink(missing_ok=True)
             aosp_capture["scenarios"].append(
                 capture_scenario(
                     _aosp_command(verified.path, scenario),
@@ -916,6 +1116,8 @@ def _run_capture(arguments: argparse.Namespace) -> int:
                     "official Fastboot",
                 )
             )
+            if scenario.output_path is not None:
+                scenario.output_path.unlink(missing_ok=True)
             kairosboot_capture["scenarios"].append(
                 capture_scenario(
                     _kairosboot_command(kairosboot, scenario),

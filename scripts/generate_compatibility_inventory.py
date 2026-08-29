@@ -37,6 +37,22 @@ CLI_SOURCE = Path("cli/main.cpp")
 
 
 MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
+    "official-host-devices": {
+        "transport": "host", "coverageIds": ["command.devices"],
+        "argv": ["devices"], "getvars": [], "commands": [], "data": [],
+    },
+    "official-host-help": {
+        "transport": "host", "coverageIds": ["option.help"],
+        "argv": ["--help"], "getvars": [], "commands": [], "data": [],
+    },
+    "official-host-help-short": {
+        "transport": "host", "coverageIds": ["option.help-short"],
+        "argv": ["-h"], "getvars": [], "commands": [], "data": [],
+    },
+    "official-host-version": {
+        "transport": "host", "coverageIds": ["option.version"],
+        "argv": ["--version"], "getvars": [], "commands": [], "data": [],
+    },
     "official-tcp-getvar": {
         "transport": "tcp",
         "coverageIds": ["command.getvar", "transport.tcp"],
@@ -139,6 +155,17 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["stage", "<ARTIFACT>/stage.bin"], "getvars": [],
         "commands": ["download:00000020"], "data": [["host-to-device", 32]],
     },
+    "official-tcp-get-staged": {
+        "transport": "tcp",
+        "coverageIds": ["command.get-staged", "protocol.upload"],
+        "argv": ["get_staged", "<OUTPUT>/stage.bin"], "getvars": [],
+        "commands": ["upload"], "data": [["device-to-host", 20]],
+    },
+    "official-tcp-fetch": {
+        "transport": "tcp", "coverageIds": ["command.fetch"],
+        "argv": ["fetch", "vendor", "<OUTPUT>/vendor.img"], "getvars": [],
+        "commands": ["fetch:vendor"], "data": [["device-to-host", 20]],
+    },
     "official-tcp-flashing-get-unlock-ability": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-get-unlock-ability"],
@@ -220,6 +247,26 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "getvars": [],
         "commands": ["download:00001800", "boot"],
         "data": [["host-to-device", 6144]],
+    },
+    "official-tcp-boot-raw-options": {
+        "transport": "tcp",
+        "coverageIds": [
+            "option.base", "option.kernel-offset", "option.ramdisk-offset",
+            "option.tags-offset", "option.page-size", "option.header-version",
+            "option.os-version", "option.os-patch-level", "option.cmdline",
+            "option.dtb", "option.dtb-offset",
+        ],
+        "argv": [
+            "--base", "0x10000000", "--kernel-offset", "0x00008000",
+            "--ramdisk-offset", "0x01000000", "--tags-offset", "0x00000100",
+            "--page-size", "4096", "--header-version", "2",
+            "--os-version", "13.0.0", "--os-patch-level", "2024-01-05",
+            "--cmdline", "console=ttyS0 differential",
+            "--dtb", "<ARTIFACT>/dtb.bin", "--dtb-offset", "0x01100000",
+            "boot", "<ARTIFACT>/kernel.bin", "<ARTIFACT>/ramdisk.bin",
+        ],
+        "getvars": [], "commands": ["download:00004000", "boot"],
+        "data": [["host-to-device", 16384]],
     },
     "official-tcp-flash-raw": {
         "transport": "tcp",

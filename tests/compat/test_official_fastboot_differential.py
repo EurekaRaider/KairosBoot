@@ -178,6 +178,10 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             scenarios = self.runner._scenario_catalog(pathlib.Path(raw_directory))
         by_id = {scenario.identifier: scenario for scenario in scenarios}
         expected = {
+            "official-host-devices",
+            "official-host-help",
+            "official-host-help-short",
+            "official-host-version",
             "official-tcp-reboot-recovery",
             "official-tcp-flashing-lock",
             "official-tcp-flashing-unlock",
@@ -188,14 +192,23 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-snapshot-merge",
             "official-tcp-serial-selector",
             "official-tcp-verbose",
+            "official-tcp-get-staged",
+            "official-tcp-fetch",
+            "official-tcp-boot-raw-options",
         }
-        self.assertEqual(len(scenarios), 29)
+        self.assertEqual(len(scenarios), 36)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
                 pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]
             ),
             ["fastboot", "-s", "{endpoint}", "getvar", "product"],
+        )
+        self.assertEqual(
+            self.runner._aosp_command(
+                pathlib.Path("fastboot"), by_id["official-host-version"]
+            ),
+            ["fastboot", "--version"],
         )
         self.assertEqual(
             self.runner._kairosboot_command(
@@ -210,6 +223,53 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "--verbose",
                 "getvar",
                 "product",
+            ],
+        )
+
+    def test_device_to_host_capture_records_exact_payload_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            output = pathlib.Path(raw_directory) / "received.bin"
+            scenario = self.runner.Scenario(
+                "fixture-receive",
+                "tcp",
+                ("get_staged", "<OUTPUT>/received.bin"),
+                "upload",
+                receive_payload=b"a\x00b",
+                output_path=output,
+                output_event_path="<OUTPUT>/received.bin",
+            )
+            recorder = self.runner.WireRecorder(scenario)
+            self.assertEqual(recorder.handle(b"upload"), b"DATA00000003")
+            self.assertEqual(
+                recorder.take_pending_responses(), [b"a\x00b", b"OKAYuploaded"]
+            )
+            output.write_bytes(b"a\x00b")
+            capture = recorder.capture(0)
+        self.assertEqual(
+            [event["kind"] for event in capture["events"]],
+            ["CLI_PARSE", "COMMAND", "DATA", "OKAY", "FILE", "EXIT"],
+        )
+        self.assertEqual(capture["events"][2]["direction"], "device-to-host")
+
+    def test_host_capture_validates_and_normalizes_version_output(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-version",
+            "host",
+            ("--version",),
+            "host",
+            host_output_kind="version",
+        )
+        capture = self.runner._capture_host(
+            [sys.executable, "-c", "print('fixture 1.2.3')"],
+            scenario,
+            "fixture",
+        )
+        self.assertEqual(
+            capture["events"],
+            [
+                {"kind": "CLI_PARSE", "argv": ["--version"], "result": "ok"},
+                {"kind": "TEXT", "message": "version"},
+                {"kind": "EXIT", "code": 0},
             ],
         )
 
@@ -292,6 +352,13 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-snapshot-merge",
                 "official-tcp-serial-selector",
                 "official-tcp-verbose",
+                "official-host-devices",
+                "official-host-help",
+                "official-host-help-short",
+                "official-host-version",
+                "official-tcp-get-staged",
+                "official-tcp-fetch",
+                "official-tcp-boot-raw-options",
             }.issubset(scenario_ids)
         )
         cli_arguments = [
