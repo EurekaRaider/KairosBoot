@@ -22,7 +22,7 @@
   "kairosboot": {
     "releaseArtifactSha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
     "sha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
-    "sourceCommit": "e4765c4ea1dd1b6c6e3ff431b4a0517865704072"
+    "sourceCommit": "0a2a8d1947a2414849398ab352b1ac3471e281c2"
   },
   "result": "matched",
   "scenarios": [
@@ -376,7 +376,6 @@
     {
       "coverageIds": [
         "command.set-active",
-        "option.a",
         "option.slot",
         "option.set-active",
         "capability.a-b-slots"
