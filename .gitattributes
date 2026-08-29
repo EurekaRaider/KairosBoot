@@ -1,3 +1,4 @@
+tests/contracts/job-report-v1.golden.json text eol=lf
 compat/aosp-platform-tools-37.0.1-source-inventory.json text eol=lf
 compat/aosp.lock.json text eol=lf
 compat/generated-inventory.json text eol=lf
