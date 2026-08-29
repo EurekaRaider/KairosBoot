@@ -20,11 +20,11 @@ summary:
     missing: 0
     partial: 0
 officialDifferentialCoverage:
-  status: "not-run"
+  status: "partial"
   requiredEntries: 86
-  requiredEntriesWithEvidence: 0
-  matchedScenarios: 0
-  uncoveredCandidateScenarios: 0
+  requiredEntriesWithEvidence: 51
+  matchedScenarios: 37
+  uncoveredCandidateScenarios: 10
 entries:
   - id: "capability.a-b-slots"
     kind: "image-plan"
@@ -61,7 +61,9 @@ entries:
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
   - id: "capability.dynamic-partitions"
     kind: "image-plan"
     required: true
@@ -109,7 +111,10 @@ entries:
     note: "Raw image download and flash are implemented."
     evidence:
       - "tests/fastboot/primitive_service_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
   - id: "capability.super-image-optimization"
     kind: "image-plan"
     required: true
@@ -174,7 +179,8 @@ entries:
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
   - id: "command.continue"
     kind: "command"
     required: true
@@ -183,7 +189,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue"
   - id: "command.create-logical-partition"
     kind: "command"
     required: true
@@ -192,7 +199,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition"
   - id: "command.delete-logical-partition"
     kind: "command"
     required: true
@@ -201,7 +209,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition"
   - id: "command.devices"
     kind: "command"
     required: true
@@ -210,7 +219,8 @@ entries:
     evidence:
       - "tests/c_api_test.c"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-devices"
   - id: "command.erase"
     kind: "command"
     required: true
@@ -239,7 +249,10 @@ entries:
       - "tests/sparse/sparse_image_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
   - id: "command.flash-raw"
     kind: "command"
     required: true
@@ -253,7 +266,8 @@ entries:
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
       - "scripts/run_official_fastboot_differential.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
   - id: "command.flashall"
     kind: "command"
     required: true
@@ -275,7 +289,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
   - id: "command.flashing-lock"
     kind: "command"
     required: true
@@ -284,7 +299,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-lock"
   - id: "command.flashing-lock-critical"
     kind: "command"
     required: true
@@ -293,7 +309,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-lock-critical"
   - id: "command.flashing-unlock"
     kind: "command"
     required: true
@@ -302,7 +319,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-unlock"
   - id: "command.flashing-unlock-critical"
     kind: "command"
     required: true
@@ -311,7 +329,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-unlock-critical"
   - id: "command.format"
     kind: "command"
     required: true
@@ -332,7 +351,8 @@ entries:
     evidence:
       - "tests/fastboot/file_receive_service_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
   - id: "command.getvar"
     kind: "command"
     required: true
@@ -341,7 +361,9 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
   - id: "command.gsi-disable"
     kind: "command"
     required: true
@@ -350,7 +372,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-disable"
   - id: "command.gsi-status"
     kind: "command"
     required: true
@@ -359,7 +382,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-status"
   - id: "command.gsi-wipe"
     kind: "command"
     required: true
@@ -368,7 +392,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe"
   - id: "command.oem"
     kind: "command"
     required: true
@@ -377,7 +402,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem"
   - id: "command.reboot"
     kind: "command"
     required: true
@@ -386,7 +412,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot"
   - id: "command.reboot-bootloader"
     kind: "command"
     required: true
@@ -395,7 +422,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader"
   - id: "command.reboot-fastboot"
     kind: "command"
     required: true
@@ -413,7 +441,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-recovery"
   - id: "command.resize-logical-partition"
     kind: "command"
     required: true
@@ -443,7 +472,9 @@ entries:
       - "tests/cli/scripted_cli_test.py"
       - "tests/fastboot/primitive_service_tests.cpp"
       - "tests/fastboot/primitive_update_device_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-signature"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature"
   - id: "command.snapshot-cancel"
     kind: "command"
     required: true
@@ -452,7 +483,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel"
   - id: "command.snapshot-merge"
     kind: "command"
     required: true
@@ -461,7 +493,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-merge"
   - id: "command.stage"
     kind: "command"
     required: true
@@ -470,7 +503,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage"
   - id: "command.update"
     kind: "command"
     required: true
@@ -726,7 +760,10 @@ entries:
       - "tests/fastboot/update_executor_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
   - id: "image.system-dlkm"
     kind: "image"
     required: false
@@ -864,7 +901,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.cmdline"
     kind: "option"
     required: true
@@ -874,7 +912,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.device-path"
     kind: "option"
     required: true
@@ -948,7 +987,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.dtb-offset"
     kind: "option"
     required: true
@@ -963,7 +1003,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.exclude-dynamic-partitions"
     kind: "option"
     required: true
@@ -988,7 +1029,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-force"
   - id: "option.fs-options"
     kind: "option"
     required: true
@@ -1017,7 +1059,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.help"
     kind: "option"
     required: true
@@ -1025,7 +1068,8 @@ entries:
     note: "Long help and version options are implemented."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help"
   - id: "option.help-short"
     kind: "option"
     required: true
@@ -1033,7 +1077,8 @@ entries:
     note: "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help-short"
   - id: "option.kernel-offset"
     kind: "option"
     required: true
@@ -1043,7 +1088,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.os-patch-level"
     kind: "option"
     required: true
@@ -1058,7 +1104,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.os-version"
     kind: "option"
     required: true
@@ -1073,7 +1120,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.page-size"
     kind: "option"
     required: true
@@ -1083,7 +1131,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.ramdisk-offset"
     kind: "option"
     required: true
@@ -1093,7 +1142,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.serial"
     kind: "option"
     required: true
@@ -1102,7 +1152,8 @@ entries:
     evidence:
       - "tests/cli/scripted_cli_test.py"
       - "tests/api/device_selector_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-serial-selector"
   - id: "option.set-active"
     kind: "option"
     required: true
@@ -1170,7 +1221,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.unbuffered"
     kind: "option"
     required: true
@@ -1187,7 +1239,8 @@ entries:
     note: "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-verbose"
   - id: "option.version"
     kind: "option"
     required: true
@@ -1195,7 +1248,8 @@ entries:
     note: "Long help and version options are implemented."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-version"
   - id: "option.wipe"
     kind: "option"
     required: true
@@ -1213,7 +1267,10 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
   - id: "protocol.download"
     kind: "protocol"
     required: true
@@ -1222,7 +1279,10 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash"
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
   - id: "protocol.responses"
     kind: "protocol"
     required: true
@@ -1231,7 +1291,8 @@ entries:
     evidence:
       - "tests/protocol/protocol_tests.cpp"
       - "tests/api/operation_state_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-informational-responses"
   - id: "protocol.upload"
     kind: "protocol"
     required: true
@@ -1240,7 +1301,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
   - id: "transport.tcp"
     kind: "transport"
     required: true
@@ -1249,7 +1311,8 @@ entries:
     evidence:
       - "tests/tcp/tcp_fastboot_tests.cpp"
       - "tests/api/c_primitive_tcp_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
   - id: "transport.udp"
     kind: "transport"
     required: true
@@ -1258,7 +1321,8 @@ entries:
     evidence:
       - "tests/udp/udp_fastboot_tests.cpp"
       - "tests/udp/udp_loopback_smoke.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
   - id: "transport.usb"
     kind: "transport"
     required: true

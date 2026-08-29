@@ -78,7 +78,10 @@
       "id": "capability.boot-image-construction",
       "kind": "image-plan",
       "note": "The bounded shared builder emits Android boot headers v0-v4 through C11, C++23, .NET and CLI, and its frozen v0 construction matches Platform-Tools 37.0.1 exact bytes including the zero identity field and raw v0/v1 DTB address template field.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -168,7 +171,11 @@
       "id": "capability.raw-image",
       "kind": "image-plan",
       "note": "Raw image download and flash are implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -291,7 +298,9 @@
       "id": "command.boot",
       "kind": "command",
       "note": "Boot accepts prebuilt and staged images and constructs validated Android boot images v0-v4 across C11, C++23, .NET and CLI; the frozen Platform-Tools 37.0.1 raw boot scenario matches exact DATA bytes, wire events and device state.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw"
+      ],
       "required": true,
       "spelling": "boot",
       "status": "implemented"
@@ -311,7 +320,9 @@
       "id": "command.continue",
       "kind": "command",
       "note": "Continue is exposed on every language surface.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-continue"
+      ],
       "required": true,
       "spelling": "continue",
       "status": "implemented"
@@ -334,7 +345,9 @@
       "id": "command.create-logical-partition",
       "kind": "command",
       "note": "Logical partition management is implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-create-logical-partition"
+      ],
       "required": true,
       "spelling": "create-logical-partition",
       "status": "implemented"
@@ -357,7 +370,9 @@
       "id": "command.delete-logical-partition",
       "kind": "command",
       "note": "Logical partition management is implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-delete-logical-partition"
+      ],
       "required": true,
       "spelling": "delete-logical-partition",
       "status": "implemented"
@@ -376,7 +391,9 @@
       "id": "command.devices",
       "kind": "command",
       "note": "Device enumeration is a first-class public API and CLI command.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-devices"
+      ],
       "required": true,
       "spelling": "devices",
       "status": "implemented"
@@ -440,7 +457,11 @@
       "id": "command.flash",
       "kind": "command",
       "note": "Raw and sparse flashing is implemented, and the CLI reproduces the frozen Platform-Tools 37.0.1 `flash <partition>` fixed-nickname lookup under ANDROID_PRODUCT_OUT. The public C, C++, and .NET file-flash APIs intentionally continue to require an explicit file path; the optional operand is a CLI contract, not a C ABI optional-file parameter.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
       "required": true,
       "spelling": "flash",
       "status": "implemented"
@@ -467,7 +488,9 @@
       "id": "command.flash-raw",
       "kind": "command",
       "note": "Flash-raw constructs validated Android boot images v0-v4 through the shared C ABI and matches the frozen Platform-Tools 37.0.1 raw-flash DATA bytes, wire events and device state.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-raw"
+      ],
       "required": true,
       "spelling": "flash:raw",
       "status": "implemented"
@@ -511,7 +534,9 @@
       "id": "command.flashing-get-unlock-ability",
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-get-unlock-ability"
+      ],
       "required": true,
       "spelling": "flashing get_unlock_ability",
       "status": "implemented"
@@ -531,7 +556,9 @@
       "id": "command.flashing-lock",
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-lock"
+      ],
       "required": true,
       "spelling": "flashing lock",
       "status": "implemented"
@@ -551,7 +578,9 @@
       "id": "command.flashing-lock-critical",
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-lock-critical"
+      ],
       "required": true,
       "spelling": "flashing lock_critical",
       "status": "implemented"
@@ -571,7 +600,9 @@
       "id": "command.flashing-unlock",
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-unlock"
+      ],
       "required": true,
       "spelling": "flashing unlock",
       "status": "implemented"
@@ -591,7 +622,9 @@
       "id": "command.flashing-unlock-critical",
       "kind": "command",
       "note": "All locked flashing subcommands are typed API operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flashing-unlock-critical"
+      ],
       "required": true,
       "spelling": "flashing unlock_critical",
       "status": "implemented"
@@ -640,7 +673,9 @@
       "id": "command.get-staged",
       "kind": "command",
       "note": "The AOSP get-staged command streams the standard upload response to an atomically replaced host file.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
+      ],
       "required": true,
       "spelling": "get_staged",
       "status": "implemented"
@@ -660,7 +695,10 @@
       "id": "command.getvar",
       "kind": "command",
       "note": "Typed getvar is available synchronously and asynchronously.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+      ],
       "required": true,
       "spelling": "getvar",
       "status": "implemented"
@@ -680,7 +718,9 @@
       "id": "command.gsi-disable",
       "kind": "command",
       "note": "GSI wipe, disable, and status are typed operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-disable"
+      ],
       "required": true,
       "spelling": "gsi disable",
       "status": "implemented"
@@ -700,7 +740,9 @@
       "id": "command.gsi-status",
       "kind": "command",
       "note": "GSI wipe, disable, and status are typed operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-status"
+      ],
       "required": true,
       "spelling": "gsi status",
       "status": "implemented"
@@ -720,7 +762,9 @@
       "id": "command.gsi-wipe",
       "kind": "command",
       "note": "GSI wipe, disable, and status are typed operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-gsi-wipe"
+      ],
       "required": true,
       "spelling": "gsi wipe",
       "status": "implemented"
@@ -740,7 +784,9 @@
       "id": "command.oem",
       "kind": "command",
       "note": "OEM passthrough is implemented with a separate raw-command escape hatch.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-oem"
+      ],
       "required": true,
       "spelling": "oem",
       "status": "implemented"
@@ -760,7 +806,9 @@
       "id": "command.reboot",
       "kind": "command",
       "note": "System reboot uses the same spelling and wire command.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot"
+      ],
       "required": true,
       "spelling": "reboot",
       "status": "implemented"
@@ -782,7 +830,9 @@
       "id": "command.reboot-bootloader",
       "kind": "command",
       "note": "The CLI accepts the frozen AOSP top-level reboot spellings; `reboot bootloader` is also accepted as shown by Platform-Tools help.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-bootloader"
+      ],
       "required": true,
       "spelling": "reboot-bootloader",
       "status": "implemented"
@@ -826,7 +876,9 @@
       "id": "command.reboot-recovery",
       "kind": "command",
       "note": "The CLI accepts the frozen AOSP top-level reboot spellings; `reboot bootloader` is also accepted as shown by Platform-Tools help.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-reboot-recovery"
+      ],
       "required": true,
       "spelling": "reboot-recovery",
       "status": "implemented"
@@ -898,7 +950,10 @@
       "id": "command.signature",
       "kind": "command",
       "note": "Format uses the ext4/f2fs filesystem pipeline, signature sends the exact 256-byte payload, and wipe-super performs the fastbootd update-super wipe transaction.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-signature",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-signature"
+      ],
       "required": true,
       "spelling": "signature",
       "status": "implemented"
@@ -918,7 +973,9 @@
       "id": "command.snapshot-cancel",
       "kind": "command",
       "note": "Snapshot cancel and merge are typed operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-cancel"
+      ],
       "required": true,
       "spelling": "snapshot-update cancel",
       "status": "implemented"
@@ -938,7 +995,9 @@
       "id": "command.snapshot-merge",
       "kind": "command",
       "note": "Snapshot cancel and merge are typed operations.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-snapshot-merge"
+      ],
       "required": true,
       "spelling": "snapshot-update merge",
       "status": "implemented"
@@ -958,7 +1017,9 @@
       "id": "command.stage",
       "kind": "command",
       "note": "Stage download is implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-stage"
+      ],
       "required": true,
       "spelling": "stage",
       "status": "implemented"
@@ -1479,7 +1540,11 @@
       "id": "image.system",
       "kind": "image",
       "note": "The two required fallback images are discovered, integrity-bound, slot-resolved and executed by both ZIP and directory update/flashall plans; system also has matched official raw-flash differential evidence.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
       "partition": "system",
       "required": true,
       "status": "implemented"
@@ -1796,7 +1861,9 @@
       "id": "option.base",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--base",
       "status": "implemented"
@@ -1820,7 +1887,9 @@
       "id": "option.cmdline",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--cmdline",
       "status": "implemented"
@@ -1975,7 +2044,9 @@
       "id": "option.dtb",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--dtb",
       "status": "implemented"
@@ -2007,7 +2078,9 @@
       "id": "option.dtb-offset",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--dtb-offset",
       "status": "implemented"
@@ -2065,7 +2138,9 @@
       "id": "option.force",
       "kind": "option",
       "note": "Force bypasses only proven unsafe logical bootloader flash/format guards and ordinary android-info mismatches; package integrity and I/O remain fail-closed. Filesystem flags are validated and translated to the frozen AOSP make_f2fs argument sequence.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-force"
+      ],
       "required": true,
       "spelling": "--force",
       "status": "implemented"
@@ -2130,7 +2205,9 @@
       "id": "option.header-version",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--header-version",
       "status": "implemented"
@@ -2147,7 +2224,9 @@
       "id": "option.help",
       "kind": "option",
       "note": "Long help and version options are implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help"
+      ],
       "required": true,
       "spelling": "--help",
       "status": "implemented"
@@ -2164,7 +2243,9 @@
       "id": "option.help-short",
       "kind": "option",
       "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help-short"
+      ],
       "required": true,
       "spelling": "-h",
       "status": "implemented"
@@ -2188,7 +2269,9 @@
       "id": "option.kernel-offset",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--kernel-offset",
       "status": "implemented"
@@ -2220,7 +2303,9 @@
       "id": "option.os-patch-level",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--os-patch-level",
       "status": "implemented"
@@ -2252,7 +2337,9 @@
       "id": "option.os-version",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--os-version",
       "status": "implemented"
@@ -2276,7 +2363,9 @@
       "id": "option.page-size",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--page-size",
       "status": "implemented"
@@ -2300,7 +2389,9 @@
       "id": "option.ramdisk-offset",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--ramdisk-offset",
       "status": "implemented"
@@ -2318,7 +2409,9 @@
       "id": "option.serial",
       "kind": "option",
       "note": "The CLI uses Fastboot-compatible `-s` selection and `devices -l` long listing for USB paths.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-serial-selector"
+      ],
       "required": true,
       "spelling": "-s",
       "status": "implemented"
@@ -2476,7 +2569,9 @@
       "id": "option.tags-offset",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--tags-offset",
       "status": "implemented"
@@ -2510,7 +2605,9 @@
       "id": "option.verbose",
       "kind": "option",
       "note": "Verbose mode emits a deterministic command, selector, and optional USB vendor diagnostic to stderr without contaminating JSON output.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-verbose"
+      ],
       "required": true,
       "spelling": "--verbose",
       "status": "implemented"
@@ -2527,7 +2624,9 @@
       "id": "option.version",
       "kind": "option",
       "note": "Long help and version options are implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-version"
+      ],
       "required": true,
       "spelling": "--version",
       "status": "implemented"
@@ -2559,7 +2658,11 @@
       "id": "protocol.command",
       "kind": "protocol",
       "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2573,7 +2676,11 @@
       "id": "protocol.download",
       "kind": "protocol",
       "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-flash",
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-flash-default-file"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2587,7 +2694,9 @@
       "id": "protocol.responses",
       "kind": "protocol",
       "note": "Command, DATA download, INFO/TEXT/OKAY/FAIL parsing, cancellation and poisoned-session behavior are covered.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-informational-responses"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2604,7 +2713,9 @@
       "id": "protocol.upload",
       "kind": "protocol",
       "note": "Bounded upload is exposed by the C, C++ and .NET APIs; the Fastboot-compatible CLI exposes it only through the official get_staged and fetch commands.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2618,7 +2729,9 @@
       "id": "transport.tcp",
       "kind": "transport",
       "note": "Boost.Asio TCP transport is covered through the public C API.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-getvar"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2632,7 +2745,9 @@
       "id": "transport.udp",
       "kind": "transport",
       "note": "Boost.Asio UDP v1 transport is implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-udp-getvar"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2659,11 +2774,11 @@
   },
   "inventoryStatus": "generated-known-gaps",
   "officialDifferentialCoverage": {
-    "matchedScenarios": 0,
+    "matchedScenarios": 37,
     "requiredEntries": 86,
-    "requiredEntriesWithEvidence": 0,
-    "status": "not-run",
-    "uncoveredCandidateScenarios": 0
+    "requiredEntriesWithEvidence": 51,
+    "status": "partial",
+    "uncoveredCandidateScenarios": 10
   },
   "requiredGaps": [],
   "schemaVersion": 2,
