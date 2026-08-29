@@ -54,6 +54,35 @@ def check_workflows() -> None:
             if FULL_SHA.fullmatch(ref) is None:
                 fail(f"{workflow.relative_to(ROOT)} must pin actions by full SHA: {value}")
 
+    hil_workflow = workflow_dir / "hil.yml"
+    if hil_workflow.is_file():
+        hil = hil_workflow.read_text(encoding="utf-8")
+        if re.search(r"^\s{2}pull_request\s*:", hil, re.MULTILINE):
+            fail("HIL must never execute untrusted pull-request code")
+        hil_requirements = {
+            "manual protected dispatch": "  workflow_dispatch:",
+            "Linux USB HIL job": "  usb-hil-linux:",
+            "macOS USB HIL job": "  usb-hil-macos:",
+            "Windows USB HIL job": "  usb-hil-windows:",
+            "32-device qualification job": "  qualification-hil:",
+            "Linux self-hosted label": "      - linux",
+            "macOS self-hosted label": "      - macos",
+            "Windows self-hosted label": "      - windows",
+            "qualification lab label": "      - kairosboot-qualification",
+            "platform USB evidence validator": "scripts/validate_usb_hil_evidence.py",
+            "Linux platform identity": "          --os linux",
+            "macOS platform identity": "          --os macos",
+            "Windows platform identity": "          --os windows",
+            "performance and soak evidence validator": "scripts/validate_hil_evidence.py",
+            "Linux aggregate dependency": "      - usb-hil-linux",
+            "macOS aggregate dependency": "      - usb-hil-macos",
+            "Windows aggregate dependency": "      - usb-hil-windows",
+            "qualification aggregate dependency": "      - qualification-hil",
+        }
+        for contract, marker in hil_requirements.items():
+            if marker not in hil:
+                fail(f"HIL workflow is missing {contract}: {marker}")
+
     release_workflow = workflow_dir / "release.yml"
     if release_workflow.is_file():
         release = release_workflow.read_text(encoding="utf-8")

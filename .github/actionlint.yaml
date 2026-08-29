@@ -1,3 +1,4 @@
 self-hosted-runner:
   labels:
     - kairosboot-hil
+    - kairosboot-qualification
