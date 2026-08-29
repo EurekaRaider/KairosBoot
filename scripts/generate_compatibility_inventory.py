@@ -125,11 +125,6 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["reboot", "recovery"], "getvars": [],
         "commands": ["reboot-recovery"], "data": [],
     },
-    "official-tcp-reboot-fastboot": {
-        "transport": "tcp", "coverageIds": ["command.reboot-fastboot"],
-        "argv": ["reboot", "fastboot"], "getvars": [],
-        "commands": ["reboot-fastboot"], "data": [],
-    },
     "official-tcp-continue": {
         "transport": "tcp", "coverageIds": ["command.continue"],
         "argv": ["continue"], "getvars": [], "commands": ["continue"], "data": [],
@@ -244,6 +239,7 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
+    "official-scripted-reboot-fastboot": ["command.reboot-fastboot"],
     "official-scripted-erase": ["command.erase"],
     # Retain the old mapping so a stale pre-fix capture remains structurally
     # auditable; current evidence is accepted only from the matched scenarios.

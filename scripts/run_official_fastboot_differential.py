@@ -54,7 +54,6 @@ class Scenario:
     kairosboot_arguments: Optional[tuple[str, ...]] = None
     variable_values: tuple[tuple[str, str], ...] = ()
     environment: tuple[tuple[str, str], ...] = ()
-    aosp_reconnect_after_terminal: bool = False
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -461,17 +460,6 @@ def _capture_tcp(command: Sequence[str], scenario: Scenario, label: str) -> dict
                 while not recorder.finished:
                     response = recorder.handle(_receive_frame(connection))
                     _send_frame(connection, response)
-            if scenario.aosp_reconnect_after_terminal and label == "official Fastboot":
-                reconnected, _ = listener.accept()
-                with reconnected:
-                    reconnected.settimeout(10)
-                    hello = _receive_exact(reconnected, 4)
-                    if hello != b"FB01":
-                        raise CaptureGateError(
-                            f"unexpected reconnected Fastboot TCP handshake: {hello!r}"
-                        )
-                    reconnected.sendall(hello)
-                    process.wait(timeout=PROCESS_TIMEOUT_SECONDS)
         except CaptureGateError as error:
             process.kill()
             stdout, stderr = process.communicate()
@@ -669,14 +657,6 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             kairosboot_arguments=("reboot", "recovery"),
         ),
         Scenario(
-            "official-tcp-reboot-fastboot", "tcp",
-            ("reboot", "fastboot"), "reboot-fastboot",
-            coverage_ids=("command.reboot-fastboot",),
-            aosp_arguments=("reboot-fastboot",),
-            kairosboot_arguments=("reboot", "fastboot"),
-            aosp_reconnect_after_terminal=True,
-        ),
-        Scenario(
             "official-tcp-continue", "tcp", ("continue",), "continue",
             coverage_ids=("command.continue",),
         ),
@@ -799,6 +779,15 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
 
 
 UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "official-scripted-reboot-fastboot",
+        "coverageIds": ["command.reboot-fastboot"],
+        "reason": (
+            "official Fastboot reconnects after reboot-fastboot and verifies "
+            "getvar:is-userspace, while the current KairosBoot reboot API retires "
+            "the session after the terminal response"
+        ),
+    },
     {
         "id": "official-scripted-erase",
         "coverageIds": ["command.erase"],

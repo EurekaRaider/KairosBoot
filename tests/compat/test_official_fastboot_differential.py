@@ -179,7 +179,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         by_id = {scenario.identifier: scenario for scenario in scenarios}
         expected = {
             "official-tcp-reboot-recovery",
-            "official-tcp-reboot-fastboot",
             "official-tcp-flashing-lock",
             "official-tcp-flashing-unlock",
             "official-tcp-flashing-lock-critical",
@@ -191,11 +190,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-vendor-id",
             "official-tcp-verbose",
         }
-        self.assertEqual(len(scenarios), 31)
+        self.assertEqual(len(scenarios), 30)
         self.assertTrue(expected.issubset(by_id))
-        self.assertTrue(
-            by_id["official-tcp-reboot-fastboot"].aosp_reconnect_after_terminal
-        )
         self.assertEqual(
             self.runner._aosp_command(
                 pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]
@@ -289,7 +285,6 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-boot-raw",
                 "official-tcp-flash-raw",
                 "official-tcp-reboot-recovery",
-                "official-tcp-reboot-fastboot",
                 "official-tcp-flashing-lock",
                 "official-tcp-flashing-unlock",
                 "official-tcp-flashing-lock-critical",
