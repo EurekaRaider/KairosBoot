@@ -1020,8 +1020,8 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "official-scripted-slot-policy",
-        "coverageIds": ["command.set-active", "option.a", "option.slot",
-                        "option.set-active", "capability.a-b-slots"],
+        "coverageIds": ["command.set-active", "option.slot", "option.set-active",
+                        "capability.a-b-slots"],
         "reason": (
             "official Fastboot probes slot-count before the operation while KairosBoot "
             "uses a different getvar sequence, so the strict wire event order differs"

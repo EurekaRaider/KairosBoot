@@ -304,8 +304,7 @@ UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
         "command.boot", "command.flash-raw", "capability.boot-image-construction",
     ],
     "official-scripted-slot-policy": [
-        "command.set-active", "option.a", "option.slot", "option.set-active",
-        "capability.a-b-slots",
+        "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
     ],
     "official-scripted-avb-flags": [
         "option.disable-verity", "option.disable-verification",
