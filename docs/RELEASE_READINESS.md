@@ -1,6 +1,7 @@
 # KairosBoot release readiness
 
-Repository audit baseline: `906c9b25604b62ce61cd647393d11afae3faa773`
+Repository audit refreshed: 2026-08-29. Exact capture commits and artifact
+digests are recorded in the compatibility evidence metadata.
 
 This audit covers R5/R6 release construction and governance contracts that can
 be verified without publishing, signing credentials, GitHub Actions execution,
@@ -23,21 +24,25 @@ or USB hardware. It does not declare KairosBoot v1.0.0 ready.
 
 These gates must remain blocking; none can be inferred from local tests.
 
-1. The capability inventory has no missing or partial entries, but
-   `claimCompatibility` must remain false until official differential evidence
-   covers the required-entry set. The current exact-head Darwin capture matches
-   37 official Platform-Tools 37.0.1 host/TCP/UDP scenarios, covers 51 of 86
-   required entries, and leaves 10 candidate scenarios uncovered.
+1. The capability inventory has no missing or partial entries. The current
+   Darwin Release artifact matches locked Platform-Tools 37.0.1 across 46
+   normalized host/TCP/UDP scenarios, including both bootloader metadata rewrite
+   and fastbootd direct paths for `resize-logical-partition`. Three scenarios
+   remain intentionally outside the transport-only oracle: platform-dependent
+   `format` bytes, device-specific `wipe-super`, and multi-session
+   `update`/`flashall`. `claimCompatibility` remains false until current-source
+   evidence is available on every locked platform and the release policy accepts
+   the required-entry set.
 2. The repository and managed package versions remain `0.1.0-dev`. Change them
    to the final identical version only after functionality and ABI are frozen;
    the release workflow rejects any tag/version mismatch.
-3. The ABI v1 manifest and symbol whitelist are enforced, but the final ABI
-   freeze must occur after all remaining public C API work is complete and then
-   pass on every native target.
-4. CI and Policy passed on exact `main` commit
-   `906c9b25604b62ce61cd647393d11afae3faa773`. Any later compatibility,
-   version, ABI, or release batch must pass both workflows again on its exact
-   merged commit.
+3. The ABI v1 manifest and symbol whitelist are enforced and the public API now
+   uses isolated Device objects plus explicit-device batches. The final ABI
+   freeze must still be tied to the release version and pass on every native
+   target.
+4. The current completion branch has not yet run remote CI by design. CI and
+   Policy must pass once on the exact PR head, and again on the exact merged
+   `main` commit if GitHub creates a different merge commit.
 5. The hardware lab is not configured on the public repository: the
    `KAIROSBOOT_HIL_ENABLED` repository variable was absent and no HIL workflow
    runs existed at the audit time. Configure the protected self-hosted lab and
@@ -57,9 +62,9 @@ These gates must remain blocking; none can be inferred from local tests.
 
 ## Final release sequence
 
-1. Expand official differential coverage to the required-entry set, regenerate
-   the compatibility inventory, freeze the C ABI, and synchronize
-   `version.json` and the managed package version.
+1. Retain the current Darwin differential evidence, run the same 46 scenarios
+   on Linux and Windows in CI, regenerate the compatibility inventory, freeze
+   the C ABI, and synchronize `version.json` and the managed package version.
 2. Merge the reviewed batch to `main`; run the six-platform CI and Policy once
    on that exact head.
 3. Configure and run HIL on the same head, retaining validated evidence for the

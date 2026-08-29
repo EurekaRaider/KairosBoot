@@ -12,13 +12,14 @@
 [![License](https://img.shields.io/badge/license-MIT-00A86B)](LICENSE)
 
 KairosBoot is a host-side library and command-line tool for the standard
-Android Fastboot protocol. Its long-term direction is a single in-process
-runtime for C, C++, .NET, and CLI consumers, with measured high-throughput and
-multi-device operation across Windows, Linux, and macOS.
+Android Fastboot protocol. One in-process runtime serves C, C++, .NET, and CLI
+consumers and supports explicit multi-device operation across Windows, Linux,
+and macOS.
 
-**KairosBoot is in early development.** The current milestone provides the SDK
-foundation, diagnostics, USB enumeration, transport internals, and test
-infrastructure—not a production-ready replacement for AOSP Fastboot.
+**KairosBoot is pre-release software.** The public SDK, Fastboot-compatible CLI,
+USB/TCP/UDP transports, image pipelines, and explicit-device batch model are
+implemented and covered by scripted tests. Real-device HIL, throughput,
+32-device, and 24-hour soak gates are still required before production use.
 
 [Why](#why-kairosboot) | [Status](#current-status) |
 [Quick Start](#quick-start) | [API](#api-surface) |
@@ -53,21 +54,21 @@ have already been delivered or benchmarked.
 
 ## Current Status
 
-The `0.1.0-dev` milestone establishes the public contracts and an experimental
-single-file USB flash path while the broader command set and hardware gates are
-still under development.
+The `0.1.0-dev` milestone implements the software contract while keeping every
+hardware-dependent release claim explicitly blocked.
 
 | Area | Status today |
 |---|---|
-| C11 SDK | Versioned opaque-handle API for version, context, errors, USB device lists, and operation-shaped flash entry points |
+| C11 SDK | Versioned opaque-handle API with one isolated `kb_device_t` per DUT, blocking/async Fastboot operations, and explicit-device batches |
 | C++23 SDK | Header-only, move-only RAII wrapper over the C ABI using `std::expected` |
 | .NET SDK | Thin `net48;net10.0` binding with `SafeHandle`, UTF-8 marshalling, tasks, cancellation, and native error propagation |
 | CLI | Fastboot-compatible command names and options for USB/TCP/UDP flashing, device management, boot images, dynamic partitions, staging, and update/flashall |
 | USB discovery | Public enumeration of Fastboot USB interfaces through the locked libusb runtime |
 | Transport core | Fastboot response state machine plus asynchronous USB and Boost.Asio-based TCP v1 / reliable UDP v1 internals tested independently |
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
-| Flash operations | C, C++23, .NET, and CLI execute cancellable single-device USB download/flash with validated raw or Android sparse inputs |
+| Fastboot operations | C, C++23, .NET, and CLI cover getvar/download/upload, flash/erase/boot/reboot, update/flashall, format, fetch/stage, slots, logical/super, fastbootd, AVB, boot/vendor_boot, snapshot, GSI, flashing, and OEM/raw passthrough |
 | Device batches | C/C++23/.NET APIs accept explicit opened devices; CLI repeats `-s` and runs up to 32 selected devices concurrently |
+| AOSP differential | The current Darwin Release artifact matches locked Platform-Tools 37.0.1 across 46 normalized host/TCP/UDP scenarios; final exact-head Linux and Windows captures remain CI work |
 | Performance and HIL | Acceptance goals are defined; 32-device, throughput, fairness, and soak claims have not been demonstrated yet |
 
 ### Target platforms
@@ -173,7 +174,7 @@ Installed CMake packages export `KairosBoot::C` and `KairosBoot::Cxx`.
 | C++23 | Header-only RAII wrapper using `std::expected`, `std::filesystem`, and a move-only `Device` per DUT; no separate C++ binary ABI |
 | .NET Framework 4.8 | Windows x64 binding using `DllImport`, per-DUT `Device` objects, `SafeHandle`, `Task`, `CancellationToken`, and `IProgress<T>` |
 | .NET 10 | `LibraryImport` binding for `win`, `linux`, and `osx` on x64 and ARM64 |
-| CLI | C++23 consumer of the public wrapper with version, diagnostics, enumeration, and experimental single-file flash commands |
+| CLI | C++23 consumer of the public wrapper using Fastboot-compatible commands and options, including repeated `-s` multi-device execution |
 
 The managed package uses `kairosboot_native` as its internal P/Invoke library
 name to avoid colliding with the managed `KairosBoot.dll` on case-insensitive
@@ -272,6 +273,8 @@ coverage includes:
 - asynchronous libusb runtime and transfer-lifecycle tests
 - TCP v1 and reliable UDP v1 protocol tests
 - sparse-image validation and malformed-input corpus tests
+- byte-exact logical-partition metadata resize tests and normalized comparison
+  against locked Platform-Tools 37.0.1
 - .NET contract and NuGet native-layout tests
 - install-tree and release-packaging smoke tests
 
@@ -281,20 +284,16 @@ gates in the roadmap.
 
 ## Roadmap
 
-The planned work is deliberately separated from the status table above:
+The remaining work is release acceptance rather than another public API model:
 
-1. Extend the integrated USB flash operation to public TCP and UDP session
-   selection, with deterministic cancellation, timeout, poison, drain, and
-   reconnect behavior.
-2. Complete the remaining Fastboot primitives including upload, erase, boot,
-   continue, reboot, getvar, fetch/stage, format, and OEM passthrough.
-3. Add update/flashall, ZIP and sparse pipelines, A/B slots, dynamic/super,
-   fastbootd, AVB, boot/vendor_boot, logical partitions, snapshots, and GSI.
-4. Complete deterministic Device-object batch execution, cancellation,
-   progress, and per-device reports across at least 32 devices.
-5. Tune against measured raw USB ceilings, compare with the pinned AOSP
-   Fastboot baseline, then pass fault-injection, fairness, and 24-hour soak
-   gates on the six target combinations.
+1. Run the final six-platform Release CI matrix and retain exact-head official
+   Fastboot differential artifacts for Darwin, Linux, and Windows.
+2. Pass real USB HIL and fault injection on Windows, Linux, and macOS.
+3. Measure raw bulk ceilings and the pinned AOSP baseline, then demonstrate the
+   single-device and real 32-device throughput/fairness gates.
+4. Complete the 24-hour hardware soak, freeze the final version/ABI, and run
+   the protected unsigned-or-signed Release workflow without weakening any
+   publication gate.
 
 ## Project Layout
 

@@ -14,6 +14,7 @@ handoff notes that described file-driven fleet jobs.
 | USB identity and reconnect | Implemented | `src/fastboot/device_connection.*` exclusively opens the selected interface, records the verified physical identity, probes live product/mode, and creates the sealed reconnect binding used by update operations. |
 | Controller-aware scheduling | Implemented; hardware proof pending | Explicit `DeviceBatch` execution groups USB devices by the root-controller identity captured when each `Device` is opened, gives every device a weighted scheduler flow, and injects scheduler-owned DATA permits into flash, boot, stage/signature, format, update, wipe-super, and reconnect-capable fastbootd sessions. TCP/UDP devices remain independent. Real multi-controller hardware acceptance remains release work. |
 | External task files | Removed | Multi-device execution is expressed only through explicit device objects and batch APIs; no runtime task-file parser, schema, artifact planner, or job actor remains. |
+| AOSP differential | 46 scenarios matched on Darwin | The locked Platform-Tools 37.0.1 Release binary and KairosBoot produce identical normalized traces for 46 host/TCP/UDP scenarios. Logical resize covers both bootloader-side `super` metadata rewrite and fastbootd direct resize. Linux and Windows exact-head captures are produced by final CI. |
 
 ## Local evidence
 
@@ -26,6 +27,10 @@ handoff notes that described file-driven fleet jobs.
 - Repository policy rejects product/runtime task files and rejects restoration
   of the removed manifest/job pipeline. GitHub workflow configuration remains
   under `.github/` because GitHub Actions requires it.
+- The bootloader `resize-logical-partition` path fetches the bounded `super`
+  prefix, validates primary/backup liblp geometry and metadata, emits the same
+  metadata-only sparse image as locked AOSP Fastboot, and flashes `super`.
+  Fastbootd retains the direct protocol command after mode/slot/logical checks.
 
 ## Remaining release acceptance
 
@@ -36,5 +41,7 @@ The remaining gates require external hardware or protected release state:
 3. A real 32-device, multi-root-controller throughput/fairness run.
 4. A 24-hour hardware soak.
 5. Protected Release workflow, signing-policy, and governance verification.
+6. Exact-head Linux and Windows copies of the 46-scenario official Fastboot
+   differential evidence (Darwin is already captured locally).
 
 Unit tests and scripted devices do not substitute for those hardware results.

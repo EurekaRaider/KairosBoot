@@ -576,12 +576,19 @@ kairosboot -s ABC123 --dtb board.dtb \
 kairosboot -s ABC123 create-logical-partition scratch 1073741824
 kairosboot -s ABC123 resize-logical-partition scratch 2147483648
 
+# Enter userspace Fastboot with the canonical Platform-Tools spelling
+kairosboot -s ABC123 reboot fastboot
+
 # Fetch a partition atomically to a file
 kairosboot -s ABC123 fetch vendor_boot vendor_boot.img
 
 # Stage and retrieve data
 kairosboot -s ABC123 stage metadata.bin
 kairosboot -s ABC123 get_staged staged-output.bin</code></pre></div>
+        <div class="callout">
+          <p data-lang="zh"><code>resize-logical-partition</code> 会先判断设备模式。在 fastbootd 中，它经过槽位与 logical 检查后发送标准 resize 命令；在 bootloader 中，它会读取有界的 <code>super</code> 元数据、在 Host 侧校验并调整 liblp 表，然后下载 metadata-only sparse super 并刷写 <code>super</code>。任一校验失败都会在破坏性下载前终止。</p>
+          <p data-lang="en"><code>resize-logical-partition</code> first checks the device mode. In fastbootd it sends the standard resize command after slot and logical checks. In the bootloader it fetches a bounded <code>super</code> metadata prefix, validates and updates the liblp tables on the host, then downloads a metadata-only sparse super image and flashes <code>super</code>. Any validation failure stops before the destructive download.</p>
+        </div>
 
         <h3 data-lang="zh">输出与退出码</h3><h3 data-lang="en">Output and exit codes</h3>
         <p data-lang="zh">CLI 保持 Fastboot 风格的文本输出，不增加 <code>--json</code>。需要结构化结果、进度和报告的自动化应使用 C、C++23 或 .NET API，并始终检查状态码。</p>
@@ -611,7 +618,7 @@ kairosboot -s ABC123 get_staged staged-output.bin</code></pre></div>
             <tr><td><span data-lang="zh">启动镜像</span><span data-lang="en">Boot image</span></td><td><code>boot &lt;kernel&gt; [ramdisk [second]]</code><br><code>flash:raw &lt;partition&gt; &lt;kernel&gt; [ramdisk [second]]</code></td><td><span data-lang="zh">构建并临时启动或刷写 Android boot image</span><span data-lang="en">Build and boot or flash an Android boot image</span></td></tr>
             <tr><td><span data-lang="zh">分区</span><span data-lang="en">Partition</span></td><td><code>erase &lt;partition&gt;</code><br><code>format[:type[:size]] &lt;partition&gt;</code><br><code>set_active &lt;slot&gt;</code></td><td><span data-lang="zh">擦除、格式化与槽位切换</span><span data-lang="en">Erase, format, and switch slots</span></td></tr>
             <tr><td><span data-lang="zh">接收/暂存</span><span data-lang="en">Receive/stage</span></td><td><code>stage &lt;file&gt;</code><br><code>get_staged &lt;output&gt;</code><br><code>fetch &lt;partition&gt; &lt;output&gt;</code></td><td><span data-lang="zh">向设备暂存或把设备数据原子写入 Host 文件</span><span data-lang="en">Stage to the device or atomically publish device data to a host file</span></td></tr>
-            <tr><td><span data-lang="zh">重启</span><span data-lang="en">Reboot</span></td><td><code>reboot [bootloader]</code><br><code>reboot-bootloader</code><br><code>reboot-recovery</code><br><code>reboot-fastboot</code><br><code>continue</code></td><td><span data-lang="zh">使用 AOSP Fastboot 拼写重启或继续启动</span><span data-lang="en">Reboot or continue boot using AOSP Fastboot spellings</span></td></tr>
+            <tr><td><span data-lang="zh">重启</span><span data-lang="en">Reboot</span></td><td><code>reboot [bootloader|fastboot]</code><br><code>reboot-bootloader</code><br><code>reboot-recovery</code><br><code>continue</code></td><td><span data-lang="zh">使用 AOSP Fastboot 拼写重启或继续启动；进入 fastbootd 使用 <code>reboot fastboot</code></span><span data-lang="en">Reboot or continue using AOSP Fastboot spellings; use <code>reboot fastboot</code> to enter fastbootd</span></td></tr>
             <tr><td><span data-lang="zh">安全状态</span><span data-lang="en">Security state</span></td><td><code>flashing &lt;lock|unlock|lock_critical|unlock_critical|get_unlock_ability&gt;</code></td><td><span data-lang="zh">设备锁定状态操作；可能清除数据</span><span data-lang="en">Device lock-state operations; may wipe data</span></td></tr>
             <tr><td><span data-lang="zh">动态系统</span><span data-lang="en">Dynamic system</span></td><td><code>gsi &lt;wipe|disable|status&gt;</code><br><code>snapshot-update &lt;cancel|merge&gt;</code></td><td><span data-lang="zh">GSI 与 snapshot update 管理</span><span data-lang="en">Manage GSI and snapshot updates</span></td></tr>
             <tr><td><span data-lang="zh">逻辑分区</span><span data-lang="en">Logical partition</span></td><td><code>create-logical-partition &lt;partition&gt; &lt;size-bytes&gt;</code><br><code>delete-logical-partition &lt;partition&gt;</code><br><code>resize-logical-partition &lt;partition&gt; &lt;size-bytes&gt;</code></td><td><span data-lang="zh">创建、删除与调整逻辑分区</span><span data-lang="en">Create, delete, and resize logical partitions</span></td></tr>
