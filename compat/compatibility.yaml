@@ -22,9 +22,9 @@ summary:
 officialDifferentialCoverage:
   status: "partial"
   requiredEntries: 86
-  requiredEntriesWithEvidence: 32
-  matchedScenarios: 29
-  uncoveredCandidateScenarios: 9
+  requiredEntriesWithEvidence: 49
+  matchedScenarios: 35
+  uncoveredCandidateScenarios: 10
 entries:
   - id: "capability.a-b-slots"
     kind: "image-plan"
@@ -220,7 +220,8 @@ entries:
     evidence:
       - "tests/c_api_test.c"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-devices"
   - id: "command.erase"
     kind: "command"
     required: true
@@ -352,7 +353,8 @@ entries:
     evidence:
       - "tests/fastboot/file_receive_service_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
   - id: "command.getvar"
     kind: "command"
     required: true
@@ -901,7 +903,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.cmdline"
     kind: "option"
     required: true
@@ -911,7 +914,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.device-path"
     kind: "option"
     required: true
@@ -985,7 +989,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.dtb-offset"
     kind: "option"
     required: true
@@ -1000,7 +1005,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.exclude-dynamic-partitions"
     kind: "option"
     required: true
@@ -1054,7 +1060,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.help"
     kind: "option"
     required: true
@@ -1062,7 +1069,8 @@ entries:
     note: "Long help and version options are implemented."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help"
   - id: "option.help-short"
     kind: "option"
     required: true
@@ -1070,7 +1078,8 @@ entries:
     note: "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help-short"
   - id: "option.kernel-offset"
     kind: "option"
     required: true
@@ -1080,7 +1089,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.os-patch-level"
     kind: "option"
     required: true
@@ -1095,7 +1105,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.os-version"
     kind: "option"
     required: true
@@ -1110,7 +1121,8 @@ entries:
       - "tests/c_api_test.c"
       - "tests/cxx_api_test.cpp"
       - "bindings/dotnet/KairosBoot.ContractTests/Program.cs"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.page-size"
     kind: "option"
     required: true
@@ -1120,7 +1132,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.ramdisk-offset"
     kind: "option"
     required: true
@@ -1130,7 +1143,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.serial"
     kind: "option"
     required: true
@@ -1208,7 +1222,8 @@ entries:
       - "tests/cli/boot_file_cli_test.py"
       - "tests/cli/scripted_cli_test.py"
       - "tests/image/boot_image_builder_tests.cpp"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
   - id: "option.unbuffered"
     kind: "option"
     required: true
@@ -1234,7 +1249,8 @@ entries:
     note: "Long help and version options are implemented."
     evidence:
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-version"
   - id: "option.wipe"
     kind: "option"
     required: true
@@ -1285,7 +1301,8 @@ entries:
     evidence:
       - "tests/api/c_primitive_tcp_tests.cpp"
       - "tests/cli/scripted_cli_test.py"
-    officialDifferentialEvidence: []
+    officialDifferentialEvidence:
+      - "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
   - id: "transport.tcp"
     kind: "transport"
     required: true

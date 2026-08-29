@@ -394,7 +394,9 @@
       "id": "command.devices",
       "kind": "command",
       "note": "Device enumeration is a first-class public API and CLI command.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-devices"
+      ],
       "required": true,
       "spelling": "devices",
       "status": "implemented"
@@ -675,7 +677,9 @@
       "id": "command.get-staged",
       "kind": "command",
       "note": "The AOSP get-staged command streams the standard upload response to an atomically replaced host file.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
+      ],
       "required": true,
       "spelling": "get_staged",
       "status": "implemented"
@@ -1855,7 +1859,9 @@
       "id": "option.base",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--base",
       "status": "implemented"
@@ -1879,7 +1885,9 @@
       "id": "option.cmdline",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--cmdline",
       "status": "implemented"
@@ -2034,7 +2042,9 @@
       "id": "option.dtb",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--dtb",
       "status": "implemented"
@@ -2067,7 +2077,9 @@
       "id": "option.dtb-offset",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--dtb-offset",
       "status": "implemented"
@@ -2191,7 +2203,9 @@
       "id": "option.header-version",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--header-version",
       "status": "implemented"
@@ -2208,7 +2222,9 @@
       "id": "option.help",
       "kind": "option",
       "note": "Long help and version options are implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help"
+      ],
       "required": true,
       "spelling": "--help",
       "status": "implemented"
@@ -2225,7 +2241,9 @@
       "id": "option.help-short",
       "kind": "option",
       "note": "The AOSP -a set-active alias and -h short-help spelling are accepted by the CLI.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-help-short"
+      ],
       "required": true,
       "spelling": "-h",
       "status": "implemented"
@@ -2249,7 +2267,9 @@
       "id": "option.kernel-offset",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--kernel-offset",
       "status": "implemented"
@@ -2282,7 +2302,9 @@
       "id": "option.os-patch-level",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--os-patch-level",
       "status": "implemented"
@@ -2315,7 +2337,9 @@
       "id": "option.os-version",
       "kind": "option",
       "note": "The shared bounded-memory builder emits Android boot headers v0-v4, encodes OS version and patch fields, includes DTB bytes and address only for v2, and rejects unsupported or ignored option combinations. The same --dtb spelling is command-scoped for vendor_boot v3/v4 repacking. C11, C++23, .NET and CLI use the same ABI options.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--os-version",
       "status": "implemented"
@@ -2339,7 +2363,9 @@
       "id": "option.page-size",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--page-size",
       "status": "implemented"
@@ -2363,7 +2389,9 @@
       "id": "option.ramdisk-offset",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--ramdisk-offset",
       "status": "implemented"
@@ -2540,7 +2568,9 @@
       "id": "option.tags-offset",
       "kind": "option",
       "note": "The locked legacy boot layout options are global CLI options and change the constructed v0 image bytes for boot and flash:raw. KairosBoot also exposes --second-offset because its v0 builder supports a second-stage component.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-boot-raw-options"
+      ],
       "required": true,
       "spelling": "--tags-offset",
       "status": "implemented"
@@ -2591,7 +2621,9 @@
       "id": "option.version",
       "kind": "option",
       "note": "Long help and version options are implemented.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-host-version"
+      ],
       "required": true,
       "spelling": "--version",
       "status": "implemented"
@@ -2678,7 +2710,9 @@
       "id": "protocol.upload",
       "kind": "protocol",
       "note": "Bounded upload is exposed by C/C++/.NET and CLI.",
-      "officialDifferentialEvidence": [],
+      "officialDifferentialEvidence": [
+        "compat/evidence/official-differential-37.0.1-darwin/official-capture-metadata.json#official-tcp-get-staged"
+      ],
       "required": true,
       "status": "implemented"
     },
@@ -2737,11 +2771,11 @@
   },
   "inventoryStatus": "generated-known-gaps",
   "officialDifferentialCoverage": {
-    "matchedScenarios": 29,
+    "matchedScenarios": 35,
     "requiredEntries": 86,
-    "requiredEntriesWithEvidence": 32,
+    "requiredEntriesWithEvidence": 49,
     "status": "partial",
-    "uncoveredCandidateScenarios": 9
+    "uncoveredCandidateScenarios": 10
   },
   "requiredGaps": [],
   "schemaVersion": 2,
