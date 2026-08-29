@@ -120,6 +120,16 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["reboot", "bootloader"], "getvars": [],
         "commands": ["reboot-bootloader"], "data": [],
     },
+    "official-tcp-reboot-recovery": {
+        "transport": "tcp", "coverageIds": ["command.reboot-recovery"],
+        "argv": ["reboot", "recovery"], "getvars": [],
+        "commands": ["reboot-recovery"], "data": [],
+    },
+    "official-tcp-reboot-fastboot": {
+        "transport": "tcp", "coverageIds": ["command.reboot-fastboot"],
+        "argv": ["reboot", "fastboot"], "getvars": [],
+        "commands": ["reboot-fastboot"], "data": [],
+    },
     "official-tcp-continue": {
         "transport": "tcp", "coverageIds": ["command.continue"],
         "argv": ["continue"], "getvars": [], "commands": ["continue"], "data": [],
@@ -140,6 +150,28 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["flashing", "get-unlock-ability"], "getvars": [],
         "commands": ["flashing get_unlock_ability"], "data": [],
     },
+    "official-tcp-flashing-lock": {
+        "transport": "tcp", "coverageIds": ["command.flashing-lock"],
+        "argv": ["flashing", "lock"], "getvars": [],
+        "commands": ["flashing lock"], "data": [],
+    },
+    "official-tcp-flashing-unlock": {
+        "transport": "tcp", "coverageIds": ["command.flashing-unlock"],
+        "argv": ["flashing", "unlock"], "getvars": [],
+        "commands": ["flashing unlock"], "data": [],
+    },
+    "official-tcp-flashing-lock-critical": {
+        "transport": "tcp",
+        "coverageIds": ["command.flashing-lock-critical"],
+        "argv": ["flashing", "lock-critical"], "getvars": [],
+        "commands": ["flashing lock_critical"], "data": [],
+    },
+    "official-tcp-flashing-unlock-critical": {
+        "transport": "tcp",
+        "coverageIds": ["command.flashing-unlock-critical"],
+        "argv": ["flashing", "unlock-critical"], "getvars": [],
+        "commands": ["flashing unlock_critical"], "data": [],
+    },
     "official-tcp-create-logical-partition": {
         "transport": "tcp", "coverageIds": ["command.create-logical-partition"],
         "argv": ["create-logical-partition", "differential", "4096"],
@@ -156,10 +188,40 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["gsi", "wipe"], "getvars": [], "commands": ["gsi:wipe"],
         "data": [],
     },
+    "official-tcp-gsi-disable": {
+        "transport": "tcp", "coverageIds": ["command.gsi-disable"],
+        "argv": ["gsi", "disable"], "getvars": [],
+        "commands": ["gsi:disable"], "data": [],
+    },
+    "official-tcp-gsi-status": {
+        "transport": "tcp", "coverageIds": ["command.gsi-status"],
+        "argv": ["gsi", "status"], "getvars": [],
+        "commands": ["gsi:status"], "data": [],
+    },
     "official-tcp-snapshot-cancel": {
         "transport": "tcp", "coverageIds": ["command.snapshot-cancel"],
         "argv": ["snapshot-update", "cancel"], "getvars": [],
         "commands": ["snapshot-update:cancel"], "data": [],
+    },
+    "official-tcp-snapshot-merge": {
+        "transport": "tcp", "coverageIds": ["command.snapshot-merge"],
+        "argv": ["snapshot-update", "merge"], "getvars": [],
+        "commands": ["snapshot-update:merge"], "data": [],
+    },
+    "official-tcp-serial-selector": {
+        "transport": "tcp", "coverageIds": ["option.serial"],
+        "argv": ["--device", "<ENDPOINT>", "getvar", "product"],
+        "getvars": ["product"], "commands": [], "data": [],
+    },
+    "official-tcp-vendor-id": {
+        "transport": "tcp", "coverageIds": ["option.vendor-id"],
+        "argv": ["--vendor-id", "0x18d1", "getvar", "product"],
+        "getvars": ["product"], "commands": [], "data": [],
+    },
+    "official-tcp-verbose": {
+        "transport": "tcp", "coverageIds": ["option.verbose"],
+        "argv": ["--verbose", "getvar", "product"],
+        "getvars": ["product"], "commands": [], "data": [],
     },
     "official-tcp-boot-raw": {
         "transport": "tcp",

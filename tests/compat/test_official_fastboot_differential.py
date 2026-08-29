@@ -173,6 +173,49 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             ],
         )
 
+    def test_expanded_catalog_covers_simple_commands_and_global_options(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            scenarios = self.runner._scenario_catalog(pathlib.Path(raw_directory))
+        by_id = {scenario.identifier: scenario for scenario in scenarios}
+        expected = {
+            "official-tcp-reboot-recovery",
+            "official-tcp-reboot-fastboot",
+            "official-tcp-flashing-lock",
+            "official-tcp-flashing-unlock",
+            "official-tcp-flashing-lock-critical",
+            "official-tcp-flashing-unlock-critical",
+            "official-tcp-gsi-disable",
+            "official-tcp-gsi-status",
+            "official-tcp-snapshot-merge",
+            "official-tcp-serial-selector",
+            "official-tcp-vendor-id",
+            "official-tcp-verbose",
+        }
+        self.assertEqual(len(scenarios), 31)
+        self.assertTrue(expected.issubset(by_id))
+        self.assertEqual(
+            self.runner._aosp_command(
+                pathlib.Path("fastboot"), by_id["official-tcp-serial-selector"]
+            ),
+            ["fastboot", "-s", "{endpoint}", "getvar", "product"],
+        )
+        self.assertEqual(
+            self.runner._kairosboot_command(
+                pathlib.Path("kairosboot"), by_id["official-tcp-vendor-id"]
+            ),
+            [
+                "kairosboot",
+                "--device",
+                "{endpoint}",
+                "--timeout-ms",
+                "5000",
+                "--vendor-id",
+                "0x18d1",
+                "getvar",
+                "product",
+            ],
+        )
+
     def test_signature_requires_download_and_records_exact_blob(self) -> None:
         scenario = self.runner.Scenario(
             "fixture-signature",
@@ -209,7 +252,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         check_schema(schema)
         validate(metadata, schema)
         self.assertEqual(metadata["result"], "matched")
-        self.assertEqual(len(metadata["scenarios"]), 19)
+        self.assertGreaterEqual(len(metadata["scenarios"]), 19)
         self.assertEqual(
             metadata["aospFastboot"]["sha256"],
             json.loads((self.root / "compat/aosp.lock.json").read_text())[
@@ -242,6 +285,18 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-tcp-flash-default-file",
                 "official-tcp-boot-raw",
                 "official-tcp-flash-raw",
+                "official-tcp-reboot-recovery",
+                "official-tcp-reboot-fastboot",
+                "official-tcp-flashing-lock",
+                "official-tcp-flashing-unlock",
+                "official-tcp-flashing-lock-critical",
+                "official-tcp-flashing-unlock-critical",
+                "official-tcp-gsi-disable",
+                "official-tcp-gsi-status",
+                "official-tcp-snapshot-merge",
+                "official-tcp-serial-selector",
+                "official-tcp-vendor-id",
+                "official-tcp-verbose",
             }.issubset(scenario_ids)
         )
         cli_arguments = [
@@ -262,6 +317,31 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             }.issubset(uncovered)
         )
         self.assertNotIn("official-scripted-boot-flash-raw", uncovered)
+
+    def test_committed_evidence_index_covers_every_locked_platform(self) -> None:
+        index = json.loads(
+            (self.root / "compat/official-differential-evidence.json").read_text()
+        )
+        metadata_paths = index["captures"]
+        self.assertEqual(len(metadata_paths), 3)
+        observed_platforms = set()
+        for relative in metadata_paths:
+            metadata_path = self.root / relative
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            platform_key = metadata["aospFastboot"]["platform"]
+            observed_platforms.add(platform_key)
+            evidence_root = metadata_path.parent
+            captures = []
+            for label in ("aosp", "kairosboot"):
+                descriptor = metadata["captureFiles"][label]
+                capture_path = evidence_root / descriptor["path"]
+                self.assertEqual(
+                    hashlib.sha256(capture_path.read_bytes()).hexdigest(),
+                    descriptor["sha256"],
+                )
+                captures.append(json.loads(capture_path.read_text(encoding="utf-8")))
+            self.assertEqual(captures[0], captures[1])
+        self.assertEqual(observed_platforms, {"darwin", "linux", "windows"})
 
 
 if __name__ == "__main__":

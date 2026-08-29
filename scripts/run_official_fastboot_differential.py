@@ -382,10 +382,13 @@ class WireRecorder:
         simple_commands = {
             "reboot", "reboot-bootloader", "reboot-recovery", "reboot-fastboot",
             "continue", "oem differential", "flashing get_unlock_ability",
+            "flashing lock", "flashing unlock", "flashing lock_critical",
+            "flashing unlock_critical",
             "create-logical-partition:differential:4096",
             "delete-logical-partition:differential",
             "resize-logical-partition:differential:8192",
-            "gsi:wipe", "snapshot-update:cancel",
+            "gsi:wipe", "gsi:disable", "gsi:status",
+            "snapshot-update:cancel", "snapshot-update:merge",
         }
         if command in simple_commands:
             commands = self.device_state.setdefault("commands", [])
@@ -647,6 +650,20 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             coverage_ids=("command.reboot-bootloader",),
         ),
         Scenario(
+            "official-tcp-reboot-recovery", "tcp",
+            ("reboot", "recovery"), "reboot-recovery",
+            coverage_ids=("command.reboot-recovery",),
+            aosp_arguments=("reboot-recovery",),
+            kairosboot_arguments=("reboot", "recovery"),
+        ),
+        Scenario(
+            "official-tcp-reboot-fastboot", "tcp",
+            ("reboot", "fastboot"), "reboot-fastboot",
+            coverage_ids=("command.reboot-fastboot",),
+            aosp_arguments=("reboot-fastboot",),
+            kairosboot_arguments=("reboot", "fastboot"),
+        ),
+        Scenario(
             "official-tcp-continue", "tcp", ("continue",), "continue",
             coverage_ids=("command.continue",),
         ),
@@ -669,6 +686,28 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             kairosboot_arguments=("flashing", "get-unlock-ability"),
         ),
         Scenario(
+            "official-tcp-flashing-lock", "tcp", ("flashing", "lock"),
+            "flashing lock", coverage_ids=("command.flashing-lock",),
+        ),
+        Scenario(
+            "official-tcp-flashing-unlock", "tcp", ("flashing", "unlock"),
+            "flashing unlock", coverage_ids=("command.flashing-unlock",),
+        ),
+        Scenario(
+            "official-tcp-flashing-lock-critical", "tcp",
+            ("flashing", "lock-critical"), "flashing lock_critical",
+            coverage_ids=("command.flashing-lock-critical",),
+            aosp_arguments=("flashing", "lock_critical"),
+            kairosboot_arguments=("flashing", "lock-critical"),
+        ),
+        Scenario(
+            "official-tcp-flashing-unlock-critical", "tcp",
+            ("flashing", "unlock-critical"), "flashing unlock_critical",
+            coverage_ids=("command.flashing-unlock-critical",),
+            aosp_arguments=("flashing", "unlock_critical"),
+            kairosboot_arguments=("flashing", "unlock-critical"),
+        ),
+        Scenario(
             "official-tcp-create-logical-partition", "tcp",
             ("create-logical-partition", "differential", "4096"),
             "create-logical-partition:differential:4096",
@@ -685,9 +724,41 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             coverage_ids=("command.gsi-wipe",),
         ),
         Scenario(
+            "official-tcp-gsi-disable", "tcp", ("gsi", "disable"),
+            "gsi:disable", coverage_ids=("command.gsi-disable",),
+        ),
+        Scenario(
+            "official-tcp-gsi-status", "tcp", ("gsi", "status"),
+            "gsi:status", coverage_ids=("command.gsi-status",),
+        ),
+        Scenario(
             "official-tcp-snapshot-cancel", "tcp",
             ("snapshot-update", "cancel"), "snapshot-update:cancel",
             coverage_ids=("command.snapshot-cancel",),
+        ),
+        Scenario(
+            "official-tcp-snapshot-merge", "tcp",
+            ("snapshot-update", "merge"), "snapshot-update:merge",
+            coverage_ids=("command.snapshot-merge",),
+        ),
+        Scenario(
+            "official-tcp-serial-selector", "tcp",
+            ("--device", "<ENDPOINT>", "getvar", "product"),
+            "getvar:product", coverage_ids=("option.serial",),
+            aosp_arguments=("getvar", "product"),
+            kairosboot_arguments=("getvar", "product"),
+        ),
+        Scenario(
+            "official-tcp-vendor-id", "tcp",
+            ("--vendor-id", "0x18d1", "getvar", "product"),
+            "getvar:product", coverage_ids=("option.vendor-id",),
+            aosp_arguments=("-i", "0x18d1", "getvar", "product"),
+            kairosboot_arguments=("--vendor-id", "0x18d1", "getvar", "product"),
+        ),
+        Scenario(
+            "official-tcp-verbose", "tcp",
+            ("--verbose", "getvar", "product"), "getvar:product",
+            coverage_ids=("option.verbose",),
         ),
         Scenario(
             "official-tcp-boot-raw", "tcp",
