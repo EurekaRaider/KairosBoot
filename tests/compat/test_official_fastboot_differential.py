@@ -198,11 +198,12 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-serial-selector",
             "official-tcp-verbose",
             "official-tcp-get-staged",
+            "official-tcp-fetch-chunking",
             "official-tcp-boot-raw-options",
             "official-tcp-flash-force",
             "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 42)
+        self.assertEqual(len(scenarios), 43)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -406,6 +407,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-host-help-short",
                 "official-host-version",
                 "official-tcp-get-staged",
+                "official-tcp-fetch-chunking",
                 "official-tcp-boot-raw-options",
                 "official-tcp-flash-force",
                 "official-tcp-informational-responses",
@@ -435,6 +437,7 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
         self.assertNotIn("official-scripted-slot-options", uncovered)
         self.assertNotIn("official-scripted-avb-flags", uncovered)
         self.assertNotIn("official-scripted-sparse-limit", uncovered)
+        self.assertNotIn("official-scripted-fetch-chunking", uncovered)
 
     def test_committed_evidence_index_covers_every_locked_platform(self) -> None:
         index = json.loads(

@@ -234,6 +234,22 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "argv": ["get_staged", "<OUTPUT>/stage.bin"], "getvars": [],
         "commands": ["upload"], "data": [["device-to-host", 20]],
     },
+    "official-tcp-fetch-chunking": {
+        "transport": "tcp", "coverageIds": ["command.fetch"],
+        "argv": ["fetch", "system", "<OUTPUT>/system.img"],
+        "getvars": [
+            "has-slot:system", "max-fetch-size", "partition-size:system",
+        ],
+        "commands": [
+            "fetch:system:0x00000000:0x00000008",
+            "fetch:system:0x00000008:0x00000008",
+            "fetch:system:0x00000010:0x00000004",
+        ],
+        "data": [
+            ["device-to-host", 8], ["device-to-host", 8],
+            ["device-to-host", 4],
+        ],
+    },
     "official-tcp-flashing-get-unlock-ability": {
         "transport": "tcp",
         "coverageIds": ["command.flashing-get-unlock-ability"],

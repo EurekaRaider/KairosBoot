@@ -60,6 +60,7 @@ class Scenario:
     host_output_kind: Optional[str] = None
     informational_responses: tuple[tuple[str, str], ...] = ()
     terminal_occurrences: int = 1
+    receive_chunks: tuple[bytes, ...] = ()
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -261,6 +262,7 @@ class WireRecorder:
         self.pending_responses: list[bytes] = []
         self.finished = False
         self.terminal_seen = 0
+        self.receive_index = 0
         self.device_state: dict[str, Any] = {"product": "product_a"}
 
     def _finish_command(self, command: str) -> None:
@@ -323,10 +325,20 @@ class WireRecorder:
             return b"OKAY" + message.encode("ascii")
 
         self.events.append({"kind": "COMMAND", "command": command})
-        if self.scenario.receive_payload is not None and (
+        if (self.scenario.receive_payload is not None or
+            self.scenario.receive_chunks) and (
             command == "upload" or command.startswith("fetch:")
         ):
-            received = self.scenario.receive_payload
+            if self.scenario.receive_chunks:
+                if self.receive_index >= len(self.scenario.receive_chunks):
+                    raise CaptureGateError(
+                        "Fastboot client requested more receive chunks than configured"
+                    )
+                received = self.scenario.receive_chunks[self.receive_index]
+                self.receive_index += 1
+            else:
+                assert self.scenario.receive_payload is not None
+                received = self.scenario.receive_payload
             terminal_message = "uploaded" if command == "upload" else "fetched"
             self.events.append(
                 {
@@ -743,6 +755,7 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
     )
     receive_payload = b"kairosboot-receive\x00\xff"
     staged_output = output_dir / "staged-output.bin"
+    fetch_output = output_dir / "fetch-output.bin"
     default_system_path = output_dir / "system.img"
     default_system_path.write_bytes(bytes(range(32)))
     return [
@@ -914,6 +927,22 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             output_event_path="<OUTPUT>/stage.bin",
         ),
         Scenario(
+            "official-tcp-fetch-chunking", "tcp",
+            ("fetch", "system", "<OUTPUT>/system.img"),
+            "fetch:system:0x00000010:0x00000004",
+            coverage_ids=("command.fetch",),
+            aosp_arguments=("fetch", "system", str(fetch_output)),
+            kairosboot_arguments=("fetch", "system", str(fetch_output)),
+            variable_values=(("has-slot:system", "no"),
+                             ("max-fetch-size", "0x8"),
+                             ("partition-size:system", "0x14")),
+            receive_payload=receive_payload,
+            receive_chunks=(receive_payload[:8], receive_payload[8:16],
+                            receive_payload[16:]),
+            output_path=fetch_output,
+            output_event_path="<OUTPUT>/system.img",
+        ),
+        Scenario(
             "official-tcp-flashing-get-unlock-ability", "tcp",
             ("flashing", "get_unlock_ability"),
             "flashing get_unlock_ability",
@@ -1067,15 +1096,6 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
 
 
 UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
-    {
-        "id": "official-scripted-fetch-chunking",
-        "coverageIds": ["command.fetch"],
-        "reason": (
-            "official Fastboot probes has-slot and max-fetch-size and performs "
-            "ranged chunked fetches, while the current no-range KairosBoot CLI "
-            "sends one direct fetch:partition receive command"
-        ),
-    },
     {
         "id": "official-scripted-reboot-fastboot",
         "coverageIds": ["command.reboot-fastboot"],

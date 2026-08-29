@@ -6429,6 +6429,10 @@ kb_status_t KB_CALL kb_fetch_file_async(
           const std::filesystem::path &destination,
           const std::uint64_t maximum_bytes,
           const kairosboot::protocol::TransferProgressObserver &observer) {
+        if (!range.offset.has_value() && !range.size.has_value()) {
+          return files.fetch_partition(
+              partition_copy, destination, maximum_bytes, observer);
+        }
         return files.fetch(partition_copy, range, destination, maximum_bytes,
                            observer);
       },

@@ -1710,10 +1710,20 @@ def run(cli: pathlib.Path) -> None:
         fetch_payload = b"f\x00\xff"
 
         def fetched_data(connection: socket.socket) -> None:
-            assert receive_frame(connection) == b"fetch:vendor"
+            assert receive_frame(connection) == b"getvar:has-slot:vendor"
+            send_frame(connection, b"OKAYno")
+            assert receive_frame(connection) == b"getvar:max-fetch-size"
+            send_frame(connection, b"OKAY0x2")
+            assert receive_frame(connection) == b"getvar:partition-size:vendor"
+            send_frame(connection, b"OKAY0x3")
+            assert receive_frame(connection) == b"fetch:vendor:0x00000000:0x00000002"
             send_frame(connection, b"INFOfetching")
-            send_frame(connection, b"DATA00000003")
-            send_frame(connection, fetch_payload)
+            send_frame(connection, b"DATA00000002")
+            send_frame(connection, fetch_payload[:2])
+            send_frame(connection, b"OKAYfetched")
+            assert receive_frame(connection) == b"fetch:vendor:0x00000002:0x00000001"
+            send_frame(connection, b"DATA00000001")
+            send_frame(connection, fetch_payload[2:])
             send_frame(connection, b"OKAYfetched")
 
         stdout, stderr = invoke(

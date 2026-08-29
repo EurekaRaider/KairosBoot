@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "src/fastboot/file_receive_service.hpp"
+#include "src/fastboot/variable_parser.hpp"
 
+#include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace kairosboot::fastboot {
@@ -163,6 +166,64 @@ namespace {
     };
 }
 
+[[nodiscard]] FileReceiveError fetch_query_error(
+    PrimitiveError error,
+    const std::uint64_t maximum_bytes) {
+    auto result = primitive_error(std::move(error), maximum_bytes);
+    result.operation = PrimitiveOperation::Fetch;
+    return result;
+}
+
+[[nodiscard]] FileReceiveError invalid_fetch_variable(
+    PrimitiveReply reply,
+    std::string message) {
+    return {
+        .code = FileReceiveErrorCode::Protocol,
+        .operation = PrimitiveOperation::Fetch,
+        .phase = protocol::ProtocolPhase::FinalResponse,
+        .message = std::move(message),
+        .device_message = {},
+        .primitive_code = PrimitiveErrorCode::ProtocolViolation,
+        .file_code = std::nullopt,
+        .terminal = std::move(reply.terminal),
+        .informational = std::move(reply.informational),
+        .transport_status = protocol::TransportStatus::Ok,
+        .transport_certainty = protocol::TransferCertainty::FullyTransferred,
+        .outbound_certainty = reply.outbound_certainty,
+        .inbound_expected = reply.inbound_expected,
+        .inbound_transferred = reply.inbound_transferred,
+        .inbound_certainty = reply.inbound_certainty,
+        .native_code = 0,
+        .session_poisoned = false,
+    };
+}
+
+class OffsetTransferSink final : public protocol::ITransferSink {
+public:
+    OffsetTransferSink(
+        std::shared_ptr<protocol::FileTransferSink> sink,
+        const std::uint64_t base) noexcept
+        : sink_(std::move(sink)), base_(base) {}
+
+    [[nodiscard]] protocol::TransferResult write(
+        const std::uint64_t offset,
+        const std::span<const std::byte> source) noexcept override {
+        if (offset > std::numeric_limits<std::uint64_t>::max() - base_) {
+            return {
+                .status = protocol::TransportStatus::IoError,
+                .transferred = 0,
+                .certainty = protocol::TransferCertainty::NotTransferred,
+                .detail = "whole-partition fetch offset overflow",
+            };
+        }
+        return sink_->write(base_ + offset, source);
+    }
+
+private:
+    std::shared_ptr<protocol::FileTransferSink> sink_;
+    std::uint64_t base_{};
+};
+
 }  // namespace
 
 FileReceiveService::FileReceiveService(PrimitiveService& primitives) noexcept
@@ -227,6 +288,140 @@ std::expected<FileReceiveResult, FileReceiveError> FileReceiveService::fetch(
         maximum_bytes,
         primitives_.fetch_to_sink(
             partition, range, *sink, maximum_bytes, observer));
+}
+
+std::expected<FileReceiveResult, FileReceiveError>
+FileReceiveService::fetch_partition(
+    const std::string_view partition,
+    const std::filesystem::path& destination,
+    const std::uint64_t maximum_bytes,
+    const protocol::TransferProgressObserver& observer) {
+    if (maximum_bytes == 0 || maximum_bytes > kMaximumFileReceiveBytes) {
+        return std::unexpected(invalid_maximum(
+            PrimitiveOperation::Fetch, maximum_bytes));
+    }
+
+    std::string resolved_partition(partition);
+    auto has_slot = primitives_.getvar("has-slot:" + resolved_partition);
+    if (!has_slot) {
+        return std::unexpected(fetch_query_error(
+            std::move(has_slot.error()), maximum_bytes));
+    }
+    if (has_slot->terminal.payload == "yes") {
+        auto current_slot = primitives_.getvar("current-slot");
+        if (!current_slot) {
+            return std::unexpected(fetch_query_error(
+                std::move(current_slot.error()), maximum_bytes));
+        }
+        auto slot = std::move(current_slot->terminal.payload);
+        if (!slot.empty() && slot.front() == '_') {
+            slot.erase(slot.begin());
+        }
+        if (slot.empty()) {
+            return std::unexpected(invalid_fetch_variable(
+                std::move(*current_slot),
+                "Fastboot current-slot must not be empty"));
+        }
+        resolved_partition += "_" + slot;
+    } else if (has_slot->terminal.payload != "no") {
+        return std::unexpected(invalid_fetch_variable(
+            std::move(*has_slot),
+            "Fastboot has-slot must be exactly 'yes' or 'no'"));
+    }
+
+    auto maximum_reply = primitives_.getvar("max-fetch-size");
+    if (!maximum_reply) {
+        return std::unexpected(fetch_query_error(
+            std::move(maximum_reply.error()), maximum_bytes));
+    }
+    auto chunk_limit = parse_unsigned_variable(maximum_reply->terminal.payload);
+    if (!chunk_limit.has_value() || *chunk_limit == 0U) {
+        return std::unexpected(invalid_fetch_variable(
+            std::move(*maximum_reply),
+            "Fastboot max-fetch-size must be a positive integer"));
+    }
+    *chunk_limit = std::min<std::uint64_t>(
+        *chunk_limit,
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()));
+
+    auto size_reply =
+        primitives_.getvar("partition-size:" + resolved_partition);
+    if (!size_reply) {
+        return std::unexpected(fetch_query_error(
+            std::move(size_reply.error()), maximum_bytes));
+    }
+    auto partition_size = parse_unsigned_variable(size_reply->terminal.payload);
+    if (!partition_size.has_value() || *partition_size == 0U) {
+        return std::unexpected(invalid_fetch_variable(
+            std::move(*size_reply),
+            "Fastboot partition-size must be a positive integer"));
+    }
+    if (*partition_size > maximum_bytes) {
+        auto error = invalid_maximum(PrimitiveOperation::Fetch, *partition_size);
+        error.message = "Fastboot partition-size exceeds the configured receive limit";
+        return std::unexpected(std::move(error));
+    }
+
+    auto sink = create_sink(PrimitiveOperation::Fetch, destination);
+    if (!sink) {
+        return std::unexpected(std::move(sink.error()));
+    }
+
+    std::uint64_t received = 0U;
+    std::optional<PrimitiveReply> final_reply;
+    while (received < *partition_size) {
+        const auto chunk_size = std::min(
+            *chunk_limit, *partition_size - received);
+        auto offset_sink =
+            std::make_shared<OffsetTransferSink>(*sink, received);
+        protocol::TransferProgressObserver chunk_observer;
+        if (observer) {
+            const auto total_size = *partition_size;
+            chunk_observer =
+                [&observer, received, total_size](
+                    const std::uint64_t completed,
+                    const std::uint64_t)
+                    -> protocol::TransferProgressAction {
+                    return observer(received + completed, total_size);
+                };
+        }
+        auto reply = primitives_.fetch_to_sink(
+            resolved_partition,
+            FetchRange{.offset = received, .size = chunk_size},
+            std::move(offset_sink), chunk_size, chunk_observer);
+        if (!reply) {
+            (*sink)->discard();
+            return std::unexpected(primitive_error(
+                std::move(reply.error()), maximum_bytes));
+        }
+        const auto expected = reply->inbound_expected;
+        const auto bytes_written = (*sink)->bytes_written();
+        if (reply->terminal.kind != protocol::ResponseKind::Okay ||
+            !expected.has_value() || *expected != chunk_size ||
+            reply->inbound_transferred != chunk_size ||
+            reply->inbound_certainty !=
+                protocol::TransferCertainty::FullyTransferred ||
+            bytes_written != received + chunk_size) {
+            (*sink)->discard();
+            return std::unexpected(exact_length_error(
+                PrimitiveOperation::Fetch, std::move(*reply),
+                bytes_written >= received ? bytes_written - received : 0U));
+        }
+        received += chunk_size;
+        final_reply = std::move(*reply);
+    }
+
+    auto sealed = (*sink)->seal(*partition_size);
+    if (!sealed) {
+        (*sink)->discard();
+        return std::unexpected(publish_error(
+            PrimitiveOperation::Fetch, std::move(*final_reply),
+            std::move(sealed.error())));
+    }
+    return FileReceiveResult{
+        .reply = std::move(*final_reply),
+        .bytes_published = *partition_size,
+    };
 }
 
 void FileReceiveService::request_cancel() noexcept {
