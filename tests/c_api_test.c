@@ -190,10 +190,13 @@ int main(void) {
   CHECK(error == NULL);
 
   kb_device_t *tcp_device = NULL;
+  kb_device_t *tcp_duplicate_device = NULL;
   kb_device_t *udp_device = NULL;
   kb_device_t *tcp_default_device = NULL;
   CHECK(kb_device_open(context, "tcp:127.0.0.1:1", &tcp_device, &error) ==
         KB_OK);
+  CHECK(kb_device_open(context, "tcp:127.0.0.1:1", &tcp_duplicate_device,
+                       &error) == KB_OK);
   CHECK(kb_device_open(context, "udp:127.0.0.1:1", &udp_device, &error) ==
         KB_OK);
   CHECK(kb_device_open(context, "tcp:127.0.0.1", &tcp_default_device,
@@ -221,6 +224,16 @@ int main(void) {
           KB_E_INVALID_ARGUMENT);
     CHECK(batch == NULL);
     CHECK(error != NULL);
+    kb_error_release(error);
+    error = NULL;
+
+    kb_device_t *duplicate_targets[] = {tcp_device, tcp_duplicate_device};
+    CHECK(kb_device_batch_run_async(duplicate_targets, 2, reject_batch_start,
+                                    NULL, NULL, &batch, &error) ==
+          KB_E_INVALID_ARGUMENT);
+    CHECK(batch == NULL);
+    CHECK(error != NULL);
+    CHECK(strstr(kb_error_message(error), "physical Device") != NULL);
     kb_error_release(error);
     error = NULL;
 
@@ -827,6 +840,7 @@ int main(void) {
   kb_device_list_release(NULL);
   kb_device_release(tcp_default_device);
   kb_device_release(udp_device);
+  kb_device_release(tcp_duplicate_device);
   kb_device_release(tcp_device);
   kb_context_release(context);
   return 0;

@@ -85,6 +85,7 @@ struct kb_device {
   std::string identifier;
   std::string serial;
   std::string usb_path;
+  std::string root_controller_id;
 };
 
 struct kb_device_info {
@@ -114,6 +115,52 @@ struct kb_operation {
   mutable std::mutex error_mutex;
   mutable std::unique_ptr<kb_error> public_error;
 };
+
+namespace kairosboot::api {
+
+namespace {
+thread_local std::optional<DeviceBatchTransferPermits>
+    g_device_batch_transfer_permits;
+}
+
+ScopedDeviceBatchTransferPermits::ScopedDeviceBatchTransferPermits(
+    kb_device_t* const device,
+    std::shared_ptr<transport::TransferPermitProvider> provider,
+    const transport::TransferRingConfig config) noexcept
+    : previous_(std::move(g_device_batch_transfer_permits)) {
+  g_device_batch_transfer_permits = DeviceBatchTransferPermits{
+      .device = device,
+      .provider = std::move(provider),
+      .config = config,
+  };
+}
+
+ScopedDeviceBatchTransferPermits::~ScopedDeviceBatchTransferPermits() {
+  g_device_batch_transfer_permits = std::move(previous_);
+}
+
+DeviceBatchSchedulingInfo device_batch_scheduling_info(
+    const kb_device_t* const device) {
+  if (device == nullptr) {
+    return {};
+  }
+  return {
+      .device_key = device->selector,
+      .controller_id = device->root_controller_id,
+  };
+}
+
+std::optional<DeviceBatchTransferPermits>
+current_device_batch_transfer_permits(
+    const kb_device_t* const device) noexcept {
+  if (!g_device_batch_transfer_permits.has_value() ||
+      g_device_batch_transfer_permits->device != device) {
+    return std::nullopt;
+  }
+  return g_device_batch_transfer_permits;
+}
+
+}  // namespace kairosboot::api
 
 namespace {
 
@@ -1081,6 +1128,25 @@ using UpdateClock = std::chrono::steady_clock;
   };
 }
 
+[[nodiscard]] std::optional<kairosboot::api::OperationErrorPayload>
+configure_batch_transfer_permits(
+    kairosboot::fastboot::PrimitiveService &service,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits> &binding,
+    const std::string_view identifier) {
+  if (!binding.has_value()) {
+    return std::nullopt;
+  }
+  if (binding->provider == nullptr ||
+      !service.configure_transfer_permits(binding->provider,
+                                          binding->config)) {
+    return update_error(
+        KB_E_INTERNAL,
+        "USB transport rejected the DeviceBatch DATA scheduler binding",
+        identifier);
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] kairosboot::api::OperationErrorPayload vbmeta_error(
     const kairosboot::image::VbmetaFlagError &error,
     const std::string_view identifier) {
@@ -1373,6 +1439,27 @@ std::string physical_usb_path(
     result += std::to_string(device.port_path[index]);
   }
   return result;
+}
+
+std::string usb_root_controller_id(
+    const kairosboot::transport::UsbDeviceInfo &device) {
+  if (device.linux_topology.has_value() &&
+      !device.linux_topology->root_controller_id.empty()) {
+    return device.linux_topology->root_controller_id;
+  }
+  if (device.windows_topology.has_value() &&
+      !device.windows_topology->root_controller_id.empty()) {
+    return device.windows_topology->root_controller_id;
+  }
+  if (device.macos_topology.has_value() &&
+      !device.macos_topology->root_controller_id.empty()) {
+    return device.macos_topology->root_controller_id;
+  }
+
+  // Topology enrichment can be unavailable on restricted hosts. A libusb bus
+  // is the narrowest conservative fallback: devices on the same visible bus
+  // still share arbitration instead of bypassing the global memory budget.
+  return "libusb-bus:" + std::to_string(device.bus_number);
 }
 
 const char *device_field(const kb_device_list_t *devices, size_t index,
@@ -2252,10 +2339,13 @@ kb_status_t start_primitive_async(
     if (!target) {
       return fail(error, target.error());
     }
+    auto transfer_permits =
+        kairosboot::api::current_device_batch_transfer_permits(device);
     auto copied_options = command_options_or_default(options);
     auto identifier = target->selector.identifier;
     auto task = [operation_lease = std::move(operation_lease),
                  target = std::move(*target), copied_options,
+                 transfer_permits = std::move(transfer_permits),
                  executor = std::move(executor),
                  identifier = std::move(identifier)](
                     kairosboot::api::OperationState::TaskContext &task_context)
@@ -2275,6 +2365,10 @@ kb_status_t start_primitive_async(
       kairosboot::protocol::FastbootSession session(
           std::move(*transport), session_options);
       kairosboot::fastboot::PrimitiveService service(session);
+      if (auto configured = configure_batch_transfer_permits(
+              service, transfer_permits, identifier)) {
+        return operation_failure(std::move(*configured));
+      }
       auto cancellation = task_context.register_cancellation_hook(
           [&service] { service.request_cancel(); });
       auto executed = executor(
@@ -2830,13 +2924,37 @@ struct PreparedPublicUpdateDevice final {
   kairosboot::fastboot::PrimitiveService *service{};
 };
 
+[[nodiscard]] std::expected<void, kairosboot::api::OperationErrorPayload>
+configure_public_update_batch_permits(
+    PreparedPublicUpdateDevice &device,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits> &binding,
+    const std::string_view identifier) {
+  if (!binding.has_value()) {
+    return {};
+  }
+  if (binding->provider == nullptr || device.update_device == nullptr) {
+    return std::unexpected(update_error(
+        KB_E_INTERNAL, "DeviceBatch DATA scheduler binding is incomplete",
+        identifier));
+  }
+  auto configured = device.update_device->configure_transfer_permits(
+      binding->provider, binding->config);
+  if (!configured) {
+    return std::unexpected(
+        public_update_device_error(configured.error(), identifier));
+  }
+  return {};
+}
+
 [[nodiscard]] std::expected<PreparedPublicUpdateDevice,
                             kairosboot::api::OperationErrorPayload>
 prepare_public_update_device(
     const PreparedTarget &target, const std::uint32_t timeout_ms,
     const UpdateClock::time_point deadline,
     const std::stop_token cancellation,
-    kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options) {
+    kairosboot::fastboot::PrimitiveUpdateDeviceOptions device_options,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits>
+        &transfer_permits) {
   try {
     PreparedPublicUpdateDevice result;
     if (target.selector.kind == kairosboot::api::DeviceSelectorKind::Tcp ||
@@ -2861,6 +2979,11 @@ prepare_public_update_device(
           std::make_unique<kairosboot::fastboot::PrimitiveUpdateDevice>(
               *result.direct_service, std::move(device_options));
       result.service = result.direct_service.get();
+      if (auto configured = configure_public_update_batch_permits(
+              result, transfer_permits, target.selector.identifier);
+          !configured) {
+        return std::unexpected(std::move(configured.error()));
+      }
       return result;
     }
 
@@ -2900,6 +3023,11 @@ prepare_public_update_device(
           std::make_unique<kairosboot::fastboot::PrimitiveUpdateDevice>(
               *result.direct_service, std::move(device_options));
       result.service = result.direct_service.get();
+      if (auto configured = configure_public_update_batch_permits(
+              result, transfer_permits, target.selector.identifier);
+          !configured) {
+        return std::unexpected(std::move(configured.error()));
+      }
       return result;
     }
 
@@ -2943,6 +3071,11 @@ prepare_public_update_device(
     result.update_device = std::move(*device);
     result.service =
         &result.update_device->current_service_for_fleet_actor();
+    if (auto configured = configure_public_update_batch_permits(
+            result, transfer_permits, target.selector.identifier);
+        !configured) {
+      return std::unexpected(std::move(configured.error()));
+    }
     return result;
   } catch (const std::bad_alloc &) {
     return std::unexpected(update_error(
@@ -2962,6 +3095,8 @@ prepare_public_update_device(
     const UpdateClock::time_point deadline,
     const kb_update_options_t &options,
     const SlotPolicy &slot_policy,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits>
+        &transfer_permits,
     kairosboot::api::OperationState::TaskContext &task_context) {
   auto identifier = selector.identifier;
   if (task_context.cancel_requested() ||
@@ -3030,7 +3165,7 @@ prepare_public_update_device(
   };
   auto public_device = prepare_public_update_device(
       *target, *open_timeout, deadline, task_context.cancellation_token(),
-      std::move(device_options));
+      std::move(device_options), transfer_permits);
   if (!public_device) {
     return operation_failure(std::move(public_device.error()));
   }
@@ -3138,11 +3273,14 @@ kb_status_t start_flash_source_async(
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
+  auto transfer_permits =
+      kairosboot::api::current_device_batch_transfer_permits(&device);
 
   auto selected_identifier = prepared_target->selector.identifier;
   std::string partition_copy{partition};
   auto task = [operation_lease = std::move(operation_lease),
                target = std::move(*prepared_target),
+               transfer_permits = std::move(transfer_permits),
                image_source = std::move(image_source),
                partition_copy = std::move(partition_copy), flash_options,
                slot_policy = std::move(slot_policy),
@@ -3199,6 +3337,10 @@ kb_status_t start_flash_source_async(
     kairosboot::protocol::FastbootSession session(
         std::move(protocol_transport), session_options);
     kairosboot::fastboot::PrimitiveService service(session);
+    if (auto configured = configure_batch_transfer_permits(
+            service, transfer_permits, selected_identifier)) {
+      return operation_failure(std::move(*configured));
+    }
     auto cancellation = task_context.register_cancellation_hook(
         [&service] { service.request_cancel(); });
 
@@ -3499,12 +3641,15 @@ kb_status_t start_vendor_boot_ramdisk_async(
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
+  auto transfer_permits =
+      kairosboot::api::current_device_batch_transfer_permits(&device);
 
   std::string partition_copy{partition};
   std::string ramdisk_name_copy{ramdisk_name};
   auto selected_identifier = prepared_target->selector.identifier;
   auto task = [operation_lease = std::move(operation_lease),
                target = std::move(*prepared_target),
+               transfer_permits = std::move(transfer_permits),
                partition_copy = std::move(partition_copy),
                ramdisk_name_copy = std::move(ramdisk_name_copy),
                new_ramdisk = std::move(new_ramdisk),
@@ -3533,6 +3678,10 @@ kb_status_t start_vendor_boot_ramdisk_async(
     kairosboot::protocol::FastbootSession session(std::move(*opened),
                                                    session_options);
     kairosboot::fastboot::PrimitiveService service(session);
+    if (auto configured = configure_batch_transfer_permits(
+            service, transfer_permits, selected_identifier)) {
+      return operation_failure(std::move(*configured));
+    }
     auto cancellation = task_context.register_cancellation_hook(
         [&service] { service.request_cancel(); });
 
@@ -3856,6 +4005,8 @@ kb_status_t start_vendor_boot_ramdisk_async(
     const std::filesystem::path &package_path,
     const kb_update_options_t &options,
     const SlotPolicy &slot_policy,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits>
+        &transfer_permits,
     kairosboot::api::OperationState::TaskContext &task_context) {
   const auto identifier = selector.identifier;
   auto deadline =
@@ -3893,7 +4044,7 @@ kb_status_t start_vendor_boot_ramdisk_async(
   }
   return execute_prepared_public_update(
       usb_state, std::move(selector), std::move(*prepared), *deadline, options,
-      slot_policy, task_context);
+      slot_policy, transfer_permits, task_context);
 }
 
 [[nodiscard]] kairosboot::api::OperationOutcome run_public_wipe_super(
@@ -3901,6 +4052,8 @@ kb_status_t start_vendor_boot_ramdisk_async(
     kairosboot::api::DeviceSelector selector,
     const std::filesystem::path &super_empty_image,
     const kb_update_options_t &options,
+    const std::optional<kairosboot::api::DeviceBatchTransferPermits>
+        &transfer_permits,
     kairosboot::api::OperationState::TaskContext &task_context) {
   const auto identifier = selector.identifier;
   auto deadline =
@@ -3923,7 +4076,7 @@ kb_status_t start_vendor_boot_ramdisk_async(
   }
   return execute_prepared_public_update(
       usb_state, std::move(selector), std::move(*prepared), *deadline, options,
-      SlotPolicy{}, task_context);
+      SlotPolicy{}, transfer_permits, task_context);
 }
 
 kb_status_t start_boot_source_async(
@@ -3948,10 +4101,13 @@ kb_status_t start_boot_source_async(
   if (!prepared_target) {
     return fail(error, prepared_target.error());
   }
+  auto transfer_permits =
+      kairosboot::api::current_device_batch_transfer_permits(&device);
 
   auto selected_identifier = prepared_target->selector.identifier;
   auto task = [operation_lease = std::move(operation_lease),
                target = std::move(*prepared_target),
+               transfer_permits = std::move(transfer_permits),
                image_source = std::move(image_source), boot_options,
                selected_identifier = std::move(selected_identifier)](
                   kairosboot::api::OperationState::TaskContext
@@ -3987,6 +4143,10 @@ kb_status_t start_boot_source_async(
     kairosboot::protocol::FastbootSession session(
         std::move(protocol_transport), session_options);
     kairosboot::fastboot::PrimitiveService service(session);
+    if (auto configured = configure_batch_transfer_permits(
+            service, transfer_permits, selected_identifier)) {
+      return operation_failure(std::move(*configured));
+    }
     auto cancellation = task_context.register_cancellation_hook(
         [&service] { service.request_cancel(); });
 
@@ -4256,6 +4416,8 @@ kb_status_t KB_CALL kb_device_open(kb_context_t *context,
       }
       result->selector = result->usb_path;
       result->serial = target->usb_device->serial_utf8;
+      result->root_controller_id =
+          usb_root_controller_id(*target->usb_device);
     } else {
       result->selector = target->selector.identifier;
     }
@@ -5088,17 +5250,20 @@ kb_status_t KB_CALL kb_update_package_async(
     auto native_package_path =
         std::filesystem::absolute(utf8_path(package_path_view));
     auto usb_state = device->context.usb_state;
+    auto transfer_permits =
+        kairosboot::api::current_device_batch_transfer_permits(device);
     auto task = [operation_lease = std::move(operation_lease),
                  usb_state = std::move(usb_state),
                  selector = std::move(*selector),
                  package = std::move(native_package_path),
+                 transfer_permits = std::move(transfer_permits),
                  copied_options = std::move(*copied_options)](
                     kairosboot::api::OperationState::TaskContext &task_context)
         mutable -> kairosboot::api::OperationOutcome {
       static_cast<void>(operation_lease);
       return run_prepared_public_update(
           usb_state, std::move(selector), package, copied_options.native,
-          copied_options.slot_policy, task_context);
+          copied_options.slot_policy, transfer_permits, task_context);
     };
     auto result = std::make_unique<kb_operation>(std::move(task));
     if (!result->state->start()) {
@@ -5200,16 +5365,20 @@ kb_status_t KB_CALL kb_wipe_super_async(
     auto native_image_path =
         std::filesystem::absolute(utf8_path(image_path));
     auto usb_state = device->context.usb_state;
+    auto transfer_permits =
+        kairosboot::api::current_device_batch_transfer_permits(device);
     auto task = [operation_lease = std::move(operation_lease),
                  usb_state = std::move(usb_state),
                  selector = std::move(*selector),
                  image = std::move(native_image_path),
+                 transfer_permits = std::move(transfer_permits),
                  copied_options = std::move(*copied_options)](
                     kairosboot::api::OperationState::TaskContext &task_context)
         mutable -> kairosboot::api::OperationOutcome {
       static_cast<void>(operation_lease);
       return run_public_wipe_super(usb_state, std::move(selector), image,
-                                   copied_options.native, task_context);
+                                   copied_options.native, transfer_permits,
+                                   task_context);
     };
     auto result = std::make_unique<kb_operation>(std::move(task));
     if (!result->state->start()) {
@@ -5380,6 +5549,8 @@ kb_status_t KB_CALL kb_format_partition_async(
     const auto format_options = flash_options_or_default(options_or_null);
     auto selected_identifier = prepared_target->selector.identifier;
     std::string partition_copy{partition};
+    auto transfer_permits =
+        kairosboot::api::current_device_batch_transfer_permits(device);
 
     auto task = [operation_lease = std::move(operation_lease),
                  target = std::move(*prepared_target),
@@ -5387,6 +5558,7 @@ kb_status_t KB_CALL kb_format_partition_async(
                  partition_copy = std::move(partition_copy),
                  type_override = std::move(type_override),
                  partition_size_override_or_zero,
+                 transfer_permits = std::move(transfer_permits),
                  format_options](
                     kairosboot::api::OperationState::TaskContext
                         &task_context) mutable
@@ -5413,6 +5585,10 @@ kb_status_t KB_CALL kb_format_partition_async(
       kairosboot::protocol::FastbootSession session(
           std::move(protocol_transport), session_options);
       kairosboot::fastboot::PrimitiveService service(session);
+      if (auto configured = configure_batch_transfer_permits(
+              service, transfer_permits, selected_identifier)) {
+        return operation_failure(std::move(*configured));
+      }
       auto cancellation = task_context.register_cancellation_hook(
           [&service] { service.request_cancel(); });
 

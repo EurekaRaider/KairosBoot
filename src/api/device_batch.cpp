@@ -4,7 +4,9 @@
 
 #include "src/api/error_handle.hpp"
 #include "src/api/operation_state.hpp"
+#include "src/fleet/controller_scheduler.hpp"
 #include "src/kairosboot_internal.hpp"
+#include "src/transport/buffer_budget.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -13,6 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <expected>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -49,6 +53,13 @@ struct ActiveChildren final {
   std::vector<kb_operation_t*> operations;
   std::size_t finished_workers{};
   bool abort_requested{};
+};
+
+struct BatchTransferScheduling final {
+  kairosboot::transport::TransferRingConfig config{};
+  std::shared_ptr<kairosboot::fleet::WeightedControllerScheduler> scheduler;
+  std::vector<std::shared_ptr<kairosboot::transport::TransferPermitProvider>>
+      providers;
 };
 
 [[nodiscard]] OperationErrorPayload make_error(
@@ -137,6 +148,84 @@ struct ActiveChildren final {
   }
   stream << "]}";
   return stream.str();
+}
+
+void publish_results(
+    const std::shared_ptr<DeviceBatchSharedState>& shared,
+    const std::vector<DeviceBatchResult>& results) {
+  auto published_results =
+      std::make_shared<const std::vector<DeviceBatchResult>>(results);
+  auto json = std::make_shared<const std::string>(make_report_json(results));
+  std::scoped_lock lock(shared->mutex);
+  shared->results = std::move(published_results);
+  shared->report_json = std::move(json);
+}
+
+[[nodiscard]] std::expected<BatchTransferScheduling, OperationErrorPayload>
+prepare_transfer_scheduling(const std::vector<kb_device_t*>& devices) {
+  try {
+    BatchTransferScheduling result;
+    result.providers.resize(devices.size());
+
+    std::vector<kairosboot::api::DeviceBatchSchedulingInfo> infos;
+    infos.reserve(devices.size());
+    bool has_usb_device = false;
+    for (const auto* device : devices) {
+      auto info = kairosboot::api::device_batch_scheduling_info(device);
+      if (info.device_key.empty()) {
+        return std::unexpected(make_error(
+            KB_E_INTERNAL, "device batch contains a Device without a stable identity"));
+      }
+      has_usb_device = has_usb_device || !info.controller_id.empty();
+      infos.push_back(std::move(info));
+    }
+    if (!has_usb_device) {
+      return result;
+    }
+
+    result.scheduler =
+        std::make_shared<kairosboot::fleet::WeightedControllerScheduler>(
+            kairosboot::transport::process_usb_buffer_budget());
+    for (std::size_t index = 0; index < infos.size(); ++index) {
+      const auto& info = infos[index];
+      if (info.controller_id.empty()) {
+        continue;
+      }
+      if (!result.scheduler->add_flow({
+              .device_id = info.device_key,
+              .controller_id = info.controller_id,
+              .weight = 1U,
+              .bytes_remaining = std::numeric_limits<std::uint64_t>::max(),
+              .max_outstanding = result.config.depth,
+          })) {
+        return std::unexpected(make_error(
+            KB_E_INTERNAL,
+            "unable to register a USB Device with the batch scheduler",
+            info.device_key));
+      }
+    }
+    for (std::size_t index = 0; index < infos.size(); ++index) {
+      const auto& info = infos[index];
+      if (info.controller_id.empty()) {
+        continue;
+      }
+      result.providers[index] = result.scheduler->make_permit_provider(
+          info.device_key, result.config.depth);
+      if (result.providers[index] == nullptr) {
+        return std::unexpected(make_error(
+            KB_E_INTERNAL,
+            "unable to bind a USB Device to the batch scheduler",
+            info.device_key));
+      }
+    }
+    return result;
+  } catch (const std::bad_alloc&) {
+    return std::unexpected(make_error(
+        KB_E_OUT_OF_MEMORY, "unable to allocate USB batch scheduling state"));
+  } catch (...) {
+    return std::unexpected(make_error(
+        KB_E_INTERNAL, "unable to prepare USB batch scheduling state"));
+  }
 }
 
 [[nodiscard]] kb_operation_state_t public_state(
@@ -269,6 +358,16 @@ void remove_active(const std::shared_ptr<ActiveChildren>& active,
     results[index].identifier = identifier == nullptr ? "" : identifier;
   }
 
+  auto scheduling = prepare_transfer_scheduling(devices);
+  if (!scheduling) {
+    for (auto& result : results) {
+      result.status = scheduling.error().status;
+      result.message = scheduling.error().message;
+    }
+    publish_results(shared, results);
+    return OperationOutcome::failed(std::move(scheduling.error()));
+  }
+
   auto active = std::make_shared<ActiveChildren>();
   auto cancellation = task_context.register_cancellation_hook(
       [active] { cancel_active(active); });
@@ -308,9 +407,16 @@ void remove_active(const std::shared_ptr<ActiveChildren>& active,
 
         kb_operation_t* operation = nullptr;
         kb_error_t* start_error = nullptr;
+        std::optional<kairosboot::api::ScopedDeviceBatchTransferPermits>
+            permit_scope;
+        if (scheduling->providers[index] != nullptr) {
+          permit_scope.emplace(devices[index], scheduling->providers[index],
+                               scheduling->config);
+        }
         const auto started = start_callback(devices[index], index,
                                             start_user_data, &operation,
                                             &start_error);
+        permit_scope.reset();
         if (started != KB_OK || operation == nullptr) {
           const auto payload = copy_error(
               started == KB_OK ? KB_E_INTERNAL : started, start_error,
@@ -392,14 +498,7 @@ void remove_active(const std::shared_ptr<ActiveChildren>& active,
     }
   }
 
-  auto published_results =
-      std::make_shared<const std::vector<DeviceBatchResult>>(results);
-  auto json = std::make_shared<const std::string>(make_report_json(results));
-  {
-    std::scoped_lock lock(shared->mutex);
-    shared->results = std::move(published_results);
-    shared->report_json = std::move(json);
-  }
+  publish_results(shared, results);
 
   if (timed_out) {
     return OperationOutcome::failed(
@@ -599,8 +698,10 @@ kb_status_t KB_CALL kb_device_batch_run_async(
   }
 
   std::vector<kb_device_t*> retained;
+  std::vector<std::string> device_keys;
   try {
     retained.reserve(device_count);
+    device_keys.reserve(device_count);
     for (std::size_t index = 0; index < device_count; ++index) {
       if (devices[index] == nullptr) {
         for (auto* device : retained) {
@@ -617,8 +718,26 @@ kb_status_t KB_CALL kb_device_batch_run_async(
         return fail(error, KB_E_INVALID_ARGUMENT,
                     "device batch contains the same Device more than once");
       }
+      auto scheduling_info =
+          kairosboot::api::device_batch_scheduling_info(devices[index]);
+      if (scheduling_info.device_key.empty()) {
+        for (auto* device : retained) {
+          kb_device_release(device);
+        }
+        return fail(error, KB_E_INTERNAL,
+                    "device batch contains a Device without a stable identity");
+      }
+      if (std::find(device_keys.begin(), device_keys.end(),
+                    scheduling_info.device_key) != device_keys.end()) {
+        for (auto* device : retained) {
+          kb_device_release(device);
+        }
+        return fail(error, KB_E_INVALID_ARGUMENT,
+                    "device batch contains the same physical Device more than once");
+      }
       static_cast<void>(kb_device_retain(devices[index]));
       retained.push_back(devices[index]);
+      device_keys.push_back(std::move(scheduling_info.device_key));
     }
     const auto options = options_or_default(options_or_null, device_count);
     auto shared = std::make_shared<DeviceBatchSharedState>();

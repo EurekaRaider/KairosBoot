@@ -12,7 +12,7 @@ handoff notes that described file-driven fleet jobs.
 | Multi-device execution | Implemented | `kb_device_batch_*`, C++ `DeviceBatch`, and C# `DeviceBatch` accept explicit device objects, enforce uniqueness, support bounded parallelism, cancellation, continue/stop-on-error behavior, ordered per-device results, and JSON reports. |
 | CLI compatibility | Implemented | The CLI exposes Fastboot-compatible commands and options. It does not expose custom planning or job-file commands. |
 | USB identity and reconnect | Implemented | `src/fastboot/device_connection.*` exclusively opens the selected interface, records the verified physical identity, probes live product/mode, and creates the sealed reconnect binding used by update operations. |
-| Controller-aware scheduling | Component implemented; batch integration pending | `WeightedControllerScheduler` remains independently tested, but the explicit `DeviceBatch` path currently provides bounded parallelism rather than controller-aware arbitration. Wiring it into the public batch path and proving it on real multi-controller hardware remain release work. |
+| Controller-aware scheduling | Implemented; hardware proof pending | Explicit `DeviceBatch` execution groups USB devices by the root-controller identity captured when each `Device` is opened, gives every device a weighted scheduler flow, and injects scheduler-owned DATA permits into flash, boot, stage/signature, format, update, wipe-super, and reconnect-capable fastbootd sessions. TCP/UDP devices remain independent. Real multi-controller hardware acceptance remains release work. |
 | External task files | Removed | Multi-device execution is expressed only through explicit device objects and batch APIs; no runtime task-file parser, schema, artifact planner, or job actor remains. |
 
 ## Local evidence
@@ -20,7 +20,9 @@ handoff notes that described file-driven fleet jobs.
 - C11, C++23, and C# contract tests cover the public device and batch surface.
 - Scripted TCP/UDP and USB adapter tests cover command serialization, identity
   verification, cancellation, reconnect safety, and error propagation.
-- Performance tests cover controller scheduling and transfer-ring behavior.
+- Performance tests cover controller scheduling and transfer-ring behavior;
+  the public C test also rejects two handles that resolve to the same physical
+  target, preventing duplicate scheduler flows for one DUT.
 - Repository policy rejects product/runtime task files and rejects restoration
   of the removed manifest/job pipeline. GitHub workflow configuration remains
   under `.github/` because GitHub Actions requires it.
