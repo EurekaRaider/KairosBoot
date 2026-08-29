@@ -111,6 +111,16 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "commands": ["download:00000020", "flash:system"],
         "data": [["host-to-device", 32]],
     },
+    "official-tcp-flash-force": {
+        "transport": "tcp", "coverageIds": ["option.force"],
+        "argv": ["--force", "flash", "system", "<ARTIFACT>/system.img"],
+        "getvars": [
+            "is-userspace", "has-slot:system", "is-logical:system",
+            "max-download-size",
+        ],
+        "commands": ["download:00000020", "flash:system"],
+        "data": [["host-to-device", 32]],
+    },
     "official-tcp-signature": {
         "transport": "tcp",
         "coverageIds": ["command.signature"],
@@ -149,6 +159,15 @@ MATCHED_SCENARIO_CONTRACTS: dict[str, dict[str, Any]] = {
         "transport": "tcp", "coverageIds": ["command.oem"],
         "argv": ["oem", "differential"], "getvars": [],
         "commands": ["oem differential"], "data": [],
+    },
+    "official-tcp-informational-responses": {
+        "transport": "tcp", "coverageIds": ["protocol.responses"],
+        "argv": ["oem", "differential-info"], "getvars": [],
+        "commands": ["oem differential-info"], "data": [],
+        "responses": [
+            ["INFO", "phase one"], ["TEXT", "phase two"],
+            ["OKAY", "accepted"],
+        ],
     },
     "official-tcp-stage": {
         "transport": "tcp", "coverageIds": ["command.stage"],
@@ -285,7 +304,8 @@ UNCOVERED_SCENARIO_CONTRACTS: dict[str, list[str]] = {
         "command.boot", "command.flash-raw", "capability.boot-image-construction",
     ],
     "official-scripted-slot-policy": [
-        "command.set-active", "option.slot", "option.set-active", "capability.a-b-slots",
+        "command.set-active", "option.a", "option.slot", "option.set-active",
+        "capability.a-b-slots",
     ],
     "official-scripted-avb-flags": [
         "option.disable-verity", "option.disable-verification",
@@ -489,10 +509,19 @@ def _validate_scenario_semantics(
         for event in events
         if isinstance(event, dict) and event.get("kind") == "DATA"
     ]
+    responses = [
+        [event.get("kind"), event.get("message")]
+        for event in events
+        if isinstance(event, dict)
+        and event.get("kind") in {"INFO", "TEXT", "OKAY", "FAIL"}
+    ]
     _require(
         getvars == contract["getvars"]
         and commands == contract["commands"]
-        and data == contract["data"],
+        and data == contract["data"]
+        and (
+            "responses" not in contract or responses == contract["responses"]
+        ),
         f"{metadata_path}#{identifier}: protocol event semantics differ from the whitelist",
     )
 

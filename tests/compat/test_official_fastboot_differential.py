@@ -194,8 +194,10 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
             "official-tcp-verbose",
             "official-tcp-get-staged",
             "official-tcp-boot-raw-options",
+            "official-tcp-flash-force",
+            "official-tcp-informational-responses",
         }
-        self.assertEqual(len(scenarios), 35)
+        self.assertEqual(len(scenarios), 37)
         self.assertTrue(expected.issubset(by_id))
         self.assertEqual(
             self.runner._aosp_command(
@@ -270,6 +272,25 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 {"kind": "TEXT", "message": "version"},
                 {"kind": "EXIT", "code": 0},
             ],
+        )
+
+    def test_informational_response_chain_preserves_info_text_and_okay(self) -> None:
+        scenario = self.runner.Scenario(
+            "fixture-responses",
+            "tcp",
+            ("oem", "differential-info"),
+            "oem differential-info",
+            informational_responses=(("INFO", "one"), ("TEXT", "two")),
+        )
+        recorder = self.runner.WireRecorder(scenario)
+        self.assertEqual(recorder.handle(b"oem differential-info"), b"INFOone")
+        self.assertEqual(
+            recorder.take_pending_responses(), [b"TEXTtwo", b"OKAYaccepted"]
+        )
+        capture = recorder.capture(0)
+        self.assertEqual(
+            [event["kind"] for event in capture["events"]],
+            ["CLI_PARSE", "COMMAND", "INFO", "TEXT", "OKAY", "EXIT"],
         )
 
     def test_signature_requires_download_and_records_exact_blob(self) -> None:
@@ -357,6 +378,8 @@ class OfficialFastbootDifferentialTests(unittest.TestCase):
                 "official-host-version",
                 "official-tcp-get-staged",
                 "official-tcp-boot-raw-options",
+                "official-tcp-flash-force",
+                "official-tcp-informational-responses",
             }.issubset(scenario_ids)
         )
         cli_arguments = [

@@ -58,6 +58,7 @@ class Scenario:
     output_path: Optional[pathlib.Path] = None
     output_event_path: Optional[str] = None
     host_output_kind: Optional[str] = None
+    informational_responses: tuple[tuple[str, str], ...] = ()
 
 
 def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -406,7 +407,8 @@ class WireRecorder:
             return b"OKAYstaged"
         simple_commands = {
             "reboot", "reboot-bootloader", "reboot-recovery", "reboot-fastboot",
-            "continue", "oem differential", "flashing get_unlock_ability",
+            "continue", "oem differential", "oem differential-info",
+            "flashing get_unlock_ability",
             "flashing lock", "flashing unlock", "flashing lock_critical",
             "flashing unlock_critical",
             "create-logical-partition:differential:4096",
@@ -418,8 +420,19 @@ class WireRecorder:
         if command in simple_commands:
             commands = self.device_state.setdefault("commands", [])
             commands.append(command)
+            encoded_responses: list[bytes] = []
+            for kind, message in self.scenario.informational_responses:
+                if kind not in {"INFO", "TEXT"}:
+                    raise CaptureGateError(
+                        f"unsupported informational response kind: {kind}"
+                    )
+                self.events.append({"kind": kind, "message": message})
+                encoded_responses.append(kind.encode("ascii") + message.encode("utf-8"))
             self.events.append({"kind": "OKAY", "message": "accepted"})
             self._finish_command(command)
+            if encoded_responses:
+                self.pending_responses = [*encoded_responses[1:], b"OKAYaccepted"]
+                return encoded_responses[0]
             return b"OKAYaccepted"
 
         self.events.append({"kind": "FAIL", "message": "unsupported scripted command"})
@@ -759,6 +772,13 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
             environment=(("ANDROID_PRODUCT_OUT", str(output_dir)),),
         ),
         Scenario(
+            "official-tcp-flash-force", "tcp",
+            ("--force", "flash", "system", "<ARTIFACT>/system.img"),
+            "flash:system", image_path, ("option.force",),
+            aosp_arguments=("--force", "flash", "system", str(image_path)),
+            kairosboot_arguments=("--force", "flash", "system", str(image_path)),
+        ),
+        Scenario(
             "official-tcp-signature", "tcp",
             ("signature", "<ARTIFACT>/signature.bin"), "signature", signature_path,
             ("command.signature",),
@@ -795,6 +815,12 @@ def _scenario_catalog(output_dir: pathlib.Path) -> list[Scenario]:
         Scenario(
             "official-tcp-oem", "tcp", ("oem", "differential"),
             "oem differential", coverage_ids=("command.oem",),
+        ),
+        Scenario(
+            "official-tcp-informational-responses", "tcp",
+            ("oem", "differential-info"), "oem differential-info",
+            coverage_ids=("protocol.responses",),
+            informational_responses=(("INFO", "phase one"), ("TEXT", "phase two")),
         ),
         Scenario(
             "official-tcp-stage", "tcp", ("stage", "<ARTIFACT>/stage.bin"),
@@ -994,8 +1020,8 @@ UNCOVERED_SCENARIOS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "official-scripted-slot-policy",
-        "coverageIds": ["command.set-active", "option.slot", "option.set-active",
-                        "capability.a-b-slots"],
+        "coverageIds": ["command.set-active", "option.a", "option.slot",
+                        "option.set-active", "capability.a-b-slots"],
         "reason": (
             "official Fastboot probes slot-count before the operation while KairosBoot "
             "uses a different getvar sequence, so the strict wire event order differs"
@@ -1189,7 +1215,7 @@ def _run_capture(arguments: argparse.Namespace) -> int:
     )
     print(
         "PASS: official Platform-Tools differential capture matched KairosBoot "
-        f"for {len(scenarios)} TCP/UDP scenarios; evidence: {output_dir}"
+        f"for {len(scenarios)} host/TCP/UDP scenarios; evidence: {output_dir}"
     )
     if temporary is not None:
         temporary.cleanup()
