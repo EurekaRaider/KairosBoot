@@ -635,8 +635,7 @@
       "events": [
         {
           "argv": [
-            "reboot",
-            "recovery"
+            "reboot-recovery"
           ],
           "kind": "CLI_PARSE",
           "result": "ok"
@@ -841,7 +840,7 @@
         {
           "argv": [
             "flashing",
-            "get-unlock-ability"
+            "get_unlock_ability"
           ],
           "kind": "CLI_PARSE",
           "result": "ok"
@@ -934,7 +933,7 @@
         {
           "argv": [
             "flashing",
-            "lock-critical"
+            "lock_critical"
           ],
           "kind": "CLI_PARSE",
           "result": "ok"
@@ -965,7 +964,7 @@
         {
           "argv": [
             "flashing",
-            "unlock-critical"
+            "unlock_critical"
           ],
           "kind": "CLI_PARSE",
           "result": "ok"
@@ -1210,7 +1209,7 @@
       "events": [
         {
           "argv": [
-            "--device",
+            "-s",
             "<ENDPOINT>",
             "getvar",
             "product"

@@ -11,18 +11,18 @@
   "captureFiles": {
     "aosp": {
       "path": "aosp-fastboot-normalized-trace.json",
-      "sha256": "65ab3ea58751a1a26ec2b65836f780e03b1ea3b4a09630be38531544e5e1e47a"
+      "sha256": "3acedf936870fcd5fa5fb608211eb37dc11c3740921d521fef03f8f889579fb3"
     },
     "kairosboot": {
       "path": "kairosboot-normalized-trace.json",
-      "sha256": "65ab3ea58751a1a26ec2b65836f780e03b1ea3b4a09630be38531544e5e1e47a"
+      "sha256": "3acedf936870fcd5fa5fb608211eb37dc11c3740921d521fef03f8f889579fb3"
     }
   },
   "documentType": "kairosboot.official-fastboot-differential-evidence",
   "kairosboot": {
-    "releaseArtifactSha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
-    "sha256": "1b197778257b5c92e5d7c99cac5a7adb333e329682b0f463511a2a272caff38f",
-    "sourceCommit": "0a2a8d1947a2414849398ab352b1ac3471e281c2"
+    "releaseArtifactSha256": "47f6504696dc51935e16e4bdcf9de70118d15b21c325c7fc8cf6f13aa96f3590",
+    "sha256": "47f6504696dc51935e16e4bdcf9de70118d15b21c325c7fc8cf6f13aa96f3590",
+    "sourceCommit": "215e9c0e09196bee90c8c8d8de285d293908a3de"
   },
   "result": "matched",
   "scenarios": [
