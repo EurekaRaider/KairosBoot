@@ -81,12 +81,6 @@ def check_workflows() -> None:
             ),
             "miniz license release asset": "miniz-3.1.2-LICENSE",
             "miniz SBOM source input": "--miniz-source",
-            "locked yaml-cpp source archive": "yaml-cpp-0.9.0.tar.gz",
-            "yaml-cpp release archive digest": (
-                "298593d9c440fd9034b8b193d96318b76d49bc97c6ceadb7b0836edf0b6d7539"
-            ),
-            "yaml-cpp license release asset": "yaml-cpp-0.9.0-LICENSE",
-            "yaml-cpp SBOM source input": "--yaml-cpp-source",
             "macOS split debug symbols": "dsymutil",
             "Windows dedicated symbol staging": "--symbols-root build/symbols/Release",
             "macOS stripped libusb runtime": (
@@ -535,75 +529,6 @@ def check_compatibility_baseline() -> None:
     for contract, (path, marker) in miniz_distribution_contracts.items():
         if marker not in path.read_text(encoding="utf-8"):
             fail(f"miniz distribution contract is missing {contract}: {marker}")
-
-    yaml_cpp = lock.get("yamlCpp", {})
-    yaml_cpp_url = (
-        "https://github.com/jbeder/yaml-cpp/releases/download/yaml-cpp-0.9.0/"
-        "yaml-cpp-yaml-cpp-0.9.0.tar.gz"
-    )
-    yaml_cpp_sha256 = (
-        "298593d9c440fd9034b8b193d96318b76d49bc97c6ceadb7b0836edf0b6d7539"
-    )
-    expected_yaml_cpp = {
-        "requiredVersion": "0.9.0",
-        "sourceTag": "yaml-cpp-0.9.0",
-        "sourceCommit": "56e3bb550c91fd7005566f19c079cb7a503223cf",
-        "sourceArchive": yaml_cpp_url,
-        "sourceArchiveSha256": yaml_cpp_sha256,
-        "license": "MIT",
-    }
-    if yaml_cpp != expected_yaml_cpp:
-        fail("yaml-cpp baseline must exactly match the validated stable 0.9.0 release")
-
-    yaml_cpp_cmake_contract = {
-        "yaml-cpp declaration": "FetchContent_Declare(\n  kairosboot_yaml_cpp",
-        "yaml-cpp population": "FetchContent_MakeAvailable(kairosboot_yaml_cpp)",
-        "yaml-cpp digest verification": (
-            'URL_HASH "SHA256=${KAIROSBOOT_YAML_CPP_SHA256}"'
-        ),
-        "private static configuration": "set(YAML_BUILD_SHARED_LIBS OFF",
-        "upstream install disabled": "set(YAML_CPP_INSTALL OFF",
-        "position-independent static code": "set(YAML_ENABLE_PIC ON",
-        "yaml-cpp target linked privately": "yaml-cpp::yaml-cpp Boost::asio_core",
-    }
-    for contract, marker in yaml_cpp_cmake_contract.items():
-        if marker not in cmake:
-            fail(f"root CMake is missing {contract}: {marker}")
-    if "install(TARGETS yaml-cpp" in cmake:
-        fail("private yaml-cpp target must not enter the installed CMake export")
-
-    for contract, marker in {
-        "locked yaml-cpp release URL": yaml_cpp_url,
-        "locked yaml-cpp release digest": yaml_cpp_sha256,
-        "yaml-cpp license asset": "yaml-cpp-0.9.0-LICENSE",
-        "yaml-cpp SBOM input": "--yaml-cpp-source",
-    }.items():
-        if marker not in release:
-            fail(f"release workflow is missing {contract}: {marker}")
-
-    yaml_cpp_distribution_contracts = {
-        "third-party notice": (ROOT / "THIRD_PARTY_NOTICES.md", "yaml-cpp 0.9.0"),
-        "SPDX package": (
-            ROOT / "scripts" / "generate_sbom.py",
-            '"name": "yaml-cpp"',
-        ),
-        "NuGet yaml-cpp license": (
-            ROOT / "bindings" / "dotnet" / "KairosBoot" / "KairosBoot.csproj",
-            "licenses/yaml-cpp/LICENSE",
-        ),
-        "CI yaml-cpp license staging": (
-            ROOT / ".github" / "workflows" / "ci.yml",
-            "share/kairosboot/yaml-cpp/LICENSE",
-        ),
-        "native archive runtime dependency gate": (
-            ROOT / "scripts" / "smoke_native_archive.py",
-            "libyaml-cpp",
-        ),
-    }
-    for contract, (path, marker) in yaml_cpp_distribution_contracts.items():
-        if marker not in path.read_text(encoding="utf-8"):
-            fail(f"yaml-cpp distribution contract is missing {contract}: {marker}")
-
 
 def main() -> None:
     check_required_files()

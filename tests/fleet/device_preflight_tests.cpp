@@ -154,9 +154,6 @@ struct TargetSpec final {
     }
     FlashJobManifest manifest{
         .location = kLocation,
-        .api_version = located("kairosboot.io/v1"),
-        .kind = located("FlashJob"),
-        .source_sha256 = {},
         .artifacts = {ManifestArtifact{
             .location = kLocation,
             .id = located("unused"),

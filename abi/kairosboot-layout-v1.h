@@ -113,6 +113,24 @@ KB_ABI_STATIC_ASSERT(offsetof(kb_context_options_t, usb_vendor_id) == 24, "kb_co
 KB_ABI_STATIC_ASSERT(sizeof(((kb_context_options_t *)0)->usb_vendor_id) == 8, "kb_context_options_t.usb_vendor_id size");
 KB_ABI_STATIC_ASSERT(KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE == 32, "KB_CONTEXT_OPTIONS_VENDOR_ID_SIZE value");
 
+KB_ABI_STATIC_ASSERT(sizeof(kb_device_batch_options_t) == 40, "kb_device_batch_options_t size");
+KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_device_batch_options_t) == 8, "kb_device_batch_options_t alignment");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, struct_size) == 0, "kb_device_batch_options_t.struct_size offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->struct_size) == 4, "kb_device_batch_options_t.struct_size size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, api_version) == 4, "kb_device_batch_options_t.api_version offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->api_version) == 4, "kb_device_batch_options_t.api_version size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, timeout_ms) == 8, "kb_device_batch_options_t.timeout_ms offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->timeout_ms) == 4, "kb_device_batch_options_t.timeout_ms size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, progress_callback) == 16, "kb_device_batch_options_t.progress_callback offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->progress_callback) == 8, "kb_device_batch_options_t.progress_callback size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, progress_user_data) == 24, "kb_device_batch_options_t.progress_user_data offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->progress_user_data) == 8, "kb_device_batch_options_t.progress_user_data size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, max_parallel_devices) == 32, "kb_device_batch_options_t.max_parallel_devices offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->max_parallel_devices) == 4, "kb_device_batch_options_t.max_parallel_devices size");
+KB_ABI_STATIC_ASSERT(offsetof(kb_device_batch_options_t, continue_on_error) == 36, "kb_device_batch_options_t.continue_on_error offset");
+KB_ABI_STATIC_ASSERT(sizeof(((kb_device_batch_options_t *)0)->continue_on_error) == 4, "kb_device_batch_options_t.continue_on_error size");
+KB_ABI_STATIC_ASSERT(KB_DEVICE_BATCH_OPTIONS_V1_SIZE == 40, "KB_DEVICE_BATCH_OPTIONS_V1_SIZE value");
+
 KB_ABI_STATIC_ASSERT(sizeof(kb_flash_options_t) == 80, "kb_flash_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_flash_options_t) == 8, "kb_flash_options_t alignment");
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, struct_size) == 0, "kb_flash_options_t.struct_size offset");
@@ -142,20 +160,6 @@ KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->force) == 4, "kb_flash_op
 KB_ABI_STATIC_ASSERT(offsetof(kb_flash_options_t, filesystem_options) == 76, "kb_flash_options_t.filesystem_options offset");
 KB_ABI_STATIC_ASSERT(sizeof(((kb_flash_options_t *)0)->filesystem_options) == 4, "kb_flash_options_t.filesystem_options size");
 KB_ABI_STATIC_ASSERT(KB_FLASH_OPTIONS_FORCE_FS_SIZE == 80, "KB_FLASH_OPTIONS_FORCE_FS_SIZE value");
-
-KB_ABI_STATIC_ASSERT(sizeof(kb_job_options_t) == 32, "kb_job_options_t size");
-KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_job_options_t) == 8, "kb_job_options_t alignment");
-KB_ABI_STATIC_ASSERT(offsetof(kb_job_options_t, struct_size) == 0, "kb_job_options_t.struct_size offset");
-KB_ABI_STATIC_ASSERT(sizeof(((kb_job_options_t *)0)->struct_size) == 4, "kb_job_options_t.struct_size size");
-KB_ABI_STATIC_ASSERT(offsetof(kb_job_options_t, api_version) == 4, "kb_job_options_t.api_version offset");
-KB_ABI_STATIC_ASSERT(sizeof(((kb_job_options_t *)0)->api_version) == 4, "kb_job_options_t.api_version size");
-KB_ABI_STATIC_ASSERT(offsetof(kb_job_options_t, timeout_ms) == 8, "kb_job_options_t.timeout_ms offset");
-KB_ABI_STATIC_ASSERT(sizeof(((kb_job_options_t *)0)->timeout_ms) == 4, "kb_job_options_t.timeout_ms size");
-KB_ABI_STATIC_ASSERT(offsetof(kb_job_options_t, progress_callback) == 16, "kb_job_options_t.progress_callback offset");
-KB_ABI_STATIC_ASSERT(sizeof(((kb_job_options_t *)0)->progress_callback) == 8, "kb_job_options_t.progress_callback size");
-KB_ABI_STATIC_ASSERT(offsetof(kb_job_options_t, progress_user_data) == 24, "kb_job_options_t.progress_user_data offset");
-KB_ABI_STATIC_ASSERT(sizeof(((kb_job_options_t *)0)->progress_user_data) == 8, "kb_job_options_t.progress_user_data size");
-KB_ABI_STATIC_ASSERT(KB_JOB_OPTIONS_V1_SIZE == 32, "KB_JOB_OPTIONS_V1_SIZE value");
 
 KB_ABI_STATIC_ASSERT(sizeof(kb_legacy_boot_options_t) == 80, "kb_legacy_boot_options_t size");
 KB_ABI_STATIC_ASSERT(KB_ABI_ALIGNOF(kb_legacy_boot_options_t) == 8, "kb_legacy_boot_options_t alignment");

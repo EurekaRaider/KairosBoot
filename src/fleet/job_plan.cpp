@@ -77,8 +77,6 @@ void validate_string_encoding(const std::string_view value,
 [[nodiscard]] std::expected<void, JobPlanError> validate_manifest_encoding(
     const FlashJobManifest& manifest) noexcept {
     std::optional<JobPlanError> error;
-    validate_string_encoding(manifest.api_version.value, error);
-    validate_string_encoding(manifest.kind.value, error);
     for (const auto& artifact : manifest.artifacts) {
         validate_string_encoding(artifact.id.value, error);
         validate_string_encoding(artifact.path.value, error);
@@ -188,8 +186,7 @@ void validate_string_encoding(const std::string_view value,
 
 [[nodiscard]] bool valid_manifest_shape(
     const FlashJobManifest& manifest) noexcept {
-    if (manifest.api_version.value != "kairosboot.io/v1" ||
-        manifest.kind.value != "FlashJob" || manifest.artifacts.empty() ||
+    if (manifest.artifacts.empty() ||
         manifest.artifacts.size() > kMaximumManifestArtifacts ||
         manifest.targets.empty() ||
         manifest.targets.size() > kMaximumManifestTargets) {
@@ -393,13 +390,7 @@ serialize_manifest(const FlashJobManifest& manifest) {
         writer.quoted(artifact.sha256.value);
         writer.raw("}");
     }
-    writer.raw("],\"kind\":");
-    writer.quoted(manifest.kind.value);
-    writer.raw(",\"manifestApiVersion\":");
-    writer.quoted(manifest.api_version.value);
-    writer.raw(",\"manifestSha256\":");
-    writer.quoted(image::sha256_hex(manifest.source_sha256));
-    writer.raw(",\"policy\":{\"maxParallelDevices\":");
+    writer.raw("],\"policy\":{\"maxParallelDevices\":");
     writer.unsigned_integer(manifest.policy.max_parallel_devices);
     writer.raw(",\"memoryBudget\":");
     if (manifest.policy.memory_budget.automatic) {

@@ -168,10 +168,12 @@ struct CommandOptions {
   std::uint64_t maximum_receive_bytes{64ULL * 1024ULL * 1024ULL};
 };
 
-struct JobOptions {
-  // Whole-job timeout. milliseconds::max() selects no deadline.
+struct DeviceBatchOptions {
+  // Whole-batch timeout. milliseconds::max() selects no deadline.
   std::chrono::milliseconds timeout{std::chrono::milliseconds::max()};
   std::function<ProgressAction(const Progress &)> progress;
+  std::uint32_t max_parallel_devices{};
+  bool continue_on_error{true};
 };
 
 class Error {
@@ -532,21 +534,23 @@ struct PreparedCommandOptions final {
   std::shared_ptr<ProgressCallbackState> callback_state;
 };
 
-struct PreparedJobOptions final {
-  kb_job_options_t native{};
+struct PreparedDeviceBatchOptions final {
+  kb_device_batch_options_t native{};
   std::shared_ptr<ProgressCallbackState> callback_state;
 };
 
-[[nodiscard]] inline std::expected<PreparedJobOptions, Error>
-prepare_job_options(const JobOptions &options) {
-  auto timeout = prepare_timeout(options.timeout, "job timeout");
+[[nodiscard]] inline std::expected<PreparedDeviceBatchOptions, Error>
+prepare_device_batch_options(const DeviceBatchOptions &options) {
+  auto timeout = prepare_timeout(options.timeout, "device batch timeout");
   if (!timeout) {
     return std::unexpected(std::move(timeout.error()));
   }
 
-  PreparedJobOptions result;
-  kb_job_options_init_sized(&result.native, sizeof(result.native));
+  PreparedDeviceBatchOptions result;
+  kb_device_batch_options_init_sized(&result.native, sizeof(result.native));
   result.native.timeout_ms = *timeout;
+  result.native.max_parallel_devices = options.max_parallel_devices;
+  result.native.continue_on_error = options.continue_on_error ? 1 : 0;
   if (options.progress) {
     result.callback_state =
         std::make_shared<ProgressCallbackState>(ProgressCallbackState{
@@ -777,102 +781,6 @@ private:
   kb_command_result_t *handle_{};
 };
 
-/* Immutable fleet plan snapshot mirroring the context-free C ABI: validation
- * and planning never touch a device; only the manifest file is read. */
-class JobPlan {
-public:
-  explicit JobPlan(kb_job_plan_t *handle) noexcept : handle_(handle) {}
-  ~JobPlan() { kb_job_plan_release(handle_); }
-
-  JobPlan(const JobPlan &) = delete;
-  JobPlan &operator=(const JobPlan &) = delete;
-
-  JobPlan(JobPlan &&other) noexcept
-      : handle_(std::exchange(other.handle_, nullptr)) {}
-  JobPlan &operator=(JobPlan &&other) noexcept {
-    if (this != &other) {
-      kb_job_plan_release(handle_);
-      handle_ = std::exchange(other.handle_, nullptr);
-    }
-    return *this;
-  }
-
-  // Borrowed views over plan-owned storage: no bytes are copied and the views
-  // stay valid until this JobPlan is destroyed or moved from. The canonical
-  // JSON is NUL-terminated UTF-8 without a trailing LF; the digest is 64
-  // lowercase hex characters.
-  [[nodiscard]] std::string_view canonical_json() const noexcept {
-    std::size_t size = 0;
-    const char *json = kb_job_plan_canonical_json(handle_, &size);
-    return json == nullptr ? std::string_view{} : std::string_view{json, size};
-  }
-  [[nodiscard]] std::string_view sha256_hex() const noexcept {
-    const char *hex = kb_job_plan_sha256_hex(handle_);
-    return hex == nullptr ? std::string_view{} : std::string_view{hex};
-  }
-
-private:
-  kb_job_plan_t *handle_{};
-};
-
-class JobReport {
-public:
-  explicit JobReport(kb_job_report_t *handle) noexcept : handle_(handle) {}
-  ~JobReport() { kb_job_report_release(handle_); }
-
-  JobReport(const JobReport &) = delete;
-  JobReport &operator=(const JobReport &) = delete;
-
-  JobReport(JobReport &&other) noexcept
-      : handle_(std::exchange(other.handle_, nullptr)) {}
-  JobReport &operator=(JobReport &&other) noexcept {
-    if (this != &other) {
-      kb_job_report_release(handle_);
-      handle_ = std::exchange(other.handle_, nullptr);
-    }
-    return *this;
-  }
-
-  [[nodiscard]] std::string_view json() const noexcept {
-    std::size_t size = 0;
-    const char *value = kb_job_report_json(handle_, &size);
-    return value == nullptr ? std::string_view{}
-                            : std::string_view{value, size};
-  }
-
-private:
-  kb_job_report_t *handle_{};
-};
-
-/* Context-free manifest entry points: failures surface the manifest source
- * path and, when known, its line and column inside the error message. */
-[[nodiscard]] inline std::expected<void, Error>
-validate_job_file(const std::filesystem::path &file_path) {
-  const auto path_u8 = file_path.u8string();
-  const std::string path_string{path_u8.begin(), path_u8.end()};
-  kb_error_t *error = nullptr;
-  const kb_status_t status =
-      ::kb_validate_job_file(path_string.c_str(), &error);
-  if (status != KB_OK) {
-    return std::unexpected(detail_take_error(status, error));
-  }
-  return {};
-}
-
-[[nodiscard]] inline std::expected<JobPlan, Error>
-plan_job_file(const std::filesystem::path &file_path) {
-  const auto path_u8 = file_path.u8string();
-  const std::string path_string{path_u8.begin(), path_u8.end()};
-  kb_job_plan_t *plan = nullptr;
-  kb_error_t *error = nullptr;
-  const kb_status_t status =
-      ::kb_plan_job_file(path_string.c_str(), &plan, &error);
-  if (status != KB_OK) {
-    return std::unexpected(detail_take_error(status, error));
-  }
-  return JobPlan{plan};
-}
-
 class Operation {
 public:
   explicit Operation(kb_operation_t *handle) noexcept : resources_(handle) {}
@@ -1005,32 +913,77 @@ private:
   detail::OperationResources resources_;
 };
 
-class Job {
+class DeviceBatchReport {
 public:
-  explicit Job(kb_job_t *handle) noexcept : handle_(handle) {}
-  ~Job() { reset(); }
+  explicit DeviceBatchReport(kb_device_batch_report_t *handle) noexcept
+      : handle_(handle) {}
+  ~DeviceBatchReport() { kb_device_batch_report_release(handle_); }
 
-  Job(const Job &) = delete;
-  Job &operator=(const Job &) = delete;
+  DeviceBatchReport(const DeviceBatchReport &) = delete;
+  DeviceBatchReport &operator=(const DeviceBatchReport &) = delete;
+  DeviceBatchReport(DeviceBatchReport &&other) noexcept
+      : handle_(std::exchange(other.handle_, nullptr)) {}
+  DeviceBatchReport &operator=(DeviceBatchReport &&other) noexcept {
+    if (this != &other) {
+      kb_device_batch_report_release(handle_);
+      handle_ = std::exchange(other.handle_, nullptr);
+    }
+    return *this;
+  }
 
-  Job(Job &&other) noexcept
+  [[nodiscard]] std::size_t size() const noexcept {
+    return kb_device_batch_report_count(handle_);
+  }
+  [[nodiscard]] kb_status_t status(const std::size_t index) const noexcept {
+    return kb_device_batch_report_status(handle_, index);
+  }
+  [[nodiscard]] std::string_view identifier(
+      const std::size_t index) const noexcept {
+    const char *value = kb_device_batch_report_identifier(handle_, index);
+    return value == nullptr ? std::string_view{} : std::string_view{value};
+  }
+  [[nodiscard]] std::string_view message(
+      const std::size_t index) const noexcept {
+    const char *value = kb_device_batch_report_message(handle_, index);
+    return value == nullptr ? std::string_view{} : std::string_view{value};
+  }
+  [[nodiscard]] std::string_view json() const noexcept {
+    std::size_t size = 0;
+    const char *value = kb_device_batch_report_json(handle_, &size);
+    return value == nullptr ? std::string_view{}
+                            : std::string_view{value, size};
+  }
+
+private:
+  kb_device_batch_report_t *handle_{};
+};
+
+class DeviceBatch {
+public:
+  explicit DeviceBatch(kb_device_batch_t *handle) noexcept : handle_(handle) {}
+  ~DeviceBatch() { reset(); }
+
+  DeviceBatch(const DeviceBatch &) = delete;
+  DeviceBatch &operator=(const DeviceBatch &) = delete;
+
+  DeviceBatch(DeviceBatch &&other) noexcept
       : handle_(std::exchange(other.handle_, nullptr)),
-        callback_state_(std::move(other.callback_state_)) {}
-  Job &operator=(Job &&other) noexcept {
+        callback_states_(std::move(other.callback_states_)) {}
+  DeviceBatch &operator=(DeviceBatch &&other) noexcept {
     if (this != &other) {
       reset();
       handle_ = std::exchange(other.handle_, nullptr);
-      callback_state_ = std::move(other.callback_state_);
+      callback_states_ = std::move(other.callback_states_);
     }
     return *this;
   }
 
   [[nodiscard]] kb_operation_state_t state() const noexcept {
-    return kb_job_state(handle_);
+    return kb_device_batch_state(handle_);
   }
 
   [[nodiscard]] std::optional<Error> error() const {
-    const kb_error_t *native = kb_job_error(handle_);
+    const kb_error_t *native = kb_device_batch_error(handle_);
     if (native == nullptr) {
       return std::nullopt;
     }
@@ -1039,17 +992,18 @@ public:
 
   [[nodiscard]] std::expected<void, Error>
   wait(std::uint32_t timeout_ms = KB_WAIT_INFINITE) {
-    const kb_status_t status = kb_job_wait(handle_, timeout_ms);
+    const kb_status_t status = kb_device_batch_wait(handle_, timeout_ms);
     if (status != KB_OK) {
       return std::unexpected(
-          detail_copy_error(status, kb_job_error(handle_)));
+          detail_copy_error(status, kb_device_batch_error(handle_)));
     }
     return {};
   }
 
   [[nodiscard]] std::expected<void, Error>
   wait(const std::chrono::milliseconds timeout) {
-    auto native_timeout = detail::prepare_timeout(timeout, "job wait timeout");
+    auto native_timeout =
+        detail::prepare_timeout(timeout, "device batch wait timeout");
     if (!native_timeout) {
       return std::unexpected(std::move(native_timeout.error()));
     }
@@ -1060,7 +1014,8 @@ public:
   wait(const std::stop_token stop_token,
        const std::chrono::milliseconds timeout =
            std::chrono::milliseconds::max()) {
-    auto native_timeout = detail::prepare_timeout(timeout, "job wait timeout");
+    auto native_timeout =
+        detail::prepare_timeout(timeout, "device batch wait timeout");
     if (!native_timeout) {
       return std::unexpected(std::move(native_timeout.error()));
     }
@@ -1069,7 +1024,7 @@ public:
       std::stop_callback cancel_on_stop{
           stop_token, [handle = handle_, &stop_observed] {
             stop_observed.store(true, std::memory_order_release);
-            (void)kb_job_cancel(handle);
+            (void)kb_device_batch_cancel(handle);
           }};
       return wait(*native_timeout);
     }();
@@ -1081,38 +1036,41 @@ public:
   }
 
   [[nodiscard]] std::expected<void, Error> cancel() {
-    const kb_status_t status = kb_job_cancel(handle_);
+    const kb_status_t status = kb_device_batch_cancel(handle_);
     if (status != KB_OK) {
       return std::unexpected(detail_copy_error(status, nullptr));
     }
     return {};
   }
 
-  [[nodiscard]] std::expected<JobReport, Error> report() const {
-    kb_job_report_t *report = nullptr;
+  [[nodiscard]] std::expected<DeviceBatchReport, Error> report() const {
+    kb_device_batch_report_t *report = nullptr;
     kb_error_t *error = nullptr;
-    const kb_status_t status = kb_job_get_report(handle_, &report, &error);
+    const kb_status_t status =
+        kb_device_batch_get_report(handle_, &report, &error);
     if (status != KB_OK) {
       return std::unexpected(detail_take_error(status, error));
     }
-    return JobReport{report};
+    return DeviceBatchReport{report};
   }
 
 private:
-  friend class Context;
+  friend class Device;
 
-  Job(kb_job_t *handle,
-      std::shared_ptr<detail::ProgressCallbackState> callback_state) noexcept
-      : handle_(handle), callback_state_(std::move(callback_state)) {}
+  DeviceBatch(
+      kb_device_batch_t *handle,
+      std::vector<std::shared_ptr<detail::ProgressCallbackState>>
+          callback_states) noexcept
+      : handle_(handle), callback_states_(std::move(callback_states)) {}
 
   void reset() noexcept {
-    kb_job_t *handle = std::exchange(handle_, nullptr);
-    kb_job_release(handle);
-    callback_state_.reset();
+    kb_device_batch_t *handle = std::exchange(handle_, nullptr);
+    kb_device_batch_release(handle);
+    callback_states_.clear();
   }
 
-  kb_job_t *handle_{};
-  std::shared_ptr<detail::ProgressCallbackState> callback_state_;
+  kb_device_batch_t *handle_{};
+  std::vector<std::shared_ptr<detail::ProgressCallbackState>> callback_states_;
 };
 
 class Device {
@@ -1751,6 +1709,142 @@ public:
     return wait(wipe_super_async(super_empty_image, options));
   }
 
+  /* Starts the same flash on explicit, already-open Device objects. Input
+   * order is preserved in progress and report indexes; no selector or hidden
+   * re-enumeration occurs. */
+  [[nodiscard]] static std::expected<DeviceBatch, Error>
+  flash_file_batch_async(
+      const std::span<Device *const> devices, std::string_view partition,
+      const std::filesystem::path &file,
+      const FlashOptions &flash = {},
+      const DeviceBatchOptions &batch = {}) {
+    if (devices.empty()) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "device batch requires at least one Device"));
+    }
+    std::vector<kb_device_t *> native_devices;
+    native_devices.reserve(devices.size());
+    for (Device *device : devices) {
+      if (device == nullptr || device->handle_ == nullptr) {
+        return std::unexpected(detail_make_error(
+            KB_E_INVALID_ARGUMENT, "device batch contains a null Device"));
+      }
+      native_devices.push_back(device->handle_);
+    }
+    auto prepared_flash = detail::prepare_flash_options(flash);
+    if (!prepared_flash) {
+      return std::unexpected(std::move(prepared_flash.error()));
+    }
+    auto prepared_batch = detail::prepare_device_batch_options(batch);
+    if (!prepared_batch) {
+      return std::unexpected(std::move(prepared_batch.error()));
+    }
+    const std::string partition_storage{partition};
+    const auto file_storage = path_utf8(file);
+    kb_device_batch_t *native_batch = nullptr;
+    kb_error_t *error = nullptr;
+    const auto status = ::kb_flash_file_batch_async(
+        native_devices.data(), native_devices.size(), partition_storage.c_str(),
+        file_storage.c_str(), &prepared_flash->native,
+        &prepared_batch->native, &native_batch, &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    std::vector<std::shared_ptr<detail::ProgressCallbackState>> callbacks;
+    callbacks.reserve(2U);
+    callbacks.push_back(std::move(prepared_flash->callback_state));
+    callbacks.push_back(std::move(prepared_batch->callback_state));
+    return DeviceBatch{native_batch, std::move(callbacks)};
+  }
+
+  [[nodiscard]] static std::expected<DeviceBatchReport, Error>
+  flash_file_batch(
+      const std::span<Device *const> devices, std::string_view partition,
+      const std::filesystem::path &file,
+      const FlashOptions &flash = {},
+      const DeviceBatchOptions &batch = {}) {
+    auto operation = flash_file_batch_async(devices, partition, file, flash,
+                                            batch);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    auto waited = operation->wait();
+    auto report = operation->report();
+    if (report) {
+      return report;
+    }
+    if (!waited) {
+      return std::unexpected(std::move(waited.error()));
+    }
+    return std::unexpected(std::move(report.error()));
+  }
+
+  [[nodiscard]] static std::expected<DeviceBatch, Error>
+  update_package_batch_async(
+      const std::span<Device *const> devices,
+      const std::filesystem::path &package,
+      const UpdateOptions &update = {},
+      const DeviceBatchOptions &batch = {}) {
+    if (devices.empty()) {
+      return std::unexpected(detail_make_error(
+          KB_E_INVALID_ARGUMENT, "device batch requires at least one Device"));
+    }
+    std::vector<kb_device_t *> native_devices;
+    native_devices.reserve(devices.size());
+    for (Device *device : devices) {
+      if (device == nullptr || device->handle_ == nullptr) {
+        return std::unexpected(detail_make_error(
+            KB_E_INVALID_ARGUMENT, "device batch contains a null Device"));
+      }
+      native_devices.push_back(device->handle_);
+    }
+    auto prepared_update = detail::prepare_update_options(update);
+    if (!prepared_update) {
+      return std::unexpected(std::move(prepared_update.error()));
+    }
+    auto prepared_batch = detail::prepare_device_batch_options(batch);
+    if (!prepared_batch) {
+      return std::unexpected(std::move(prepared_batch.error()));
+    }
+    const auto package_storage = path_utf8(package);
+    kb_device_batch_t *native_batch = nullptr;
+    kb_error_t *error = nullptr;
+    const auto status = ::kb_update_package_batch_async(
+        native_devices.data(), native_devices.size(), package_storage.c_str(),
+        &prepared_update->native, &prepared_batch->native, &native_batch,
+        &error);
+    if (status != KB_OK) {
+      return std::unexpected(detail_take_error(status, error));
+    }
+    std::vector<std::shared_ptr<detail::ProgressCallbackState>> callbacks;
+    callbacks.reserve(2U);
+    callbacks.push_back(std::move(prepared_update->callback_state));
+    callbacks.push_back(std::move(prepared_batch->callback_state));
+    return DeviceBatch{native_batch, std::move(callbacks)};
+  }
+
+  [[nodiscard]] static std::expected<DeviceBatchReport, Error>
+  update_package_batch(
+      const std::span<Device *const> devices,
+      const std::filesystem::path &package,
+      const UpdateOptions &update = {},
+      const DeviceBatchOptions &batch = {}) {
+    auto operation = update_package_batch_async(devices, package, update,
+                                                batch);
+    if (!operation) {
+      return std::unexpected(std::move(operation.error()));
+    }
+    auto waited = operation->wait();
+    auto report = operation->report();
+    if (report) {
+      return report;
+    }
+    if (!waited) {
+      return std::unexpected(std::move(waited.error()));
+    }
+    return std::unexpected(std::move(report.error()));
+  }
+
 private:
   friend class Context;
 
@@ -1895,39 +1989,6 @@ private:
       return std::unexpected(detail_take_error(status, error));
     }
     return Device{device};
-  }
-
-public:
-  [[nodiscard]] std::expected<Job, Error>
-  run_job_file_async(const std::filesystem::path &manifest,
-                     const JobOptions &options = {}) const {
-    auto prepared = detail::prepare_job_options(options);
-    if (!prepared) {
-      return std::unexpected(std::move(prepared.error()));
-    }
-    const auto path = Device::path_utf8(manifest);
-    kb_job_t *job = nullptr;
-    kb_error_t *error = nullptr;
-    const auto status = ::kb_run_job_file_async(
-        handle_, path.c_str(), &prepared->native, &job, &error);
-    if (status != KB_OK) {
-      return std::unexpected(detail_take_error(status, error));
-    }
-    return Job{job, std::move(prepared->callback_state)};
-  }
-
-  [[nodiscard]] std::expected<JobReport, Error>
-  run_job_file(const std::filesystem::path &manifest,
-               const JobOptions &options = {}) const {
-    auto job = run_job_file_async(manifest, options);
-    if (!job) {
-      return std::unexpected(std::move(job.error()));
-    }
-    auto waited = job->wait();
-    if (!waited) {
-      return std::unexpected(std::move(waited.error()));
-    }
-    return job->report();
   }
 
 private:

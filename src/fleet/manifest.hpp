@@ -1,34 +1,20 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "src/image/file_source.hpp"
-#include "src/image/sha256.hpp"
-
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
-#include <filesystem>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <variant>
 #include <vector>
 
 namespace kairosboot::fleet {
 
-using ManifestClock = std::chrono::steady_clock;
-using ManifestTimePoint = ManifestClock::time_point;
-
-inline constexpr std::uint64_t kMaximumManifestBytes = 1024U * 1024U;
-inline constexpr std::size_t kMaximumManifestDepth = 64U;
-inline constexpr std::size_t kMaximumManifestNodes = 131072U;
 inline constexpr std::size_t kMaximumManifestScalarBytes = 4096U;
 inline constexpr std::size_t kMaximumManifestArtifacts = 16384U;
 inline constexpr std::size_t kMaximumManifestTargets = 256U;
 inline constexpr std::size_t kMaximumManifestSelectorValues = 256U;
 inline constexpr std::size_t kMaximumManifestSteps = 16384U;
-inline constexpr auto kDefaultManifestParseBudget = std::chrono::seconds{5};
 
 struct ManifestSourceLocation final {
     std::uint32_t line{1U};
@@ -42,60 +28,6 @@ struct LocatedManifestString final {
     ManifestSourceLocation location;
 
     [[nodiscard]] bool operator==(const LocatedManifestString&) const = default;
-};
-
-enum class ManifestErrorKind : std::uint8_t {
-    InvalidArgument,
-    NotFound,
-    UnsafePath,
-    Io,
-    TooLarge,
-    Cancelled,
-    TimedOut,
-    InvalidUtf8,
-    Syntax,
-    MultipleDocuments,
-    UnsupportedTag,
-    AliasNotAllowed,
-    DuplicateKey,
-    NonScalarKey,
-    UnknownField,
-    MissingField,
-    TypeMismatch,
-    LimitExceeded,
-    InvalidValue,
-    DuplicateValue,
-    UnknownArtifact,
-    ResourceExhausted,
-    UnexpectedFailure,
-};
-
-struct ManifestError final {
-    ManifestErrorKind kind{ManifestErrorKind::UnexpectedFailure};
-    int native_code{};
-    std::optional<ManifestSourceLocation> location;
-    std::string path;
-    std::string message;
-
-    [[nodiscard]] bool operator==(const ManifestError&) const = default;
-};
-
-enum class ManifestFaultPoint : std::uint8_t {
-    InputBuffer,
-    EventScan,
-    AstConstruction,
-};
-
-using ManifestFaultHook = void (*)(ManifestFaultPoint, void*);
-
-struct ManifestParseOptions final {
-    ManifestTimePoint deadline{ManifestClock::now() +
-                               kDefaultManifestParseBudget};
-    std::stop_token cancellation;
-    // Deterministic allocation/exception seam for internal tests. Production
-    // leaves both fields null; hooks must never be invoked after parsing ends.
-    ManifestFaultHook fault_hook{};
-    void* fault_context{};
 };
 
 struct ManifestArtifact final {
@@ -223,27 +155,11 @@ struct ManifestPolicy final {
 
 struct FlashJobManifest final {
     ManifestSourceLocation location;
-    LocatedManifestString api_version;
-    LocatedManifestString kind;
-    // SHA-256 of the exact stable source bytes parsed into this owned AST.
-    image::Sha256Digest source_sha256{};
     std::vector<ManifestArtifact> artifacts;
     std::vector<ManifestTarget> targets;
     ManifestPolicy policy;
 
     [[nodiscard]] bool operator==(const FlashJobManifest&) const = default;
 };
-
-// Opens the manifest itself once through FileImageSource. Artifact paths are
-// validated as inert relative strings and are never opened by this layer.
-[[nodiscard]] std::expected<FlashJobManifest, ManifestError>
-load_fleet_manifest_file(const std::filesystem::path& path,
-                         const ManifestParseOptions& options = {});
-
-// Parses an already-open immutable manifest snapshot. This overload lets a
-// caller bind path identity before a rename/replacement race.
-[[nodiscard]] std::expected<FlashJobManifest, ManifestError>
-parse_fleet_manifest_source(const image::FileImageSource& source,
-                            const ManifestParseOptions& options = {});
 
 }  // namespace kairosboot::fleet

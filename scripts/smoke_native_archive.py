@@ -45,8 +45,6 @@ def is_forbidden_compression_runtime(name: str) -> bool:
             r"(?:lib)?zlib[0-9]*\.dll",
             r"libz(?:\.[0-9]+)*\.dylib",
             r"libz\.so(?:\.[0-9]+)*",
-            r"(?:lib)?yaml-cpp[^/\\]*\.(?:dll|dylib)",
-            r"libyaml-cpp[^/\\]*\.so(?:\.[0-9]+)*",
         )
     )
 
@@ -200,14 +198,6 @@ def main() -> None:
             if not miniz_license.is_file():
                 raise SystemExit(
                     f"Release archive is missing the miniz license: {miniz_license}"
-                )
-            yaml_cpp_license = (
-                archive_root / "share" / "kairosboot" / "yaml-cpp" / "LICENSE"
-            )
-            if not yaml_cpp_license.is_file():
-                raise SystemExit(
-                    "Release archive is missing the yaml-cpp license: "
-                    f"{yaml_cpp_license}"
                 )
         symbol_names = archive_members(archives["symbols"])
         for name in symbol_names:

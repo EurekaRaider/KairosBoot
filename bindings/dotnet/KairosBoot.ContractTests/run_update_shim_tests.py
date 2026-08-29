@@ -136,7 +136,6 @@ def main() -> int:
             "kb_flash_options_init_sized",
             "kb_legacy_boot_options_init_sized",
             "kb_update_options_init_sized",
-            "kb_job_options_init_sized",
             "kb_version_init_sized",
         ):
             require_shim_export(native, symbol)

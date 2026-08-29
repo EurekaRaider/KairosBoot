@@ -147,9 +147,6 @@ void write_bytes(const std::filesystem::path& path,
     }
     FlashJobManifest manifest{
         .location = kLocation,
-        .api_version = located("kairosboot.io/v1"),
-        .kind = located("FlashJob"),
-        .source_sha256 = Sha256Digest{},
         .artifacts = std::move(artifacts),
         .targets = {
             ManifestTarget{

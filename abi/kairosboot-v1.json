@@ -60,7 +60,7 @@
       "x64"
     ]
   },
-  "headerContractSha256": "7d3a6c58c3d34b24da3c32a623f6a999a0ec48f3a8eb4eb241d36eb612c24383",
+  "headerContractSha256": "c60298d6599e42103026b38f9078b1aefaf65a198c91796393550bf2a5059b1b",
   "schemaVersion": 1,
   "structs": {
     "kb_command_options_t": {
@@ -138,6 +138,51 @@
         "value": 32
       }
     },
+    "kb_device_batch_options_t": {
+      "alignment": 8,
+      "fields": [
+        {
+          "name": "struct_size",
+          "offset": 0,
+          "size": 4
+        },
+        {
+          "name": "api_version",
+          "offset": 4,
+          "size": 4
+        },
+        {
+          "name": "timeout_ms",
+          "offset": 8,
+          "size": 4
+        },
+        {
+          "name": "progress_callback",
+          "offset": 16,
+          "size": 8
+        },
+        {
+          "name": "progress_user_data",
+          "offset": 24,
+          "size": 8
+        },
+        {
+          "name": "max_parallel_devices",
+          "offset": 32,
+          "size": 4
+        },
+        {
+          "name": "continue_on_error",
+          "offset": 36,
+          "size": 4
+        }
+      ],
+      "size": 40,
+      "versionSize": {
+        "macro": "KB_DEVICE_BATCH_OPTIONS_V1_SIZE",
+        "value": 40
+      }
+    },
     "kb_flash_options_t": {
       "alignment": 8,
       "fields": [
@@ -211,41 +256,6 @@
       "versionSize": {
         "macro": "KB_FLASH_OPTIONS_FORCE_FS_SIZE",
         "value": 80
-      }
-    },
-    "kb_job_options_t": {
-      "alignment": 8,
-      "fields": [
-        {
-          "name": "struct_size",
-          "offset": 0,
-          "size": 4
-        },
-        {
-          "name": "api_version",
-          "offset": 4,
-          "size": 4
-        },
-        {
-          "name": "timeout_ms",
-          "offset": 8,
-          "size": 4
-        },
-        {
-          "name": "progress_callback",
-          "offset": 16,
-          "size": 8
-        },
-        {
-          "name": "progress_user_data",
-          "offset": 24,
-          "size": 8
-        }
-      ],
-      "size": 32,
-      "versionSize": {
-        "macro": "KB_JOB_OPTIONS_V1_SIZE",
-        "value": 32
       }
     },
     "kb_legacy_boot_options_t": {
@@ -538,6 +548,22 @@
     "kb_create_logical_partition_async",
     "kb_delete_logical_partition",
     "kb_delete_logical_partition_async",
+    "kb_device_batch_cancel",
+    "kb_device_batch_error",
+    "kb_device_batch_get_report",
+    "kb_device_batch_options_init",
+    "kb_device_batch_options_init_sized",
+    "kb_device_batch_release",
+    "kb_device_batch_report_count",
+    "kb_device_batch_report_identifier",
+    "kb_device_batch_report_json",
+    "kb_device_batch_report_message",
+    "kb_device_batch_report_release",
+    "kb_device_batch_report_status",
+    "kb_device_batch_run",
+    "kb_device_batch_run_async",
+    "kb_device_batch_state",
+    "kb_device_batch_wait",
     "kb_device_identifier",
     "kb_device_list_count",
     "kb_device_list_product",
@@ -546,6 +572,7 @@
     "kb_device_list_usb_path",
     "kb_device_open",
     "kb_device_release",
+    "kb_device_retain",
     "kb_device_serial",
     "kb_device_usb_path",
     "kb_enumerate_devices",
@@ -571,6 +598,8 @@
     "kb_fetch_file_async",
     "kb_flash_file",
     "kb_flash_file_async",
+    "kb_flash_file_batch",
+    "kb_flash_file_batch_async",
     "kb_flash_options_init",
     "kb_flash_options_init_sized",
     "kb_flash_raw",
@@ -590,19 +619,6 @@
     "kb_getvar_async",
     "kb_gsi",
     "kb_gsi_async",
-    "kb_job_cancel",
-    "kb_job_error",
-    "kb_job_get_report",
-    "kb_job_options_init",
-    "kb_job_options_init_sized",
-    "kb_job_plan_canonical_json",
-    "kb_job_plan_release",
-    "kb_job_plan_sha256_hex",
-    "kb_job_release",
-    "kb_job_report_json",
-    "kb_job_report_release",
-    "kb_job_state",
-    "kb_job_wait",
     "kb_legacy_boot_options_init",
     "kb_legacy_boot_options_init_sized",
     "kb_oem",
@@ -613,15 +629,12 @@
     "kb_operation_release",
     "kb_operation_state",
     "kb_operation_wait",
-    "kb_plan_job_file",
     "kb_raw_command",
     "kb_raw_command_async",
     "kb_reboot",
     "kb_reboot_async",
     "kb_resize_logical_partition",
     "kb_resize_logical_partition_async",
-    "kb_run_job_file",
-    "kb_run_job_file_async",
     "kb_set_active",
     "kb_set_active_async",
     "kb_signature_file",
@@ -635,11 +648,12 @@
     "kb_update_options_init_sized",
     "kb_update_package",
     "kb_update_package_async",
+    "kb_update_package_batch",
+    "kb_update_package_batch_async",
     "kb_upload",
     "kb_upload_async",
     "kb_upload_file",
     "kb_upload_file_async",
-    "kb_validate_job_file",
     "kb_version_init",
     "kb_version_init_sized",
     "kb_wipe_super",

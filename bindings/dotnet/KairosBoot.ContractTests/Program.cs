@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -16,27 +15,6 @@ internal static class Program
 {
     private static int checks;
 
-    private const string kValidManifest =
-        "apiVersion: kairosboot.io/v1\n" +
-        "kind: FlashJob\n" +
-        "artifacts:\n" +
-        "  - id: system\n" +
-        "    path: images/system.img\n" +
-        "    sha256: \"1111111111111111111111111111111111111111111111111111111111111111\"\n" +
-        "targets:\n" +
-        "  - name: product-a\n" +
-        "    selector:\n" +
-        "      serials: [SERIAL-01]\n" +
-        "    expectedProduct: product_a\n" +
-        "    steps:\n" +
-        "      - flash:\n" +
-        "          partition: system\n" +
-        "          artifact: system\n" +
-        "policy:\n" +
-        "  onDeviceFailure: continue\n" +
-        "  maxParallelDevices: 32\n" +
-        "  memoryBudget: auto\n";
-
     private static async Task<int> Main()
     {
         try
@@ -46,11 +24,10 @@ internal static class Program
             CheckNativeBinaryCopy();
             CheckCommandOptions();
             CheckUpdateOptions();
-            CheckJobOptions();
             CheckLegacyBootOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
-            CheckFleetPublicSurface();
+            CheckDeviceBatchPublicSurface();
             CheckExtendedException();
             await CheckCancellationDrain().ConfigureAwait(false);
             await CheckCancellationCompletionRace().ConfigureAwait(false);
@@ -60,7 +37,6 @@ internal static class Program
                 await CheckScriptedUpdateShim().ConfigureAwait(false);
                 await CheckScriptedBootShim().ConfigureAwait(false);
                 await CheckScriptedLegacyBootShim().ConfigureAwait(false);
-                await CheckScriptedFleetShim().ConfigureAwait(false);
                 Console.WriteLine($"KairosBoot scripted native checks passed: {checks}");
                 return 0;
             }
@@ -72,7 +48,6 @@ internal static class Program
             }
 
             CheckVersion();
-            CheckFleetJobValidateAndPlan();
             CheckDevicesEnumerate();
             CheckFlashOptions();
             await CheckFlashFailsAccurately().ConfigureAwait(false);
@@ -117,15 +92,15 @@ internal static class Program
                 .Single())
             .ToList();
         var uniqueEntryPoints = entryPoints.Distinct(StringComparer.Ordinal).ToList();
-        if (uniqueEntryPoints.Count != 122)
+        if (uniqueEntryPoints.Count != 106)
         {
             throw new InvalidOperationException(
-                $"Contract check failed: expected 122 native ABI entry points, found {uniqueEntryPoints.Count}.");
+                $"Contract check failed: expected 106 native ABI entry points, found {uniqueEntryPoints.Count}.");
         }
 
         checks++;
         Check(entryPoints.All(entryPoint => !string.IsNullOrEmpty(entryPoint)), "explicit entry points");
-        Check(uniqueEntryPoints.Count == 122, "unique entry points");
+        Check(uniqueEntryPoints.Count == 106, "unique entry points");
         Check(entryPoints.Contains("kb_device_open"), "device open import");
         Check(entryPoints.Contains("kb_device_identifier"), "device identifier import");
         Check(entryPoints.Contains("kb_device_serial"), "device serial import");
@@ -168,22 +143,6 @@ internal static class Program
         Check(entryPoints.Contains("kb_command_result_output_path"), "result output path import");
         Check(entryPoints.Contains("kb_command_result_received_bytes"), "result received bytes import");
         Check(entryPoints.Contains("kb_error_session_poisoned"), "extended error import");
-        Check(entryPoints.Contains("kb_validate_job_file"), "fleet validate import");
-        Check(entryPoints.Contains("kb_plan_job_file"), "fleet plan import");
-        Check(entryPoints.Contains("kb_job_plan_canonical_json"), "fleet plan JSON import");
-        Check(entryPoints.Contains("kb_job_plan_sha256_hex"), "fleet plan digest import");
-        Check(entryPoints.Contains("kb_job_plan_release"), "fleet plan release import");
-        Check(entryPoints.Contains("kb_job_options_init_sized"), "fleet job options import");
-        Check(entryPoints.Contains("kb_run_job_file_async"), "fleet async run import");
-        Check(entryPoints.Contains("kb_run_job_file"), "fleet blocking run import");
-        Check(entryPoints.Contains("kb_job_wait"), "fleet wait import");
-        Check(entryPoints.Contains("kb_job_cancel"), "fleet cancel import");
-        Check(entryPoints.Contains("kb_job_state"), "fleet state import");
-        Check(entryPoints.Contains("kb_job_error"), "fleet error import");
-        Check(entryPoints.Contains("kb_job_get_report"), "fleet report import");
-        Check(entryPoints.Contains("kb_job_release"), "fleet job release import");
-        Check(entryPoints.Contains("kb_job_report_json"), "fleet report JSON import");
-        Check(entryPoints.Contains("kb_job_report_release"), "fleet report release import");
         Check(entryPoints.Contains("kb_version_init_sized"), "version import");
         Check(entryPoints.Contains("kb_flashing_async"), "flashing import");
         Check(entryPoints.Contains("kb_gsi_async"), "GSI import");
@@ -206,17 +165,6 @@ internal static class Program
         {
             Check(invalid.IsInvalid, "invalid command result handle is inert");
         }
-        Check(
-            typeof(JobPlanSafeHandle).IsSubclassOf(typeof(SafeHandle)),
-            "job plan SafeHandle");
-        using (var invalidPlan = new JobPlanSafeHandle(IntPtr.Zero))
-        {
-            Check(invalidPlan.IsInvalid, "invalid job plan handle is inert");
-        }
-        Check(typeof(JobSafeHandle).IsSubclassOf(typeof(SafeHandle)), "job SafeHandle");
-        Check(
-            typeof(JobReportSafeHandle).IsSubclassOf(typeof(SafeHandle)),
-            "job report SafeHandle");
     }
 
     private static void CheckInteropCallingConventionAndStrings()
@@ -231,7 +179,7 @@ internal static class Program
             })
             .Where(item => item.Import != null)
             .ToList();
-        Check(methods.Count == 123, "net48 DllImport count");
+        Check(methods.Count == 107, "net48 DllImport count");
         Check(
             methods.All(item => item.Import!.CallingConvention == CallingConvention.Cdecl),
             "net48 Cdecl imports");
@@ -240,7 +188,7 @@ internal static class Program
             .SelectMany(item => item.Method.GetParameters())
             .Where(parameter => parameter.ParameterType == typeof(string))
             .ToList();
-        Check(stringParameters.Count == 71, "net48 native UTF-8 string parameters");
+        Check(stringParameters.Count == 67, "net48 native UTF-8 string parameters");
         Check(
             stringParameters.All(parameter =>
                 parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value ==
@@ -258,7 +206,7 @@ internal static class Program
             .Where(item => item.Import != null)
             .ToList();
         var groups = methods.GroupBy(item => item.Import!.EntryPoint, StringComparer.Ordinal).ToList();
-        Check(groups.Count == 122, "net10 LibraryImport count");
+        Check(groups.Count == 106, "net10 LibraryImport count");
         Check(
             groups.All(group => group.Any(item =>
                 item.Call?.CallConvs.Contains(
@@ -270,7 +218,7 @@ internal static class Program
                 parameter => parameter.ParameterType == typeof(string)))
             .ToList();
         Check(
-            stringMethods.Count == 45,
+            stringMethods.Count == 41,
             $"net10 native UTF-8 string methods (found {stringMethods.Count})");
         Check(
             stringMethods.All(item =>
@@ -459,25 +407,6 @@ internal static class Program
             NativeMethods.CommandOptionsStructSize == Marshal.SizeOf<NativeCommandOptions>(),
             "command options declared size");
 
-        Check(
-            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.StructSize)).ToInt32() == 0,
-            "job options struct_size offset");
-        Check(
-            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.ApiVersion)).ToInt32() == 4,
-            "job options api_version offset");
-        Check(
-            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.TimeoutMilliseconds)).ToInt32() == 8,
-            "job options timeout offset");
-        Check(
-            Marshal.OffsetOf<NativeJobOptions>(nameof(NativeJobOptions.ProgressCallback)).ToInt32() ==
-                (IntPtr.Size == 8 ? 16 : 12),
-            "job options callback offset");
-        Check(
-            Marshal.SizeOf<NativeJobOptions>() == (IntPtr.Size == 8 ? 32 : 20),
-            "job options native size");
-        Check(
-            NativeMethods.JobOptionsStructSize == Marshal.SizeOf<NativeJobOptions>(),
-            "job options declared size");
     }
 
     private static void CheckNativeBinaryCopy()
@@ -616,19 +545,6 @@ internal static class Program
         Check(result.DeviceIdentifier == "设备-一", "result UTF-8 device identifier");
         Expect<InvalidOperationException>(
             () => CommandMessageKindMapping.FromNative(2, "contract test"));
-    }
-
-    private static void CheckJobOptions()
-    {
-        Check(JobOptions.Default.Timeout == Timeout.InfiniteTimeSpan, "default job timeout");
-        Check(default(JobOptions).Timeout == Timeout.InfiniteTimeSpan, "default struct job timeout");
-        var fractional = TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1);
-        Check(new JobOptions(fractional).Timeout == fractional, "finite job timeout");
-        Expect<ArgumentOutOfRangeException>(
-            () => _ = new JobOptions(TimeSpan.FromTicks(-1)));
-        Expect<ArgumentOutOfRangeException>(
-            () => _ = new JobOptions(
-                TimeSpan.FromTicks((long)uint.MaxValue * TimeSpan.TicksPerMillisecond)));
     }
 
     private static void CheckTypedPublicSurface()
@@ -868,6 +784,39 @@ internal static class Program
                     method.Name == "ResizeLogicalPartitionAsync")
                 .All(method => method.GetParameters()[1].ParameterType == typeof(ulong)),
             "logical partition sizes are UInt64");
+    }
+
+    private static void CheckDeviceBatchPublicSurface()
+    {
+        Check(
+            typeof(DeviceBatch).IsAbstract && typeof(DeviceBatch).IsSealed,
+            "static DeviceBatch entry");
+        var run = typeof(DeviceBatch).GetMethod("RunAsync");
+        Check(
+            run != null && run.ReturnType == typeof(Task<DeviceBatchReport>),
+            "DeviceBatch RunAsync signature");
+        Check(
+            typeof(DeviceBatch).GetMethod("FlashFileAsync")?.ReturnType ==
+                typeof(Task<DeviceBatchReport>),
+            "DeviceBatch flash signature");
+        Check(
+            typeof(DeviceBatch).GetMethod("UpdatePackageAsync")?.ReturnType ==
+                typeof(Task<DeviceBatchReport>),
+            "DeviceBatch update signature");
+        Check(
+            typeof(DeviceBatchReport).GetProperty("Devices")?.PropertyType ==
+                typeof(IReadOnlyList<DeviceBatchResult>),
+            "DeviceBatch ordered results");
+        Check(
+            typeof(DeviceBatchResult).GetProperty("Identifier")?.PropertyType ==
+                typeof(string),
+            "DeviceBatch captured identifier");
+        var publicTypes = typeof(Context).Assembly.GetExportedTypes();
+        Check(
+            publicTypes.All(type =>
+                type.Name != "Fleet" && type.Name != "JobPlan" &&
+                type.Name != "FleetJob" && type.Name != "JobReport"),
+            "removed file-driven job surface");
     }
 
     private static void CheckExtendedException()
@@ -1472,440 +1421,9 @@ internal static class Program
         Check(ScriptedUpdateNativeMethods.DeviceReleaseCount() == 4, "legacy boot device release");
     }
 
-    private static void CheckFleetPublicSurface()
-    {
-        Check(typeof(Fleet).IsAbstract && typeof(Fleet).IsSealed, "static fleet entry");
-        var validate = typeof(Fleet).GetMethod("ValidateJobFile", new[] { typeof(string) });
-        Check(validate != null && validate.ReturnType == typeof(void), "fleet validate signature");
-        var plan = typeof(Fleet).GetMethod("PlanJobFile", new[] { typeof(string) });
-        Check(plan != null && plan.ReturnType == typeof(JobPlan), "fleet plan signature");
-        Check(
-            typeof(JobPlan).IsSealed && typeof(JobPlan).GetInterfaces().Contains(typeof(IDisposable)),
-            "sealed disposable job plan");
-        Check(
-            typeof(JobPlan).GetProperty("CanonicalJson")?.PropertyType == typeof(string) &&
-                typeof(JobPlan).GetProperty("CanonicalJson")?.CanRead == true &&
-                typeof(JobPlan).GetProperty("CanonicalJson")?.CanWrite == false,
-            "job plan canonical JSON property");
-        Check(
-            typeof(JobPlan).GetProperty("Sha256Hex")?.PropertyType == typeof(string) &&
-                typeof(JobPlan).GetProperty("Sha256Hex")?.CanRead == true &&
-                typeof(JobPlan).GetProperty("Sha256Hex")?.CanWrite == false,
-            "job plan digest property");
-        Check(typeof(JobOptions).IsValueType, "fleet job options value type");
-        Check(typeof(JobProgress).IsSealed, "fleet progress sealed");
-        Check(
-            typeof(FleetJob).IsSealed &&
-                typeof(FleetJob).GetInterfaces().Contains(typeof(IDisposable)),
-            "fleet job lifecycle owner");
-        Check(
-            typeof(JobReport).IsSealed &&
-                typeof(JobReport).GetInterfaces().Contains(typeof(IDisposable)),
-            "fleet report lifecycle owner");
-        Check(
-            typeof(FleetJob).GetProperty("State")?.PropertyType == typeof(OperationState),
-            "fleet job state property");
-        Check(
-            typeof(FleetJob).GetProperty("Error")?.PropertyType == typeof(KairosBootException),
-            "fleet job error property");
-        Check(
-            typeof(FleetJob).GetMethod("Wait", Type.EmptyTypes)?.ReturnType ==
-                typeof(JobReport),
-            "fleet blocking wait signature");
-        Check(
-            typeof(FleetJob).GetMethod("WaitAsync", new[] { typeof(CancellationToken) })?.ReturnType ==
-                typeof(Task<JobReport>),
-            "fleet async wait signature");
-        Check(
-            typeof(FleetJob).GetMethod("GetReport", Type.EmptyTypes)?.ReturnType ==
-                typeof(JobReport),
-            "fleet report extraction signature");
-        Check(
-            typeof(JobReport).GetProperty("Json")?.PropertyType == typeof(string),
-            "fleet report JSON property");
-
-        var startMethods = typeof(Context)
-            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Where(method => method.Name == "StartJobFile")
-            .ToList();
-        Check(startMethods.Count == 2, "fleet start overloads");
-        Check(
-            startMethods.All(method => method.ReturnType == typeof(FleetJob)),
-            "fleet start returns lifecycle");
-        Check(
-            typeof(Context).GetMethod("RunJobFile")?.ReturnType == typeof(JobReport),
-            "fleet blocking run signature");
-        Check(
-            typeof(Context).GetMethod("RunJobFileAsync")?.ReturnType == typeof(Task<JobReport>),
-            "fleet async run signature");
-    }
-
-    private static async Task CheckScriptedFleetShim()
-    {
-        ScriptedUpdateNativeMethods.Reset();
-        var progressEvents = new List<JobProgress>();
-        var progress = new InlineProgress<JobProgress>(progressEvents.Add);
-
-        using (var context = Context.Create())
-        {
-            var blocking = context.RunJobFile(
-                "blocking.yaml", new JobOptions(TimeSpan.FromMilliseconds(17)));
-            Check(ContainsOrdinal(blocking.Json, "\"blocking\":true"), "blocking fleet report");
-            blocking.Dispose();
-            Expect<ObjectDisposedException>(() => { _ = blocking.Json; });
-
-            JobReport independent;
-            using (var job = context.StartJobFile(
-                "success.yaml",
-                new JobOptions(TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1)),
-                progress))
-            {
-                Check(job.State == OperationState.Running, "fleet running state");
-                Check(job.Error == null, "fleet running error absent");
-                var busy = Expect<KairosBootException>(() => job.GetReport());
-                Check(busy.Status == KairosBootStatus.Busy, "fleet early report busy");
-                independent = await job.WaitAsync().ConfigureAwait(false);
-                Check(job.State == OperationState.Succeeded, "fleet succeeded state");
-                Check(job.Error == null, "fleet success error absent");
-            }
-            Check(
-                ContainsOrdinal(independent.Json, "\"state\":\"succeeded\""),
-                "fleet report outlives job");
-            independent.Dispose();
-
-            using (var job = context.StartJobFile("failure.yaml"))
-            {
-                var failure = await ExpectAsync<KairosBootException>(
-                    () => job.WaitAsync()).ConfigureAwait(false);
-                Check(failure.Status == KairosBootStatus.Io, "fleet failure status");
-                Check(job.State == OperationState.Failed, "fleet failed state");
-                Check(job.Error?.Status == KairosBootStatus.Io, "fleet error snapshot status");
-                Check(job.Error?.NativeCode == -55, "fleet error snapshot native code");
-                using (var report = job.GetReport())
-                {
-                    Check(
-                        ContainsOrdinal(report.Json, "\"state\":\"failed\""),
-                        "fleet failure report");
-                }
-            }
-
-            using (var cancellation = new CancellationTokenSource())
-            using (var job = context.StartJobFile(
-                "cancel.yaml",
-                progress: new InlineProgress<JobProgress>(_ => cancellation.Cancel())))
-            {
-                await ExpectAsync<OperationCanceledException>(
-                    () => job.WaitAsync(cancellation.Token)).ConfigureAwait(false);
-                Check(job.State == OperationState.Cancelled, "fleet cancelled state");
-                Check(
-                    job.Error?.Status == KairosBootStatus.Cancelled,
-                    "fleet cancellation error snapshot");
-                using (var report = job.GetReport())
-                {
-                    Check(
-                        ContainsOrdinal(report.Json, "\"state\":\"cancelled\""),
-                        "fleet cancellation report");
-                }
-            }
-
-            var disposed = context.StartJobFile("dispose.yaml");
-            var disposingWait = disposed.WaitAsync();
-            disposed.Dispose();
-            disposed.Dispose();
-            var disposeCancellation = await ExpectAsync<KairosBootException>(
-                () => disposingWait).ConfigureAwait(false);
-            Check(
-                disposeCancellation.Status == KairosBootStatus.Cancelled,
-                "fleet dispose cancels and drains wait");
-            Expect<ObjectDisposedException>(() => { _ = disposed.State; });
-
-            using (var convenience = await context.RunJobFileAsync(
-                "success.yaml",
-                new JobOptions(TimeSpan.FromMilliseconds(2)),
-                progress).ConfigureAwait(false))
-            {
-                Check(
-                    ContainsOrdinal(convenience.Json, "\"state\":\"succeeded\""),
-                    "fleet async convenience report");
-            }
-
-            using (var preCancelled = new CancellationTokenSource())
-            {
-                preCancelled.Cancel();
-                await ExpectAsync<OperationCanceledException>(
-                    () => context.RunJobFileAsync(
-                        "success.yaml",
-                        new JobOptions(TimeSpan.FromMilliseconds(2)),
-                        progress,
-                        preCancelled.Token)).ConfigureAwait(false);
-            }
-        }
-
-        Check(progressEvents.Count >= 2, "fleet progress observed");
-        Check(progressEvents.All(item => item.Stage == "execute"), "fleet progress stage");
-        Check(
-            progressEvents.All(item => item.DeviceIdentifier == "SERIAL-01"),
-            "fleet progress device");
-        Check(ScriptedUpdateNativeMethods.FailureCode() == 0, "fleet native assertions");
-        Check(ScriptedUpdateNativeMethods.JobOptionsInitCount() == 6, "fleet options init calls");
-        Check(ScriptedUpdateNativeMethods.JobAsyncStartCount() == 5, "fleet async starts");
-        Check(ScriptedUpdateNativeMethods.JobBlockingCount() == 1, "fleet blocking call");
-        Check(ScriptedUpdateNativeMethods.JobCancelCount() == 2, "fleet cancellation count");
-        Check(ScriptedUpdateNativeMethods.JobReleaseCount() == 5, "fleet job releases");
-        Check(
-            ScriptedUpdateNativeMethods.JobReportReleaseCount() == 5,
-            "fleet report releases");
-        Check(ScriptedUpdateNativeMethods.ContextReleaseCount() == 1, "fleet context release");
-    }
-
-    private static void CheckFleetJobValidateAndPlan()
-    {
-        Expect<ArgumentException>(() => Fleet.ValidateJobFile(null!));
-        Expect<ArgumentException>(() => Fleet.ValidateJobFile(string.Empty));
-        Expect<ArgumentException>(() => Fleet.PlanJobFile(null!));
-        Expect<ArgumentException>(() => Fleet.PlanJobFile(string.Empty));
-        Expect<ArgumentException>(() => Fleet.PlanJobFile("job\0.yaml"));
-
-        var directory = Path.Combine(
-            Path.GetTempPath(),
-            "kairosboot-csharp-fleet-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        try
-        {
-            var valid = Path.Combine(directory, "kb_fleet_valid.yaml");
-            WriteUtf8(valid, kValidManifest);
-            var syntax = Path.Combine(directory, "kb_fleet_syntax.yaml");
-            WriteUtf8(syntax, "apiVersion: kairosboot.io/v1\nkind: [unclosed\n");
-            var semantic = Path.Combine(directory, "kb_fleet_semantic.yaml");
-            WriteUtf8(
-                semantic,
-                "apiVersion: kairosboot.io/v1\nkind: FlashJob\nbogusField: true\n");
-
-            Fleet.ValidateJobFile(valid);
-            using (var plan = Fleet.PlanJobFile(valid))
-            {
-                var json = plan.CanonicalJson;
-                Check(json.Length > 1, "fleet canonical JSON size");
-                Check(json[0] == '{' && json[json.Length - 1] == '}', "fleet canonical JSON framing");
-                Check(json[json.Length - 1] != '\n', "fleet canonical JSON has no trailing LF");
-                Check(
-                    ContainsOrdinal(json, "\"kind\":\"FlashJob\""),
-                    "fleet canonical kind");
-                Check(
-                    ContainsOrdinal(json, "\"schemaVersion\":1"),
-                    "fleet canonical schema version");
-
-                var digest = plan.Sha256Hex;
-                Check(digest.Length == 64, "fleet digest length");
-                Check(IsLowercaseHex(digest), "fleet digest alphabet");
-                Check(digest == Sha256HexOf(json), "fleet digest matches canonical bytes");
-                Check(plan.CanonicalJson == json, "fleet canonical JSON is stable");
-            }
-
-            var first = Fleet.PlanJobFile(valid);
-            var second = Fleet.PlanJobFile(valid);
-            Check(!ReferenceEquals(first, second), "fleet independent plan instances");
-            Check(first.CanonicalJson == second.CanonicalJson, "fleet independent canonical JSON");
-            Check(first.Sha256Hex == second.Sha256Hex, "fleet independent digests");
-            first.Dispose();
-            first.Dispose();
-            Check(second.CanonicalJson.Length > 1, "fleet surviving plan JSON");
-            Check(second.Sha256Hex.Length == 64, "fleet surviving plan digest");
-            Expect<ObjectDisposedException>(() => { _ = first.CanonicalJson; });
-            Expect<ObjectDisposedException>(() => { _ = first.Sha256Hex; });
-            second.Dispose();
-
-            var missing = Path.Combine(directory, "kb_fleet_missing.yaml");
-            var missingValidate = Expect<KairosBootException>(() => Fleet.ValidateJobFile(missing));
-            Check(missingValidate.Status == KairosBootStatus.Io, "fleet missing validate status");
-            Check(missingValidate.NativeCode == 2, "fleet missing native errno");
-            Check(
-                ContainsOrdinal(missingValidate.Message, "kb_fleet_missing.yaml"),
-                "fleet missing path message");
-            var missingPlan = Expect<KairosBootException>(() => Fleet.PlanJobFile(missing));
-            Check(missingPlan.Status == KairosBootStatus.Io, "fleet missing plan status");
-            Check(missingPlan.NativeCode == 2, "fleet missing plan native errno");
-
-            var syntaxValidate = Expect<KairosBootException>(() => Fleet.ValidateJobFile(syntax));
-            Check(syntaxValidate.Status == KairosBootStatus.InvalidArgument, "fleet syntax status");
-            Check(syntaxValidate.NativeCode == 0, "fleet syntax native code");
-            Check(
-                ContainsOrdinal(syntaxValidate.Message, "kb_fleet_syntax.yaml"),
-                "fleet syntax path message");
-            Check(ContainsLineColumn(syntaxValidate.Message), "fleet syntax line/column message");
-            var syntaxPlan = Expect<KairosBootException>(() => Fleet.PlanJobFile(syntax));
-            Check(syntaxPlan.Status == KairosBootStatus.InvalidArgument, "fleet syntax plan status");
-            Check(
-                ContainsOrdinal(syntaxPlan.Message, "kb_fleet_syntax.yaml"),
-                "fleet syntax plan path message");
-
-            var semanticValidate = Expect<KairosBootException>(() => Fleet.ValidateJobFile(semantic));
-            Check(
-                semanticValidate.Status == KairosBootStatus.InvalidArgument,
-                "fleet semantic status");
-            Check(
-                ContainsOrdinal(semanticValidate.Message, ":3:1:"),
-                "fleet semantic line/column");
-            Check(
-                ContainsOrdinal(semanticValidate.Message, "$.bogusField"),
-                "fleet semantic schema path");
-            var semanticPlan = Expect<KairosBootException>(() => Fleet.PlanJobFile(semantic));
-            Check(
-                semanticPlan.Status == KairosBootStatus.InvalidArgument,
-                "fleet semantic plan status");
-            Check(
-                ContainsOrdinal(semanticPlan.Message, "$.bogusField"),
-                "fleet semantic plan schema path");
-
-            CheckFleetGoldenPlan();
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    private static void CheckFleetGoldenPlan()
-    {
-        var sourceRoot = FindTestSourceRoot();
-        var fixture = Path.Combine(sourceRoot, "tests", "contracts", "fleet-job-v1.fixture.yaml");
-        var goldenPath = Path.Combine(sourceRoot, "tests", "contracts", "job-plan-v1.golden.json");
-        var golden = File.ReadAllBytes(goldenPath);
-        Check(golden.Length > 1, "fleet golden size");
-        Check(golden[golden.Length - 1] == (byte)'\n', "fleet golden trailing LF");
-        Check(golden[golden.Length - 2] != (byte)'\n', "fleet golden single trailing LF");
-        var expectedJson = Encoding.UTF8.GetString(golden, 0, golden.Length - 1);
-
-        using (var plan = Fleet.PlanJobFile(fixture))
-        {
-            var json = plan.CanonicalJson;
-            Check(json == expectedJson, "fleet golden canonical JSON");
-            Check(
-                plan.Sha256Hex == Sha256HexOf(expectedJson),
-                "fleet golden digest matches golden bytes");
-            Check(
-                plan.Sha256Hex ==
-                    "992daa21b5ea246910fc5d9ffffafed3e36e883d6a407b70abe3b04def3823f4",
-                "fleet golden frozen digest");
-            Check(
-                ContainsOrdinal(
-                    json,
-                    "58539b1d8a0ba3108ffd0f0ea835d25efca9a6ce85b06cd15f0f1307d4b1c9ef"),
-                "fleet manifest provenance digest");
-        }
-    }
-
-    private static string FindTestSourceRoot()
-    {
-        var configured = Environment.GetEnvironmentVariable("KAIROSBOOT_TEST_SOURCE_DIR");
-        if (!string.IsNullOrEmpty(configured) &&
-            File.Exists(Path.Combine(configured, "tests", "contracts", "job-plan-v1.golden.json")))
-        {
-            return configured;
-        }
-
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
-             directory != null;
-             directory = directory.Parent)
-        {
-            if (File.Exists(
-                    Path.Combine(directory.FullName, "tests", "contracts", "job-plan-v1.golden.json")))
-            {
-                return directory.FullName;
-            }
-        }
-
-        throw new InvalidOperationException(
-            "KairosBoot contract fixtures were not found above " + AppContext.BaseDirectory +
-                "; set KAIROSBOOT_TEST_SOURCE_DIR to the repository root.");
-    }
-
-    private static void WriteUtf8(string path, string text)
-    {
-        File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-    }
-
     private static bool ContainsOrdinal(string text, string fragment)
     {
         return text.IndexOf(fragment, StringComparison.Ordinal) >= 0;
-    }
-
-    private static bool IsLowercaseHex(string text)
-    {
-        foreach (var character in text)
-        {
-            if ((character < '0' || character > '9') && (character < 'a' || character > 'f'))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ContainsLineColumn(string text)
-    {
-        for (var i = 0; i + 1 < text.Length; i++)
-        {
-            if (text[i] != ':')
-            {
-                continue;
-            }
-
-            var lineDigits = 0;
-            while (i + 1 + lineDigits < text.Length &&
-                   text[i + 1 + lineDigits] >= '0' && text[i + 1 + lineDigits] <= '9')
-            {
-                lineDigits++;
-            }
-
-            if (lineDigits == 0)
-            {
-                continue;
-            }
-
-            var columnStart = i + 1 + lineDigits;
-            if (columnStart >= text.Length || text[columnStart] != ':')
-            {
-                continue;
-            }
-
-            var columnDigits = 0;
-            while (columnStart + 1 + columnDigits < text.Length &&
-                   text[columnStart + 1 + columnDigits] >= '0' &&
-                   text[columnStart + 1 + columnDigits] <= '9')
-            {
-                columnDigits++;
-            }
-
-            if (columnDigits == 0)
-            {
-                continue;
-            }
-
-            var after = columnStart + 1 + columnDigits;
-            if (after < text.Length && text[after] == ':')
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static string Sha256HexOf(string value)
-    {
-        using (var sha256 = SHA256.Create())
-        {
-            var digest = sha256.ComputeHash(Encoding.UTF8.GetBytes(value));
-            var builder = new StringBuilder(digest.Length * 2);
-            foreach (var digit in digest)
-            {
-                builder.Append(digit.ToString("x2"));
-            }
-
-            return builder.ToString();
-        }
     }
 
     private static void CheckVersion()
@@ -2586,23 +2104,6 @@ internal static class Program
         [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_device_release_count", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int DeviceReleaseCount();
 
-        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_options_init_count", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int JobOptionsInitCount();
-
-        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_async_start_count", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int JobAsyncStartCount();
-
-        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_blocking_count", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int JobBlockingCount();
-
-        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_cancel_count", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int JobCancelCount();
-
-        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_release_count", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int JobReleaseCount();
-
-        [DllImport(NativeMethods.LibraryName, EntryPoint = "kb_test_job_report_release_count", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int JobReportReleaseCount();
     }
 
     private static TException Expect<TException>(Action action)

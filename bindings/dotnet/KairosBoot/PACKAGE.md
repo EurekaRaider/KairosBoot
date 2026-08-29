@@ -10,10 +10,9 @@ Development packages are managed-only by default. A developer using one must
 stage the native SDK library and its dependencies in the operating system's
 native library search path, renaming or aliasing the SDK library to the
 platform's `kairosboot_native` filename. Release packages include validated
-KairosBoot, libusb, and platform runtime assets for all six RIDs. Boost, miniz,
-and yaml-cpp remain internal native dependencies; their license texts are
-included at package root, and the private static dependencies add no runtime
-library.
+KairosBoot, libusb, and platform runtime assets for all six RIDs. Boost and
+miniz remain internal native dependencies; their license texts are included at
+package root, and the private static dependencies add no runtime library.
 
 Within the .NET/NuGet distribution, the native library is named
 `kairosboot_native` so it cannot collide with the managed `KairosBoot.dll` on
@@ -71,10 +70,8 @@ thread per device. `KairosBootException` includes the binary device message,
 ordered command messages, inbound expected/transferred counts and certainty,
 and whether the native session was poisoned.
 
-`Fleet.ValidateJobFile` and `Fleet.PlanJobFile` validate and plan Fleet job
-manifests without a `Context`; they never initialize USB transport, enumerate
-devices, or open artifact paths. Failures throw `KairosBootException` with the
-manifest path and, when known, its `line:column` diagnostics plus the platform
-native code. `JobPlan` owns an immutable native snapshot; `CanonicalJson`
-returns an owned copy of the canonical SDK JSON without a trailing LF and
-`Sha256Hex` its lowercase hexadecimal digest, and the plan must be disposed.
+`DeviceBatch.RunAsync` applies one asynchronous operation to an explicit list of
+already-open `Device` objects with bounded parallelism, cancellation, fault
+isolation, and ordered per-device results. `DeviceBatch.FlashFileAsync` and
+`DeviceBatch.UpdatePackageAsync` provide the common one-to-many flashing
+workflows without re-enumerating devices or repeating selectors.
