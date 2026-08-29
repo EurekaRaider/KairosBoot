@@ -459,8 +459,8 @@
           <p data-lang="en"><strong>Flashing is destructive.</strong> Before <code>flash</code>, <code>erase</code>, <code>format</code>, <code>update</code>, lock, or unlock, verify the device, partition, product, and image hash. KairosBoot does not guess an offset or auto-resume after power loss or an uncertain transfer.</p>
         </div>
         <div class="callout warn">
-          <p data-lang="zh">项目仍处于 1.0 前开发阶段。完整 Fastboot 兼容性、真实硬件性能与 32 台设备验收仍需以仓库门禁和目标硬件实测为准；不要仅凭模拟测试把当前开发版本用于生产。</p>
-          <p data-lang="en">The project is still pre-1.0. Full Fastboot compatibility, hardware performance, and 32-device acceptance remain subject to repository gates and real target hardware; do not treat simulation-only results as production qualification.</p>
+          <p data-lang="zh">项目仍处于 1.0 前开发阶段。当前软件里程碑以 GitHub-hosted Release CI、脚本化协议/传输测试、安装包 smoke test 和锁定版本的官方 Fastboot 差分测试为验收边界。真实 USB 硬件验收已明确延期；当前不需要 self-hosted runner，HIL 工作流保留但默认不启用。本文档不声称已验证真实吞吐、32 台设备并发、硬件故障注入、24 小时 soak 或生产刷机安全。</p>
+          <p data-lang="en">The project is still pre-1.0. The current software milestone is bounded by GitHub-hosted Release CI, scripted protocol and transport tests, package smoke tests, and differentials against the locked official Fastboot. Real USB hardware qualification is explicitly deferred: no self-hosted runner is required now, and the retained HIL workflow stays disabled by default. This guide makes no claim of validated real-device throughput, 32-device concurrency, hardware fault injection, 24-hour soak behavior, or production flash safety.</p>
         </div>
         <div class="grid-2">
           <div class="mini-card">
@@ -530,8 +530,8 @@ target_link_libraries(my_cpp_app PRIVATE KairosBoot::Cxx)</code></pre></div>
           </tbody>
         </table></div>
         <div class="callout">
-          <p data-lang="zh"><code>ContextOptions.usb_vendor_id</code> 是 SDK 的 USB 枚举过滤能力，仅影响 USB；Fastboot 兼容 CLI 不增加 vendor-id 选项。多设备生产作业优先使用物理 USB path 绑定重连，再用 serial/product 二次验证。</p>
-          <p data-lang="en"><code>ContextOptions.usb_vendor_id</code> is an SDK USB-enumeration filter and affects USB only; the Fastboot-compatible CLI adds no vendor-id option. For production fleets, prefer physical USB-path reconnect binding with serial/product as secondary verification.</p>
+          <p data-lang="zh"><code>ContextOptions.usb_vendor_id</code> 是 SDK 的 USB 枚举过滤能力，仅影响 USB；Fastboot 兼容 CLI 不增加 vendor-id 选项。多设备部署优先使用物理 USB path 绑定重连，再用 serial/product 二次验证。</p>
+          <p data-lang="en"><code>ContextOptions.usb_vendor_id</code> is an SDK USB-enumeration filter and affects USB only; the Fastboot-compatible CLI adds no vendor-id option. For multi-device deployments, prefer physical USB-path reconnect binding with serial/product as secondary verification.</p>
         </div>
       </section>
 

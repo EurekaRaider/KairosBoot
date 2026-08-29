@@ -18,8 +18,10 @@ and macOS.
 
 **KairosBoot is pre-release software.** The public SDK, Fastboot-compatible CLI,
 USB/TCP/UDP transports, image pipelines, and explicit-device batch model are
-implemented and covered by scripted tests. Real-device HIL, throughput,
-32-device, and 24-hour soak gates are still required before production use.
+implemented and covered by GitHub-hosted Release CI and scripted tests. Real
+USB hardware qualification has been deliberately deferred from the current
+software milestone, so no real-device throughput, 32-device, fault-injection,
+or 24-hour soak result is claimed.
 
 [Why](#why-kairosboot) | [Status](#current-status) |
 [Quick Start](#quick-start) | [API](#api-surface) |
@@ -30,10 +32,11 @@ implemented and covered by scripted tests. Real-device HIL, throughput,
 ---
 
 > [!IMPORTANT]
-> Public single-device USB flashing is now integrated, but KairosBoot has not
-> completed real-device HIL, fault-injection, soak, or throughput acceptance.
-> Treat this development build as destructive and experimental; do not use it
-> on devices containing irreplaceable data.
+> Public USB flashing is integrated, but the current acceptance boundary is
+> GitHub-hosted CI plus scripted protocol and transport tests. Real-device HIL,
+> fault injection, throughput, 32-device, and soak qualification are explicitly
+> deferred. Treat this development build as destructive and experimental; do
+> not use it on devices containing irreplaceable data.
 
 ## Why KairosBoot?
 
@@ -54,8 +57,10 @@ have already been delivered or benchmarked.
 
 ## Current Status
 
-The `0.1.0-dev` milestone implements the software contract while keeping every
-hardware-dependent release claim explicitly blocked.
+The `0.1.0-dev` software milestone is implemented and validated without making
+hardware-dependent release claims. It does not require a self-hosted runner:
+the protected HIL workflow and its fail-closed validators remain dormant until
+real hardware qualification is resumed.
 
 | Area | Status today |
 |---|---|
@@ -68,8 +73,8 @@ hardware-dependent release claim explicitly blocked.
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
 | Fastboot operations | C, C++23, .NET, and CLI cover getvar/download/upload, flash/erase/boot/reboot, update/flashall, format, fetch/stage, slots, logical/super, fastbootd, AVB, boot/vendor_boot, snapshot, GSI, flashing, and OEM/raw passthrough |
 | Device batches | C/C++23/.NET APIs accept explicit opened devices; CLI repeats `-s` and runs up to 32 selected devices concurrently |
-| AOSP differential | The last merged baseline passed locked Platform-Tools 37.0.1 differentials on Darwin, Linux, and Windows across 46 normalized host/TCP/UDP scenarios; the final exact head must repeat them |
-| Performance and HIL | Fail-closed three-platform USB/fault and 32-device qualification gates are implemented; no real-hardware throughput, fairness, or soak claim has been demonstrated yet |
+| AOSP differential | Locked Platform-Tools 37.0.1 differentials pass on Darwin, Linux, and Windows across 46 normalized host/TCP/UDP scenarios |
+| Performance and HIL | Real hardware qualification is deferred; the dormant fail-closed workflow is retained for a future lab phase, and no throughput, fairness, 32-device, fault-injection, or soak claim is made |
 
 ### Target platforms
 
@@ -79,8 +84,9 @@ hardware-dependent release claim explicitly blocked.
 | Ubuntu 22.04+ / Debian 12+ | x64, ARM64 | Native SDK/CLI and .NET 10 |
 | macOS 14+ | x64, ARM64 | Native SDK/CLI and .NET 10 |
 
-These are build and release targets. They do not imply that real-device USB
-hardware-in-the-loop acceptance is complete on every target.
+These are build and release targets covered by the repository's hosted CI
+matrix. They do not imply real-device USB hardware-in-the-loop acceptance on
+any target.
 
 ## Quick Start
 
@@ -200,7 +206,7 @@ private implementation path.
 Public calls cover versioning, context management, diagnostics, USB discovery,
 USB/TCP/UDP devices, Fastboot command families, update/flashall, and cancellable
 explicit-device batches. Real-hardware performance and soak gates remain
-separate acceptance work.
+deferred qualification work outside the current software milestone.
 
 ## Build
 
@@ -279,23 +285,28 @@ coverage includes:
 - install-tree and release-packaging smoke tests
 
 Passing these tests does not establish production flash safety, USB ceiling
-performance, or real-device behavior. Those require the later HIL and soak
-gates in the roadmap. Lab operators should follow the
-[hardware qualification contract](docs/HARDWARE_LAB.md); the workflow refuses
-synthetic or incomplete evidence.
+performance, or real-device behavior. Real hardware qualification is
+deliberately deferred from the current milestone; no self-hosted runner or HIL
+run is required at this stage. The protected workflow remains dormant and
+continues to reject synthetic or incomplete evidence. When qualification is
+resumed, lab operators must follow the
+[hardware qualification contract](docs/HARDWARE_LAB.md).
 
 ## Roadmap
 
-The remaining work is release acceptance rather than another public API model:
+The current software milestone is closed by the hosted Release CI matrix,
+scripted protocol/transport coverage, package smoke tests, and locked official
+Fastboot differentials. Hardware qualification is a separate future phase:
 
-1. Run the final six-platform Release CI matrix and retain exact-head official
-   Fastboot differential artifacts for Darwin, Linux, and Windows.
-2. Pass real USB HIL and fault injection on Windows, Linux, and macOS.
-3. Measure raw bulk ceilings and the pinned AOSP baseline, then demonstrate the
-   single-device and real 32-device throughput/fairness gates.
-4. Complete the 24-hour hardware soak, freeze the final version/ABI, and run
-   the protected unsigned-or-signed Release workflow without weakening any
-   publication gate.
+1. Provision dedicated Windows, Linux, and macOS lab hosts only when real USB
+   qualification is resumed; ordinary CI continues to use GitHub-hosted runners.
+2. Run real USB fault injection, raw-ceiling, single-device, and 32-device
+   throughput/fairness measurements without accepting synthetic substitutes.
+3. Complete the 24-hour hardware soak before making production hardware or
+   performance claims.
+4. Choose the public version and signing mode separately before publishing a
+   protected release; this development milestone does not imply a signed or
+   production-qualified release.
 
 ## Project Layout
 
