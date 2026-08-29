@@ -4428,7 +4428,16 @@ execute_network_reboot_fastboot(
       .terminal = kairosboot::protocol::Response{
           .kind = kairosboot::protocol::ResponseKind::Okay,
           .payload = "yes",
+          .data_size = {},
       },
+      .informational = {},
+      .phase = kairosboot::protocol::ProtocolPhase::FinalResponse,
+      .outbound_certainty =
+          kairosboot::protocol::TransferCertainty::FullyTransferred,
+      .inbound_expected = {},
+      .inbound_transferred = 0,
+      .inbound_certainty =
+          kairosboot::protocol::TransferCertainty::NotTransferred,
   };
   return kairosboot::api::OperationOutcome::succeeded(
       make_command_result(
