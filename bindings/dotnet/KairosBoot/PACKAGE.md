@@ -70,8 +70,7 @@ thread per device. `KairosBootException` includes the binary device message,
 ordered command messages, inbound expected/transferred counts and certainty,
 and whether the native session was poisoned.
 
-`DeviceBatch.RunAsync` applies one asynchronous operation to an explicit list of
-already-open `Device` objects with bounded parallelism, cancellation, fault
-isolation, and ordered per-device results. `DeviceBatch.FlashFileAsync` and
-`DeviceBatch.UpdatePackageAsync` provide the common one-to-many flashing
-workflows without re-enumerating devices or repeating selectors.
+Every managed SDK operation is a method on one opened `Device`. The package has
+no `DeviceBatch` type and no API that accepts a `Device` array or collection.
+Applications that operate several devices start independent tasks and own their
+concurrency limit, cancellation linkage, failure policy, and result aggregation.

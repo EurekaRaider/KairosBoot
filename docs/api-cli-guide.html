@@ -367,6 +367,11 @@
       }
       .topbar { background: rgba(17, 25, 35, .92); }
       .hero { background: radial-gradient(circle at 80% 20%, rgba(6, 182, 212, .13), transparent 28%), linear-gradient(135deg, #0f1a22, #111923 62%, #0d2029); }
+      .badge {
+        border-color: rgba(103, 212, 234, .2);
+        background: rgba(103, 212, 234, .07);
+        color: var(--muted);
+      }
       .toc { background: rgba(17, 25, 35, .9); }
       .toc a:hover, .toc a.active, .callout { background: #102b36; }
       tbody tr:hover { background: #15202a; }
@@ -442,7 +447,7 @@
       <a href="#c-api"><span data-lang="zh">C11 API</span><span data-lang="en">C11 API</span></a>
       <a href="#cpp-api"><span data-lang="zh">C++23 API</span><span data-lang="en">C++23 API</span></a>
       <a href="#dotnet-api"><span data-lang="zh">C# / .NET API</span><span data-lang="en">C# / .NET API</span></a>
-      <a href="#fleet"><span data-lang="zh">多设备批量</span><span data-lang="en">Multi-device batch</span></a>
+      <a href="#fleet"><span data-lang="zh">设备隔离与并发</span><span data-lang="en">Device isolation &amp; concurrency</span></a>
       <a href="#errors"><span data-lang="zh">进度、取消与错误</span><span data-lang="en">Progress, cancellation &amp; errors</span></a>
       <a href="#reference"><span data-lang="zh">API 能力索引</span><span data-lang="en">API capability index</span></a>
     </nav>
@@ -829,23 +834,23 @@ if (!result) {
 auto payload = result-&gt;terminal_payload();
 /* payload is a borrowed span valid while CommandResult lives. */</code></pre></div>
 
-        <h3 data-lang="zh">显式 Device 批量刷写</h3><h3 data-lang="en">Explicit Device batch flashing</h3>
+        <h3 data-lang="zh">互相隔离的并发 Device 操作</h3><h3 data-lang="en">Concurrent, isolated Device operations</h3>
         <div class="code-wrap"><pre><code>auto first = context-&gt;open_device("ABC123");
 auto second = context-&gt;open_device("ABC124");
 if (!first || !second) return 1;
 
-std::array&lt;kairosboot::Device *, 2&gt; devices{&amp;*first, &amp;*second};
-kairosboot::DeviceBatchOptions batch_options;
-batch_options.max_parallel_devices = 2;
-batch_options.continue_on_error = true;
+auto first_flash = first-&gt;flash_file_async("boot", "boot.img");
+auto second_flash = second-&gt;flash_file_async("boot", "boot.img");
+if (!first_flash || !second_flash) return 1;
 
-auto report = kairosboot::Device::flash_file_batch(
-    devices, "boot", "boot.img", {}, batch_options);
-if (!report) {
-  std::cerr &lt;&lt; report.error().message() &lt;&lt; '\\n';
-  return 1;
-}
-std::cout &lt;&lt; report-&gt;json() &lt;&lt; '\n';</code></pre></div>
+auto first_result = first_flash-&gt;wait();
+auto second_result = second_flash-&gt;wait();
+if (!first_result)
+  std::cerr &lt;&lt; first-&gt;identifier() &lt;&lt; ": "
+            &lt;&lt; first_result.error().message() &lt;&lt; '\\n';
+if (!second_result)
+  std::cerr &lt;&lt; second-&gt;identifier() &lt;&lt; ": "
+            &lt;&lt; second_result.error().message() &lt;&lt; '\\n';</code></pre></div>
       </section>
 
       <section id="dotnet-api">
@@ -896,45 +901,62 @@ catch (KairosBootException ex)
     Console.Error.WriteLine($"sessionPoisoned={ex.SessionPoisoned}");
 }</code></pre></div>
 
-        <h3 data-lang="zh">Device 批量操作</h3><h3 data-lang="en">Device batch operations</h3>
+        <h3 data-lang="zh">每个 Device 独立操作</h3><h3 data-lang="en">Independent operations per Device</h3>
         <div class="code-wrap"><pre><code>using var first = context.OpenDevice("ABC123");
 using var second = context.OpenDevice("ABC124");
-DeviceBatchReport report = await DeviceBatch.FlashFileAsync(
-    new[] { first, second },
+using var firstCancellation =
+    CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
+using var secondCancellation =
+    CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
+
+Task firstFlash = first.FlashFileAsync(
     partition: "boot",
     filePath: "boot.img",
     options: FlashOptions.Default,
-    maxParallelDevices: 2,
-    continueOnError: true,
-    cancellationToken: cancellation.Token);
+    cancellationToken: firstCancellation.Token);
+Task secondFlash = second.FlashFileAsync(
+    partition: "boot",
+    filePath: "boot.img",
+    options: FlashOptions.Default,
+    cancellationToken: secondCancellation.Token);
 
-foreach (DeviceBatchResult result in report.Devices)
-    Console.WriteLine($"{result.Identifier}: {result.Status}");</code></pre></div>
+// Task.WhenAll is application-level orchestration. No KairosBoot API receives
+// a Device array or collection.
+await Task.WhenAll(firstFlash, secondFlash);</code></pre></div>
         <p class="muted" data-lang="zh">异步取消会先请求 native cancellation，然后继续 drain operation 与回调，再释放 SafeHandle；因此取消令牌触发不代表设备 I/O 已在同一瞬间停止。</p>
         <p class="muted" data-lang="en">Asynchronous cancellation first requests native cancellation, then drains operations and callbacks before releasing SafeHandles. A token firing therefore does not mean device I/O stopped at that exact instant.</p>
       </section>
 
       <section id="fleet">
-        <h2 data-lang="zh">多设备批量操作</h2>
-        <h2 data-lang="en">Multi-device batch operations</h2>
-        <p data-lang="zh">调用方先打开互相隔离的 <code>Device</code> 对象，再把这些对象显式传给批量 API。设备顺序决定稳定的 report index；库不会重新枚举、重新匹配 selector 或读取外部任务文件。</p>
-        <p data-lang="en">Open isolated <code>Device</code> objects first, then pass them explicitly to the batch API. Device order defines stable report indexes; the library does not re-enumerate, rematch selectors, or read an external job file.</p>
-        <div class="code-wrap"><pre><code>/* C11: explicit Device ownership and one-to-many flash. */
-kb_device_t *devices[] = { first, second };
-kb_device_batch_options_t batch_options;
-kb_device_batch_options_init(&amp;batch_options);
-batch_options.max_parallel_devices = 2;
-batch_options.continue_on_error = 1;
+        <h2 data-lang="zh">设备隔离与并发编排</h2>
+        <h2 data-lang="en">Device isolation and concurrent orchestration</h2>
+        <p data-lang="zh">所有 Fastboot 业务操作都只接收一个显式 <code>Device</code>。SDK 不提供接收 <code>Device</code> 数组或集合的批处理 API；并发上限、失败策略和汇总结果由应用层在独立的单设备调用之外实现。库不会重新枚举、重新匹配 selector 或读取外部任务文件。</p>
+        <p data-lang="en">Every Fastboot operation accepts exactly one explicit <code>Device</code>. The SDK has no batch API that accepts an array or collection of <code>Device</code> objects; concurrency limits, failure policy, and result aggregation belong to the application layer around independent single-device calls. The library does not re-enumerate, rematch selectors, or read external task files.</p>
+        <div class="code-wrap"><pre><code>/* C11: start and own one operation per Device. */
+kb_operation_t *first_operation = NULL;
+kb_operation_t *second_operation = NULL;
+kb_error_t *first_error = NULL;
+kb_error_t *second_error = NULL;
 
-kb_device_batch_report_t *report = NULL;
-kb_status_t status = kb_flash_file_batch(
-    devices, 2, "system", "system.img", NULL,
-    &amp;batch_options, &amp;report, &amp;error);</code></pre></div>
+kb_status_t first_status = kb_flash_file_async(
+    first, "system", "system.img", NULL, &amp;first_operation, &amp;first_error);
+kb_status_t second_status = kb_flash_file_async(
+    second, "system", "system.img", NULL, &amp;second_operation, &amp;second_error);
+
+if (first_status == KB_OK)
+  first_status = kb_operation_wait(first_operation, KB_WAIT_INFINITE);
+if (second_status == KB_OK)
+  second_status = kb_operation_wait(second_operation, KB_WAIT_INFINITE);
+
+if (first_operation != NULL) kb_operation_release(first_operation);
+if (second_operation != NULL) kb_operation_release(second_operation);
+if (first_error != NULL) kb_error_release(first_error);
+if (second_error != NULL) kb_error_release(second_error);</code></pre></div>
         <ul>
-          <li data-lang="zh">同一个 <code>Device</code> 不能重复出现在同一批次；每个对象保留独立会话和错误状态。</li>
-          <li data-lang="en">A <code>Device</code> cannot appear twice in one batch; every object keeps an isolated session and error state.</li>
-          <li data-lang="zh"><code>continue_on_error</code> 隔离单设备失败；取消会传播给所有活动 operation。</li>
-          <li data-lang="en"><code>continue_on_error</code> isolates one-device failures; cancellation propagates to every active operation.</li>
+          <li data-lang="zh">同一个 <code>Device</code> 不能同时执行两个操作；不同 <code>Device</code> 分别保留独立会话、取消和错误状态。</li>
+          <li data-lang="en">One <code>Device</code> cannot run two operations at once; different <code>Device</code> objects keep isolated sessions, cancellation, and error state.</li>
+          <li data-lang="zh">每个 operation 单独取消、等待和读取错误；是否联动取消由应用决定。</li>
+          <li data-lang="en">Each operation is cancelled, awaited, and inspected independently; the application decides whether cancellation is linked.</li>
           <li data-lang="zh">同一设备内的 Fastboot 命令严格串行；并发发生在设备之间与 DATA transfer pipeline 内。</li>
           <li data-lang="en">Fastboot commands remain strictly serial per device; concurrency occurs across devices and inside the DATA transfer pipeline.</li>
         </ul>
@@ -946,8 +968,8 @@ kb_status_t status = kb_flash_file_batch(
         <h2 data-lang="zh">进度、取消与错误</h2>
         <h2 data-lang="en">Progress, cancellation, and errors</h2>
         <div class="grid-2">
-          <div class="mini-card"><h3 data-lang="zh">超时</h3><h3 data-lang="en">Timeouts</h3><p data-lang="zh">flash/command options 是每次 I/O deadline；update/batch options 是整个操作 deadline。初始化后的默认值为无限，不代表系统不会因断连或协议错误失败。</p><p data-lang="en">Flash/command options use per-I/O deadlines; update/batch options use whole-operation deadlines. The initialized default is infinite, but disconnects and protocol errors still fail.</p></div>
-          <div class="mini-card"><h3 data-lang="zh">取消</h3><h3 data-lang="en">Cancellation</h3><p data-lang="zh">取消是请求，不是线程强杀。释放 operation/batch 前等待 transport 与回调 drain，避免 use-after-free 和跨设备串线。</p><p data-lang="en">Cancellation is a request, not a thread kill. Transport and callbacks drain before operation/batch release to avoid use-after-free and cross-device mix-ups.</p></div>
+          <div class="mini-card"><h3 data-lang="zh">超时</h3><h3 data-lang="en">Timeouts</h3><p data-lang="zh">flash/command options 是每次 I/O deadline；update options 是整个单设备操作 deadline。初始化后的默认值为无限，不代表系统不会因断连或协议错误失败。</p><p data-lang="en">Flash/command options use per-I/O deadlines; update options use a whole-operation deadline for one device. The initialized default is infinite, but disconnects and protocol errors still fail.</p></div>
+          <div class="mini-card"><h3 data-lang="zh">取消</h3><h3 data-lang="en">Cancellation</h3><p data-lang="zh">取消是请求，不是线程强杀。释放每个 operation 前等待 transport 与回调 drain，避免 use-after-free 和跨设备串线。</p><p data-lang="en">Cancellation is a request, not a thread kill. Transport and callbacks drain before each operation is released to avoid use-after-free and cross-device mix-ups.</p></div>
           <div class="mini-card"><h3 data-lang="zh">传输确定性</h3><h3 data-lang="en">Transfer certainty</h3><p data-lang="zh"><code>NotSent</code>、<code>PartialOrUnknown</code>、<code>FullyTransferred</code> 描述失败时 Host 能确认的数据状态；状态不确定时必须重新建立可信会话。</p><p data-lang="en"><code>NotSent</code>, <code>PartialOrUnknown</code>, and <code>FullyTransferred</code> describe what the host knows after a failure. An uncertain state requires a newly trusted session.</p></div>
           <div class="mini-card"><h3 data-lang="zh">接收文件</h3><h3 data-lang="en">Received files</h3><p data-lang="zh">upload/get-staged/fetch 的 SDK file API 先写临时文件，只有收到精确 DATA 和终态 OKAY 后才原子替换目标；Fastboot CLI 只公开官方 <code>get_staged</code> 与 <code>fetch</code> 命令。</p><p data-lang="en">The upload/get-staged/fetch SDK file APIs write a temporary file and atomically replace the destination only after exact DATA and terminal OKAY; the Fastboot CLI exposes only the official <code>get_staged</code> and <code>fetch</code> commands.</p></div>
         </div>
@@ -958,13 +980,13 @@ kb_status_t status = kb_flash_file_batch(
           <tbody>
             <tr><td><code>KB_OK</code></td><td><span data-lang="zh">成功</span><span data-lang="en">Success</span></td></tr>
             <tr><td><code>KB_E_INVALID_ARGUMENT</code></td><td><span data-lang="zh">修正调用参数或 options 结构</span><span data-lang="en">Fix call arguments or the options layout</span></td></tr>
-            <tr><td><code>KB_E_OUT_OF_MEMORY</code></td><td><span data-lang="zh">降低并发/内存预算并停止当前批次</span><span data-lang="en">Reduce concurrency/memory budget and stop the current batch</span></td></tr>
+            <tr><td><code>KB_E_OUT_OF_MEMORY</code></td><td><span data-lang="zh">降低应用层并发或内存预算，并停止当前工作流</span><span data-lang="en">Reduce application-level concurrency or memory budget and stop the current workflow</span></td></tr>
             <tr><td><code>KB_E_NOT_SUPPORTED</code></td><td><span data-lang="zh">检查平台、设备能力或当前开发版本支持范围</span><span data-lang="en">Check platform, device capability, or current development-version scope</span></td></tr>
             <tr><td><code>KB_E_NO_DEVICE</code></td><td><span data-lang="zh">检查连接、驱动和 selector</span><span data-lang="en">Check connection, driver, and selector</span></td></tr>
             <tr><td><code>KB_E_AMBIGUOUS_DEVICE</code></td><td><span data-lang="zh">提供明确 selector</span><span data-lang="en">Provide an explicit selector</span></td></tr>
             <tr><td><code>KB_E_BUSY</code></td><td><span data-lang="zh">等待同一 session 的当前协议操作结束</span><span data-lang="en">Wait for the current protocol operation on that session</span></td></tr>
             <tr><td><code>KB_E_TIMEOUT</code></td><td><span data-lang="zh">读取 transfer state；不要假设设备未收到数据</span><span data-lang="en">Read transfer state; do not assume the device received nothing</span></td></tr>
-            <tr><td><code>KB_E_CANCELLED</code></td><td><span data-lang="zh">等待 drain 完成并读取最终 report</span><span data-lang="en">Wait for drain and inspect the final report</span></td></tr>
+            <tr><td><code>KB_E_CANCELLED</code></td><td><span data-lang="zh">等待该 operation drain 完成并读取最终错误</span><span data-lang="en">Wait for that operation to drain and inspect its final error</span></td></tr>
             <tr><td><code>KB_E_IO</code></td><td><span data-lang="zh">检查 native/libusb code、连接与 session poisoned</span><span data-lang="en">Inspect native/libusb code, connection, and session-poisoned state</span></td></tr>
             <tr><td><code>KB_E_PROTOCOL</code></td><td><span data-lang="zh">保存 INFO/TEXT/设备消息，重新建立可信连接</span><span data-lang="en">Preserve INFO/TEXT/device messages and establish a trusted connection</span></td></tr>
             <tr><td><code>KB_E_DEVICE_FAIL</code></td><td><span data-lang="zh">读取设备 FAIL payload 与有序消息</span><span data-lang="en">Read device FAIL payload and ordered messages</span></td></tr>
@@ -976,8 +998,8 @@ kb_status_t status = kb_flash_file_batch(
       <section id="reference">
         <h2 data-lang="zh">API 能力索引</h2>
         <h2 data-lang="en">API capability index</h2>
-        <p data-lang="zh">每个 C 同步调用与其 <code>_async</code> 形式共享行为；阻塞调用内部启动异步 operation/batch 并等待。C++ 与 C# 以同一能力分组映射到稳定 C ABI。</p>
-        <p data-lang="en">Each blocking C call shares behavior with its <code>_async</code> form; blocking calls start and wait for an asynchronous operation/batch internally. C++ and C# map the same capability groups to the stable C ABI.</p>
+        <p data-lang="zh">每个 C 同步调用与其 <code>_async</code> 形式共享行为；阻塞调用内部启动一个单设备异步 operation 并等待。C++ 与 C# 以同一能力分组映射到稳定 C ABI。</p>
+        <p data-lang="en">Each blocking C call shares behavior with its <code>_async</code> form; blocking calls start and wait for one asynchronous single-device operation internally. C++ and C# map the same capability groups to the stable C ABI.</p>
         <div class="table-scroll api-list"><table>
           <thead><tr><th><span data-lang="zh">能力</span><span data-lang="en">Capability</span></th><th>C API</th><th>C++23 / C#</th></tr></thead>
           <tbody>
@@ -988,7 +1010,6 @@ kb_status_t status = kb_flash_file_batch(
             <tr><td><span data-lang="zh">基本命令</span><span data-lang="en">Primitive commands</span></td><td><code>kb_getvar*</code>, <code>kb_erase*</code>, <code>kb_set_active*</code>, <code>kb_reboot*</code>, <code>kb_continue_boot*</code></td><td><code>getvar</code>, <code>erase</code>, <code>set_active</code>, <code>reboot</code>, <code>continue_boot</code><br>matching <code>*Async</code> methods</td></tr>
             <tr><td><span data-lang="zh">设备管理</span><span data-lang="en">Device management</span></td><td><code>kb_flashing*</code>, <code>kb_gsi*</code>, <code>kb_snapshot_update*</code>, <code>kb_oem*</code>, <code>kb_raw_command*</code></td><td>typed enums and matching <code>Device</code> methods</td></tr>
             <tr><td><span data-lang="zh">暂存/接收</span><span data-lang="en">Stage/receive</span></td><td><code>kb_stage*</code>, <code>kb_upload*</code>, <code>kb_upload_file*</code>, <code>kb_get_staged_file*</code>, <code>kb_fetch*</code>, <code>kb_fetch_file*</code></td><td><code>stage</code>, <code>upload</code>, <code>upload_file</code>, <code>get_staged_file</code>, <code>fetch</code>, <code>fetch_file</code><br>matching <code>*Async</code> methods</td></tr>
-            <tr><td><span data-lang="zh">多设备批量</span><span data-lang="en">Multi-device batch</span></td><td><code>kb_device_batch_run*</code>, <code>kb_flash_file_batch*</code>, <code>kb_update_package_batch*</code>, <code>kb_device_batch_report_*</code></td><td><code>Device::flash_file_batch</code>, <code>Device::update_package_batch</code><br><code>DeviceBatch.RunAsync/FlashFileAsync/UpdatePackageAsync</code></td></tr>
             <tr><td><span data-lang="zh">生命周期/错误</span><span data-lang="en">Lifecycle/errors</span></td><td><code>kb_operation_*</code>, <code>kb_command_result_*</code>, <code>kb_error_*</code>, all <code>kb_*_release</code></td><td>move-only RAII + <code>std::expected&lt;T, Error&gt;</code><br><code>SafeHandle</code> + <code>KairosBootException</code></td></tr>
           </tbody>
         </table></div>

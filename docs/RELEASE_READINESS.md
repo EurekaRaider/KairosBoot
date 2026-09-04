@@ -38,10 +38,11 @@ These gates must remain blocking; none can be inferred from local tests.
 2. The repository and managed package versions remain `0.1.0-dev`. Change them
    to the final identical version only after functionality and ABI are frozen;
    the release workflow rejects any tag/version mismatch.
-3. The ABI v1 manifest and symbol whitelist are enforced and the public API now
-   uses isolated Device objects plus explicit-device batches. The final ABI
-   freeze must still be tied to the release version and pass on every native
-   target.
+3. The ABI v1 manifest and symbol whitelist are enforced and every Fastboot
+   business API now uses one isolated Device. No public SDK API accepts a
+   device array or collection; multi-device orchestration belongs to callers
+   and the CLI. The final ABI freeze must still be tied to the release version
+   and pass on every native target.
 4. Exact merged baseline `28c58cee75cd53b7efe32d867d1d3bc17133ecf4`
    passed CI run `33247608133` and Policy run `33247608098`. The current HIL
    enforcement change has not run remote CI by design; CI and Policy must pass

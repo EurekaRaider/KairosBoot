@@ -246,9 +246,7 @@ if(APPLE)
 endif()
 kairosboot_enable_strict_warnings(kairosboot_internal)
 
-add_library(kairosboot SHARED
-            src/kairosboot.cpp
-            src/api/device_batch.cpp)
+add_library(kairosboot SHARED src/kairosboot.cpp)
 if(WIN32)
   target_sources(kairosboot PRIVATE abi/kairosboot.def)
 elseif(APPLE)

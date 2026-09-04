@@ -90,14 +90,6 @@ static_assert(noexcept(kairosboot::detail::progress_trampoline(nullptr,
 
 static_assert(!std::is_copy_constructible_v<kairosboot::Device>);
 static_assert(std::is_nothrow_move_constructible_v<kairosboot::Device>);
-static_assert(!std::is_copy_constructible_v<kairosboot::DeviceBatch>);
-static_assert(std::is_nothrow_move_constructible_v<kairosboot::DeviceBatch>);
-static_assert(!std::is_copy_constructible_v<kairosboot::DeviceBatchReport>);
-static_assert(
-    std::is_nothrow_move_constructible_v<kairosboot::DeviceBatchReport>);
-static_assert(std::is_same_v<
-              decltype(kairosboot::DeviceBatchOptions{}.max_parallel_devices),
-              std::uint32_t>);
 
 template <typename T>
 concept ContextHasLegacyPrimitive = requires(T &context) {
@@ -116,9 +108,23 @@ concept ContextHasLegacyUpdate = requires(T &context,
   context.update_package(package);
 };
 
+template <typename T>
+concept DeviceHasBatchFlash = requires(
+    std::span<T *const> devices, std::filesystem::path image) {
+  T::flash_file_batch_async(devices, "boot", image);
+};
+
+template <typename T>
+concept DeviceHasBatchUpdate = requires(
+    std::span<T *const> devices, std::filesystem::path package) {
+  T::update_package_batch_async(devices, package);
+};
+
 static_assert(!ContextHasLegacyPrimitive<kairosboot::Context>);
 static_assert(!ContextHasLegacyFlash<kairosboot::Context>);
 static_assert(!ContextHasLegacyUpdate<kairosboot::Context>);
+static_assert(!DeviceHasBatchFlash<kairosboot::Device>);
+static_assert(!DeviceHasBatchUpdate<kairosboot::Device>);
 static_assert(requires(kairosboot::Context &context,
                        kairosboot::Device &device,
                        kairosboot::CommandOptions options,
@@ -458,12 +464,6 @@ int main() {
   auto tcp_default_device = context->open_device("tcp:127.0.0.1");
   CHECK(tcp_default_device.has_value());
   CHECK(tcp_device->identifier() == "tcp:127.0.0.1:1");
-
-  const std::span<kairosboot::Device *const> empty_batch;
-  const auto rejected_empty_batch = kairosboot::Device::flash_file_batch_async(
-      empty_batch, "boot", std::filesystem::path{"unused.img"});
-  CHECK(!rejected_empty_batch.has_value());
-  CHECK(rejected_empty_batch.error().status() == KB_E_INVALID_ARGUMENT);
 
   kairosboot::UpdateOptions invalid_update_timeout;
   invalid_update_timeout.timeout = -1ms;

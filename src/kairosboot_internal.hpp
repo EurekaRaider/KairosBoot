@@ -11,47 +11,36 @@
 #include <cstring>
 #include <memory>
 #include <optional>
-#include <string>
 
 namespace kairosboot::api {
 
-struct DeviceBatchSchedulingInfo final {
-  std::string device_key;
-  std::string controller_id;
-};
-
-struct DeviceBatchTransferPermits final {
+struct OperationTransferPermits final {
   kb_device_t* device{};
   std::shared_ptr<transport::TransferPermitProvider> provider;
   transport::TransferRingConfig config{};
 };
 
-// The batch start callback is synchronous: it must return the child operation
-// it just created. A thread-local scope therefore carries one scheduler binding
-// into that operation without mutating the Device or racing another batch that
-// attempts to use the same handle concurrently.
-class ScopedDeviceBatchTransferPermits final {
+// A thread-local scope can carry an application-owned scheduler binding into
+// one operation without mutating the Device or coupling different devices.
+class ScopedOperationTransferPermits final {
 public:
-  ScopedDeviceBatchTransferPermits(
+  ScopedOperationTransferPermits(
       kb_device_t* device,
       std::shared_ptr<transport::TransferPermitProvider> provider,
       transport::TransferRingConfig config) noexcept;
-  ~ScopedDeviceBatchTransferPermits();
+  ~ScopedOperationTransferPermits();
 
-  ScopedDeviceBatchTransferPermits(
-      const ScopedDeviceBatchTransferPermits&) = delete;
-  ScopedDeviceBatchTransferPermits& operator=(
-      const ScopedDeviceBatchTransferPermits&) = delete;
+  ScopedOperationTransferPermits(
+      const ScopedOperationTransferPermits&) = delete;
+  ScopedOperationTransferPermits& operator=(
+      const ScopedOperationTransferPermits&) = delete;
 
 private:
-  std::optional<DeviceBatchTransferPermits> previous_;
+  std::optional<OperationTransferPermits> previous_;
 };
 
-[[nodiscard]] DeviceBatchSchedulingInfo device_batch_scheduling_info(
-    const kb_device_t* device);
-
-[[nodiscard]] std::optional<DeviceBatchTransferPermits>
-current_device_batch_transfer_permits(const kb_device_t* device) noexcept;
+[[nodiscard]] std::optional<OperationTransferPermits>
+current_operation_transfer_permits(const kb_device_t* device) noexcept;
 
 namespace detail {
 

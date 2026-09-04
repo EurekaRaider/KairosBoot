@@ -27,7 +27,7 @@ internal static class Program
             CheckLegacyBootOptions();
             CheckCommandResultLifetime();
             CheckTypedPublicSurface();
-            CheckDeviceBatchPublicSurface();
+            CheckDeviceIsolationPublicSurface();
             CheckExtendedException();
             await CheckCancellationDrain().ConfigureAwait(false);
             await CheckCancellationCompletionRace().ConfigureAwait(false);
@@ -786,37 +786,42 @@ internal static class Program
             "logical partition sizes are UInt64");
     }
 
-    private static void CheckDeviceBatchPublicSurface()
+    private static void CheckDeviceIsolationPublicSurface()
     {
-        Check(
-            typeof(DeviceBatch).IsAbstract && typeof(DeviceBatch).IsSealed,
-            "static DeviceBatch entry");
-        var run = typeof(DeviceBatch).GetMethod("RunAsync");
-        Check(
-            run != null && run.ReturnType == typeof(Task<DeviceBatchReport>),
-            "DeviceBatch RunAsync signature");
-        Check(
-            typeof(DeviceBatch).GetMethod("FlashFileAsync")?.ReturnType ==
-                typeof(Task<DeviceBatchReport>),
-            "DeviceBatch flash signature");
-        Check(
-            typeof(DeviceBatch).GetMethod("UpdatePackageAsync")?.ReturnType ==
-                typeof(Task<DeviceBatchReport>),
-            "DeviceBatch update signature");
-        Check(
-            typeof(DeviceBatchReport).GetProperty("Devices")?.PropertyType ==
-                typeof(IReadOnlyList<DeviceBatchResult>),
-            "DeviceBatch ordered results");
-        Check(
-            typeof(DeviceBatchResult).GetProperty("Identifier")?.PropertyType ==
-                typeof(string),
-            "DeviceBatch captured identifier");
         var publicTypes = typeof(Context).Assembly.GetExportedTypes();
         Check(
             publicTypes.All(type =>
                 type.Name != "Fleet" && type.Name != "JobPlan" &&
-                type.Name != "FleetJob" && type.Name != "JobReport"),
-            "removed file-driven job surface");
+                type.Name != "FleetJob" && type.Name != "JobReport" &&
+                type.Name != "DeviceBatch" && type.Name != "DeviceBatchReport" &&
+                type.Name != "DeviceBatchResult"),
+            "removed multi-device SDK surface");
+        var collectionParameters = publicTypes
+            .SelectMany(type => type.GetMethods(
+                BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public))
+            .SelectMany(method => method.GetParameters())
+            .Where(parameter => WrapsDevice(parameter.ParameterType))
+            .ToList();
+        Check(
+            collectionParameters.Count == 0,
+            "no public API accepts a wrapped Device or Device collection");
+    }
+
+    private static bool WrapsDevice(Type type)
+    {
+        if (type == typeof(Device))
+        {
+            return false;
+        }
+        if (type.HasElementType)
+        {
+            var element = type.GetElementType();
+            return element == typeof(Device) ||
+                (element != null && WrapsDevice(element));
+        }
+
+        return type.IsGenericType && type.GetGenericArguments().Any(argument =>
+            argument == typeof(Device) || WrapsDevice(argument));
     }
 
     private static void CheckExtendedException()

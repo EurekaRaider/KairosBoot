@@ -26,22 +26,6 @@ EXPORTS
     kb_create_logical_partition_async
     kb_delete_logical_partition
     kb_delete_logical_partition_async
-    kb_device_batch_cancel
-    kb_device_batch_error
-    kb_device_batch_get_report
-    kb_device_batch_options_init
-    kb_device_batch_options_init_sized
-    kb_device_batch_release
-    kb_device_batch_report_count
-    kb_device_batch_report_identifier
-    kb_device_batch_report_json
-    kb_device_batch_report_message
-    kb_device_batch_report_release
-    kb_device_batch_report_status
-    kb_device_batch_run
-    kb_device_batch_run_async
-    kb_device_batch_state
-    kb_device_batch_wait
     kb_device_identifier
     kb_device_list_count
     kb_device_list_product
@@ -76,8 +60,6 @@ EXPORTS
     kb_fetch_file_async
     kb_flash_file
     kb_flash_file_async
-    kb_flash_file_batch
-    kb_flash_file_batch_async
     kb_flash_options_init
     kb_flash_options_init_sized
     kb_flash_raw
@@ -126,8 +108,6 @@ EXPORTS
     kb_update_options_init_sized
     kb_update_package
     kb_update_package_async
-    kb_update_package_batch
-    kb_update_package_batch_async
     kb_upload
     kb_upload_async
     kb_upload_file

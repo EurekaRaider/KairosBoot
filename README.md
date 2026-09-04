@@ -13,11 +13,11 @@
 
 KairosBoot is a host-side library and command-line tool for the standard
 Android Fastboot protocol. One in-process runtime serves C, C++, .NET, and CLI
-consumers and supports explicit multi-device operation across Windows, Linux,
-and macOS.
+consumers across Windows, Linux, and macOS. Each SDK call targets one explicit
+device; applications may run independent per-device calls concurrently.
 
 **KairosBoot is pre-release software.** The public SDK, Fastboot-compatible CLI,
-USB/TCP/UDP transports, image pipelines, and explicit-device batch model are
+USB/TCP/UDP transports, image pipelines, and device-isolated operation model are
 implemented and covered by GitHub-hosted Release CI and scripted tests. Real
 USB hardware qualification has been deliberately deferred from the current
 software milestone, so no real-device throughput, 32-device, fault-injection,
@@ -64,7 +64,7 @@ real hardware qualification is resumed.
 
 | Area | Status today |
 |---|---|
-| C11 SDK | Versioned opaque-handle API with one isolated `kb_device_t` per DUT, blocking/async Fastboot operations, and explicit-device batches |
+| C11 SDK | Versioned opaque-handle API with one isolated `kb_device_t` per DUT and blocking/async Fastboot operations that each accept one device |
 | C++23 SDK | Header-only, move-only RAII wrapper over the C ABI using `std::expected` |
 | .NET SDK | Thin `net48;net10.0` binding with `SafeHandle`, UTF-8 marshalling, tasks, cancellation, and native error propagation |
 | CLI | Fastboot-compatible command names and options for USB/TCP/UDP flashing, device management, boot images, dynamic partitions, staging, and update/flashall |
@@ -72,8 +72,8 @@ real hardware qualification is resumed.
 | Transport core | Fastboot response state machine plus asynchronous USB and Boost.Asio-based TCP v1 / reliable UDP v1 internals tested independently |
 | Data path | Transfer-ring, buffer-budget, adaptive-tuning, controller-scheduling, and sparse-image validation primitives |
 | Fastboot operations | C, C++23, .NET, and CLI cover getvar/download/upload, flash/erase/boot/reboot, update/flashall, format, fetch/stage, slots, logical/super, fastbootd, AVB, boot/vendor_boot, snapshot, GSI, flashing, and OEM/raw passthrough |
-| Device batches | C/C++23/.NET APIs accept explicit opened devices; CLI repeats `-s` and runs up to 32 selected devices concurrently |
-| AOSP differential | Locked Platform-Tools 37.0.1 differentials pass on Darwin, Linux, and Windows across 46 normalized host/TCP/UDP scenarios |
+| Device isolation | Every SDK operation targets one explicit opened device; no C, C++, or .NET API accepts a device array or collection. Applications compose independent calls, while repeated CLI `-s` calls remain CLI-owned orchestration |
+| AOSP differential | The last merged baseline matched locked Platform-Tools 37.0.1 on Darwin, Linux, and Windows across 46 normalized host/TCP/UDP scenarios; this API-changing head requires fresh exact-source evidence |
 | Performance and HIL | Real hardware qualification is deferred; the dormant fail-closed workflow is retained for a future lab phase, and no throughput, fairness, 32-device, fault-injection, or soak claim is made |
 
 ### Target platforms
@@ -204,9 +204,11 @@ also a public SDK consumer, which keeps its behavior from drifting into a
 private implementation path.
 
 Public calls cover versioning, context management, diagnostics, USB discovery,
-USB/TCP/UDP devices, Fastboot command families, update/flashall, and cancellable
-explicit-device batches. Real-hardware performance and soak gates remain
-deferred qualification work outside the current software milestone.
+USB/TCP/UDP devices, Fastboot command families, and update/flashall. Every
+operation accepts exactly one device; applications own any cross-device
+concurrency, failure policy, and result aggregation. Real-hardware performance
+and soak gates remain deferred qualification work outside the current software
+milestone.
 
 ## Build
 
