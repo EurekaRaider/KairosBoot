@@ -217,12 +217,14 @@ jobs:
         include:
           - id: windows-x64
             runner: windows-2022
+            generator: Visual Studio 17 2022
             architecture: x64
             dependency-architecture: x64
             deployment-target: ""
             developer-dir: ""
           - id: windows-arm64
             runner: windows-11-arm
+            generator: Visual Studio 18 2026
             architecture: ARM64
             dependency-architecture: arm64
             deployment-target: ""
@@ -269,7 +271,7 @@ jobs:
       - name: Configure Windows
         if: runner.os == 'Windows'
         run: >-
-          cmake -S . -B build -G "Visual Studio 17 2022"
+          cmake -S . -B build -G "${{ matrix.generator }}"
           -A ${{ matrix.architecture }}
           -DBUILD_TESTING=ON
           -DKAIROSBOOT_RELEASE_SYMBOLS=ON
@@ -394,7 +396,7 @@ jobs:
             --dist dist `
             --version "$env:VERSION" `
             --platform "$env:PLATFORM" `
-            --generator "Visual Studio 17 2022" `
+            --generator "${{ matrix.generator }}" `
             --architecture "${{ matrix.architecture }}" `
             --dumpbin "$dumpbin"
 

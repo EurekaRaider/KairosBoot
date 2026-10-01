@@ -44,16 +44,8 @@ class CompatibilityInventoryTests(unittest.TestCase):
         )
         expected_required_gaps: list[str] = []
         self.assertEqual(inventory["requiredGaps"], expected_required_gaps)
-        self.assertEqual(
-            inventory["officialDifferentialCoverage"]["status"], "partial"
-        )
-        self.assertEqual(
-            inventory["officialDifferentialCoverage"]["requiredEntriesWithEvidence"],
-            64,
-        )
-        self.assertEqual(
-            inventory["officialDifferentialCoverage"]["matchedScenarios"], 46
-        )
+        # Coverage depends on whether the persisted captures match this source.
+        # Current and stale capture contracts are checked with fixed commits below.
         for entry in inventory["entries"]:
             self.assertIn(entry["status"], GENERATOR.ALLOWED_STATUSES)
             self.assertNotIn("unknown", entry["status"])
@@ -298,6 +290,9 @@ class CompatibilityInventoryTests(unittest.TestCase):
             ):
                 current = GENERATOR.generate(root)
             self.assertEqual(
+                current["officialDifferentialCoverage"]["status"], "partial"
+            )
+            self.assertEqual(
                 current["officialDifferentialCoverage"]["matchedScenarios"], 46
             )
             self.assertEqual(
@@ -312,6 +307,9 @@ class CompatibilityInventoryTests(unittest.TestCase):
                 GENERATOR, "_repository_commit", return_value="f" * 40
             ):
                 stale = GENERATOR.generate(root)
+            self.assertEqual(
+                stale["officialDifferentialCoverage"]["status"], "not-run"
+            )
             self.assertEqual(
                 stale["officialDifferentialCoverage"]["matchedScenarios"], 0
             )

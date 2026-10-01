@@ -104,12 +104,14 @@ jobs:
         include:
           - id: windows-x64
             runner: windows-2022
+            generator: Visual Studio 17 2022
             architecture: x64
             dependency-architecture: x64
             deployment-target: ""
             developer-dir: ""
           - id: windows-arm64
             runner: windows-11-arm
+            generator: Visual Studio 18 2026
             architecture: ARM64
             dependency-architecture: arm64
             deployment-target: ""
@@ -156,7 +158,7 @@ jobs:
       - name: Configure Windows with MSVC
         if: runner.os == 'Windows'
         run: >-
-          cmake -S . -B build -G "Visual Studio 17 2022"
+          cmake -S . -B build -G "${{ matrix.generator }}"
           -A ${{ matrix.architecture }}
           -DBUILD_TESTING=ON
           "-DKAIROSBOOT_LIBUSB_ROOT=$env:RUNNER_TEMP/libusb"
@@ -185,7 +187,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cmake -S tests/package_consumer -B consumer-build -G "Visual Studio 17 2022" `
+          cmake -S tests/package_consumer -B consumer-build -G "${{ matrix.generator }}" `
             -A ${{ matrix.architecture }} `
             "-DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/kairosboot-install"
           cmake --build consumer-build --config Release --parallel

@@ -1,9 +1,9 @@
 name: HIL
 
 on:
+  # Hardware qualification is deferred until the protected labs are configured.
+  # Manual runs still require all hardware evidence before release.
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
